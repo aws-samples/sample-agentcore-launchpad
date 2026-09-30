@@ -1453,15 +1453,21 @@ def test_resolve_source_surfaces_an_unreadable_batch(monkeypatch):
 
 def test_pinned_source_reaches_both_generators_and_is_recorded(monkeypatch):
     """The whole point: the recommendation must read that job's sessions, and the
-    experiment must record which source produced it."""
+    experiment must record which source produced it. The prompt job reads the batch;
+    the tool job refuses a batch source (live ValidationException 2026-09-30), so it
+    gets the same run's session spans inline."""
     monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
+    spans = [{"name": "execute_tool shell", "attributes": {"session.id": "s-0001"}}]
+    pinned_runs: list[str] = []
+    monkeypatch.setattr(svc, "_source_run_spans",
+                        lambda src, _ws: pinned_runs.append(src["run_id"]) or spans)
     seen: list[dict] = []
 
     def capture(name):
         def _start(client, **kw):
             seen.append({"job": name, **{k: v for k, v in kw.items()
                                         if k in ("batch_evaluation_arn",
-                                                 "log_group_arns")}})
+                                                 "log_group_arns", "session_spans")}})
             return {"recommendationId": f"r-{name}"}
         return _start
 
@@ -1483,10 +1489,39 @@ def test_pinned_source_reaches_both_generators_and_is_recorded(monkeypatch):
     out = svc.stage_recommend("e1", _rec_agent({"shell": "d"}), WS, source=source)
 
     assert [s["job"] for s in seen] == ["sp", "td"]
+    sp, td = seen
+    assert sp["batch_evaluation_arn"] == source["batch_evaluation_arn"]
+    assert td["session_spans"] == spans and "batch_evaluation_arn" not in td
+    assert pinned_runs == ["run1"]
     for call in seen:
-        assert call["batch_evaluation_arn"] == source["batch_evaluation_arn"]
         assert "log_group_arns" not in call     # the window is fully replaced
     assert out["trace_source"] == source        # lineage, verbatim
+    assert out["tool_status"] == "COMPLETED"
+
+
+def test_a_pinned_run_without_spans_fails_only_the_tool_job(monkeypatch):
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
+
+    def no_spans(_src, _ws):
+        raise RuntimeError("no spans were found for this run's sessions")
+
+    monkeypatch.setattr(svc, "_source_run_spans", no_spans)
+    started: list[str] = []
+    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation",
+                        lambda *a, **k: started.append("sp") or {"recommendationId": "r"})
+    monkeypatch.setattr(svc.ac, "start_tool_description_recommendation",
+                        lambda *a, **k: started.append("td") or {"recommendationId": "r"})
+    monkeypatch.setattr(svc.ac, "poll_recommendation", lambda *a, **k: {
+        "status": "COMPLETED", "recommendationResult": {
+            "systemPromptRecommendationResult": {"recommendedSystemPrompt": "better"}}})
+
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "d"}), WS, source={
+        "kind": "batch_evaluation", "run_id": "run1", "batch_evaluation_arn": "arn:be"})
+
+    assert started == ["sp"]
+    assert out["recommended_prompt"] == "better"
+    assert out["tool_status"] == "error"
+    assert "no spans" in out["tool_error"]
 
 
 def test_recommend_action_resolves_the_source_before_dispatch(client, monkeypatch):

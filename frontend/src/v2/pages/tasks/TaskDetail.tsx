@@ -12,6 +12,7 @@ import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../../ResultsView
 import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
 import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
 import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
+import { RunRecommendations } from "./RunRecommendations";
 
 const POLL_MS = 8000;
 
@@ -238,6 +239,9 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           </Card>
         </>
       )}
+
+      {/* keyed on status: the inputs' eligibility flips when the run completes */}
+      {data.kind === "run" && data.run && <RunRecommendations key={data.status} run={data.run} />}
 
       <Confirm
         open={confirm !== null}

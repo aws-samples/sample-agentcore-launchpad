@@ -558,14 +558,17 @@ def stage_recommend(
         "kind": "cloudwatch",
         "lookback_days": ac.RECOMMEND_LOOKBACK_DAYS,
     }
-    # A pinned source replaces the window for BOTH generators: they share one
-    # agentTraces builder, and a recommendation that read the pinned sessions for the
-    # prompt but a 7-day window for the tool descriptions would not be "only that
-    # job's sessions" in any useful sense.
+    # A pinned source replaces the window for BOTH generators — a recommendation that
+    # read the pinned sessions for the prompt but a 7-day window for the tool
+    # descriptions would not be "only that job's sessions" in any useful sense. The
+    # prompt job reads the batch itself; the tool job refuses a batch source (live
+    # ValidationException 2026-09-30), so it gets the same run's sessions' spans
+    # inline instead (resolved lazily, only when tools are recommended).
+    window_args: dict[str, Any] = {
+        "log_group_arns": log_group_arns, "service_names": service_names,
+    }
     trace_args: dict[str, Any] = (
-        {"batch_evaluation_arn": pinned_arn}
-        if pinned_arn
-        else {"log_group_arns": log_group_arns, "service_names": service_names}
+        {"batch_evaluation_arn": pinned_arn} if pinned_arn else window_args
     )
 
     # regeneration is now a first-class flow — job names get a per-run suffix
@@ -627,7 +630,7 @@ def stage_recommend(
             # downstream (bundles/A-B would run on text no optimizer produced)
             out.update(
                 system_prompt_status=sp_status or "FAILED",
-                system_prompt_error=_rec_error(sp_payload, sp_status)[:300],
+                system_prompt_error=ac.recommendation_error(sp_payload, sp_status)[:300],
             )
 
     if "tool_descriptions" in types and "tool_descriptions" not in mine:
@@ -641,14 +644,20 @@ def stage_recommend(
             out["tool_descriptions"] = {}
         else:
             try:
+                tool_trace_args = window_args
+                if pinned_arn:
+                    progress("reading the selected evaluation run's session spans…")
+                    tool_trace_args = {
+                        "session_spans": _source_run_spans(source or {}, workspace)
+                    }
                 progress("generating tool-description recommendation…")
                 suggestions, status, err = _run_tool_recommendation(
-                    data, exp_id, run_tag, analyzed, trace_args,
+                    data, exp_id, run_tag, analyzed, tool_trace_args,
                 )
                 # the job rejects the WHOLE tool list when any listed tool is
                 # absent from the sampled traces (live-verified
                 # ValidationException) — retry once with only traced tools
-                missing = _tools_not_in_traces(err)
+                missing = ac.tools_not_in_traces(err)
                 remaining = {k: v for k, v in analyzed.items()
                              if k not in missing}
                 if status != "COMPLETED" and missing and remaining:
@@ -656,7 +665,7 @@ def stage_recommend(
                              f"{sorted(missing)}…")
                     out["analyzed_tools"] = remaining
                     suggestions, status, err = _run_tool_recommendation(
-                        data, exp_id, f"{run_tag}r", remaining, trace_args,
+                        data, exp_id, f"{run_tag}r", remaining, tool_trace_args,
                     )
                 if status == "COMPLETED":
                     out["tool_status"] = "COMPLETED"
@@ -672,6 +681,22 @@ def stage_recommend(
                 out["tool_descriptions"] = {}
 
     return out
+
+
+def _source_run_spans(
+    source: dict[str, Any], workspace: WorkspaceContext
+) -> list[dict[str, Any]]:
+    """The pinned evaluation run's session spans — the tool job's exact scope."""
+    from app.evaluation.recommendations import run_spans
+
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, source.get("run_id"))
+    finally:
+        db.close()
+    if run is None:
+        raise RuntimeError("the selected evaluation run no longer exists")
+    return run_spans(run, workspace)
 
 
 def _third_party_prompt_recommendation(
@@ -826,7 +851,7 @@ def _run_tool_recommendation(
     """One tool-description job → (suggestions, job status, error text).
 
     ``trace_args`` is whatever ``recommendation_traces`` needs — either the
-    log-group/service-name pair or a pinned ``batch_evaluation_arn`` — so both
+    log-group/service-name pair or a pinned run's ``session_spans`` — so both
     generators in one RECOMMEND always read the same sessions.
     """
     td = ac.start_tool_description_recommendation(
@@ -851,27 +876,6 @@ def _run_tool_recommendation(
     if payload.get("errorCode"):
         err = f"{payload['errorCode']}: {err}" if err else str(payload["errorCode"])
     return suggestions, result.get("status") or "COMPLETED", err
-
-
-_NOT_TRACED_RE = re.compile(
-    r"not found in the sampled agent traces: \[([^\]]*)\]"
-)
-
-
-def _tools_not_in_traces(err: str) -> set[str]:
-    m = _NOT_TRACED_RE.search(err or "")
-    if not m:
-        return set()
-    return {p.strip().strip("'\"") for p in m.group(1).split(",") if p.strip()}
-
-
-def _rec_error(payload: dict[str, Any], status: str) -> str:
-    """Operator-facing failure text for a recommendation AWS did not complete."""
-    code = payload.get("errorCode") or ""
-    msg = payload.get("errorMessage") or ""
-    if code and msg:
-        return f"{code}: {msg}"
-    return code or msg or f"recommendation job ended {status or 'unknown'}"
 
 
 def system_prompt_rec_failed(rec: dict[str, Any]) -> bool:

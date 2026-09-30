@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, aws_error_code
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import service
+from app.evaluation import recommendations, service
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
@@ -1495,6 +1495,76 @@ def recheck_run(
     if run is None or run.workspace_id != ws.id:
         raise NotFoundError("run.not_found", "run not found")
     return _run_out(service.recheck_run(run.id, workspace=ws.context))
+
+
+# ─── recommendations seeded from a run ──────────────────────────────────────
+class RecommendationTool(BaseModel):
+    name: str = Field(min_length=1, max_length=recommendations.TOOL_NAME_MAX)
+    description: str = Field(default="", max_length=recommendations.TOOL_DESCRIPTION_MAX)
+
+
+class RecommendationCreate(BaseModel):
+    kinds: list[Literal["system_prompt", "tool_descriptions"]] = Field(min_length=1)
+    # where the confirmed inputs came from — display only (harness | spec | manual)
+    input_source: Literal["harness", "spec", "manual"] = "manual"
+    system_prompt: str | None = Field(default=None, max_length=recommendations.SYSTEM_PROMPT_MAX)
+    evaluator: str | None = Field(default=None, max_length=256)
+    tools: list[RecommendationTool] | None = Field(default=None, max_length=100)
+
+
+def _run_in(db: Session, ws: WorkspaceScope, run_id: str) -> EvalRun:
+    run = db.get(EvalRun, run_id)
+    if run is None or run.workspace_id != ws.id:
+        raise NotFoundError("run.not_found", "run not found")
+    return run
+
+
+@router.get("/runs/{run_id}/recommendation-inputs")
+def get_recommendation_inputs(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The current system prompt + tool descriptions a recommendation would revise.
+
+    ``source`` says where they came from: ``harness`` (live GetHarness, incl. the
+    attached Gateways' tool schemas), ``spec`` (the Launchpad agent spec) or
+    ``manual`` (nothing readable — the operator must enter them)."""
+    return recommendations.resolve_inputs(db, _run_in(db, ws, run_id), ws.context)
+
+
+@router.get("/runs/{run_id}/recommendations")
+def list_run_recommendations(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Recommendations started from this run, newest first; each non-terminal one
+    is refreshed from GetRecommendation on read."""
+    run = _run_in(db, ws, run_id)
+    rows = recommendations.list_for_run(db, run, ws.context)
+    return {"recommendations": [recommendations.out(r) for r in rows]}
+
+
+@router.post("/runs/{run_id}/recommendations", status_code=201)
+def create_run_recommendations(
+    run_id: str,
+    req: RecommendationCreate,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Start one StartRecommendation job per requested kind, its traces pinned to
+    this run's batch evaluation (only completed runs with a batch → else 409)."""
+    run = _run_in(db, ws, run_id)
+    rows = recommendations.start(
+        db, run, ws.context,
+        kinds=list(dict.fromkeys(req.kinds)),
+        input_source=req.input_source,
+        system_prompt=req.system_prompt,
+        evaluator=req.evaluator,
+        tools={t.name: t.description for t in req.tools or []},
+    )
+    return {"recommendations": [recommendations.out(r) for r in rows]}
 
 
 DELETABLE_RUN_STATUSES = ("failed", "stopped")

@@ -172,6 +172,50 @@ export interface EvaluationRunResults {
   truncated: boolean;
 }
 
+/** Where a run recommendation's inputs came from: `harness` = live GetHarness (incl.
+ *  the attached Gateways' tool schemas), `spec` = the Launchpad agent spec, `manual`
+ *  = nothing readable — the operator must enter them. */
+export type RunRecommendationSource = "harness" | "spec" | "manual";
+export type RunRecommendationKind = "system_prompt" | "tool_descriptions";
+
+export interface RunRecommendationInputs {
+  source: RunRecommendationSource;
+  agent_method: string | null;
+  system_prompt: string;
+  tools: { name: string; description: string; origin: "inline_function" | "gateway" | "spec" }[];
+  /** `gateway_unreadable` / `remote_mcp_runtime_only` — tools the backend could not list */
+  notes: { code: string; tool: string; detail: string }[];
+  /** numeric, higher-is-better evaluators: the run's own first, then the defaults */
+  evaluators: string[];
+  default_evaluator: string;
+  eligible: boolean;
+  reason_code: "run_not_completed" | "run_no_batch" | null;
+  /** tool jobs read the run's sessions' spans inline — false for a time-window run */
+  tools_eligible: boolean;
+}
+
+export interface RunRecommendation {
+  id: string;
+  run_id: string;
+  kind: RunRecommendationKind;
+  recommendation_id: string;
+  name: string;
+  status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "FAILED" | "DELETING";
+  input_source: RunRecommendationSource;
+  system_prompt: string | null;
+  evaluator: string | null;
+  tools: Record<string, string>;
+  skipped_tools: string[];
+  result: {
+    recommended_prompt?: string;
+    explanation?: string;
+    tools?: Record<string, { description: string; explanation: string }>;
+  };
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface ExperimentReadiness {
   agent_id: string;
   lookback_hours: number;

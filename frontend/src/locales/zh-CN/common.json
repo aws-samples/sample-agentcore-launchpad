@@ -7336,6 +7336,53 @@
       "info": "基本信息",
       "createdBy": "创建人",
       "updatedBy": "最近保存人"
+    },
+    "rec": {
+      "title": "优化建议",
+      "sub": "AgentCore Recommendations 读取本任务的 trace",
+      "new": "新建优化建议",
+      "kinds": "优化对象",
+      "sourceHarness": "Managed Harness Agent：以下系统提示词和工具描述直接读取自已部署的 Harness（GetHarness，含其 Gateway 工具 schema）。",
+      "sourceSpec": "已从 Launchpad Agent 配置预填。生成前请确认与实际部署一致。",
+      "sourceManual": "无法自动获取该 Agent 当前的系统提示词和工具描述，请在下方输入（必填）。",
+      "note": {
+        "remote_mcp_runtime_only": "远程 MCP 服务器 {{tool}} 的工具只在运行时列出。如需优化，请手动添加，名称为 {{tool}}_<tool>。",
+        "gateway_unreadable": "无法读取 Gateway {{tool}} 的工具（{{detail}}）。如有需要请手动添加。"
+      },
+      "currentPrompt": "当前系统提示词",
+      "promptPlaceholder": "粘贴 Agent 当前的系统提示词",
+      "promptHintPrefilled": "仅当已部署的提示词不同时才需修改。",
+      "promptHintManual": "必填：Agent 实际运行时使用的系统提示词原文。",
+      "promptRequired": "请输入当前系统提示词",
+      "evaluator": "优化目标评估器",
+      "evaluatorHint": "建议会让提示词朝该评估器打高分的方向改进，评估器必须使用数值评分。",
+      "currentTools": "当前工具描述",
+      "toolsHintPrefilled": "只能分析本任务会话中实际调用过的工具，其余会自动剔除。没有描述的预填工具默认不勾选。",
+      "toolsHintManual": "必填：与 Agent 调用时完全一致的工具名称，以及其当前描述。",
+      "toolsRequired": "请至少输入一个工具",
+      "toolDescRequired": "每个工具都需要填写当前描述",
+      "addTool": "添加工具",
+      "removeTool": "移除",
+      "starting": "正在启动…",
+      "started": "已启动优化建议",
+      "traceNote": "Trace 来源：本任务的 {{count}} 个会话（批量评估 {{id}}）",
+      "reason": {
+        "run_not_completed": "任务完成后即可生成优化建议。",
+        "run_no_batch": "该任务没有批量评估，无可分析的 trace。"
+      },
+      "source": {
+        "harness": "来自 Harness",
+        "spec": "来自配置",
+        "manual": "手动输入"
+      },
+      "running": "正在 AWS 上运行（{{id}}），自动刷新中…",
+      "skippedTools": "以下工具未出现在 trace 中，已剔除：{{tools}}",
+      "explanation": "说明",
+      "copy": "复制提示词",
+      "copied": "已复制",
+      "copyFailed": "复制失败",
+      "includeTool": "包含此工具",
+      "toolsIneligible": "工具描述优化需要任务的会话列表。该任务评估的是时间窗口，只能优化系统提示词。"
     }
   }
 }
