@@ -74,10 +74,19 @@ export const RUN_TERMINAL_STATUSES: ReadonlySet<EvaluationRunStatus> = new Set([
 export const isActiveRun = (run: { status: EvaluationRunStatus }): boolean =>
   !RUN_TERMINAL_STATUSES.has(run.status);
 
+/** An agent's telemetry in CloudWatch Logs — `StartBatchEvaluation`'s `cloudWatchLogs` source. */
+export interface LogSource {
+  service_name: string;
+  log_group_names: string[];
+}
+
 export interface EvaluationRunInfo {
   id: string;
   agent_id: string;
   agent_name: string;
+  /** set when the run evaluates CloudWatch telemetry with no platform agent
+   *  (`agent_id` is "" and `agent_name` the service name) */
+  log_source?: LogSource | null;
   dataset_id?: string | null;
   dataset_name: string | null;
   /** Published cloud-dataset version the run replayed ("2"); null = the draft

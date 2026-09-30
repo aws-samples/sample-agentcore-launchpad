@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type EvaluatorRow, type V2Range } from "../../../lib/api";
+import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { INSIGHT_TYPES, insightLabel } from "../../online";
-import type { TaskMode } from "../../tasks";
+import { SERVICE_NAME_RE, type TaskMode } from "../../tasks";
 import {
   Alert,
   Button,
@@ -23,8 +23,12 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { LogSourceFields } from "./LogSourceFields";
+import { LogStreamPicker } from "./LogStreamPicker";
 
 type Source = "window" | "sessions" | "logs" | "dataset";
+/** What is evaluated: a platform agent, or CloudWatch telemetry with no agent behind it. */
+type Target = "agent" | "cloudwatch";
 type Strategy = "history" | "continuous";
 
 const LOOKBACKS = [1, 6, 24, 72, 168, 336];
@@ -36,12 +40,19 @@ const MIN_INSIGHT_SESSIONS = 3;
 interface Draft {
   name: string;
   description: string;
+  target: Target;
   agentId: string;
+  /** cloudwatch target: the span service.name + the batch's input log groups */
+  serviceName: string;
+  logGroups: string[];
   mode: TaskMode;
   source: Source;
   strategy: Strategy;
   lookbackHours: number;
   sessionIds: string[];
+  /** sessions of the log streams picked for the 日志 source, listed over `logHours` */
+  logSessionIds: string[];
+  logHours: number;
   /** local dataset id, or `cloud:<datasetId>` */
   dataset: string;
   sampling: number;
@@ -54,12 +65,17 @@ interface Draft {
 const EMPTY: Draft = {
   name: "",
   description: "",
+  target: "agent",
   agentId: "",
+  serviceName: "",
+  logGroups: [],
   mode: "evaluators",
   source: "window",
   strategy: "history",
   lookbackHours: 24,
   sessionIds: [],
+  logSessionIds: [],
+  logHours: 168,
   dataset: "",
   sampling: 10,
   sessionTimeout: 15,
@@ -77,10 +93,14 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
     const copied = run.mode === "insights" ? { mode: "insights" as const, insights: run.evaluators } : { evaluators: run.evaluators };
-    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", agentId: run.agent_id, ...copied };
+    const target = run.log_source
+      ? { target: "cloudwatch" as const, serviceName: run.log_source.service_name, logGroups: run.log_source.log_group_names }
+      : { agentId: run.agent_id };
+    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied };
     if (name.startsWith("window:")) return { ...base, source: "window", lookbackHours: parseInt(name.slice(7), 10) || 24 };
     if (name.startsWith("cloud:") && run.dataset_id) return { ...base, source: "dataset", dataset: `${CLOUD_VALUE_PREFIX}${run.dataset_id}` };
     if (run.dataset_id) return { ...base, source: "dataset", dataset: run.dataset_id };
+    if (name.startsWith("logs:")) return { ...base, source: "logs", logSessionIds: run.session_ids };
     return { ...base, source: "sessions", sessionIds: run.session_ids };
   }
   if (from?.startsWith("online:")) {
@@ -145,6 +165,13 @@ export function TaskWizard() {
     () => (sessions.data?.sessions ?? []).filter((s) => agent && s.agent === agent.name),
     [sessions.data, agent],
   );
+  // cloudwatch target: the service's sessions in the window, for the 链路 preview
+  const cwService = draft?.serviceName.trim() ?? "";
+  const cwReady = !!draft && draft.target === "cloudwatch" && SERVICE_NAME_RE.test(cwService) && draft.logGroups.length > 0;
+  const cwWindow = useLoad(
+    () => (cwReady && draft?.source === "window" ? api.v2LogSessions(cwService, draft.logGroups, draft.lookbackHours) : Promise.resolve(null)),
+    `cw-window:${cwReady}:${draft?.source}:${cwService}:${draft?.logGroups.join("|")}:${draft?.lookbackHours}`,
+  );
 
   if (seed.error) return <Alert tone="error">{seed.error}</Alert>;
   if (!draft) return <Spin />;
@@ -165,10 +192,14 @@ export function TaskWizard() {
 
   const validateStep0 = (): string | null => {
     if (!draft.name.trim()) return t("v2.tasks.errName");
-    if (!draft.agentId) return t("v2.tasks.errAgent");
+    if (draft.target === "agent" && !draft.agentId) return t("v2.tasks.errAgent");
+    if (draft.target === "cloudwatch" && !SERVICE_NAME_RE.test(draft.serviceName.trim())) return t("v2.tasks.cw.errService");
+    if (draft.target === "cloudwatch" && draft.logGroups.length === 0) return t("v2.tasks.cw.errGroups");
     if (draft.source === "sessions" && draft.sessionIds.length === 0) return t("v2.tasks.errSessions");
     if (draft.source === "dataset" && !draft.dataset) return t("v2.tasks.errDataset");
-    if (draft.mode === "insights" && draft.source === "sessions" && draft.sessionIds.length < MIN_INSIGHT_SESSIONS) {
+    if (draft.source === "logs" && draft.logSessionIds.length === 0) return t("v2.tasks.errLogs");
+    const picked = draft.source === "sessions" ? draft.sessionIds.length : draft.source === "logs" ? draft.logSessionIds.length : null;
+    if (draft.mode === "insights" && picked !== null && picked < MIN_INSIGHT_SESSIONS) {
       return t("v2.tasks.errInsightSessions", { min: MIN_INSIGHT_SESSIONS });
     }
     return null;
@@ -207,11 +238,15 @@ export function TaskWizard() {
             ? { lookback_hours: draft.lookbackHours }
             : draft.source === "sessions"
               ? { session_ids: draft.sessionIds }
-              : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
+              : draft.source === "logs"
+                ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
+                : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
                 ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
                 : { dataset_id: draft.dataset };
         const run = await api.v2CreateRun({
-          agent_id: draft.agentId,
+          ...(draft.target === "cloudwatch"
+            ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
+            : { agent_id: draft.agentId }),
           name: draft.name.trim(),
           description: draft.description || undefined,
           ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
@@ -230,12 +265,22 @@ export function TaskWizard() {
   const toggleEvaluator = (id: string) =>
     set({ evaluators: draft.evaluators.includes(id) ? draft.evaluators.filter((e) => e !== id) : [...draft.evaluators, id] });
 
+  // without a platform agent there is nothing to invoke (dataset) and no
+  // agent-attributed trajectory list (sessions): only passive CloudWatch scopes
+  const cloudwatch = draft.target === "cloudwatch";
   const sourceCards: { key: Source; disabled?: boolean }[] = [
     { key: "window" },
-    { key: "sessions" },
-    { key: "logs", disabled: true },
-    { key: "dataset" },
+    { key: "sessions", disabled: cloudwatch },
+    { key: "logs" },
+    { key: "dataset", disabled: cloudwatch },
   ];
+  const chooseTarget = (target: Target) =>
+    set({
+      target,
+      source: target === "cloudwatch" && (draft.source === "sessions" || draft.source === "dataset") ? "window" : draft.source,
+      strategy: target === "cloudwatch" ? "history" : draft.strategy,
+      logSessionIds: [],
+    });
   const chooseSource = (source: Source) => set({ source, strategy: source === "window" ? draft.strategy : "history" });
   // continuous insights are an online-evaluation config with a report schedule — not a task
   const chooseMode = (mode: TaskMode) => set({ mode, strategy: mode === "insights" ? "history" : draft.strategy });
@@ -245,7 +290,8 @@ export function TaskWizard() {
   const fewSessions =
     draft.mode === "insights" &&
     ((draft.source === "window" && !sessions.loading && windowSessions.length < MIN_INSIGHT_SESSIONS) ||
-      (draft.source === "dataset" && !!selectedDataset && selectedDataset.item_count < MIN_INSIGHT_SESSIONS));
+      (draft.source === "dataset" && !!selectedDataset && selectedDataset.item_count < MIN_INSIGHT_SESSIONS) ||
+      (cloudwatch && draft.source === "window" && !!cwWindow.data && cwWindow.data.streams.length < MIN_INSIGHT_SESSIONS));
 
   return (
     <>
@@ -282,19 +328,39 @@ export function TaskWizard() {
         <>
           <Card title={t("v2.tasks.basic")}>
             <div className="v2-form cols-2">
-              <Field label={t("v2.tasks.colName")} required>
+              <Field label={t("v2.tasks.cw.target")} full>
+                <div className="v2-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                  <OptionCard
+                    title={t("v2.tasks.cw.targetAgent")}
+                    desc={t("v2.tasks.cw.targetAgentDesc")}
+                    on={!cloudwatch}
+                    onClick={() => chooseTarget("agent")}
+                    testId="v2-task-target-agent"
+                  />
+                  <OptionCard
+                    title={t("v2.tasks.cw.targetCw")}
+                    desc={t("v2.tasks.cw.targetCwDesc")}
+                    on={cloudwatch}
+                    onClick={() => chooseTarget("cloudwatch")}
+                    testId="v2-task-target-cloudwatch"
+                  />
+                </div>
+              </Field>
+              <Field label={t("v2.tasks.colName")} required full={cloudwatch}>
                 <input className="v2-input" value={draft.name} maxLength={64} onChange={(e) => set({ name: e.target.value })} data-testid="v2-task-name" />
               </Field>
-              <Field label={t("v2.tasks.colAgent")} required hint={agents.loading ? undefined : activeAgents.length === 0 ? t("v2.tasks.noAgents") : undefined}>
-                <select className="v2-select" value={draft.agentId} onChange={(e) => set({ agentId: e.target.value, sessionIds: [] })} data-testid="v2-task-agent">
-                  <option value="">{t("v2.common.choose")}</option>
-                  {activeAgents.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              {!cloudwatch && (
+                <Field label={t("v2.tasks.colAgent")} required hint={agents.loading ? undefined : activeAgents.length === 0 ? t("v2.tasks.noAgents") : undefined}>
+                  <select className="v2-select" value={draft.agentId} onChange={(e) => set({ agentId: e.target.value, sessionIds: [], logSessionIds: [] })} data-testid="v2-task-agent">
+                    <option value="">{t("v2.common.choose")}</option>
+                    {activeAgents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field label={t("v2.tasks.description")} full>
                 <textarea className="v2-textarea" rows={2} value={draft.description} maxLength={1000} placeholder={t("v2.tasks.descPlaceholder")} onChange={(e) => set({ description: e.target.value })} />
               </Field>
@@ -319,6 +385,17 @@ export function TaskWizard() {
             </div>
           </Card>
 
+          {cloudwatch && (
+            <Card title={t("v2.tasks.cw.title")} sub={t("v2.tasks.cw.sub")} testId="v2-task-cw">
+              <LogSourceFields
+                serviceName={draft.serviceName}
+                logGroups={draft.logGroups}
+                onChange={(patch) => set({ ...patch, logSessionIds: [] })}
+                onUseAgent={(agentId) => set({ target: "agent", agentId, logSessionIds: [] })}
+              />
+            </Card>
+          )}
+
           <Card title={t("v2.tasks.dataConfig")}>
             <div className="v2-options">
               {sourceCards.map(({ key, disabled }) => (
@@ -328,7 +405,7 @@ export function TaskWizard() {
                   desc={t(`v2.tasks.src.${key}Desc`)}
                   on={draft.source === key}
                   disabled={disabled}
-                  badge={disabled ? <Tag tone="gray">{t("v2.common.soon")}</Tag> : undefined}
+                  badge={disabled ? <Tag tone="gray">{t("v2.tasks.cw.needsAgent")}</Tag> : undefined}
                   onClick={() => chooseSource(key)}
                   testId={`v2-task-src-${key}`}
                 />
@@ -352,7 +429,7 @@ export function TaskWizard() {
                     title={t("v2.tasks.strategyContinuous")}
                     desc={t("v2.tasks.strategyContinuousDesc")}
                     on={draft.strategy === "continuous"}
-                    disabled={draft.source !== "window" || draft.mode === "insights"}
+                    disabled={draft.source !== "window" || draft.mode === "insights" || cloudwatch}
                     onClick={() => set({ strategy: "continuous" })}
                     testId="v2-task-strategy-continuous"
                   />
@@ -376,9 +453,17 @@ export function TaskWizard() {
                       <input className="v2-input" type="number" min={1} max={1440} value={draft.sessionTimeout} onChange={(e) => set({ sessionTimeout: Math.max(1, Math.min(1440, Number(e.target.value) || 15)) })} />
                     </Field>
                   </div>
-                ) : draft.source === "window" ? (
-                  <Field label={t("v2.tasks.lookback")} hint={t("v2.tasks.lookbackHint")}>
-                    <select className="v2-select" value={draft.lookbackHours} onChange={(e) => set({ lookbackHours: Number(e.target.value) })}>
+                ) : draft.source === "window" || draft.source === "logs" ? (
+                  <Field
+                    label={draft.source === "logs" ? t("v2.tasks.logs.window") : t("v2.tasks.lookback")}
+                    hint={draft.source === "logs" ? t("v2.tasks.logs.picked", { count: draft.logSessionIds.length }) : t("v2.tasks.lookbackHint")}
+                  >
+                    <select
+                      className="v2-select"
+                      value={draft.source === "logs" ? draft.logHours : draft.lookbackHours}
+                      onChange={(e) => set(draft.source === "logs" ? { logHours: Number(e.target.value) } : { lookbackHours: Number(e.target.value) })}
+                      data-testid="v2-task-lookback"
+                    >
                       {LOOKBACKS.map((h) => (
                         <option key={h} value={h}>
                           {t("v2.tasks.hours", { count: h })}
@@ -405,9 +490,66 @@ export function TaskWizard() {
             </div>
           </Card>
 
-          <Card title={t("v2.tasks.preview")} sub={t("v2.tasks.previewSub")}>
-            {!agent ? (
+          <Card
+            title={draft.source === "logs" ? t("v2.tasks.logs.title") : t("v2.tasks.preview")}
+            sub={draft.source === "logs" ? t(cloudwatch ? "v2.tasks.cw.logsSub" : "v2.tasks.logs.sub") : t("v2.tasks.previewSub")}
+          >
+            {cloudwatch && !cwReady ? (
+              <p className="v2-muted">{t("v2.tasks.cw.previewPick")}</p>
+            ) : cloudwatch && draft.source === "window" ? (
+              <>
+                <Alert>
+                  {cwWindow.data
+                    ? t(cwWindow.data.truncated ? "v2.tasks.cw.previewWindowMore" : "v2.tasks.cw.previewWindow", {
+                        count: cwWindow.data.streams.length,
+                        hours: draft.lookbackHours,
+                        service: cwService,
+                      })
+                    : t("v2.common.loading")}
+                </Alert>
+                <Table
+                  columns={[
+                    { key: "sid", title: t("v2.traces.colSession"), render: (r: V2LogStream) => <span className="mono">{r.session_id}</span> },
+                    { key: "traces", title: t("v2.pipelines.traceCount"), className: "num", render: (r: V2LogStream) => r.traces ?? "—" },
+                    { key: "last", title: t("v2.pipelines.lastActive"), className: "nowrap", render: (r: V2LogStream) => fmtTime(r.last_event) },
+                  ]}
+                  rows={(cwWindow.data?.streams ?? []).slice(0, 8)}
+                  rowKey={(r) => r.session_id ?? r.stream}
+                  loading={cwWindow.loading}
+                  error={cwWindow.error}
+                  onRetry={cwWindow.reload}
+                  empty={t("v2.tasks.cw.previewNone")}
+                />
+              </>
+            ) : !cloudwatch && !agent ? (
               <p className="v2-muted">{t("v2.tasks.previewPickAgent")}</p>
+            ) : draft.source === "logs" ? (
+              <>
+                {cloudwatch ? (
+                  <LogStreamPicker
+                    load={(hours, q) => api.v2LogSessions(cwService, draft.logGroups, hours, q)}
+                    loadKey={`cw:${cwService}:${draft.logGroups.join("|")}`}
+                    hint={t("v2.tasks.cw.keywordHint")}
+                    hours={draft.logHours}
+                    selected={draft.logSessionIds}
+                    onChange={(logSessionIds) => set({ logSessionIds })}
+                  />
+                ) : (
+                  <LogStreamPicker
+                    load={(hours, q) => api.v2AgentLogStreams(agent?.id ?? "", hours, q)}
+                    loadKey={`agent:${agent?.id}`}
+                    hint={t("v2.tasks.logs.keywordHint")}
+                    hours={draft.logHours}
+                    selected={draft.logSessionIds}
+                    onChange={(logSessionIds) => set({ logSessionIds })}
+                  />
+                )}
+                {draft.logSessionIds.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <Alert>{t("v2.tasks.logs.hintSelected")}</Alert>
+                  </div>
+                )}
+              </>
             ) : draft.source === "dataset" ? (
               selectedDataset ? (
                 <Table

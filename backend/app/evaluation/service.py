@@ -207,6 +207,7 @@ def execute_run(
     method: str,
     service_name: str,
     log_group: str,
+    log_groups: list[str] | None = None,
     protocol: str = "http",
     items: list[dict[str, Any]],
     evaluators: list[str],
@@ -228,7 +229,10 @@ def execute_run(
     agent's past traffic — the window path skips invoke/wait entirely — or an
     online evaluation config (``online_config_arn`` + ``time_range``): an
     on-demand report over the sessions that config sampled, where the batch
-    inherits the config's insights/evaluators (passing them is rejected)."""
+    inherits the config's insights/evaluators (passing them is rejected).
+    ``log_groups`` are the batch's input log groups (default: ``aws/spans`` plus
+    the agent's own ``log_group``)."""
+    input_groups = list(log_groups or ["aws/spans", log_group])
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     attempt: dict[str, str] = {}
     try:
@@ -325,7 +329,7 @@ def execute_run(
                     data,
                     name=f"run_{run_id[:8]}",
                     service_name=service_name,
-                    log_groups=["aws/spans", log_group],
+                    log_groups=input_groups,
                     session_ids=session_ids or None,
                     time_range=time_range,
                     insights=insights,
@@ -337,7 +341,7 @@ def execute_run(
                     data,
                     name=f"run_{run_id[:8]}",
                     service_name=service_name,
-                    log_groups=["aws/spans", log_group],
+                    log_groups=input_groups,
                     session_ids=session_ids or None,
                     time_range=time_range,
                     evaluators=evaluators,
@@ -644,7 +648,7 @@ def resume_interrupted_runs() -> list[str]:
 
 def submit_run(
     *,
-    agent: Agent,
+    agent: Agent | None,
     workspace: WorkspaceContext,
     dataset_items: list[dict[str, Any]],
     dataset_id: str | None,
@@ -662,8 +666,22 @@ def submit_run(
     dataset_version: str | None = None,
     name: str | None = None,
     description: str | None = None,
+    log_source: dict[str, Any] | None = None,
 ) -> EvalRun:
-    service_name, log_group = resolve_telemetry(agent, workspace)
+    """Queue one run. The telemetry comes from the platform ``agent`` — or, with
+    ``agent=None``, from ``log_source`` {service_name, log_group_names}: an agent
+    that is not a platform agent (off-runtime, or no ledger row) whose spans and
+    content logs are already in CloudWatch. Such a run is passive only (session
+    ids or a time window); there is nothing to invoke."""
+    if agent is None:
+        if not log_source or dataset_items:
+            raise ValueError("an agent-less run needs a log_source and a passive scope")
+        service_name = log_source["service_name"]
+        log_groups = list(log_source["log_group_names"])
+        log_group = log_groups[0]
+    else:
+        service_name, log_group = resolve_telemetry(agent, workspace)
+        log_groups = ["aws/spans", log_group]
     # Window runs have no dataset; encode the scope in dataset_name so the
     # runs list can render "window · Nh" without a schema change.
     if lookback_hours and not dataset_name:
@@ -671,9 +689,12 @@ def submit_run(
     db = SessionLocal()
     try:
         run = EvalRun(
-            workspace_id=agent.workspace_id,
-            agent_id=agent.id,
-            agent_name=agent.name,
+            workspace_id=agent.workspace_id if agent else workspace.id,
+            agent_id=agent.id if agent else "",
+            agent_name=agent.name if agent else service_name[:64],
+            log_source=None if agent else {
+                "service_name": service_name, "log_group_names": log_groups,
+            },
             name=name,
             description=description,
             dataset_id=dataset_id,
@@ -687,13 +708,13 @@ def submit_run(
         db.add(run)
         db.commit()
         run_id = run.id
-        agent_arn = agent.arn
-        agent_ledger_id = agent.id
-        agent_method = agent.method
-        agent_protocol = (agent.spec or {}).get("protocol") or "http"
+        agent_arn = agent.arn if agent else ""
+        agent_ledger_id = agent.id if agent else None
+        agent_method = agent.method if agent else ""
+        agent_protocol = ((agent.spec or {}) if agent else {}).get("protocol") or "http"
         # Gateway-tool agents need a runtimeUserId or the Runtime injects no
         # workload token and the eval run measures a tool-less agent.
-        agent_runtime_user = gateway_support.runtime_user_id(agent.spec)
+        agent_runtime_user = gateway_support.runtime_user_id(agent.spec) if agent else None
     finally:
         db.close()
 
@@ -711,6 +732,7 @@ def submit_run(
             protocol=agent_protocol,
             service_name=service_name,
             log_group=log_group,
+            log_groups=log_groups,
             items=items_snapshot,
             evaluators=evaluators,
             mode=mode,

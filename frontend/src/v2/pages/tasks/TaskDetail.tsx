@@ -144,7 +144,24 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           items={[
             { label: t("v2.tasks.colName"), value: data.name },
             { label: "ID", value: <span className="mono">{data.id}</span> },
-            { label: t("v2.tasks.colAgent"), value: data.agentName },
+            ...(data.logSource
+              ? [
+                  { label: t("v2.tasks.cw.target"), value: t("v2.tasks.cw.targetCw") },
+                  { label: t("v2.tasks.cw.service"), value: <span className="mono">{data.logSource.service_name}</span> },
+                  {
+                    label: t("v2.tasks.cw.groupsLabel"),
+                    value: (
+                      <div className="v2-tags">
+                        {data.logSource.log_group_names.map((g) => (
+                          <Tag key={g} tone="outline">
+                            <span className="mono">{g}</span>
+                          </Tag>
+                        ))}
+                      </div>
+                    ),
+                  },
+                ]
+              : [{ label: t("v2.tasks.colAgent"), value: data.agentName }]),
             { label: t("v2.tasks.colSource"), value: sourceLabel(t, data) },
             {
               label: t("v2.tasks.colStrategy"),

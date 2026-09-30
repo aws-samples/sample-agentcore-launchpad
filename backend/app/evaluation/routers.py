@@ -6,7 +6,7 @@ Adapted from agentcore_eva_opt routers (datasets/evaluators/runs/insights).
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query
@@ -1160,8 +1160,26 @@ def delete_evaluator(
 
 
 # ─── runs ────────────────────────────────────────────────────────────────────
+LOG_GROUP_NAME_RE = r"^[.\-_/#A-Za-z0-9]{1,512}$"
+# a service.name as spans carry it; no whitespace or quotes (it is echoed into
+# CloudWatch filters by the discovery routes)
+SERVICE_NAME_RE = r"^[A-Za-z0-9._:/@#\-]{1,256}$"
+
+
+class LogSource(BaseModel):
+    """An agent's telemetry already in CloudWatch Logs, with no platform agent
+    behind it — `StartBatchEvaluation`'s `cloudWatchLogs` data source as is."""
+
+    service_name: str = Field(pattern=SERVICE_NAME_RE)
+    log_group_names: list[Annotated[str, Field(pattern=LOG_GROUP_NAME_RE)]] = Field(
+        min_length=1, max_length=10
+    )
+
+
 class RunCreate(BaseModel):
-    agent_id: str
+    # exactly one target: a platform agent, or a CloudWatch log source
+    agent_id: str | None = None
+    log_source: LogSource | None = None
     # optional operator-facing task name/description (console V2 evaluation tasks)
     name: str | None = Field(default=None, min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=1000)
@@ -1179,6 +1197,9 @@ class RunCreate(BaseModel):
     # active readiness threshold, not an unconditional sleep.
     wait_seconds: int = Field(default=180, ge=0, le=600)
     session_ids: list[str] | None = None  # insights/passive over past sessions
+    # where session_ids came from, for display only: "logs" = runtime log streams
+    # picked in the V2 task wizard (recorded as dataset_name "logs:<n>")
+    session_source: Literal["logs"] | None = None
     lookback_hours: int | None = Field(default=None, ge=1, le=336)  # time window
     insights: list[str] | None = None  # insight-type subset (insights mode)
 
@@ -1188,6 +1209,8 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "id": run.id,
         "agent_id": run.agent_id,
         "agent_name": run.agent_name,
+        # {service_name, log_group_names} when the run has no platform agent
+        "log_source": run.log_source,
         "name": run.name,
         "description": run.description,
         "dataset_id": run.dataset_id,
@@ -1285,19 +1308,40 @@ def create_run(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    agent = db.get(Agent, req.agent_id)
-    if agent is not None and agent.workspace_id != ws.id:
-        agent = None
-    if agent is None or agent.status != "active":
-        raise AppError("agent.not_active", "agent must be active", status_code=400)
+    if bool(req.agent_id) == bool(req.log_source):
+        raise AppError(
+            "run.target_required",
+            "exactly one target required: agent_id or log_source",
+            status_code=422,
+        )
+    agent = None
+    if req.agent_id:
+        agent = db.get(Agent, req.agent_id)
+        if agent is not None and agent.workspace_id != ws.id:
+            agent = None
+        if agent is None or agent.status != "active":
+            raise AppError("agent.not_active", "agent must be active", status_code=400)
 
     dataset_scope = bool(req.dataset_id) or bool(req.cloud_dataset_id)
+    if req.log_source and dataset_scope:
+        raise AppError(
+            "run.log_source_scope",
+            "a CloudWatch log source is evaluated passively — scope it with "
+            "session_ids or lookback_hours (a dataset replay needs an agent to invoke)",
+            status_code=422,
+        )
     scopes = [dataset_scope, bool(req.session_ids), bool(req.lookback_hours)]
     if sum(scopes) != 1 or (req.dataset_id and req.cloud_dataset_id):
         raise AppError(
             "run.scope_required",
             "exactly one scope required: dataset_id, cloud_dataset_id, "
             "session_ids or lookback_hours",
+            status_code=422,
+        )
+    if req.session_source and not req.session_ids:
+        raise AppError(
+            "run.session_source_scope",
+            "session_source only applies to a session_ids scope",
             status_code=422,
         )
     if req.dataset_version and not req.cloud_dataset_id:
@@ -1335,6 +1379,9 @@ def create_run(
         # "cloud:" prefix marks the scope in the runs list (like "window:Nh");
         # the pinned version travels on its own column, never in this string.
         dataset_name = f"cloud:{cloud_name}"
+    elif req.session_source == "logs":
+        # like "window:Nh": the scope rides in dataset_name, no schema change
+        dataset_name = f"logs:{len(set(req.session_ids or []))}"
 
     if any("actor_profile" in item for item in items) and not req.actor_model_id:
         raise AppError(
@@ -1356,8 +1403,14 @@ def create_run(
         )
     if req.mode == "evaluators":
         _assert_target_references(
-            db, ws, req.evaluators, items, dataset_scope, agent_spec=agent.spec
+            db, ws, req.evaluators, items, dataset_scope,
+            agent_spec=agent.spec if agent else None,
         )
+    log_source = None
+    if req.log_source:
+        groups = list(dict.fromkeys(req.log_source.log_group_names))
+        _assert_log_groups_exist(ws, groups)
+        log_source = {"service_name": req.log_source.service_name, "log_group_names": groups}
 
     if req.lookback_hours:
         now = datetime.now(UTC)
@@ -1389,8 +1442,27 @@ def create_run(
         dataset_version=req.dataset_version if req.cloud_dataset_id else None,
         name=req.name,
         description=req.description,
+        log_source=log_source,
     )
     return _run_out(run)
+
+
+def _assert_log_groups_exist(ws: WorkspaceScope, groups: list[str]) -> None:
+    """A missing input log group only surfaces as a failed batch minutes later
+    — refuse it up front instead (one DescribeLogGroups per group, ≤ 10)."""
+    logs = ws.context.client("logs")
+    missing = []
+    for name in groups:
+        found = logs.describe_log_groups(logGroupNamePrefix=name, limit=50).get("logGroups", [])
+        if not any(g.get("logGroupName") == name for g in found):
+            missing.append(name)
+    if missing:
+        raise AppError(
+            "run.log_group_missing",
+            f"log group(s) not found in this workspace: {', '.join(missing)}",
+            {"missing": missing},
+            status_code=422,
+        )
 
 
 @router.post("/runs/{run_id}/stop", status_code=202)

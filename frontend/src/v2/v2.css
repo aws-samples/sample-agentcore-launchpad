@@ -243,6 +243,9 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-table td { padding: 12px 16px; border-bottom: 1px solid var(--v2-line-2); color: var(--v2-ink); vertical-align: middle; }
 .v2-table tbody tr:hover td { background: #fafbfc; }
 .v2-table tbody tr.selected td { background: var(--v2-primary-soft); }
+/* a column pinned to the right edge (operations) — stays reachable when the table scrolls */
+.v2-table th.sticky, .v2-table td.sticky { position: sticky; right: 0; z-index: 1; box-shadow: -6px 0 6px -6px rgba(0, 0, 0, 0.12); }
+.v2-table td.sticky { background: var(--v2-card); }
 .v2-table.dense td { padding: 7px 12px; }
 .v2-table.dense th { padding: 8px 12px; }
 .v2-table.loose td { padding: 16px 16px; }
@@ -409,3 +412,42 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   .v2-search { width: 100%; }
   .v2-span .track { width: 100px; }
 }
+
+/* ---------- evaluation insights panel (评估总览 · 评估洞察) ---------- */
+.v2-istats { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.v2-istat { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px 16px; background: var(--v2-fill); }
+.v2-istat .l { color: var(--v2-ink-2); font-size: 13px; }
+.v2-istat .v { font-size: 22px; font-weight: 600; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.v2-istat .v.bad { color: var(--v2-danger); }
+.v2-istat .s { color: var(--v2-ink-3); font-size: 12px; }
+.v2-iclusters { display: flex; flex-direction: column; gap: 8px; }
+.v2-icluster { display: flex; align-items: flex-start; gap: 12px; width: 100%; text-align: left; font: inherit; color: inherit; background: #fff; border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px 14px; cursor: pointer; }
+.v2-icluster:hover { border-color: var(--v2-primary); }
+.v2-icluster .rank { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; background: var(--v2-fill-2); color: var(--v2-ink-2); }
+.v2-icluster .rank.red { background: var(--v2-danger-soft); color: #cb2634; }
+.v2-icluster .rank.blue { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2-icluster .rank.green { background: var(--v2-success-soft); color: #009a29; }
+.v2-icluster .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.v2-icluster .name { font-size: 14px; font-weight: 600; color: var(--v2-ink); }
+.v2-icluster .desc { color: var(--v2-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.v2-icluster .meter { flex: none; width: 220px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; text-align: right; }
+.v2-irec { color: var(--v2-ink-2); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.v2-irec.full { display: block; }
+.v2-ilabel { color: var(--v2-ink-3); margin-right: 6px; }
+@media (max-width: 900px) {
+  .v2-istats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .v2-icluster { flex-wrap: wrap; }
+  .v2-icluster .meter { width: 100%; text-align: left; }
+}
+
+/* ---------- CloudWatch-source task (no platform agent) ---------- */
+.v2-suggest { display: flex; flex-direction: column; border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); padding: 4px; max-height: 240px; overflow: auto; font-size: 13px; }
+.v2-suggest > span { padding: 6px 8px; }
+.v2-suggest button { display: flex; align-items: center; gap: 6px; text-align: left; border: 0; background: none; padding: 6px 8px; border-radius: 4px; cursor: pointer; color: var(--v2-ink); font-size: 13px; }
+.v2-suggest button:hover { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2-tag-x { border: 0; background: none; padding: 0 0 0 4px; cursor: pointer; color: var(--v2-ink-3); display: inline-flex; align-items: center; }
+.v2-tag-x:hover { color: var(--v2-danger); }
+/* long monospace names (log groups) wrap inside their tag instead of overflowing the cell */
+.v2-tags .v2-tag { max-width: 100%; }
+.v2-tag:has(> .mono) { height: auto; min-height: 22px; padding-top: 2px; padding-bottom: 2px; }
+.v2-tag > .mono { white-space: normal; word-break: break-all; }

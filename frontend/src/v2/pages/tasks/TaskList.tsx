@@ -13,7 +13,9 @@ import {
   sourceLabel,
   STATUS_TONE,
   statusLabel,
+  TASK_SOURCES,
   taskItemLabel,
+  type TaskMode,
   type TaskStatus,
   type V2Task,
 } from "../../tasks";
@@ -41,6 +43,7 @@ export function TaskList() {
   const { data, loading, error, reload } = useLoad(loadTasks, "tasks");
   const [status, setStatus] = useState("");
   const [source, setSource] = useState("");
+  const [mode, setMode] = useState("");
   const [agent, setAgent] = useState("");
   const [q, setQ] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
@@ -53,13 +56,15 @@ export function TaskList() {
     return tasks.filter((task) => {
       if (status && task.status !== status) return false;
       if (source && task.source !== source) return false;
+      if (mode && task.mode !== mode) return false;
       if (agent && task.agentName !== agent) return false;
       return !needle || `${task.name} ${task.id} ${task.description}`.toLowerCase().includes(needle);
     });
-  }, [tasks, status, source, agent, q]);
+  }, [tasks, status, source, mode, agent, q]);
   const paged = usePaged(rows, 12);
   const mayRun = can("eval.run");
 
+  const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
   const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id });
   const copy = (task: V2Task) => setParams({ view: "new", from: `${task.kind}:${task.id}` });
 
@@ -93,7 +98,7 @@ export function TaskList() {
       render: (task) => (
         <>
           <LinkButton onClick={() => open(task)}>
-            <span className="ellipsis" style={{ maxWidth: 320 }} title={task.name}>{task.name}</span>
+            <span className="ellipsis" style={{ maxWidth: 240 }} title={task.name}>{task.name}</span>
           </LinkButton>
           <span className="sub mono">ID: {task.id}</span>
         </>
@@ -105,39 +110,61 @@ export function TaskList() {
       render: (task) => {
         const label = (id: string) => taskItemLabel(t, task, id);
         return (
-          <span className="ellipsis" style={{ maxWidth: 180 }} title={task.evaluators.map(label).join("、")}>
-            {task.mode === "insights" && <Tag tone="blue">{t("v2.tasks.modeInsightsShort")}</Tag>} {evaluatorSummary(t, task.evaluators, label)}
+          <span className="ellipsis" style={{ maxWidth: 160 }} title={task.evaluators.map(label).join("、")}>
+            {evaluatorSummary(t, task.evaluators, label)}
           </span>
         );
       },
     },
     {
+      key: "mode",
+      title: t("v2.tasks.mode"),
+      className: "nowrap",
+      render: (task) => <Tag tone={task.mode === "insights" ? "blue" : "outline"}>{modeLabel(task.mode)}</Tag>,
+    },
+    {
       key: "agent",
       title: t("v2.tasks.colAgent"),
-      render: (task) => <span className="ellipsis" title={task.agentName}>{task.agentName}</span>,
+      render: (task) => (
+        <>
+          <span className={task.logSource ? "ellipsis mono" : "ellipsis"} style={{ maxWidth: 160 }} title={task.agentName}>
+            {task.agentName}
+          </span>
+          {task.logSource && <span className="sub">{t("v2.tasks.cw.short")}</span>}
+        </>
+      ),
     },
     {
+      // the run strategy rides under the source — the table stays within 8 columns
       key: "source",
-      title: t("v2.tasks.colSource"),
-      render: (task) => <span className="ellipsis" title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>,
-    },
-    {
-      key: "strategy",
-      title: t("v2.tasks.colStrategy"),
-      className: "nowrap",
-      render: (task) => (task.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")),
+      title: t("v2.tasks.colSourceStrategy"),
+      render: (task) => (
+        <>
+          <span className="ellipsis" style={{ maxWidth: 180 }} title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>
+          <span className="sub">{task.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")}</span>
+        </>
+      ),
     },
     {
       key: "status",
       title: t("v2.tasks.colStatus"),
       render: (task) => <Tag tone={STATUS_TONE[task.status]}>{statusLabel(t, task.status)}</Tag>,
     },
-    { key: "created", title: t("v2.tasks.colCreated"), className: "nowrap", render: (task) => fmtTime(task.createdAt) },
-    { key: "updated", title: t("v2.tasks.colUpdated"), className: "nowrap", render: (task) => fmtTime(task.updatedAt) },
+    {
+      key: "time",
+      title: t("v2.tasks.colCreatedUpdated"),
+      className: "nowrap",
+      render: (task) => (
+        <>
+          {fmtTime(task.createdAt)}
+          <span className="sub" title={t("v2.tasks.colUpdated")}>{fmtTime(task.updatedAt)}</span>
+        </>
+      ),
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),
-      className: "right",
+      className: "right sticky",
       render: (task) => {
         const active = task.status === "running" || task.status === "queued";
         return (
@@ -192,10 +219,17 @@ export function TaskList() {
             value={source}
             allLabel={t("v2.common.all")}
             onChange={setSource}
-            options={(["window", "sessions", "dataset", "cloud", "live"] as const).map((s) => ({
+            options={TASK_SOURCES.map((s) => ({
               value: s,
               label: t(`v2.taskSource.${s}Short`),
             }))}
+          />
+          <FilterSelect
+            label={t("v2.tasks.mode")}
+            value={mode}
+            allLabel={t("v2.common.all")}
+            onChange={setMode}
+            options={(["evaluators", "insights"] as const).map((m) => ({ value: m, label: modeLabel(m) }))}
           />
           <FilterSelect
             label={t("v2.tasks.colAgent")}

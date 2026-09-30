@@ -2526,6 +2526,34 @@ through the same backend routes and permission checks as the classic pages.
   the run's clusters instead of scores; clustering needs at least 3 sessions, so
   hand-picked sessions require 3 and a smaller window/dataset warns. Continuous
   insights stay on the online-evaluation page (they carry a report schedule).
+  The task list shows the evaluation type as its own column (and filter); to stay
+  within eight columns the run strategy rides under the data source and the
+  update time under the creation time, and the operations column is pinned to
+  the right edge.
+- **日志 data source** (`v2/pages/tasks/LogStreamPicker.tsx`): the wizard lists the
+  agent's runtime log streams in a window (default 7 days) through
+  `GET /api/eval/agents/{id}/log-streams` and filters them by keyword — stream name
+  or log content (see the Data Processing API). One row is one session: a code
+  runtime's `[runtime-logs-<sessionId>]` stream, or for a Harness runtime (which
+  names streams per microVM) that session's slice of `otel-rt-logs`; streams no
+  session owns are hidden behind a toggle and never selectable. The picked
+  sessions start an ordinary `session_ids` run (no agent invocation), tagged
+  `session_source: "logs"` so the list shows the source as 日志.
+- **Evaluation target: platform agent or CloudWatch telemetry.** A task can
+  evaluate an agent that is not a platform agent (for example one not hosted on
+  AgentCore Runtime) straight from its CloudWatch telemetry
+  (`v2/pages/tasks/LogSourceFields.tsx`): the operator gives the span
+  `service.name` and 1–10 input log groups — picked from services discovered in
+  `aws/spans` (`GET /api/eval/log-services`, which also pre-fills the content log
+  group the spans' resource names and flags a service a platform agent owns) and
+  a log-group search (`GET /api/eval/log-groups`). The run carries
+  `log_source {service_name, log_group_names}` instead of `agent_id`, which is
+  exactly `StartBatchEvaluation`'s `cloudWatchLogs` source. Only passive scopes
+  apply: 链路 (a time window) or 日志 (sessions of the service in those log
+  groups, found from its spans with Logs Insights — `GET /api/eval/log-sessions`
+  — since an off-runtime agent's content logs need not carry a `session.id`);
+  Agent 轨迹, dataset replay and continuous evaluation need a platform agent.
+  The ledger row keeps `agent_id = ""` and the service name as `agent_name`.
 - **Results are shown, not exported.** Task detail and 评估总览 read the judged
   records (`GET /api/eval/runs/{id}/results`, `GET /api/eval/online/{id}/results`)
   into one row model (`v2/results.ts`): outcome, raw and **normalized** score
@@ -2534,6 +2562,14 @@ through the same backend routes and permission checks as the classic pages.
   completed scored runs of the window (insights runs carry no scores) plus every continuous task, with KPIs, a
   per-evaluator breakdown, filters, CSV export and "bad cases → dataset", which
   feeds `POST /api/eval/datasets/from-sessions` (see the Data Processing API).
+  Its **评估洞察** panel (`v2/InsightsPanel.tsx`) covers the completed insights runs
+  of the window from the clusters already on the run rows (no extra read): task /
+  failure-category / intent / summary counts, then the failure, intent and
+  execution-summary clusters merged by name across tasks, biggest first, each
+  with its top recommendation; a cluster opens a drawer with sub-categories, root
+  causes and recommendations, affected sessions and links to its source tasks.
+  The task, agent, source and search filters narrow the panel too; the
+  evaluator / outcome / score-band filters are score-only.
 
 ## Console authentication and accounts
 

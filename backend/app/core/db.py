@@ -203,6 +203,7 @@ def _migrate(bind) -> None:
         for column, ddl in (
             ("name", "ALTER TABLE eval_runs ADD COLUMN name VARCHAR(64)"),
             ("description", "ALTER TABLE eval_runs ADD COLUMN description TEXT"),
+            ("log_source", "ALTER TABLE eval_runs ADD COLUMN log_source JSON"),
         ):
             if column not in existing:
                 with bind.begin() as conn:

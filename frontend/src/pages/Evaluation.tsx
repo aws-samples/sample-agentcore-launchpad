@@ -79,7 +79,8 @@ const LEVEL_BADGE: Record<string, { label: string; color: string }> = {
 // Backend scope encodings for the runs table: "window:24h" → "window · 24h",
 // "cloud:name" (AWS cloud dataset) → "☁ name · v2" when the run pinned a
 // published version, "☁ name · <draftLabel>" otherwise; "online:<configId>"
-// (on-demand report of an online insights config) → "online · <configId>".
+// (on-demand report of an online insights config) → "online · <configId>";
+// "logs:<n>" (runtime log streams picked in the V2 task wizard) → "logs · <n>".
 function scopeLabel(run: RunInfo, draftLabel: string): string {
   if (run.dataset_name?.startsWith("window:")) {
     return `window · ${run.dataset_name.slice("window:".length)}`;
@@ -91,6 +92,7 @@ function scopeLabel(run: RunInfo, draftLabel: string): string {
   if (run.dataset_name?.startsWith("online:")) {
     return `online · ${run.dataset_name.slice("online:".length)}`;
   }
+  if (run.dataset_name?.startsWith("logs:")) return `logs · ${run.session_ids.length}`;
   if (run.mode === "insights") return `insights · ${run.session_ids.length}`;
   return run.dataset_name ?? "—";
 }

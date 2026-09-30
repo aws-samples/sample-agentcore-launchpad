@@ -1,7 +1,7 @@
 import type { TFunction } from "i18next";
 
 import { api, type OnlineEvalConfigRow } from "../lib/api";
-import type { EvaluationRunInfo } from "../lib/evaluation";
+import type { EvaluationRunInfo, LogSource } from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
 import { insightLabel, modeOf } from "./online";
 import type { TagTone } from "./ui";
@@ -13,7 +13,12 @@ import type { TagTone } from "./ui";
  * (continuous strategy — sampled live sessions scored as they arrive).
  */
 export type TaskKind = "run" | "online";
-export type TaskSource = "dataset" | "cloud" | "window" | "sessions" | "live";
+export type TaskSource = "dataset" | "cloud" | "window" | "sessions" | "logs" | "live";
+/** How many input log groups `StartBatchEvaluation` accepts (CloudWatch-source tasks). */
+export const MAX_LOG_GROUPS = 10;
+/** A span `service.name` as the backend accepts it (no whitespace or quotes). */
+export const SERVICE_NAME_RE = /^[A-Za-z0-9._:/@#-]{1,256}$/;
+export const TASK_SOURCES: TaskSource[] = ["window", "sessions", "logs", "dataset", "cloud", "live"];
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "stopped" | "paused" | "pending";
 /** `evaluators` scores each session; `insights` clusters the sessions (failure analysis). */
 export type TaskMode = "evaluators" | "insights";
@@ -24,12 +29,15 @@ export interface V2Task {
   name: string;
   description: string;
   agentId: string | null;
+  /** the agent's name — for a CloudWatch-source run, the telemetry service name */
   agentName: string;
+  /** set when the task evaluates CloudWatch telemetry with no platform agent */
+  logSource: LogSource | null;
   mode: TaskMode;
   /** evaluator ids — or, in insights mode, the insight types applied */
   evaluators: string[];
   source: TaskSource;
-  /** dataset name / window length / sampling percentage */
+  /** dataset name / window length / session count / sampling percentage */
   sourceDetail: string;
   status: TaskStatus;
   createdAt: string | null;
@@ -42,6 +50,7 @@ function runSource(run: EvaluationRunInfo): { source: TaskSource; detail: string
   const name = run.dataset_name ?? "";
   if (name.startsWith("window:")) return { source: "window", detail: name.slice("window:".length) };
   if (name.startsWith("cloud:")) return { source: "cloud", detail: name.slice("cloud:".length) };
+  if (name.startsWith("logs:")) return { source: "logs", detail: String(run.session_ids.length) };
   if (!run.dataset_id && run.session_ids.length > 0) {
     return { source: "sessions", detail: String(run.session_ids.length) };
   }
@@ -68,8 +77,9 @@ export function taskFromRun(run: EvaluationRunInfo): V2Task {
     id: run.id,
     name: run.name || `${run.agent_name} · ${detail || run.id}`,
     description: run.description ?? "",
-    agentId: run.agent_id,
+    agentId: run.agent_id || null,
     agentName: run.agent_name,
+    logSource: run.log_source ?? null,
     mode: run.mode === "insights" ? "insights" : "evaluators",
     evaluators: run.evaluators,
     source,
@@ -95,6 +105,7 @@ export function taskFromOnline(row: OnlineEvalConfigRow): V2Task {
     name: row.description?.trim() || row.name || row.config_id,
     description: row.description ?? "",
     agentId: row.agent_id,
+    logSource: null,
     agentName: row.agent_name ?? row.matched_agent?.name ?? "—",
     mode: modeOf(row) === "insights" ? "insights" : "evaluators",
     evaluators: modeOf(row) === "insights" ? row.insights : row.evaluators,
