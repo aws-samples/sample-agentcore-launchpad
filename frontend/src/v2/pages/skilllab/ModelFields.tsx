@@ -8,7 +8,7 @@ import {
   judgeReadiness,
   modelDefault,
 } from "../../../lib/skillLab";
-import { Field } from "../../ui";
+import { Field, Select } from "../../ui";
 
 export interface JudgeFields {
   model: string;
@@ -56,18 +56,12 @@ export function ModelFields({
   return (
     <div className="v2-form cols-2">
       <Field label={t("skillLab.backend.field")} hint={t("skillLab.backend.hint")}>
-        <select
-          className="v2-select"
+        <Select
           value={backend}
-          data-testid={`${testId}-backend`}
-          onChange={(e) => applyBackend(e.target.value as SkillLabTargetBackend)}
-        >
-          {backendsOf(status).map((option) => (
-            <option key={option} value={option}>
-              {BACKEND_LABELS[option] ?? option}
-            </option>
-          ))}
-        </select>
+          testId={`${testId}-backend`}
+          options={backendsOf(status).map((option) => ({ value: option, label: BACKEND_LABELS[option] ?? option }))}
+          onChange={(v) => applyBackend(v as SkillLabTargetBackend)}
+        />
       </Field>
       <Field
         label={t("skillLab.eval.wizard.field.targetModel")}
@@ -106,19 +100,15 @@ export function ModelFields({
               )
             }
           >
-            <select
-              className="v2-select"
+            <Select
               value={judge.mode}
-              data-testid={`${testId}-judge-mode`}
-              onChange={(e) => judge.setMode(e.target.value as SkillLabJudgeMode)}
-            >
-              {judgeModes.map((option) => (
-                <option key={option} value={option}>
-                  {t(`skillLab.backend.judgeModeOption.${option}`)}
-                  {option !== "chat" && !readiness.ready ? " ⚠" : ""}
-                </option>
-              ))}
-            </select>
+              testId={`${testId}-judge-mode`}
+              options={judgeModes.map((option) => ({
+                value: option,
+                label: `${t(`skillLab.backend.judgeModeOption.${option}`)}${option !== "chat" && !readiness.ready ? " ⚠" : ""}`,
+              }))}
+              onChange={(v) => judge.setMode(v as SkillLabJudgeMode)}
+            />
           </Field>
         </>
       )}

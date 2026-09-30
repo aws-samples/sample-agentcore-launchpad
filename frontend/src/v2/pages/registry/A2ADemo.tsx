@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { api, errorMessage, type RegistryA2ADemoResult } from "../../../lib/api";
 import { fmtDuration } from "../../format";
 import { useLoad } from "../../hooks";
-import { Alert, Button, Card, Field, FlowHeader, Tag } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, Select, Tag } from "../../ui";
 
 function Stage({
   index,
@@ -74,19 +74,15 @@ export function A2ADemo() {
         <Card title={t("v2.registry.demo.ask")}>
           <div className="v2-form">
             <Field label={t("v2.registry.demo.agent")} required hint={t("v2.registry.demo.agentHint")}>
-              <select
-                className="v2-select"
+              <Select
                 value={agentId}
-                onChange={(e) => setPicked(e.target.value)}
-                data-testid="v2-registry-demo-agent"
-              >
-                {eligible.length === 0 && <option value="">{agents.loading ? t("v2.common.loading") : t("v2.registry.demo.noAgents")}</option>}
-                {eligible.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} · {a.method}
-                  </option>
-                ))}
-              </select>
+                placeholder={
+                  eligible.length === 0 ? (agents.loading ? t("v2.common.loading") : t("v2.registry.demo.noAgents")) : undefined
+                }
+                options={eligible.map((a) => ({ value: a.id, label: `${a.name} · ${a.method}` }))}
+                onChange={(v) => setPicked(v)}
+                testId="v2-registry-demo-agent"
+              />
             </Field>
             <Field label={t("v2.registry.demo.question")} required>
               <textarea

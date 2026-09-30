@@ -8,7 +8,7 @@ import { CROSS_ACCOUNT_GUIDE_URL, SPOKE_TEMPLATE_URL } from "../../../lib/links"
 import { ROLE_ARN, suggestExternalId, WORKSPACE_REGIONS } from "../../../lib/workspaces";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Field, FlowHeader, OptionCard } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, OptionCard, Select } from "../../ui";
 
 const OTHER = "__other__";
 
@@ -238,22 +238,20 @@ export function WorkspaceCreate() {
               </Field>
               <Field label={t("v2.workspaces.field.region")} required hint={t("workspacesPage.create.regionHint")}>
                 <div className="v2-stack">
-                  <select
-                    className="v2-select"
+                  <Select
                     value={choice}
-                    onChange={(e) => setChoice(e.target.value)}
+                    options={[
+                      { value: OTHER, label: t("v2.workspaces.regionOther") },
+                      ...WORKSPACE_REGIONS.map((option) => ({
+                        value: option,
+                        // "in use" is about THIS account's regions
+                        label: `${option}${!external && takenRegions.includes(option) ? ` · ${t("workspacesPage.create.regionTaken")}` : ""}`,
+                      })),
+                    ]}
+                    onChange={(v) => setChoice(v)}
                     disabled={submitting}
-                    data-testid="v2-ws-region-select"
-                  >
-                    <option value={OTHER}>{t("v2.workspaces.regionOther")}</option>
-                    {WORKSPACE_REGIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                        {/* "in use" is about THIS account's regions */}
-                        {!external && takenRegions.includes(option) ? ` · ${t("workspacesPage.create.regionTaken")}` : ""}
-                      </option>
-                    ))}
-                  </select>
+                    testId="v2-ws-region-select"
+                  />
                   {choice === OTHER && (
                     <input
                       className="v2-input mono"

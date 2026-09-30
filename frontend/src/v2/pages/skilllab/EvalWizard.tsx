@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJudgeMode, type SkillLabStatus, type SkillLabTargetBackend } from "../../../lib/api";
 import { canSubmitJobs, evalSplitsOf } from "../../../lib/skillLab";
-import { Alert, Button, Card, Field, FlowHeader, Segmented } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, Segmented, Select } from "../../ui";
 import { ModelFields } from "./ModelFields";
 import { SkillSourcePicker } from "./SkillPicker";
 import { initialSource, skillSourceOf, type SourceState, useTasksets } from "./state";
@@ -147,14 +147,13 @@ export function EvalWizard({ status }: { status: SkillLabStatus | null }) {
             required
             hint={!tasksets.loading && rows.length === 0 ? t("skillLab.eval.wizard.noTasksets") : undefined}
           >
-            <select className="v2-select" value={tasksetId} onChange={(e) => setTasksetId(e.target.value)} data-testid="v2-eval-taskset">
-              <option value="">{t("v2.common.choose")}</option>
-              {rows.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.name} ({t(`skillLab.tasksets.mode.${row.mode}`)})
-                </option>
-              ))}
-            </select>
+            <Select
+              value={tasksetId}
+              placeholder={t("v2.common.choose")}
+              options={rows.map((row) => ({ value: row.id, label: `${row.name} (${t(`skillLab.tasksets.mode.${row.mode}`)})` }))}
+              onChange={setTasksetId}
+              testId="v2-eval-taskset"
+            />
           </Field>
           {splits.length > 0 && (
             <Field label={t("v2.skillLab.split")} hint={t("v2.skillLab.splitHint")}>

@@ -29,7 +29,7 @@ import {
   validateDraft,
   withMode,
 } from "../../online";
-import { Alert, Button, Card, Field, FlowHeader, OptionCard, Spin } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, OptionCard, Select, Spin } from "../../ui";
 
 function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (next: FilterDraft[]) => void }) {
   const { t } = useTranslation();
@@ -46,34 +46,34 @@ function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (
             aria-label={t("v2.online.filterKey")}
             onChange={(e) => set(i, { key: e.target.value })}
           />
-          <select className="v2-select" style={{ flex: 1.4 }} value={f.operator} aria-label={t("v2.online.filterOperator")} onChange={(e) => set(i, { operator: e.target.value as FilterDraft["operator"] })}>
-            {OPERATORS.map((op) => (
-              <option key={op} value={op}>
-                {op}
-              </option>
-            ))}
-          </select>
-          <select
-            className="v2-select"
+          <Select
+            style={{ flex: 1.4 }}
+            value={f.operator}
+            ariaLabel={t("v2.online.filterOperator")}
+            options={OPERATORS.map((op) => ({ value: op, label: op }))}
+            onChange={(v) => set(i, { operator: v as FilterDraft["operator"] })}
+          />
+          <Select
             style={{ flex: 1 }}
             value={f.kind}
-            aria-label={t("v2.online.filterKind")}
-            onChange={(e) => {
-              const kind = e.target.value as FilterKind;
+            ariaLabel={t("v2.online.filterKind")}
+            options={(["string", "number", "boolean"] as FilterKind[]).map((k) => ({ value: k, label: t(`v2.online.kind.${k}`) }))}
+            onChange={(v) => {
+              const kind = v as FilterKind;
               set(i, { kind, value: kind === "boolean" ? "true" : "" });
             }}
-          >
-            {(["string", "number", "boolean"] as FilterKind[]).map((k) => (
-              <option key={k} value={k}>
-                {t(`v2.online.kind.${k}`)}
-              </option>
-            ))}
-          </select>
+          />
           {f.kind === "boolean" ? (
-            <select className="v2-select" style={{ flex: 2 }} value={f.value} aria-label={t("v2.online.filterValue")} onChange={(e) => set(i, { value: e.target.value })}>
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
+            <Select
+              style={{ flex: 2 }}
+              value={f.value}
+              ariaLabel={t("v2.online.filterValue")}
+              options={[
+                { value: "true", label: "true" },
+                { value: "false", label: "false" },
+              ]}
+              onChange={(v) => set(i, { value: v })}
+            />
           ) : (
             <input
               className="v2-input"
@@ -192,14 +192,13 @@ export function OnlineEditor({ id }: { id: string | null }) {
             {editing ? (
               <input className="v2-input" value={row?.agent_name ?? row?.agent_id ?? "—"} readOnly />
             ) : (
-              <select className="v2-select" value={agentId} onChange={(e) => setAgentId(e.target.value)} data-testid="v2-online-agent">
-                <option value="">{t("v2.common.choose")}</option>
-                {eligible.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} · {a.method}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={agentId}
+                placeholder={t("v2.common.choose")}
+                options={eligible.map((a) => ({ value: a.id, label: `${a.name} · ${a.method}` }))}
+                onChange={setAgentId}
+                testId="v2-online-agent"
+              />
             )}
           </Field>
           <Field label={t("v2.tasks.description")} hint={t("v2.online.descHint")}>

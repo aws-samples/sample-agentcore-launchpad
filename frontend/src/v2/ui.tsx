@@ -3,6 +3,7 @@
 // Styling lives in v2.css under the `.v2` scope.
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -13,7 +14,18 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  Fragment,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { ToastContext } from "./hooks";
@@ -103,10 +115,326 @@ export function Tag({
   );
 }
 
-/* ---------- filter select: "状态  全部 ▾" ---------- */
+/* ---------- dropdowns: Select (form field) + FilterSelect ("状态  全部 ▾") ---------- */
 export interface Option {
   value: string;
   label: string;
+  disabled?: boolean;
+  /** consecutive options sharing a group render under one header */
+  group?: string;
+}
+
+/** Lists longer than this get a filter box at the top of the popup. */
+const SEARCH_THRESHOLD = 8;
+
+/**
+ * Shared popup-listbox behaviour behind every V2 dropdown trigger. The popup is
+ * rendered next to the trigger (not portalled: the `--v2-*` tokens live on the
+ * `.v2` root) with `position: fixed`, so card / modal-body overflow never clips it.
+ */
+function useListbox({
+  options,
+  value,
+  onChange,
+  disabled,
+  searchable,
+  mono,
+}: {
+  options: Option[];
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  searchable?: boolean;
+  mono?: boolean;
+}) {
+  const { t } = useTranslation();
+  const listId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const typeahead = useRef({ text: "", at: 0 });
+  // Space-select closes the list on keydown, so by keyup `open` is already false
+  const spaceChose = useRef(false);
+  const [openState, setOpen] = useState(false);
+  // a control disabled while its list is open (e.g. Chat going busy) drops the list
+  const open = openState && !disabled;
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(-1);
+  const [pos, setPos] = useState<CSSProperties>({});
+  const withSearch = searchable ?? options.length > SEARCH_THRESHOLD;
+  const needle = query.trim().toLowerCase();
+  const visible = useMemo(
+    () => (needle ? options.filter((o) => o.label.toLowerCase().includes(needle)) : options),
+    [options, needle],
+  );
+
+  const place = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 8;
+    const above = r.top - 8;
+    // flip only when the list (capped at 240 px) does not fit below
+    const need = Math.min(240, options.length * 32 + (withSearch ? 44 : 0) + 10);
+    const up = below < need && above > below;
+    setPos({
+      left: r.left,
+      minWidth: r.width,
+      maxWidth: Math.max(r.width, Math.min(480, window.innerWidth - r.left - 8)),
+      maxHeight: Math.min(320, Math.max(120, up ? above : below)),
+      ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+    });
+  }, [options.length, withSearch]);
+
+  const step = useCallback(
+    (from: number, dir: 1 | -1) => {
+      for (let i = from + dir; i >= 0 && i < visible.length; i += dir) {
+        if (!visible[i].disabled) return i;
+      }
+      return from;
+    },
+    [visible],
+  );
+
+  const show = () => {
+    if (disabled) return;
+    const at = options.findIndex((o) => o.value === value && !o.disabled);
+    setQuery("");
+    setActive(at >= 0 ? at : options.findIndex((o) => !o.disabled));
+    place();
+    setOpen(true);
+  };
+
+  const close = useCallback((refocus: boolean) => {
+    setOpen(false);
+    if (refocus) triggerRef.current?.focus();
+  }, []);
+
+  const choose = (o: Option | undefined) => {
+    if (!o || o.disabled) return;
+    if (o.value !== value) onChange(o.value);
+    close(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target) || popRef.current?.contains(target)) return;
+      close(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    searchRef.current?.focus();
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, close, place]);
+
+  useEffect(() => {
+    if (!open || active < 0) return;
+    popRef.current?.querySelector(`[data-idx="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (disabled) return;
+    const inSearch = e.target === searchRef.current;
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        show();
+      }
+      return; // Enter / Space fall through to the trigger's click
+    }
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setActive((i) => step(i, 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setActive((i) => step(i, -1));
+        break;
+      case "Home":
+      case "End":
+        if (inSearch) return;
+        e.preventDefault();
+        setActive(e.key === "Home" ? step(-1, 1) : step(visible.length, -1));
+        break;
+      case "Enter":
+        e.preventDefault();
+        choose(visible[active]);
+        break;
+      case " ":
+        if (inSearch) return;
+        e.preventDefault();
+        spaceChose.current = true;
+        choose(visible[active]);
+        break;
+      case "Escape":
+        // keep an enclosing Modal / Drawer (window keydown listener) open
+        e.preventDefault();
+        e.stopPropagation();
+        close(true);
+        break;
+      case "Tab":
+        close(false);
+        break;
+      default: {
+        if (inSearch || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+        const now = Date.now();
+        const ta = typeahead.current;
+        ta.text = now - ta.at > 600 ? e.key.toLowerCase() : ta.text + e.key.toLowerCase();
+        ta.at = now;
+        const hit = visible.findIndex((o) => !o.disabled && o.label.toLowerCase().startsWith(ta.text));
+        if (hit >= 0) setActive(hit);
+      }
+    }
+  };
+
+  const optionId = (i: number) => `${listId}-o${i}`;
+  const triggerProps = {
+    ref: triggerRef,
+    type: "button" as const,
+    disabled,
+    "aria-haspopup": "listbox" as const,
+    "aria-expanded": open,
+    "aria-controls": open ? listId : undefined,
+    "aria-activedescendant": open && !withSearch && active >= 0 ? optionId(active) : undefined,
+    onClick: () => (open ? close(false) : show()),
+    onKeyDown,
+    onKeyUp: (e: ReactKeyboardEvent<HTMLElement>) => {
+      if (e.key !== " ") return;
+      if (open || spaceChose.current) e.preventDefault(); // no click-reopen after Space-select
+      spaceChose.current = false;
+    },
+  };
+
+  // like a native <select>, only the first option carrying the value is "the" selection
+  const selectedIdx = visible.findIndex((o) => o.value === value);
+  let lastGroup: string | undefined;
+  const popup = open ? (
+    <div
+      ref={popRef}
+      className={mono ? "v2-pop mono" : "v2-pop"}
+      style={pos}
+      onKeyDown={onKeyDown}
+      // inside a <label>, a click here would re-activate the trigger and reopen the list
+      onClick={(e) => e.preventDefault()}
+      data-testid="v2-select-popup"
+    >
+      {withSearch && (
+        <div className="v2-pop-search">
+          <Search size={14} aria-hidden="true" />
+          <input
+            ref={searchRef}
+            className="v2-input"
+            value={query}
+            placeholder={t("v2.common.searchOptions")}
+            aria-label={t("v2.common.searchOptions")}
+            aria-controls={listId}
+            aria-activedescendant={active >= 0 ? optionId(active) : undefined}
+            onChange={(e) => {
+              const q = e.target.value.trim().toLowerCase();
+              setQuery(e.target.value);
+              setActive(options.filter((o) => !q || o.label.toLowerCase().includes(q)).findIndex((o) => !o.disabled));
+            }}
+          />
+        </div>
+      )}
+      <div className="v2-pop-list" role="listbox" id={listId}>
+        {visible.length === 0 && <div className="v2-pop-empty">{t("v2.common.noMatch")}</div>}
+        {visible.map((o, i) => {
+          const header = o.group && o.group !== lastGroup ? o.group : null;
+          lastGroup = o.group;
+          const selected = i === selectedIdx;
+          return (
+            <Fragment key={i}>
+              {header && (
+                <div className="v2-opt-group" role="presentation">
+                  {header}
+                </div>
+              )}
+              <div
+                id={optionId(i)}
+                role="option"
+                aria-selected={selected}
+                aria-disabled={o.disabled || undefined}
+                data-idx={i}
+                className={["v2-opt", o.group ? "grouped" : "", i === active ? "active" : "", selected ? "selected" : "", o.disabled ? "disabled" : ""].join(" ").trim()}
+                title={o.label}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => !o.disabled && setActive(i)}
+                onClick={() => choose(o)}
+              >
+                <span className="txt">{o.label}</span>
+                {selected && <Check size={14} aria-hidden="true" />}
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+    </div>
+  ) : null;
+
+  return { open, triggerProps, popup };
+}
+
+/** Form-field dropdown — the V2 replacement for `<select className="v2-select">`. */
+export function Select({
+  value,
+  options,
+  onChange,
+  placeholder,
+  disabled,
+  mono,
+  searchable,
+  className,
+  style,
+  id,
+  ariaLabel,
+  testId,
+}: {
+  value: string;
+  options: Option[];
+  onChange: (value: string) => void;
+  /** label of a leading, selectable "" option (the old `<option value="">`) */
+  placeholder?: string;
+  disabled?: boolean;
+  mono?: boolean;
+  /** default: on when there are more than 8 options */
+  searchable?: boolean;
+  className?: string;
+  style?: CSSProperties;
+  id?: string;
+  ariaLabel?: string;
+  testId?: string;
+}) {
+  const all = useMemo(
+    () => (placeholder !== undefined ? [{ value: "", label: placeholder }, ...options] : options),
+    [options, placeholder],
+  );
+  const { open, triggerProps, popup } = useListbox({ options: all, value, onChange, disabled, searchable, mono });
+  const current = all.find((o) => o.value === value);
+  return (
+    <>
+      <button
+        {...triggerProps}
+        id={id}
+        className={["v2-sel", mono ? "mono" : "", open ? "open" : "", className ?? ""].join(" ").trim()}
+        style={style}
+        aria-label={ariaLabel}
+        data-testid={testId}
+      >
+        <span className={current ? "val" : "val ph"}>{current?.label ?? (value || placeholder || "")}</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {popup}
+    </>
+  );
 }
 
 export function FilterSelect({
@@ -115,6 +443,9 @@ export function FilterSelect({
   options,
   onChange,
   allLabel,
+  disabled,
+  title,
+  className,
   testId,
 }: {
   label: string;
@@ -123,28 +454,31 @@ export function FilterSelect({
   onChange: (value: string) => void;
   /** label of the "" option; omit to force a concrete value */
   allLabel?: string;
+  disabled?: boolean;
+  title?: string;
+  className?: string;
   testId?: string;
 }) {
-  const current = options.find((o) => o.value === value)?.label ?? allLabel ?? value;
+  const all = useMemo(
+    () => (allLabel !== undefined ? [{ value: "", label: allLabel }, ...options] : options),
+    [options, allLabel],
+  );
+  const { open, triggerProps, popup } = useListbox({ options: all, value, onChange, disabled });
+  const current = all.find((o) => o.value === value)?.label ?? (value || "—");
   return (
-    <label className={`v2-filter${value && allLabel ? " active" : ""}`}>
-      {label}
-      <b>{current}</b>
-      <ChevronDown size={14} aria-hidden="true" />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
+    <>
+      <button
+        {...triggerProps}
+        className={["v2-filter", value && allLabel !== undefined ? "active" : "", open ? "open" : "", className ?? ""].join(" ").trim()}
+        title={title}
         data-testid={testId}
       >
-        {allLabel !== undefined && <option value="">{allLabel}</option>}
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+        {label}
+        <b>{current}</b>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {popup}
+    </>
   );
 }
 

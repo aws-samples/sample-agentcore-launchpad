@@ -14,7 +14,7 @@ import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, type Column, Descriptions, Drawer, FilterSelect, LinkButton, Table } from "../../ui";
 import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from "./common";
-import { FilterPick, LoadMore } from "./widgets";
+import { LoadMore } from "./widgets";
 
 const TOP_K = [3, 5, 10, 20];
 
@@ -234,10 +234,11 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
     <>
       <Card testId="v2-memory-longterm">
         <div className="v2-toolbar">
-          <FilterPick
+          <FilterSelect
             label={t("memoryPage.long.actorLabel")}
             value={actorId ?? ""}
-            placeholder={t("memoryPage.long.pickActor")}
+            allLabel={t("memoryPage.long.pickActor")}
+            className="v2-memory-pick"
             onChange={(v) => onSelectActor(v || null)}
             options={actors.items.map((a) => ({ value: a.actor_id, label: actorText(t, a) }))}
             testId="v2-memory-actor"
@@ -247,10 +248,11 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
               {t("v2.memory.moreActors")}
             </LinkButton>
           )}
-          <FilterPick
+          <FilterSelect
             label={t("memoryPage.long.strategyLabel")}
             value={strategyId ?? ""}
-            placeholder={t("memoryPage.long.pickStrategy")}
+            allLabel={t("memoryPage.long.pickStrategy")}
+            className="v2-memory-pick"
             disabled={!actorId}
             onChange={(v) => onSelectStrategy(v || null)}
             // a placeholder in the MIDDLE of the path cannot be resolved from an

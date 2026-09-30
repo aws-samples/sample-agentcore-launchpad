@@ -20,6 +20,7 @@ import {
   Pager,
   SearchInput,
   Segmented,
+  Select,
   Spin,
   Steps,
   Table,
@@ -307,23 +308,19 @@ export function PipelineEditor({ id }: { id: string | null }) {
             </div>
             <div className="v2-form cols-2">
               <Field label="Agent" hint={t("v2.pipelines.agentHint")}>
-                <select className="v2-select" value={draft.source.agent ?? ""} onChange={(e) => setSource({ agent: e.target.value || null })}>
-                  <option value="">{t("v2.pipelines.allAgents")}</option>
-                  {[...new Set([...(draft.source.agent ? [draft.source.agent] : []), ...agents])].map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  value={draft.source.agent ?? ""}
+                  placeholder={t("v2.pipelines.allAgents")}
+                  options={[...new Set([...(draft.source.agent ? [draft.source.agent] : []), ...agents])].map((a) => ({ value: a, label: a }))}
+                  onChange={(v) => setSource({ agent: v || null })}
+                />
               </Field>
               <Field label={t("v2.common.timeRange")}>
-                <select className="v2-select" value={draft.source.range} onChange={(e) => setSource({ range: e.target.value as V2Range })}>
-                  {RANGES.map((r) => (
-                    <option key={r} value={r}>
-                      {rangeLabel(t, r)}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  value={draft.source.range}
+                  options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))}
+                  onChange={(v) => setSource({ range: v as V2Range })}
+                />
               </Field>
               <Field label={t("v2.pipelines.sessionStatus")}>
                 <Segmented
@@ -450,14 +447,12 @@ export function PipelineEditor({ id }: { id: string | null }) {
               </Field>
             ) : (
               <Field label={t("v2.addToDataset.dataset")} required>
-                <select className="v2-select" value={draft.output.dataset_id ?? ""} onChange={(e) => setDraft({ ...draft, output: { dataset_id: e.target.value } })}>
-                  <option value="">{t("v2.common.choose")}</option>
-                  {receivable.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} · {t("v2.datasets.items", { count: d.item_count })}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  value={draft.output.dataset_id ?? ""}
+                  placeholder={t("v2.common.choose")}
+                  options={receivable.map((d) => ({ value: d.id, label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}` }))}
+                  onChange={(v) => setDraft({ ...draft, output: { dataset_id: v } })}
+                />
               </Field>
             )}
           </div>

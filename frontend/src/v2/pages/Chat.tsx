@@ -25,7 +25,7 @@ import {
 } from "../../lib/api";
 import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../../lib/chat";
 import { useLoad, useV2Toast } from "../hooks";
-import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Spin, Tag } from "../ui";
+import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
 import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
@@ -389,33 +389,29 @@ export function V2Chat() {
                   {agentsLoad.error}
                 </Alert>
               ) : (
-                <select
-                  className="v2-select"
+                <Select
                   value={agentId}
                   disabled={busy || (agentsLoad.loading && !agentsLoad.data)}
-                  onChange={(e) => {
-                    setAgentId(e.target.value);
-                    newSession(e.target.value);
+                  placeholder={
+                    agents.length === 0
+                      ? agentsLoad.loading && !agentsLoad.data
+                        ? t("v2.common.loading")
+                        : t("v2.chat.noAgents")
+                      : undefined
+                  }
+                  options={[
+                    ...(agents.length > 0 && agentId === ""
+                      ? [{ value: "", label: t("chatPage.pickAgent"), disabled: true }]
+                      : []),
+                    ...agents.map((a) => ({ value: a.id, label: a.name })),
+                  ]}
+                  onChange={(v) => {
+                    setAgentId(v);
+                    newSession(v);
                   }}
-                  aria-label={t("chatPage.agentSelectLabel")}
-                  data-testid="agent-select"
-                >
-                  {agents.length === 0 && (
-                    <option value="">
-                      {agentsLoad.loading && !agentsLoad.data ? t("v2.common.loading") : t("v2.chat.noAgents")}
-                    </option>
-                  )}
-                  {agents.length > 0 && agentId === "" && (
-                    <option value="" disabled>
-                      {t("chatPage.pickAgent")}
-                    </option>
-                  )}
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
+                  ariaLabel={t("chatPage.agentSelectLabel")}
+                  testId="agent-select"
+                />
               )}
               {agent && (
                 <div className="v2-chat-agent-meta">

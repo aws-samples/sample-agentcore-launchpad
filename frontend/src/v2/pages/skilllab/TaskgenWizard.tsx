@@ -11,7 +11,7 @@ import {
 } from "../../../lib/api";
 import { modelDefault } from "../../../lib/skillLab";
 import { TASK_ASSET_ACCEPT } from "../../../lib/skillLabTasksets";
-import { Alert, Button, Card, Field, FlowHeader, LinkButton } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, LinkButton, Select } from "../../ui";
 import { ModelFields } from "./ModelFields";
 import { SkillMultiPicker } from "./SkillPicker";
 import { useTasksets } from "./state";
@@ -208,24 +208,22 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
       <Card title={t("skillLab.taskgen.field.expand")} sub={t("skillLab.taskgen.hint.expand")}>
         <div className="v2-form cols-2">
           <Field label={t("skillLab.taskgen.field.expand")}>
-            <select className="v2-select" value={expandId} onChange={(e) => setExpandId(e.target.value)} data-testid="v2-taskgen-expand">
-              <option value="">{t("skillLab.taskgen.expand.none")}</option>
-              {expandable.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.name} ({t(`skillLab.tasksets.mode.${row.mode}`)})
-                </option>
-              ))}
-            </select>
+            <Select
+              value={expandId}
+              placeholder={t("skillLab.taskgen.expand.none")}
+              options={expandable.map((row) => ({ value: row.id, label: `${row.name} (${t(`skillLab.tasksets.mode.${row.mode}`)})` }))}
+              onChange={setExpandId}
+              testId="v2-taskgen-expand"
+            />
           </Field>
           {expandTarget !== null && (
             <Field label={t("skillLab.taskgen.field.targetSplit")}>
-              <select className="v2-select" value={targetSplit} onChange={(e) => setTargetSplit(e.target.value)} data-testid="v2-taskgen-split">
-                {splitOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={targetSplit}
+                options={splitOptions.map((option) => ({ value: option, label: option }))}
+                onChange={setTargetSplit}
+                testId="v2-taskgen-split"
+              />
             </Field>
           )}
         </div>

@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { api, errorMessage, type RuntimeCanaryInfo } from "../../../lib/api";
 import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Spin, Table, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
 import { StageCard } from "../experiments/StageCard";
 import { CANARY_TONE, RAMP_STAGES, verdictTone, versionsLabel, weightsLabel } from "./common";
 
@@ -190,14 +190,13 @@ export function CanaryDetail({ id }: { id: string }) {
             {current && canary.status === "running" && (
               <div className="v2-form cols-2">
                 <Field label={t("expPage.datasetTag")}>
-                  <select className="v2-select" value={dataset} onChange={(e) => setDataset(e.target.value)} data-testid="v2-canary-dataset">
-                    {datasets.length === 0 && <option value="">{t("canaryPage.noTrafficDataset")}</option>}
-                    {datasets.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} ({d.item_count})
-                      </option>
-                    ))}
-                  </select>
+                  <Select
+                    value={dataset}
+                    onChange={setDataset}
+                    testId="v2-canary-dataset"
+                    placeholder={datasets.length === 0 ? t("canaryPage.noTrafficDataset") : undefined}
+                    options={datasets.map((d) => ({ value: d.id, label: `${d.name} (${d.item_count})` }))}
+                  />
                 </Field>
                 <Field label={t("v2.common.actions")}>
                   <div className="v2-row" style={{ alignItems: "flex-start" }}>

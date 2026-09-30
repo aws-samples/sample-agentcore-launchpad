@@ -17,6 +17,7 @@ import {
   LinkButton,
   Pager,
   SearchInput,
+  Select,
   Table,
   Tag,
 } from "../../ui";
@@ -354,42 +355,32 @@ function BrowserDemo() {
         </Field>
         {webBotAuth ? (
           <Field label={t("v2.governance.demo.browserResource")}>
-            <select
-              className="v2-select mono"
+            <Select
+              mono
               value={effectiveBrowser}
               disabled={locked || signedBrowsers.length === 0}
-              onChange={(e) => setBrowserIdentifier(e.target.value)}
-              data-testid="browser-resource"
-            >
-              {signedBrowsers.length === 0 && <option value="">{t("v2.governance.demo.noWebBotAuthBrowser")}</option>}
-              {signedBrowsers.map((browser) => (
-                <option key={browser.identifier} value={browser.identifier}>
-                  {browser.name}
-                </option>
-              ))}
-            </select>
+              placeholder={signedBrowsers.length === 0 ? t("v2.governance.demo.noWebBotAuthBrowser") : undefined}
+              options={signedBrowsers.map((browser) => ({ value: browser.identifier, label: browser.name }))}
+              onChange={(v) => setBrowserIdentifier(v)}
+              testId="browser-resource"
+            />
           </Field>
         ) : (
           <div />
         )}
         <Field label={t("v2.governance.demo.profile")}>
-          <select
-            className="v2-select mono"
+          <Select
+            mono
             value={effectiveProfile}
             disabled={locked}
-            onChange={(e) => {
-              setProfileIdentifier(e.target.value);
-              if (!e.target.value) setSaveProfile(false);
+            placeholder={t("v2.governance.demo.noProfile")}
+            options={readyProfiles.map((profile) => ({ value: profile.identifier, label: profile.name }))}
+            onChange={(v) => {
+              setProfileIdentifier(v);
+              if (!v) setSaveProfile(false);
             }}
-            data-testid="browser-profile"
-          >
-            <option value="">{t("v2.governance.demo.noProfile")}</option>
-            {readyProfiles.map((profile) => (
-              <option key={profile.identifier} value={profile.identifier}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
+            testId="browser-profile"
+          />
         </Field>
         <Field label={t("v2.governance.demo.profilePersistence")}>
           <label className={locked || !effectiveProfile ? "v2-check disabled" : "v2-check"} style={{ height: 32 }}>

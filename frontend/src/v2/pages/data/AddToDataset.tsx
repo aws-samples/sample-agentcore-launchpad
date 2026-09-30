@@ -10,7 +10,7 @@ import {
   type V2SkippedSession,
 } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Field, Modal, Segmented } from "../../ui";
+import { Alert, Button, Field, Modal, Segmented, Select } from "../../ui";
 
 /**
  * "加入数据集" — turn observed sessions (the trajectories behind the selected
@@ -156,14 +156,12 @@ function AddToDatasetBody({
           </Field>
           {mode === "existing" ? (
             <Field label={t("v2.addToDataset.dataset")} required>
-              <select className="v2-select" value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-                <option value="">{t("v2.common.choose")}</option>
-                {receivable.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} · {t("v2.datasets.items", { count: d.item_count })}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={datasetId}
+                placeholder={t("v2.common.choose")}
+                options={receivable.map((d) => ({ value: d.id, label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}` }))}
+                onChange={setDatasetId}
+              />
             </Field>
           ) : (
             <>

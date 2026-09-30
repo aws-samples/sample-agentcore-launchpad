@@ -2,7 +2,7 @@ import { Inbox, PlayCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, type VideoVersionFilter, videoTimestamp } from "../../../lib/videos";
-import { Alert, Button, Card, SearchInput, Segmented, Tag } from "../../ui";
+import { Alert, Button, Card, SearchInput, Segmented, Select, Tag } from "../../ui";
 
 interface Result {
   id: string;
@@ -107,18 +107,14 @@ export function VideoLibrary({
           />
           <label className="v2-videos-section-filter">
             <span>{t("videoManage.section")}</span>
-            <select
-              className="v2-select"
+            <Select
               value={section ?? ""}
               disabled={!category}
-              onChange={(event) => onFilter("section", event.target.value)}
-              data-testid="video-section-filter"
-            >
-              <option value="">{t("videos.all")}</option>
-              {sectionOptions.map((item) => (
-                <option key={item.id} value={item.id}>{item.title[locale]}</option>
-              ))}
-            </select>
+              placeholder={t("videos.all")}
+              options={sectionOptions.map((item) => ({ value: item.id, label: item.title[locale] }))}
+              onChange={(v) => onFilter("section", v)}
+              testId="video-section-filter"
+            />
           </label>
           <div className="end">
             <SearchInput value={query} onChange={(value) => onFilter("q", value)} placeholder={t("videos.search")} testId="video-search" />

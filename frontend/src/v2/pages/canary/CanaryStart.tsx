@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Field, FlowHeader } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
 
 /**
  * 新建金丝雀: the champion agent and the candidate edit (system prompt, plus the
@@ -79,27 +79,19 @@ export function CanaryStart() {
       <Card title={t("v2.canary.championTitle")}>
         <div className="v2-form">
           <Field label={t("canaryPage.agent")} required hint={unsupported.length ? t("canaryPage.eligibilityHint") : undefined}>
-            <select
-              className="v2-select"
+            <Select
               value={agentId}
-              onChange={(e) => {
-                setAgentId(e.target.value);
-                if (sourceExp && e.target.value !== handoffChampion) setSourceExp("");
+              onChange={(v) => {
+                setAgentId(v);
+                if (sourceExp && v !== handoffChampion) setSourceExp("");
               }}
-              data-testid="v2-canary-agent"
-            >
-              <option value="">{t("canaryPage.pickAgent")}</option>
-              {eligible.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} · {a.method}
-                </option>
-              ))}
-              {unsupported.map((a) => (
-                <option key={a.id} value={a.id} disabled>
-                  {a.name} · {a.method} — {reason(a)}
-                </option>
-              ))}
-            </select>
+              testId="v2-canary-agent"
+              placeholder={t("canaryPage.pickAgent")}
+              options={[
+                ...eligible.map((a) => ({ value: a.id, label: `${a.name} · ${a.method}` })),
+                ...unsupported.map((a) => ({ value: a.id, label: `${a.name} · ${a.method} — ${reason(a)}`, disabled: true })),
+              ]}
+            />
           </Field>
         </div>
       </Card>

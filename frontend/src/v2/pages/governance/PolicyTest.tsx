@@ -17,7 +17,7 @@ import {
   sortTestActions,
 } from "../../../lib/governance";
 import { useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Descriptions, Field, Tag, type TagTone } from "../../ui";
+import { Alert, Button, Card, Descriptions, Field, Select, Tag, type TagTone } from "../../ui";
 
 // ERROR is a non-decision (never recorded), so it must not share DENY's tone.
 const OUTCOME_TONE: Record<GovernancePolicyTestOutcome, TagTone> = { ALLOW: "green", DENY: "red", ERROR: "orange" };
@@ -72,33 +72,25 @@ export function PolicyTestCard({ actions }: { actions: GovernanceGatewayAction[]
     >
       <div className="v2-form cols-2">
         <Field label={t("v2.governance.testIdentity")}>
-          <select
-            className="v2-select"
+          <Select
             value={identity}
             disabled={running}
-            onChange={(e) => setIdentity(e.target.value as GovernancePolicyTestIdentity)}
-          >
-            {POLICY_TEST_IDENTITIES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            options={POLICY_TEST_IDENTITIES.map((option) => ({ value: option.value, label: option.label }))}
+            onChange={(v) => setIdentity(v as GovernancePolicyTestIdentity)}
+          />
         </Field>
         <Field label={t("v2.governance.exactAction")}>
-          <select
-            className="v2-select mono"
+          <Select
+            mono
             value={tool}
             disabled={running || ordered.length === 0}
-            onChange={(e) => setSelectedTool(e.target.value)}
-          >
-            {ordered.length === 0 && <option value="">{t("v2.governance.noActions")}</option>}
-            {ordered.map((action) => (
-              <option key={action.name} value={action.name}>
-                {action.name} · {action.verified ? t("v2.governance.verified") : t("v2.governance.unverified")}
-              </option>
-            ))}
-          </select>
+            placeholder={ordered.length === 0 ? t("v2.governance.noActions") : undefined}
+            options={ordered.map((action) => ({
+              value: action.name,
+              label: `${action.name} · ${action.verified ? t("v2.governance.verified") : t("v2.governance.unverified")}`,
+            }))}
+            onChange={(v) => setSelectedTool(v)}
+          />
         </Field>
         <Field
           label={t("v2.governance.arguments")}

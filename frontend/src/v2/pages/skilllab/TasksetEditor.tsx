@@ -40,6 +40,7 @@ import {
   LinkButton,
   OptionCard,
   Segmented,
+  Select,
   Spin,
   Tag,
 } from "../../ui";
@@ -458,13 +459,11 @@ export function TasksetEditor({ id }: { id: string | null }) {
           <div className="v2-form cols-2">
             {mode === "split" && (
               <Field label={t("skillLab.tasksets.upload.targetSplit")}>
-                <select className="v2-select" value={uploadSplit} onChange={(e) => setUploadSplit(e.target.value)}>
-                  {SPLIT_ORDER.map((split) => (
-                    <option key={split} value={split}>
-                      {split}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  value={uploadSplit}
+                  options={SPLIT_ORDER.map((split) => ({ value: split, label: split }))}
+                  onChange={setUploadSplit}
+                />
               </Field>
             )}
             <Field label={t("skillLab.tasksets.upload.label")} hint={t("skillLab.tasksets.upload.hint")} error={uploadError} full>

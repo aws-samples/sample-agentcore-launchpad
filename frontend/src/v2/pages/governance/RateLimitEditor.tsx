@@ -22,7 +22,7 @@ import {
   WILDCARD,
 } from "../../../lib/governanceRateLimits";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Field, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, LinkButton, Select, Spin, Tag } from "../../ui";
 
 const PERIODS: GovernanceRatePeriod[] = ["second", "minute"];
 
@@ -295,24 +295,18 @@ export function RateLimitEditor({ gatewayId, limitId }: { gatewayId: string; lim
                             updateEntry(index, (current) => ({ ...current, [metric]: { ...current[metric], rate: e.target.value } }))
                           }
                         />
-                        <select
-                          className="v2-select"
-                          aria-label={`${metric} ${t("v2.governance.rl.period")}`}
+                        <Select
+                          ariaLabel={`${metric} ${t("v2.governance.rl.period")}`}
                           disabled={!config.enabled}
                           value={config.period}
-                          onChange={(e) =>
+                          options={PERIODS.map((period) => ({ value: period, label: t(`governance.rateLimits.period_${period}`) }))}
+                          onChange={(v) =>
                             updateEntry(index, (current) => ({
                               ...current,
-                              [metric]: { ...current[metric], period: e.target.value as GovernanceRatePeriod },
+                              [metric]: { ...current[metric], period: v as GovernanceRatePeriod },
                             }))
                           }
-                        >
-                          {PERIODS.map((period) => (
-                            <option key={period} value={period}>
-                              {t(`governance.rateLimits.period_${period}`)}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </div>
                     );
                   })}

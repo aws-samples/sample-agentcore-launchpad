@@ -23,7 +23,7 @@ import {
   planConfirmScenarios,
   planUnblockGoldenTest,
 } from "../../../lib/assistant";
-import { Alert, Button, Confirm, LinkButton, Table, Tag, type TagTone } from "../../ui";
+import { Alert, Button, Confirm, LinkButton, Select, Table, Tag, type TagTone } from "../../ui";
 import { NextStepsCard } from "./NextSteps";
 import { SECTION_IDS } from "./common";
 
@@ -349,20 +349,17 @@ export function EvalAssetsCard({
           <div className="v2-toolbar">
             <label className="v2-row" style={{ fontSize: 13, color: "var(--v2-ink-2)" }}>
               {t("assistantEval.sourceRevision")}
-              <select
-                className="v2-select"
+              <Select
                 style={{ width: "auto" }}
-                value={sourceRevision}
+                value={String(sourceRevision)}
                 disabled={busy}
-                data-testid="v2-assistant-eval-source"
-                onChange={(e) => setSourceRevision(Number(e.target.value))}
-              >
-                {proposals.filter((p) => p.status !== "invalid").map((p) => (
-                  <option key={p.id} value={p.revision}>
-                    r{p.revision} · {t(`assistantPage.status.${p.status}`)}
-                  </option>
-                ))}
-              </select>
+                testId="v2-assistant-eval-source"
+                options={proposals.filter((p) => p.status !== "invalid").map((p) => ({
+                  value: String(p.revision),
+                  label: `r${p.revision} · ${t(`assistantPage.status.${p.status}`)}`,
+                }))}
+                onChange={(v) => setSourceRevision(Number(v))}
+              />
             </label>
             <Button kind={current ? undefined : "primary"} disabled={busy || !proposals.length}
               onClick={() => void prepare()} testId="v2-assistant-eval-prepare">

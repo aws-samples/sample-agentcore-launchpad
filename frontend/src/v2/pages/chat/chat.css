@@ -22,7 +22,7 @@
 .v2 .v2-chat-col > .v2-chat-pane:first-child { flex: none; }
 
 /* ---------- agent card ---------- */
-.v2 .v2-chat-pane .v2-select { width: 100%; }
+.v2 .v2-chat-pane .v2-sel { width: 100%; }
 .v2 .v2-chat-agent-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .v2 .v2-chat-agent-meta .v2-chat-extlink { margin-left: auto; }
 .v2 .v2-chat-extlink { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--v2-primary); text-decoration: none; white-space: nowrap; }

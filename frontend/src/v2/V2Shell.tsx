@@ -13,7 +13,7 @@ import { useWorkspace } from "../workspace/workspace-context";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
 import { V2_NAV, type V2NavItem } from "./nav";
-import { V2ToastProvider } from "./ui";
+import { FilterSelect, V2ToastProvider } from "./ui";
 
 const COLLAPSE_KEY = "launchpad_v2_nav_collapsed";
 
@@ -45,23 +45,14 @@ function WorkspaceSelect() {
   const { workspaces, current, select } = useWorkspace();
   if (workspaces.length === 0) return null;
   return (
-    <label className="v2-filter" title={t("topbar.workspaceTitle")}>
-      {t("topbar.workspaceLabel")}
-      <b>{current ? `${current.name} · ${current.region}` : "—"}</b>
-      <ChevronDown size={14} aria-hidden="true" />
-      <select
-        value={current?.id ?? ""}
-        onChange={(e) => select(e.target.value)}
-        aria-label={t("topbar.workspaceLabel")}
-        data-testid="v2-workspace-select"
-      >
-        {workspaces.map((ws) => (
-          <option key={ws.id} value={ws.id}>
-            {ws.name} · {ws.region}
-          </option>
-        ))}
-      </select>
-    </label>
+    <FilterSelect
+      label={t("topbar.workspaceLabel")}
+      title={t("topbar.workspaceTitle")}
+      value={current?.id ?? ""}
+      options={workspaces.map((ws) => ({ value: ws.id, label: `${ws.name} · ${ws.region}` }))}
+      onChange={select}
+      testId="v2-workspace-select"
+    />
   );
 }
 
