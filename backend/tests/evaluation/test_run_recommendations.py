@@ -16,6 +16,15 @@ from app.evaluation.models import EvalRun
 from app.models.ledger import Agent
 
 BATCH_ARN = "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluation/be-1"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_catalog_cache():
+    """The gateway / evaluator catalogs are cached per process; one test's stubbed
+    catalog must never answer another's."""
+    recs.clear_catalog_cache()
+    yield
+    recs.clear_catalog_cache()
 GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:1:gateway/gw-abc"
 
 
@@ -304,6 +313,91 @@ def test_start_refuses_what_the_options_hide(client, monkeypatch, evaluator, cod
     assert res.status_code == 422
     assert res.json()["code"] == code
     data.start_recommendation.assert_not_called()
+
+
+def test_catalogs_are_cached_but_the_harness_is_read_live(client, monkeypatch):
+    agent_id = _agent(method="harness", resource_id="hr_harness-1")
+    control = _account(_harness_control())
+    _stub(monkeypatch, control=control)
+    run_id = _run(agent_id)
+
+    first = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
+    second = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
+
+    assert first["tools"] == second["tools"] and first["evaluators"] == second["evaluators"]
+    # one catalog read for two card loads …
+    assert control.list_gateway_targets.call_count == 1
+    assert control.get_gateway_target.call_count == 1
+    assert control.list_evaluators.call_count == 1
+    # … while the Harness (prompt, tool list) is read every time: edits show at once
+    assert control.get_harness.call_count == 2
+
+
+def test_the_catalog_cache_expires(client, monkeypatch):
+    control = _account(MagicMock())
+    _stub(monkeypatch, control=control)
+    run_id = _run("")
+    clock = [1000.0]
+    monkeypatch.setattr(recs.time, "monotonic", lambda: clock[0])
+
+    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
+    clock[0] += recs.CATALOG_TTL_S - 1
+    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
+    assert control.list_evaluators.call_count == 1
+    clock[0] += 2
+    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
+    assert control.list_evaluators.call_count == 2
+
+
+def test_a_failed_catalog_read_is_not_cached(client, monkeypatch):
+    control = MagicMock()
+    control.list_evaluators.side_effect = [RuntimeError("Throttling"),
+                                           {"evaluators": []}]
+    _stub(monkeypatch, control=control)
+    run_id = _run("")
+
+    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
+    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
+
+    assert control.list_evaluators.call_count == 2  # the failure was retried
+
+
+def test_gateway_targets_are_read_in_parallel(monkeypatch):
+    """A shared KB gateway has 15+ targets; reading them one by one cost ~5 s."""
+    import threading
+
+    control = MagicMock()
+    control.list_gateway_targets.return_value = {
+        "items": [{"targetId": f"t{i}"} for i in range(6)]}
+    barrier = threading.Barrier(6, timeout=5)  # only passes if all 6 run at once
+
+    def get_target(gatewayIdentifier, targetId):
+        barrier.wait()
+        return {"targetId": targetId, "name": f"kb{targetId}",
+                "targetConfiguration": {"mcp": {"lambda": {"toolSchema": {"inlinePayload": [
+                    {"name": "Retrieve", "description": f"KB {targetId}"}]}}}}}
+
+    control.get_gateway_target.side_effect = get_target
+    ws = MagicMock(id="w1", account_id="1", region="us-west-2")
+
+    actions = recs._gateway_actions(control, ws, "gw-1")
+
+    assert sorted(a["name"] for a in actions) == [f"kbt{i}___Retrieve" for i in range(6)]
+
+
+def test_catalog_cache_keys_on_workspace_and_gateway():
+    calls = []
+
+    def load(tag):
+        return lambda: calls.append(tag) or tag
+
+    a = recs._cached(("gateway", "w1", "1", "us-west-2", "gw-1"), load("a"))
+    b = recs._cached(("gateway", "w1", "1", "us-west-2", "gw-2"), load("b"))
+    c = recs._cached(("gateway", "w2", "1", "us-east-1", "gw-1"), load("c"))
+    again = recs._cached(("gateway", "w1", "1", "us-west-2", "gw-1"), load("x"))
+
+    assert (a, b, c, again) == ("a", "b", "c", "a")
+    assert calls == ["a", "b", "c"]
 
 
 # ─── start ──────────────────────────────────────────────────────────────────

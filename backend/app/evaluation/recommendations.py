@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -51,6 +53,14 @@ DEFAULT_EVALUATOR = "Builtin.GoalSuccessRate"
 # GoalSuccessRate for an agent with a clear task, Helpfulness for an open-ended one.
 RECOMMENDED_EVALUATORS = (DEFAULT_EVALUATOR, "Builtin.Helpfulness")
 EVALUATOR_READ_WORKERS = 8  # GetEvaluator fan-out when screening the account's judges
+GATEWAY_READ_WORKERS = 8  # GetGatewayTarget fan-out (a shared KB gateway has 15+ targets)
+# Gateway tool catalogs and the account's evaluator screen barely change, yet reading
+# them cost ~5 s on prod (one GetGatewayTarget per target, one GetEvaluator per judge)
+# on every card load. The Harness itself is never cached: a prompt edit must show at
+# once. Failures are not cached, so a denied read is retried on the next load.
+CATALOG_TTL_S = 60.0
+_catalog_cache: dict[tuple[str, ...], tuple[float, Any]] = {}
+_catalog_lock = threading.Lock()
 SYSTEM_PROMPT_MAX = 20000  # SystemPromptText max (service model)
 TOOL_DESCRIPTION_MAX = 20000  # ToolDescriptionText max
 TOOL_NAME_MAX = 256  # RecommendationToolName max
@@ -60,6 +70,46 @@ SPANS_MAX = 20000  # Spans list max (service model)
 SPAN_QUERY_BATCH = 10
 SPAN_LOOKBACK_MARGIN_H = 48  # a run's sessions ran shortly before its row was written
 SPAN_LOOKBACK_MAX_H = 24 * 90
+
+
+def _cached(key: tuple[str, ...], load: Any) -> Any:
+    """``load()`` memoized for ``CATALOG_TTL_S``; an exception is never stored."""
+    with _catalog_lock:
+        hit = _catalog_cache.get(key)
+        if hit and time.monotonic() - hit[0] < CATALOG_TTL_S:
+            return hit[1]
+    value = load()
+    with _catalog_lock:
+        _catalog_cache[key] = (time.monotonic(), value)
+    return value
+
+
+def clear_catalog_cache() -> None:
+    with _catalog_lock:
+        _catalog_cache.clear()
+
+
+def _workspace_key(workspace: WorkspaceContext) -> tuple[str, ...]:
+    return (str(workspace.id), str(workspace.account_id), str(workspace.region))
+
+
+def _gateway_actions(
+    control: Any, workspace: WorkspaceContext, gateway_id: str
+) -> list[dict[str, Any]]:
+    """The Gateway's tools (``<target>___<tool>`` + description), targets read in
+    parallel and the catalog cached per workspace + gateway."""
+    from app.services.governance import discover_actions
+
+    def load() -> list[dict[str, Any]]:
+        summaries = policy_api.list_gateway_targets(control, gateway_id)
+        with ThreadPoolExecutor(max_workers=GATEWAY_READ_WORKERS) as pool:
+            details = list(pool.map(
+                lambda t: policy_api.get_gateway_target(control, gateway_id, t["targetId"]),
+                summaries,
+            ))
+        return discover_actions(details)
+
+    return _cached(("gateway", *_workspace_key(workspace), gateway_id), load)
 
 
 def _is_harness(agent: Agent) -> bool:
@@ -89,8 +139,6 @@ def _selected(allowed: list[str] | None, alias: str, tool: str | None) -> bool:
 
 
 def _harness_inputs(agent: Agent, workspace: WorkspaceContext) -> dict[str, Any]:
-    from app.services.governance import discover_actions
-
     control = control_client(workspace)
     try:
         detail = hc.get_harness(control, str(agent.resource_id))
@@ -121,12 +169,12 @@ def _harness_inputs(agent: Agent, workspace: WorkspaceContext) -> dict[str, Any]
             gateway_arn = str((config.get("agentCoreGateway") or {}).get("gatewayArn") or "")
             gateway_id = gateway_arn.rsplit("/", 1)[-1]
             try:
-                targets = policy_api.list_gateway_target_details(control, gateway_id)
+                actions = _gateway_actions(control, workspace, gateway_id)
             except Exception as exc:
                 notes.append({"code": "gateway_unreadable", "tool": alias,
                               "detail": f"{type(exc).__name__}: {exc}"[:300]})
                 continue
-            for action in discover_actions(targets):
+            for action in actions:
                 if _selected(allowed, alias, action["name"]):
                     tools.append({"name": action["name"],
                                   "description": action["description"],
@@ -183,17 +231,22 @@ def _evaluator_problem(
 
 def _account_evaluators(workspace: WorkspaceContext) -> list[dict[str, Any]]:
     """ACTIVE non-built-in evaluators, each custom one read back with GetEvaluator
-    (ListEvaluators carries no config). Unreadable → listed without detail: the
-    start-time check still has the last word."""
-    control = control_client(workspace)
+    (ListEvaluators carries no config), cached per workspace. Unreadable judge →
+    listed without detail: the start-time check still has the last word."""
     try:
-        listed = [
-            e for e in ac.list_evaluators(control)
-            if not str(e.get("evaluatorId", "")).startswith(_BUILTIN_PREFIX)
-            and e.get("status", "ACTIVE") == "ACTIVE"
-        ]
+        return _cached(("evaluators", *_workspace_key(workspace)),
+                       lambda: _read_account_evaluators(workspace))
     except Exception:
-        return []  # listing unavailable — built-ins still render
+        return []  # listing unavailable — built-ins still render (and nothing is cached)
+
+
+def _read_account_evaluators(workspace: WorkspaceContext) -> list[dict[str, Any]]:
+    control = control_client(workspace)
+    listed = [
+        e for e in ac.list_evaluators(control)
+        if not str(e.get("evaluatorId", "")).startswith(_BUILTIN_PREFIX)
+        and e.get("status", "ACTIVE") == "ACTIVE"
+    ]
 
     def read(entry: dict[str, Any]) -> dict[str, Any]:
         evaluator_id = str(entry["evaluatorId"])
