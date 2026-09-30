@@ -84,9 +84,9 @@ export const V2_NAV: V2NavGroup[] = [
     key: "eval",
     labelKey: "v2.nav.groupEval",
     items: [
+      { to: "/v2/eval/insights", labelKey: "v2.nav.insights", icon: ChartColumn, v2: true },
       { to: "/v2/eval/data", labelKey: "v2.nav.dataCenter", icon: Database, v2: true },
       { to: "/v2/eval/tasks", labelKey: "v2.nav.tasks", icon: ListChecks, v2: true },
-      { to: "/v2/eval/insights", labelKey: "v2.nav.insights", icon: ChartColumn, v2: true },
       { to: "/v2/eval/online", labelKey: "v2.nav.online", icon: Radar, v2: true },
       { to: "/v2/eval/evaluators", labelKey: "v2.nav.evaluators", icon: Target, v2: true },
       { to: "/v2/eval/experiments", labelKey: "v2.nav.experiments", icon: FlaskConical, v2: true },
