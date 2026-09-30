@@ -146,6 +146,29 @@ def test_unreadable_gateway_is_a_note_not_a_failure(client, monkeypatch):
     assert body["notes"][0]["code"] == "gateway_unreadable"
 
 
+@pytest.mark.parametrize(("spec", "source"), [
+    ({"system_prompt": "Prompt kept in the ledger."}, "spec"),
+    ({"name": "gone"}, "manual"),
+])
+def test_a_deleted_harness_falls_back_instead_of_failing(client, monkeypatch, spec, source):
+    """Measured on prod 2026-09-30: runs outlive their Harness. The card must still
+    offer input boxes (the traces are intact), not a 502."""
+    agent_id = _agent(method="harness", resource_id="gone_harness-1", spec=spec)
+    control = MagicMock()
+    control.get_harness.side_effect = RuntimeError(
+        "ResourceNotFoundException: Agent with name gone_harness-1 not found.")
+    _stub(monkeypatch, control=control)
+
+    res = client.get(f"/api/eval/runs/{_run(agent_id)}/recommendation-inputs")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source"] == source
+    assert body["eligible"] is True
+    assert [n["code"] for n in body["notes"]] == ["harness_unreadable"]
+    assert "ResourceNotFoundException" in body["notes"][0]["detail"]
+
+
 def test_runtime_agent_inputs_come_from_the_spec(client, monkeypatch):
     agent_id = _agent(method="zip_runtime", resource_id="rt-1", spec={
         "system_prompt": "Be concise.",

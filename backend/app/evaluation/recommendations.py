@@ -93,12 +93,14 @@ def _harness_inputs(agent: Agent, workspace: WorkspaceContext) -> dict[str, Any]
     try:
         detail = hc.get_harness(control, str(agent.resource_id))
     except Exception as exc:
-        raise AppError(
-            "recommendation.harness_unreadable",
-            "the agent's Harness could not be read from AWS",
-            {"harness_id": agent.resource_id, "aws_error": f"{type(exc).__name__}: {exc}"},
-            status_code=502,
-        ) from exc
+        # The run outlives its Harness (deleted / converted since — measured on prod
+        # 2026-09-30, ResourceNotFoundException), or the read is denied. The run's
+        # traces are still there, so fall back like any unreadable agent: the spec
+        # if it carries inputs, else operator input — never an error card.
+        inputs = _spec_inputs(agent)
+        inputs["notes"] = [{"code": "harness_unreadable", "tool": str(agent.resource_id),
+                            "detail": f"{type(exc).__name__}: {exc}"[:300]}]
+        return inputs
     prompt = "\n".join(
         str(part["text"]) for part in detail.get("systemPrompt") or [] if part.get("text")
     )

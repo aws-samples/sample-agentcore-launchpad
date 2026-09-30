@@ -7347,7 +7347,8 @@
       "sourceManual": "无法自动获取该 Agent 当前的系统提示词和工具描述，请在下方输入（必填）。",
       "note": {
         "remote_mcp_runtime_only": "远程 MCP 服务器 {{tool}} 的工具只在运行时列出。如需优化，请手动添加，名称为 {{tool}}_<tool>。",
-        "gateway_unreadable": "无法读取 Gateway {{tool}} 的工具（{{detail}}）。如有需要请手动添加。"
+        "gateway_unreadable": "无法读取 Gateway {{tool}} 的工具（{{detail}}）。如有需要请手动添加。",
+        "harness_unreadable": "无法读取 Harness {{tool}}（{{detail}}），因此拿不到其已部署的提示词和工具。本任务的 trace 仍然完整，请在下方输入或核对。"
       },
       "currentPrompt": "当前系统提示词",
       "promptPlaceholder": "粘贴 Agent 当前的系统提示词",

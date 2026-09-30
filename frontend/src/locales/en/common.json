@@ -7347,7 +7347,8 @@
       "sourceManual": "The current system prompt and tool descriptions of this agent cannot be read automatically. Enter them below. They are required.",
       "note": {
         "remote_mcp_runtime_only": "The remote MCP server {{tool}} lists its tools only at runtime. Add any you want optimized by hand, named {{tool}}_<tool>.",
-        "gateway_unreadable": "The tools of Gateway {{tool}} could not be read ({{detail}}). Add them by hand if needed."
+        "gateway_unreadable": "The tools of Gateway {{tool}} could not be read ({{detail}}). Add them by hand if needed.",
+        "harness_unreadable": "The Harness {{tool}} could not be read ({{detail}}), so its deployed prompt and tools are unavailable. The run's traces are intact: enter or check the inputs below."
       },
       "currentPrompt": "Current system prompt",
       "promptPlaceholder": "Paste the agent's current system prompt",

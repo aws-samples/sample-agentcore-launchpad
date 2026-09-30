@@ -183,7 +183,7 @@ export interface RunRecommendationInputs {
   agent_method: string | null;
   system_prompt: string;
   tools: { name: string; description: string; origin: "inline_function" | "gateway" | "spec" }[];
-  /** `gateway_unreadable` / `remote_mcp_runtime_only` — tools the backend could not list */
+  /** `harness_unreadable` (fell back to spec / manual), `gateway_unreadable`, `remote_mcp_runtime_only` */
   notes: { code: string; tool: string; detail: string }[];
   /** numeric, higher-is-better evaluators: the run's own first, then the defaults */
   evaluators: string[];
