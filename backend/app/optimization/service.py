@@ -69,6 +69,8 @@ TRAFFIC_MAX_CONCURRENCY = 10
 # a prompt slower than this fails the stage rather than the sample (see the
 # exception contract below).
 TRAFFIC_REQUEST_TIMEOUT_S = 180.0
+# Runtime user id every experiment / canary replay session is attributed to.
+TRAFFIC_USER_ID = "launchpad-experiment-traffic"
 # Outcome for a prompt that was never sent because an earlier one failed
 # fatally. Never surfaces to a caller: its presence implies a stored exception,
 # which send_gateway_traffic raises before it builds a result.
@@ -1223,7 +1225,7 @@ def send_gateway_traffic(
     gateway_url: str, target: str, prompts: list[str],
     workspace: WorkspaceContext,
     poster: Any = None, signer: Any = None, progress: Progress = _noop,
-    concurrency: int | None = None,
+    concurrency: int | None = None, user_id: str = TRAFFIC_USER_ID,
 ) -> dict[str, Any]:
     """SigV4 POST each prompt through the experiment gateway (A/B routes them).
 
@@ -1253,6 +1255,12 @@ def send_gateway_traffic(
       flight finish and are joined first. Which error surfaces is decided by
       input order, not by which failure came back first.
 
+    Every prompt carries the runtime user id header (``user_id``): the Gateway passes
+    it on as ``runtimeUserId``, which is what gives the runtime a workload access
+    token — without it an agent whose tools need an outbound Identity token (a
+    converted twin's Gateway MCP client) errors on every session and the A/B test
+    never gets a score.
+
     Non-200 responses keep counting into ``failed`` (the stage still succeeds).
     ``status_counts`` breaks those down by status code so a throttled run
     (``{"200": 47, "429": 3}``) is distinguishable from an agent error — keys are
@@ -1275,6 +1283,7 @@ def send_gateway_traffic(
             {"prompt": prompt, "sessionId": session_id},
             workspace,
             session_id=session_id,
+            user_id=user_id,
             poster=poster,
             signer=signer,
             timeout=TRAFFIC_REQUEST_TIMEOUT_S,

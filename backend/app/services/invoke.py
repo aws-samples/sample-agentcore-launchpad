@@ -210,7 +210,9 @@ def _invoke_via_canary(
         if gateway_access_token:
             body["actor_id"] = actor_id
             body["gateway_access_token"] = gateway_access_token
-        response = gateway.sigv4_post(url, body, workspace, session_id=sticky)
+        response = gateway.sigv4_post(
+            url, body, workspace, session_id=sticky, user_id=runtime_user_id or actor_id,
+        )
         if response.status_code != 200:
             raise RuntimeError(f"gateway route returned HTTP {response.status_code}")
         return _parse_gateway_text(response.text, sticky)

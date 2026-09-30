@@ -16,6 +16,10 @@ from botocore.awsrequest import AWSRequest
 from app.services.workspace import WorkspaceContext
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
+# The Gateway forwards it to the runtime as runtimeUserId. Without it a SigV4-invoked
+# runtime has no workload access token, so any outbound Identity token fetch (e.g. a
+# converted twin's Gateway MCP client) fails before the agent can answer.
+USER_ID_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-User-Id"
 
 
 def _default_signer(creds: Any, region: str, aws_request: AWSRequest) -> None:
@@ -28,6 +32,7 @@ def sigv4_post(
     workspace: WorkspaceContext,
     *,
     session_id: str | None = None,
+    user_id: str | None = None,
     poster: Any = None,
     signer: Any = None,
     timeout: float = 120,
@@ -36,7 +41,8 @@ def sigv4_post(
 
     Returns the raw HTTP response (callers inspect ``.status_code`` / body). When
     ``session_id`` is set, the sticky ``X-Amzn-Bedrock-AgentCore-Runtime-Session-Id``
-    header pins the A/B variant for that session. ``poster``/``signer`` are test
+    header pins the A/B variant for that session; ``user_id`` travels as the runtime
+    user id header. ``poster``/``signer`` are test
     injection seams — no real AWS or network when both are supplied.
     """
     credentials = workspace.credentials()
@@ -46,6 +52,8 @@ def sigv4_post(
     headers = {"Content-Type": "application/json"}
     if session_id:
         headers[SESSION_HEADER] = session_id
+    if user_id:
+        headers[USER_ID_HEADER] = user_id
     aws_request = AWSRequest(method="POST", url=url, data=body, headers=headers)
     signer(credentials, workspace.region, aws_request)
 

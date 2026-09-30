@@ -247,3 +247,19 @@ def test_empty_prompt_list_short_circuits():
 
     assert result == {"session_ids": [], "sent": 0, "failed": 0, "status_counts": {}}
     assert poster.bodies == []
+
+
+def test_every_replay_session_carries_the_runtime_user_id():
+    """Without the user id header the Gateway invokes the runtime with no
+    runtimeUserId, so a twin whose tools need an outbound Identity token errors on
+    every session (live, 2026-09-29: 20/20 A/B sessions, no scores)."""
+    from app.services.agentcore.gateway import USER_ID_HEADER
+
+    seen = []
+
+    def poster(url, body, headers):
+        seen.append(headers.get(USER_ID_HEADER))
+        return type("Resp", (), {"status_code": 200})()
+
+    _send(["a", "b"], poster, concurrency=1)
+    assert seen == [svc.TRAFFIC_USER_ID, svc.TRAFFIC_USER_ID]

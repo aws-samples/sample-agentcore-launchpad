@@ -42,8 +42,8 @@ def test_active_canary_routes_through_gateway(monkeypatch):
     )
     calls: dict = {}
 
-    def fake_sigv4(url, body, _ws, *, session_id=None):
-        calls.update(url=url, body=body, session_id=session_id)
+    def fake_sigv4(url, body, _ws, *, session_id=None, user_id=None):
+        calls.update(url=url, body=body, session_id=session_id, user_id=user_id)
         return _Resp(200, json.dumps({"result": "hello from candidate"}))
 
     monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", fake_sigv4)
@@ -59,6 +59,7 @@ def test_active_canary_routes_through_gateway(monkeypatch):
     assert calls["url"] == "https://gw.example/canctrl/invocations"
     assert calls["body"] == {"prompt": "hi", "sessionId": "x" * 40}
     assert calls["session_id"] == "x" * 40
+    assert calls["user_id"]  # the Gateway forwards it as runtimeUserId
     assert out == {"text": "hello from candidate", "session_id": "x" * 40}
 
 
@@ -68,7 +69,7 @@ def test_short_session_id_is_replaced_before_gateway_post(monkeypatch):
     )
     calls: dict = {}
 
-    def fake_sigv4(url, body, _ws, *, session_id=None):
+    def fake_sigv4(url, body, _ws, *, session_id=None, user_id=None):
         calls.update(session_id=session_id, body=body)
         return _Resp(200, json.dumps({"result": "ok"}))
 
@@ -89,7 +90,7 @@ def test_authenticated_canary_payload_keeps_user_policy_identity(monkeypatch):
     )
     calls: dict = {}
 
-    def fake_sigv4(url, body, _ws, *, session_id=None):
+    def fake_sigv4(url, body, _ws, *, session_id=None, user_id=None):
         calls.update(body=body)
         return _Resp(200, json.dumps({"result": "ok"}))
 

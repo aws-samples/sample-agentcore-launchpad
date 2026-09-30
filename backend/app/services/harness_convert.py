@@ -80,6 +80,53 @@ _NATIVE_TEMPLATE_IMPORTS = {"shell": "import subprocess", "file_operations": "im
 GW_SOFTFAIL_START = "# <launchpad-gateway-softfail:v1>"
 GW_SOFTFAIL_END = "# </launchpad-gateway-softfail:v1>"
 GW_LAZY_TOKEN_MARK = "_launchpad_lazy_gateway_transport"
+GW_NO_BUNDLE_CLIENT = "_LaunchpadMCPClient"
+_MCP_CLIENT_IMPORT = "from strands.tools.mcp.mcp_client import MCPClient\n"
+# A converted twin runs behind the experiment Gateway, which hands it the routed
+# configuration bundle as OTel baggage. OTel's threading/asyncio instrumentation
+# carries that baggage onto the twin's own Gateway MCP calls, and launchpad-gw then
+# tries to resolve the (percent-encoded, truncated) bundle on tools/list and answers
+# 400 — every A/B session fails at tool load. The twin already applies its bundle
+# itself (config-bundle graft), so its Gateway calls go out without those keys.
+_NO_BUNDLE_CLIENT_SOURCE = '''
+
+_LAUNCHPAD_BUNDLE_BAGGAGE = ("aws.agentcore.configbundle_arn", "aws.agentcore.configbundle_version")
+
+
+def _launchpad_attach_without_bundle_baggage():
+    from opentelemetry import baggage, context
+
+    current = context.get_current()
+    for key in _LAUNCHPAD_BUNDLE_BAGGAGE:
+        current = baggage.remove_baggage(key, context=current)
+    return context.attach(current)
+
+
+class _LaunchpadMCPClient(MCPClient):
+    """Gateway MCP client whose calls never carry the caller's config-bundle baggage.
+
+    ``start()`` spawns the session thread and every call is handed to it with the
+    caller's OTel context, so both run with those baggage keys removed.
+    """
+
+    def start(self):
+        from opentelemetry import context
+
+        token = _launchpad_attach_without_bundle_baggage()
+        try:
+            return super().start()
+        finally:
+            context.detach(token)
+
+    def _invoke_on_background_thread(self, coro):
+        from opentelemetry import context
+
+        token = _launchpad_attach_without_bundle_baggage()
+        try:
+            return super()._invoke_on_background_thread(coro)
+        finally:
+            context.detach(token)
+'''
 ATTACHMENT_GRAFT_START = "# <launchpad-attachments:v1>"
 ATTACHMENT_GRAFT_END = "# </launchpad-attachments:v1>"
 _ATTACHMENT_INVOKE = '''    if payload.get("attachments"):
@@ -750,7 +797,7 @@ def graft_lazy_gateway_token(client_py: str) -> str:
             f" if _token else {{}},\n"
             f"{indent}    )\n"
             f"\n"
-            f"{indent}return MCPClient({GW_LAZY_TOKEN_MARK}{match.group('rest')})"
+            f"{indent}return {GW_NO_BUNDLE_CLIENT}({GW_LAZY_TOKEN_MARK}{match.group('rest')})"
         )
 
     grafted, count = _GW_EAGER_TOKEN_RE.subn(_replace, client_py)
@@ -760,7 +807,12 @@ def graft_lazy_gateway_token(client_py: str) -> str:
             "MCPClient(lambda: streamablehttp_client(url, headers=headers)) shape not "
             "found in mcp_client/client.py (agentcore CLI codegen changed?)"
         )
-    return grafted
+    if _MCP_CLIENT_IMPORT not in grafted:
+        raise ConversionError(
+            "graft anchor missing: 'from strands.tools.mcp.mcp_client import MCPClient' "
+            "not found in mcp_client/client.py (agentcore CLI codegen changed?)"
+        )
+    return grafted.replace(_MCP_CLIENT_IMPORT, _MCP_CLIENT_IMPORT + _NO_BUNDLE_CLIENT_SOURCE, 1)
 
 
 GW_CLIENTS_MARK = "# <launchpad-gateway-clients:v1>"

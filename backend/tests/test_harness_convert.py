@@ -1149,7 +1149,7 @@ def test_lazy_gateway_token_graft_moves_the_fetch_into_the_transport():
     # the fetch now lives inside the callable, not at return-statement level
     fetch_at = grafted.index("_token = _get_bearer_token_launchpad_gw()")
     def_at = grafted.index(f"def {hc.GW_LAZY_TOKEN_MARK}()")
-    return_at = grafted.index(f"return MCPClient({hc.GW_LAZY_TOKEN_MARK}")
+    return_at = grafted.index(f"return {hc.GW_NO_BUNDLE_CLIENT}({hc.GW_LAZY_TOKEN_MARK}")
     assert def_at < fetch_at < return_at
     # no eager fetch survives
     assert "\n    token = _get_bearer_token_launchpad_gw()" not in grafted
@@ -1399,3 +1399,40 @@ def test_convert_route_reads_the_live_harness_only_for_gateway_sources(client, m
         "system_prompt": "sp", "tools": [{"type": "gateway", "name": "hr-database"}]})
     client.post(f"/api/agents/{gw.id}/convert")
     assert seen == ["gw_src-H1"]
+
+
+def test_twin_gateway_client_drops_config_bundle_baggage():
+    """Behind the experiment Gateway the twin receives the routed bundle as OTel
+    baggage; launchpad-gw 400s tools/list when that baggage reaches it (live,
+    2026-09-30). Every session start and background call must run without it."""
+    from opentelemetry import baggage, context
+
+    grafted = hc.graft_lazy_gateway_token(MCP_CLIENT_PY)
+    start = grafted.index("_LAUNCHPAD_BUNDLE_BAGGAGE = ")
+    end = grafted.rindex("context.detach(token)\n") + len("context.detach(token)\n")
+    seen: list[dict] = []
+
+    class FakeMCPClient:
+        def start(self):
+            seen.append(dict(baggage.get_all()))
+
+        def _invoke_on_background_thread(self, coro):
+            seen.append(dict(baggage.get_all()))
+            return coro
+
+    namespace = {"MCPClient": FakeMCPClient}
+    exec(compile(grafted[start:end], "client.py", "exec"), namespace)  # noqa: S102
+    client = namespace[hc.GW_NO_BUNDLE_CLIENT]()
+    ctx = context.get_current()
+    for key, value in (("aws.agentcore.configbundle_arn", "arn:bundle"),
+                       ("aws.agentcore.configbundle_version", "v1"), ("keep", "me")):
+        ctx = baggage.set_baggage(key, value, context=ctx)
+    token = context.attach(ctx)
+    try:
+        client.start()
+        assert client._invoke_on_background_thread("coro") == "coro"
+        after = dict(baggage.get_all())
+    finally:
+        context.detach(token)
+    assert seen == [{"keep": "me"}, {"keep": "me"}]
+    assert after["aws.agentcore.configbundle_arn"] == "arn:bundle"  # caller untouched
