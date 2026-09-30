@@ -81,6 +81,9 @@ def _span(session_id: str, tool: str) -> dict:
 def _stub(monkeypatch, control=None, data=None, spans=None):
     """AWS stubs; ``spans`` maps session id → span docs the Logs Insights query returns."""
     control = control or MagicMock()
+    if not isinstance(control.list_evaluators.return_value, dict):
+        # an unset MagicMock answers a truthy nextToken — pagination would never end
+        control.list_evaluators.return_value = {"evaluators": []}
     data = data or MagicMock()
     data.get_batch_evaluation.return_value = {"batchEvaluationArn": BATCH_ARN}
     monkeypatch.setattr(recs, "control_client", lambda _ws: control)
@@ -146,6 +149,29 @@ def test_unreadable_gateway_is_a_note_not_a_failure(client, monkeypatch):
     assert body["notes"][0]["code"] == "gateway_unreadable"
 
 
+@pytest.mark.parametrize(("spec", "source"), [
+    ({"system_prompt": "Prompt kept in the ledger."}, "spec"),
+    ({"name": "gone"}, "manual"),
+])
+def test_a_deleted_harness_falls_back_instead_of_failing(client, monkeypatch, spec, source):
+    """Measured on prod 2026-09-30: runs outlive their Harness. The card must still
+    offer input boxes (the traces are intact), not a 502."""
+    agent_id = _agent(method="harness", resource_id="gone_harness-1", spec=spec)
+    control = MagicMock()
+    control.get_harness.side_effect = RuntimeError(
+        "ResourceNotFoundException: Agent with name gone_harness-1 not found.")
+    _stub(monkeypatch, control=control)
+
+    res = client.get(f"/api/eval/runs/{_run(agent_id)}/recommendation-inputs")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source"] == source
+    assert body["eligible"] is True
+    assert [n["code"] for n in body["notes"]] == ["harness_unreadable"]
+    assert "ResourceNotFoundException" in body["notes"][0]["detail"]
+
+
 def test_runtime_agent_inputs_come_from_the_spec(client, monkeypatch):
     agent_id = _agent(method="zip_runtime", resource_id="rt-1", spec={
         "system_prompt": "Be concise.",
@@ -170,15 +196,114 @@ def test_byoc_and_log_source_runs_need_manual_inputs(client, monkeypatch):
         assert body["system_prompt"] == "" and body["tools"] == []
 
 
-def test_lower_is_better_evaluators_are_never_optimization_targets(client, monkeypatch):
-    _stub(monkeypatch)
-    run_id = _run("", evaluators=["Builtin.Harmfulness", "judge-x", "Builtin.Correctness"])
+def _judge(evaluator_id: str, *, instructions="Rate the answer.", categorical=False):
+    scale = ({"categorical": [{"label": "pass"}]} if categorical
+             else {"numerical": [{"value": 1.0, "label": "pass"}]})
+    return {"evaluatorId": evaluator_id, "evaluatorArn": f"arn:x:evaluator/{evaluator_id}",
+            "evaluatorConfig": {"llmAsAJudge": {"instructions": instructions,
+                                                "ratingScale": scale}}}
+
+
+def _account(control):
+    control.list_evaluators.return_value = {"evaluators": [
+        {"evaluatorId": "Builtin.Helpfulness", "evaluatorType": "Builtin", "status": "ACTIVE"},
+        {"evaluatorId": "ThirdParty.DeepEval.TaskCompletion", "evaluatorType": "ThirdParty",
+         "evaluatorName": "TaskCompletion", "level": "TRACE", "status": "ACTIVE"},
+        {"evaluatorId": "ThirdParty.DeepEval.Toxicity", "evaluatorType": "ThirdParty",
+         "level": "TRACE", "status": "ACTIVE"},
+        {"evaluatorId": "judge-num", "evaluatorType": "Custom", "evaluatorName": "tone",
+         "level": "TRACE", "status": "ACTIVE"},
+        {"evaluatorId": "judge-cat", "evaluatorType": "Custom", "level": "TRACE",
+         "status": "ACTIVE"},
+        {"evaluatorId": "judge-gt", "evaluatorType": "Custom", "level": "TRACE",
+         "status": "ACTIVE"},
+        {"evaluatorId": "judge-new", "evaluatorType": "Custom", "status": "CREATING"},
+    ]}
+    details = {
+        "judge-num": _judge("judge-num"),
+        "judge-cat": _judge("judge-cat", categorical=True),
+        "judge-gt": _judge("judge-gt", instructions="Compare with {expected_response}."),
+    }
+    control.get_evaluator.side_effect = lambda evaluatorId: details[evaluatorId]
+    return control
+
+
+def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monkeypatch):
+    control, _ = _stub(monkeypatch, control=_account(MagicMock()))
+    run_id = _run("", evaluators=["Builtin.Harmfulness", "judge-num", "Builtin.Correctness",
+                                  "judge-gt", "judge-deleted"])
+
+    body = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
+    options = {o["id"]: o for o in body["evaluators"]}
+    order = [o["id"] for o in body["evaluators"]]
+
+    # the run's own usable evaluators lead, then the two recommended targets
+    assert order[:4] == ["judge-num", "Builtin.Correctness",
+                         "Builtin.GoalSuccessRate", "Builtin.Helpfulness"]
+    assert {o["id"] for o in body["evaluators"] if o["recommended"]} == {
+        "Builtin.GoalSuccessRate", "Builtin.Helpfulness"}
+    assert options["judge-num"]["group"] == "run"
+    assert options["judge-num"]["name"] == "tone"
+    assert options["Builtin.Faithfulness"]["group"] == "builtin"
+    assert options["ThirdParty.DeepEval.TaskCompletion"]["group"] == "third_party"
+    assert body["default_evaluator"] == "Builtin.GoalSuccessRate"
+    # nothing that cannot produce a usable signal from traces alone
+    assert {e["id"]: e["reason"] for e in body["excluded_evaluators"]} == {
+        "judge-deleted": "unavailable",
+        "Builtin.Harmfulness": "lower_is_better",
+        "judge-gt": "ground_truth",
+        "Builtin.Refusal": "lower_is_better",
+        "Builtin.Stereotyping": "lower_is_better",
+        "Builtin.TrajectoryExactOrderMatch": "ground_truth",
+        "Builtin.TrajectoryInOrderMatch": "ground_truth",
+        "Builtin.TrajectoryAnyOrderMatch": "ground_truth",
+        "ThirdParty.DeepEval.Toxicity": "lower_is_better",
+        "judge-cat": "categorical",
+    }
+    assert "judge-new" not in options  # not ACTIVE yet
+    # a managed third-party evaluator has no config to screen — never read back
+    assert "ThirdParty.DeepEval.TaskCompletion" not in {
+        c.kwargs["evaluatorId"] for c in control.get_evaluator.call_args_list}
+
+
+def test_an_insights_run_still_offers_every_evaluator(client, monkeypatch):
+    _stub(monkeypatch, control=_account(MagicMock()))
+    run_id = _run("", mode="insights", evaluators=["Builtin.Insight.FailureAnalysis"])
 
     body = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
 
-    assert body["evaluators"] == [
-        "judge-x", "Builtin.Correctness", "Builtin.GoalSuccessRate", "Builtin.Helpfulness",
-    ]
+    ids = [o["id"] for o in body["evaluators"]]
+    assert ids[:2] == ["Builtin.GoalSuccessRate", "Builtin.Helpfulness"]
+    assert "judge-num" in ids and "Builtin.Faithfulness" in ids
+    assert "run" not in {o["group"] for o in body["evaluators"]}
+
+
+def test_an_unlistable_account_still_offers_the_builtins(client, monkeypatch):
+    control = MagicMock()
+    control.list_evaluators.side_effect = RuntimeError("AccessDenied")
+    _stub(monkeypatch, control=control)
+
+    body = client.get(f"/api/eval/runs/{_run('')}/recommendation-inputs").json()
+
+    # the run's own built-in stays in its group; no account evaluator can be listed
+    assert {o["group"] for o in body["evaluators"]} == {"run", "builtin"}
+    assert "Builtin.GoalSuccessRate" in {o["id"] for o in body["evaluators"]}
+
+
+@pytest.mark.parametrize(("evaluator", "code"), [
+    ("Builtin.Harmfulness", "recommendation.evaluator_lower_is_better"),
+    ("Builtin.TrajectoryInOrderMatch", "recommendation.evaluator_ground_truth"),
+    ("judge-gt", "recommendation.evaluator_ground_truth"),
+])
+def test_start_refuses_what_the_options_hide(client, monkeypatch, evaluator, code):
+    _, data = _stub(monkeypatch, control=_account(MagicMock()))
+
+    res = client.post(f"/api/eval/runs/{_run('')}/recommendations", json={
+        "kinds": ["system_prompt"], "system_prompt": "x", "evaluator": evaluator})
+
+    assert res.status_code == 422
+    assert res.json()["code"] == code
+    data.start_recommendation.assert_not_called()
 
 
 # ─── start ──────────────────────────────────────────────────────────────────

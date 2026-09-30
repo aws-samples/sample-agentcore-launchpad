@@ -178,15 +178,27 @@ export interface EvaluationRunResults {
 export type RunRecommendationSource = "harness" | "spec" | "manual";
 export type RunRecommendationKind = "system_prompt" | "tool_descriptions";
 
+export interface RunRecommendationEvaluator {
+  id: string;
+  name: string;
+  level: string | null;
+  group: "run" | "builtin" | "third_party" | "custom";
+  /** the devguide's recommended targets: Builtin.GoalSuccessRate / Builtin.Helpfulness */
+  recommended: boolean;
+}
+
 export interface RunRecommendationInputs {
   source: RunRecommendationSource;
   agent_method: string | null;
   system_prompt: string;
   tools: { name: string; description: string; origin: "inline_function" | "gateway" | "spec" }[];
-  /** `gateway_unreadable` / `remote_mcp_runtime_only` — tools the backend could not list */
+  /** `harness_unreadable` (fell back to spec / manual), `gateway_unreadable`, `remote_mcp_runtime_only` */
   notes: { code: string; tool: string; detail: string }[];
-  /** numeric, higher-is-better evaluators: the run's own first, then the defaults */
-  evaluators: string[];
+  /** every evaluator the job can optimize toward: the run's own first, then the two
+   *  recommended targets, then AWS built-ins, third-party and this account's custom ones */
+  evaluators: RunRecommendationEvaluator[];
+  /** left out and why — lower_is_better | ground_truth | categorical | unavailable */
+  excluded_evaluators: { id: string; reason: string }[];
   default_evaluator: string;
   eligible: boolean;
   reason_code: "run_not_completed" | "run_no_batch" | null;
