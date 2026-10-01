@@ -7421,6 +7421,7 @@
       "skippedTools": "以下工具未出现在 trace 中，已剔除：{{tools}}",
       "explanation": "说明",
       "copy": "复制提示词",
+      "copyTools": "复制工具描述",
       "copied": "已复制",
       "copyFailed": "复制失败",
       "includeTool": "包含此工具",
@@ -7457,7 +7458,8 @@
         "startedToast": "已接受——正在发布新的 Harness 版本。",
         "confirmTitle": "接受这条建议？",
         "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。"
-      }
+      },
+      "toolDiff": "工具描述"
     }
   }
 }
