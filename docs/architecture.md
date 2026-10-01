@@ -2533,8 +2533,9 @@ through the same backend routes and permission checks as the classic pages.
   endpoints and the trace delivery. While one is live, non-streaming platform invokes
   of the agent go through its gateway (fallback: the control endpoint). The architect's
   next-steps panel (`v2/pages/assistant/NextSteps.tsx`) drives this as step 3 (AI
-  recommendations from the first clean run; accepting one re-publishes the Harness as a
-  new version) and step 4's 金丝雀实验 (`HarnessCanary.tsx`). In V2 the classic
+  recommendations from a chosen clean run — the newest by default — with the other runs'
+  recommendations, an accepted one included, listed underneath; accepting one re-publishes
+  the Harness as a new version) and step 4's 金丝雀实验 (`HarnessCanary.tsx`). In V2 the classic
   `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
   in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
   its section nav are no longer reached from the V2 sidebar.
