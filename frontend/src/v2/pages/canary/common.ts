@@ -9,6 +9,10 @@ export const RAMP_STAGES = [
   { control: 1, treatment: 99 },
 ] as const;
 
+/** A Harness canary may `complete` from this ramp stage (50/50) on a treatment-wins
+ *  verdict — mirrors `canary_service.EARLY_COMPLETE_STAGE`. */
+export const EARLY_COMPLETE_STAGE = 1;
+
 export const CANARY_TONE: Record<RuntimeCanaryInfo["status"], TagTone> = {
   running: "blue",
   completed: "green",

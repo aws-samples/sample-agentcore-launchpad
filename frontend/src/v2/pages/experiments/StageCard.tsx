@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 
 import { Tag } from "../../ui";
 
-export type CardState = "active" | "done" | "pending";
+/** `skipped`: a step the flow legitimately jumped over (a Harness canary completed at 50/50). */
+export type CardState = "active" | "done" | "pending" | "skipped";
 
 /** One numbered step of an experiment or canary flow; the active step is highlighted. */
 export function StageCard({

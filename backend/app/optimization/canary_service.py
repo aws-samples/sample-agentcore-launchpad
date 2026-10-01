@@ -348,8 +348,29 @@ def stage_not_ready_reason(row: RuntimeCanary, action: str) -> str | None:
         if action == "advance" and ramp_stage >= len(RAMP_WEIGHTS) - 1:
             return "the final 1/99 stage must be completed, not advanced"
         if action == "complete" and ramp_stage != len(RAMP_WEIGHTS) - 1:
-            return "reach the final 1/99 stage first"
+            if not early_complete_allowed(row):
+                return "reach the final 1/99 stage first"
     return None
+
+
+EARLY_COMPLETE_STAGE = 1  # the 50/50 ramp stage
+
+
+def early_complete_allowed(row: RuntimeCanary) -> bool:
+    """A Harness canary may complete straight from 50/50 on a treatment-wins verdict.
+
+    The architect's Harness canary gets its traffic from Dataset replay, so the 1/99
+    stage would replay almost every session into the treatment and add one more
+    verdict wait without new comparative evidence. Runtime canaries keep the full
+    90/10 → 50/50 → 1/99 ramp. A non-significant win still needs the operator
+    override (``assert_verdict_allows``), exactly as advancing would."""
+    if not is_harness(row):
+        return False
+    setup = row.artifacts.get("setup") or {}
+    if int(setup.get("ramp_stage", 0)) != EARLY_COMPLETE_STAGE:
+        return False
+    _, current = _current_round(row)
+    return ((current or {}).get("verdict") or {}).get("verdict") == "treatment-wins"
 
 
 def assert_verdict_allows(
@@ -894,6 +915,8 @@ def act_complete(
         "promoted_version": setup["v_candidate"],
         "ab_test_status": stopped.get("executionStatus"),
         "completed_at": _now(),
+        # < the last ramp stage ⇒ a Harness canary completed early from 50/50
+        "completed_at_stage": int(setup.get("ramp_stage", 0)),
     }
     _update(
         canary_id,

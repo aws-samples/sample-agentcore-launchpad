@@ -7,7 +7,7 @@ import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
 import { StageCard } from "../experiments/StageCard";
-import { CANARY_TONE, RAMP_STAGES, verdictTone, versionsLabel, weightsLabel } from "./common";
+import { CANARY_TONE, EARLY_COMPLETE_STAGE, RAMP_STAGES, verdictTone, versionsLabel, weightsLabel } from "./common";
 
 const POLL_MS = 8000;
 const FAST_POLL_MS = 2500;
@@ -85,6 +85,9 @@ export function CanaryDetail({ id }: { id: string }) {
   const rounds = a.rounds ?? [];
   const currentStage = liveSetup?.ramp_stage ?? 0;
   const terminal = canary.status !== "running";
+  const isHarness = a.kind === "harness";
+  // the stage `complete` left from: the final one, or 50/50 for an early Harness completion
+  const completedStage = a.complete?.completed_at_stage ?? RAMP_STAGES.length - 1;
 
   /** Button while pending → progress line; a stored `<action>: …` error turns it into a retry. */
   const actionButton = (
@@ -144,9 +147,12 @@ export function CanaryDetail({ id }: { id: string }) {
       !!verdict && (verdict.verdict === "control-wins" || verdict.verdict === "insufficient-data" || verdict.verdict === "insufficient-n");
     const needsOverride = !blocked && !!verdict && (verdict.verdict === "tie" || verdict.significant === false);
     const action = index === RAMP_STAGES.length - 1 ? "complete" : "advance";
-    const done = index < currentStage || (index === 2 && !!a.complete);
+    // a Harness canary may complete straight from 50/50 on a treatment-wins verdict
+    const earlyComplete = isHarness && index === EARLY_COMPLETE_STAGE && verdict?.verdict === "treatment-wins";
+    const skipped = isHarness && !!a.complete && index > completedStage;
+    const done = index < currentStage || (index === completedStage && !!a.complete);
     const advanceLabel = action === "complete" ? t("canaryPage.complete") : t("canaryPage.advance");
-    const state = done ? "done" : current && canary.status === "running" ? "active" : "pending";
+    const state = skipped ? "skipped" : done ? "done" : current && canary.status === "running" ? "active" : "pending";
 
     return (
       <StageCard
@@ -156,7 +162,9 @@ export function CanaryDetail({ id }: { id: string }) {
         title={t("canaryPage.stage.ramp", { control: ramp.control, treatment: ramp.treatment })}
         state={state}
       >
-        {!reached ? (
+        {skipped ? (
+          <span className="v2-muted">{t("canaryPage.stage.skippedEarly")}</span>
+        ) : !reached ? (
           <span className="v2-muted">{t("canaryPage.stage.locked")}</span>
         ) : (
           <div className="v2-form">
@@ -223,12 +231,33 @@ export function CanaryDetail({ id }: { id: string }) {
                           {advanceLabel}
                         </Button>
                       ))}
+                    {earlyComplete &&
+                      (canary.running_action === "complete" || canary.error?.startsWith("complete: ") ? (
+                        actionButton("complete", t("canaryPage.completeEarly"), {
+                          extra: needsOverride ? { allow_non_significant: true } : undefined,
+                        })
+                      ) : (
+                        <Button
+                          disabled={locked}
+                          onClick={() =>
+                            needsOverride
+                              ? setConfirm({ action: "complete", allowNonSignificant: true })
+                              : void onAction("complete")
+                          }
+                          testId="v2-canary-action-complete-early"
+                        >
+                          {t("canaryPage.completeEarly")}
+                        </Button>
+                      ))}
                   </div>
                 </Field>
               </div>
             )}
             {blocked && current && <Alert tone="error">{t("canaryPage.blocked", { verdict: verdict?.verdict })}</Alert>}
             {needsOverride && current && <Alert tone="warn">{t("canaryPage.overrideHint")}</Alert>}
+            {earlyComplete && current && canary.status === "running" && (
+              <Alert>{t("canaryPage.completeEarlyHint")}</Alert>
+            )}
           </div>
         )}
       </StageCard>
@@ -240,7 +269,7 @@ export function CanaryDetail({ id }: { id: string }) {
     ...RAMP_STAGES.map((r, i) => ({
       key: `ramp-${i}`,
       label: `${r.control}/${r.treatment}`,
-      done: i < currentStage || (i === 2 && !!a.complete),
+      done: i < currentStage || (i === completedStage && !!a.complete),
       active: !!liveSetup && i === currentStage && !terminal,
     })),
     { key: "finish", label: t("v2.canary.finish"), done: terminal, active: false },

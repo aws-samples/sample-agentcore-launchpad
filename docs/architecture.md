@@ -2523,7 +2523,12 @@ through the same backend routes and permission checks as the classic pages.
   `InvokeAgentRuntime` on the harness ARN (CDK grants that plus `InvokeHarness` on
   `harness/*`), and the Harness spans carry the gateway's `routing_experiment_variant_name`,
   so `GetABTest` reports per-variant results. Complete is ledger-only (treatment is
-  already `DEFAULT`); rollback re-publishes the control version's behaviour (GetHarness
+  already `DEFAULT`) and, unlike a Runtime canary, may run straight from **50/50** on a
+  `treatment-wins` verdict (`canary_service.early_complete_allowed`; a non-significant
+  win still needs the override, a tie still ramps to 1/99): the architect's canary is fed
+  by Dataset replay, so 1/99 would only replay into the treatment without new comparative
+  evidence. `complete.completed_at_stage` records where it left, and the detail page
+  marks 1/99 skipped. Rollback re-publishes the control version's behaviour (GetHarness
   at that version → UpdateHarness, a new version); cleanup also deletes both Harness
   endpoints and the trace delivery. While one is live, non-streaming platform invokes
   of the agent go through its gateway (fallback: the control endpoint). The architect's

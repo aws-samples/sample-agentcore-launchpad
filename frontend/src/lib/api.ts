@@ -624,6 +624,8 @@ export interface RuntimeCanaryInfo {
       ab_test_status: string;
       completed_at: string;
       promoted_version?: string;
+      // ramp stage `complete` ran at; < 2 ⇒ a Harness canary completed early from 50/50
+      completed_at_stage?: number;
     };
     rollback?: {
       winner: string;

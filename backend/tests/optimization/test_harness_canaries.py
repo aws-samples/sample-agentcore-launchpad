@@ -244,6 +244,91 @@ def _setup_artifact(canary_id: str) -> dict:
     }
 
 
+# ─── early complete from 50/50 ──────────────────────────────────────────────
+def _at_stage(canary_id: str, stage: int, verdict: dict | None, *, harness: bool = True) -> None:
+    db = SessionLocal()
+    try:
+        row = db.get(RuntimeCanary, canary_id)
+        setup = {**_setup_artifact(canary_id), "ramp_stage": stage}
+        rounds = [{"ramp_stage": stage, "weights": {}, "traffic_attempts": [
+            {"sent": 7, "failed": 0, "baseline_n": 0}]}]
+        if verdict is not None:
+            rounds[0]["verdict"] = verdict
+        artifacts = {**row.artifacts, "setup": setup, "rounds": rounds}
+        if not harness:
+            artifacts.pop("kind")
+        row.artifacts = artifacts
+        db.commit()
+    finally:
+        db.close()
+
+
+def _complete(client, canary_id: str, **extra):
+    return client.post(f"/api/runtime-canaries/{canary_id}/action",
+                       json={"action": "complete", **extra})
+
+
+def test_a_harness_canary_completes_from_50_50_on_a_treatment_win(client, monkeypatch):
+    canary_id = _canary(_agent())
+    _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": True})
+    runs: list[str] = []
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+
+    res = _complete(client, canary_id)
+
+    assert res.status_code == 202, res.text
+    assert runs == ["complete"]
+
+
+def test_an_early_complete_records_the_stage_it_left_from(monkeypatch):
+    agent_id = _agent()
+    canary_id = _canary(agent_id)
+    _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": True})
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: MagicMock())
+    monkeypatch.setattr(exp_svc, "_stop_ab_test",
+                        lambda *a, **kw: {"executionStatus": "STOPPED"})
+
+    result = canary_svc.act_complete(canary_id, lambda _m: None, allow_non_significant=False)
+
+    assert result["completed_at_stage"] == 1
+    assert result["promoted_version"] == "3"
+    assert _reload(canary_id).status == "completed"
+
+
+def test_a_non_significant_early_win_still_needs_the_override(client, monkeypatch):
+    canary_id = _canary(_agent())
+    _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": False})
+    runs: list[str] = []
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+
+    refused = _complete(client, canary_id)
+    overridden = _complete(client, canary_id, allow_non_significant=True)
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "canary.override_required"
+    assert overridden.status_code == 202
+    assert runs == ["complete"]
+
+
+@pytest.mark.parametrize(("stage", "verdict", "harness"), [
+    (0, {"verdict": "treatment-wins", "significant": True}, True),   # 90/10 is too early
+    (1, {"verdict": "tie", "significant": False}, True),             # a tie goes on to 1/99
+    (1, {"verdict": "treatment-wins", "significant": True}, False),  # Runtime keeps the full ramp
+])
+def test_early_complete_is_only_a_harness_50_50_treatment_win(client, monkeypatch, stage,
+                                                              verdict, harness):
+    canary_id = _canary(_agent())
+    _at_stage(canary_id, stage, verdict, harness=harness)
+    runs: list[str] = []
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+
+    res = _complete(client, canary_id, allow_non_significant=True)
+
+    assert res.status_code == 409
+    assert res.json()["code"] == "canary.stage_not_ready"
+    assert runs == []
+
+
 def test_traffic_posts_the_invoke_harness_body_under_the_ab_filter(monkeypatch):
     agent_id = _agent()
     canary_id = _canary(agent_id)
