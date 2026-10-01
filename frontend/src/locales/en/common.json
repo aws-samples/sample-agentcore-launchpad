@@ -3318,7 +3318,8 @@
     "stage": {
       "setup": "CANARY GATEWAY + CANDIDATE SETUP",
       "ramp": "{{control}}/{{treatment}} TRAFFIC + VERDICT",
-      "locked": "Complete the previous stage's traffic, verdict, and advancement gate first."
+      "locked": "Complete the previous stage's traffic, verdict, and advancement gate first.",
+      "skippedEarly": "Skipped — the canary completed at 50/50 on a treatment-wins verdict."
     },
     "list": {
       "title": "RUNTIME CANARIES",
@@ -3353,7 +3354,9 @@
       "ramp99": "1/99 — final stage; AgentCore weights have a floor of one",
       "finish": "FINISH — promote the candidate to production, or roll back and clean up",
       "note": "The candidate winning advances directly. Ties and non-significant results require override; the current version winning and insufficient evidence remain blocked."
-    }
+    },
+    "completeEarly": "Complete now (skip 1/99)",
+    "completeEarlyHint": "Harness canary: its traffic is Dataset replay, so the 1/99 stage would send almost every session to the treatment without adding comparative evidence. On this treatment-wins verdict you can complete straight away — the A/B test stops and production stays on the new version — or keep ramping to 1/99."
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",
@@ -4746,7 +4749,7 @@
     },
     "canary": {
       "title": "Canary experiment",
-      "body": "A/B the newest Harness version (the recommendation you accepted) against an earlier version on live traffic: a dedicated Gateway routes 90/10 → 50/50 → 1/99 between two Harness endpoints, each variant is scored by its own online evaluation, and the A/B test decides whether the new version is promoted or rolled back.",
+      "body": "A/B the newest Harness version (the recommendation you accepted) against an earlier version: a dedicated Gateway routes 90/10 → 50/50 between two Harness endpoints, each variant is scored by its own online evaluation, and once the 50/50 verdict is treatment-wins you can complete right away (1/99 is optional); control-wins rolls back.",
       "versions": "Versions",
       "latest": "v{{v}} · latest",
       "control": "Control",
@@ -6243,7 +6246,8 @@
       "cardState": {
         "active": "Current",
         "done": "Done",
-        "pending": "Pending"
+        "pending": "Pending",
+        "skipped": "Skipped"
       },
       "pipeline": "Experiment flow",
       "summary": "Summary",
