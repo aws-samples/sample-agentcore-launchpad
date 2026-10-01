@@ -832,7 +832,9 @@ export function RuntimeCanaryView() {
                   ? t("canaryPage.confirmCleanup.body")
                   : confirm?.action === "rollback"
                     ? t("canaryPage.confirmRollback.body")
-                    : t("canaryPage.confirmOverride.body")}
+                    : confirm?.action === "complete"
+                      ? t("canaryPage.confirmOverride.completeBody")
+                      : t("canaryPage.confirmOverride.body")}
                 confirmLabel={confirm?.action === "cleanup"
                   ? t("canaryPage.cleanup")
                   : confirm?.action === "rollback"

@@ -3335,7 +3335,8 @@
     },
     "confirmOverride": {
       "title": "Override non-significant evidence",
-      "body": "The current result is tied or not statistically significant. Continue shifting more live production traffic to the candidate anyway?"
+      "body": "The current result is tied or not statistically significant. Continue shifting more live production traffic to the candidate anyway?",
+      "completeBody": "The current result is tied or not statistically significant. Completing stops the A/B test and production keeps serving the candidate version; the earlier version stays available for rollback. This is your decision — it does not show the candidate is better."
     },
     "confirmRollback": {
       "title": "Roll back the canary",

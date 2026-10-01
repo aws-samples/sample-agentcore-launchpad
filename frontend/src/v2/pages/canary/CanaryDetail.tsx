@@ -413,7 +413,9 @@ export function CanaryDetail({ id }: { id: string }) {
             ? t("canaryPage.confirmCleanup.body")
             : confirm?.action === "rollback"
               ? t("canaryPage.confirmRollback.body")
-              : t("canaryPage.confirmOverride.body")
+              : confirm?.action === "complete"
+                ? t("canaryPage.confirmOverride.completeBody")
+                : t("canaryPage.confirmOverride.body")
         }
         confirmLabel={
           confirm?.action === "cleanup"
