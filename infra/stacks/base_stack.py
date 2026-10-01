@@ -495,6 +495,22 @@ class LaunchpadBaseStack(Stack):
                 ],
             )
         )
+        # A Harness canary fronts two Harness endpoints with passthrough targets that
+        # call InvokeHarness through this role. Measured live 2026-09-30: the call is
+        # authorised as InvokeAgentRuntime on the HARNESS arn (403 without it), so both
+        # actions are granted on harness/* (endpoints are sub-resources of it).
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="InvokeHarnessTargets",
+                actions=[
+                    "bedrock-agentcore:InvokeHarness",
+                    "bedrock-agentcore:InvokeAgentRuntime",
+                ],
+                resources=[
+                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:harness/*"
+                ],
+            )
+        )
         # A request carrying config-bundle baggage makes the GATEWAY resolve the
         # bundle itself, with this role — not just the agent. Without this grant the
         # Gateway answers the MCP call with HTTP 400 `Config bundle fetch failed:

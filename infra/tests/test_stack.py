@@ -306,6 +306,36 @@ def test_outputs_exported(template: Template):
         assert key in outputs, f"missing output {key}"
 
 
+def test_gateway_role_can_invoke_harness_canary_targets(template: Template):
+    """A Harness canary's passthrough targets call InvokeHarness with the gateway
+    role, and AWS authorises that call as InvokeAgentRuntime on the harness ARN
+    (measured live: HTTP 403 without it)."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Sid": "InvokeHarnessTargets",
+                                        "Action": [
+                                            "bedrock-agentcore:InvokeHarness",
+                                            "bedrock-agentcore:InvokeAgentRuntime",
+                                        ],
+                                    }
+                                )
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+
 def test_gateway_role_can_resolve_a_routed_config_bundle(template: Template):
     """A request carrying config-bundle baggage makes the GATEWAY fetch the bundle
     with its own role, not just the agent. Measured live: without this grant the

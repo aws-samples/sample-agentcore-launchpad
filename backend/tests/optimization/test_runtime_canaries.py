@@ -187,7 +187,8 @@ def test_create_requires_a_candidate_edit(client):
     [
         (_agent("inactive", status="failed"), "canary.agent_not_active"),
         (
-            _agent("harness", method="harness", arn="arn:harness/x"),
+            # a Harness is canary-eligible (version A/B) once it has a Harness ARN
+            _agent("harness", method="harness", arn=None),
             "canary.agent_unsupported",
         ),
         (
@@ -512,6 +513,7 @@ def test_active_route_is_provisioning_form_before_gateway_is_live():
     # provisioning form: no gateway_url / control_target → invoke serves v_current
     # via the stable endpoint, NEVER DEFAULT (the untested candidate).
     assert route == {
+        "kind": "runtime",
         "runtime_id": "agentp-res",
         "arn": "arn:agentp",
         "stable_endpoint": "stablep",

@@ -3272,7 +3272,8 @@
       "not-runtime": "Target canaries require an AgentCore Runtime agent.",
       "container-followup": "Container canary candidate minting via CodeBuild is a follow-up.",
       "a2a": "A2A agents are not compatible with HTTP target-canary traffic.",
-      "no-runtime-arn": "This agent has no deployed AgentCore Runtime ARN."
+      "no-runtime-arn": "This agent has no deployed AgentCore Runtime ARN.",
+      "no-harness-arn": "The agent has no deployed Harness ARN."
     },
     "meta": "Live production traffic · candidate-version A/B · per-canary gateway",
     "modeLabel": "Experiment workflow",
@@ -4734,7 +4735,36 @@
       "body": "Online evaluation samples live sessions with the same evaluators — leave the reference-dependent ones off there. Turn it on only once the offline run is stable, and start with a low sampling rate.",
       "open": "OPEN ONLINE EVALUATION"
     },
-    "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS."
+    "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS.",
+    "recommend": {
+      "title": "Generate AI-recommended improvements",
+      "body": "AgentCore Recommendations reads the traces of your newest clean run and proposes a revised system prompt (and tool descriptions) aimed at the evaluator you pick. Review the diff; accepting it re-publishes the Harness with that prompt, and AWS creates a new Harness version (DEFAULT follows it).",
+      "source": "Traces from",
+      "version": "Harness now on v{{v}}",
+      "publishing": "Publishing the new Harness version of “{{name}}”… Step 4 lists it once the deploy finishes.",
+      "waiting": "Available after a run in step 2 completes without errors — its traces seed the recommendation."
+    },
+    "canary": {
+      "title": "Canary experiment",
+      "body": "A/B the newest Harness version (the recommendation you accepted) against an earlier version on live traffic: a dedicated Gateway routes 90/10 → 50/50 → 1/99 between two Harness endpoints, each variant is scored by its own online evaluation, and the A/B test decides whether the new version is promoted or rolled back.",
+      "versions": "Versions",
+      "latest": "v{{v}} · latest",
+      "control": "Control",
+      "firstSuffix": " (first)",
+      "treatment": "vs treatment v{{v}} (latest)",
+      "create": "Start canary",
+      "creating": "Starting…",
+      "current": "Canary",
+      "open": "Open canary",
+      "noPermission": "Your account lacks the eval.run permission needed to start a canary.",
+      "agentNotActive": "The agent must be active (a new version may still be publishing).",
+      "needsTwoVersions": "Needs at least two Harness versions — accept a recommendation in step 3 first.",
+      "alreadyRunning": "A canary is already running for this agent — finish or roll it back on its page first.",
+      "startedToast": "Canary {{name}} created — setup is running.",
+      "confirmTitle": "Start a canary between Harness versions?",
+      "confirmBody": "Launchpad will pin two endpoints of “{{name}}” (control v{{control}}, treatment v{{treatment}}), create a dedicated Gateway with trace delivery, two passthrough targets, two online evaluation configs and a target-routing A/B test at 90/10 in {{account}} / {{region}}. These are real, billable AWS resources; while the canary runs, platform invocations of this agent go through the canary Gateway. Clean them up from the canary page when you are done."
+    },
+    "noteHarness": "This panel is mostly guidance. The billable actions — START EVALUATION (the same request as New Run), generating and accepting a recommendation (accepting publishes a new Harness version) and starting a canary — each ask for confirmation. Every other link only opens an existing console page with the resources pre-selected."
   },
   "fishbone": {
     "title": "Agent-DLC five-dimension fishbone · launch barriers",
@@ -7413,6 +7443,16 @@
         "ground_truth": "needs dataset ground truth, which a recommendation's traces do not carry",
         "categorical": "categorical rating scale; no numerical signal to optimize",
         "unavailable": "used by this run but no longer in this account/region"
+      },
+      "accept": {
+        "button": "Accept & publish new version",
+        "accepting": "Publishing…",
+        "noPermission": "Your account lacks the agents.deploy permission needed to publish a new version.",
+        "accepted": "Accepted by {{by}} at {{at}} — published as a new Harness version (was v{{version}}).",
+        "toolsNotApplied": "Tool-description recommendations are not written into a Harness version: a Gateway tool's description belongs to its Gateway target.",
+        "startedToast": "Accepted — publishing a new Harness version.",
+        "confirmTitle": "Accept this recommendation?",
+        "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback."
       }
     }
   }

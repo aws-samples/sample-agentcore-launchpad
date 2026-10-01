@@ -10,26 +10,28 @@ import {
   type AssistantEvalResource,
   type AssistantProposal,
   errorMessage,
-  type ExperimentSummary,
 } from "../../../lib/api";
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
 import { type EvaluationRunInfo, evaluationRunPresentation, RUN_TERMINAL_STATUSES } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, Tag } from "../../ui";
-import { AGENT_TONE, CHIP_TAG, shortId } from "./common";
+import { RunRecommendations } from "../tasks/RunRecommendations";
+import { CHIP_TAG, shortId } from "./common";
+import { HarnessCanary } from "./HarnessCanary";
 
 /**
  * NEXT STEPS — shown under the evaluation assets once the creation operation has
  * SUCCEEDED: guidance with deep links, plus START EVALUATION (the same
- * `POST /api/eval/runs` New Run sends: agent + created Dataset + created evaluators)
- * and CONVERT TO RUNTIME (`POST /api/agents/{id}/convert`, the A/B subject) — both
- * behind a confirm because they invoke the Agent / create billable AWS resources.
+ * `POST /api/eval/runs` New Run sends: agent + created Dataset + created evaluators),
+ * AI RECOMMENDATIONS from the first clean run (accepting one re-publishes the Harness
+ * as a new version) and a HARNESS CANARY (that new version vs an earlier one) — each
+ * billable action behind a confirm.
  */
 
 const MAX_BATCH_EVALUATORS = 10;
 const RUN_POLL_MS = 5000;
-const TWIN_POLL_MS = 5000;
+const AGENT_POLL_MS = 5000;
 const RUN_HISTORY_LIMIT = 10;
 
 const meanScore = (run: EvaluationRunInfo) =>
@@ -83,73 +85,29 @@ export function NextStepsCard({
 
   const agentName = deployed?.agentName ?? String(proposal?.content.name ?? "");
   const agentFailed = deployed?.jobStatus === "failed" || deployed?.agentStatus === "failed";
-  const agentReady = !!deployed?.agentId && deployed.jobStatus === "succeeded" && deployed.agentStatus === "active";
+  const targetId = deployed?.agentId ?? null;
 
-  // ── Runtime twin: a managed Harness cannot consume a routed configuration bundle,
-  // so the A/B converts it into a NEW `<name>-rt` zip runtime; once active it is the
-  // main version here (Chat, runs and the experiment target it). Read from the ledger.
-  const harnessId = deployed?.agentId ?? null;
-  const [twins, setTwins] = useState<AgentInfo[] | null>(null);
-  const [twinError, setTwinError] = useState<string | null>(null);
-  const [confirmConvert, setConfirmConvert] = useState(false);
-  const [converting, setConverting] = useState(false);
-  const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
-  const loadTwins = useCallback(async () => {
-    if (!harnessId) {
-      setTwins([]);
-      return;
-    }
-    try {
-      const res = await api.listAgentConversions(harnessId);
-      setTwins(res.conversions);
-      setTwinError(null);
-    } catch (err) {
-      setTwinError(errorMessage(err));
-    }
-  }, [harnessId]);
-  useEffect(() => { void loadTwins(); }, [loadTwins]);
-  const twin = (twins ?? []).find((a) => a.status === "active") ?? (twins ?? [])[0] ?? null;
-  const twinDeploying = twin?.status === "deploying";
-  const twinActive = twin?.status === "active";
-  const twinFailed = twin?.status === "failed";
+  // The live agent row: accepting a recommendation re-publishes it (status goes
+  // deploying → active on a NEW Harness version), so it is read — and polled while
+  // deploying — rather than trusted from the creation result.
+  const [agent, setAgent] = useState<AgentInfo | null>(null);
+  const [agentTick, setAgentTick] = useState(0);
   useEffect(() => {
-    if (!twinDeploying) return;
-    const timer = window.setInterval(() => void loadTwins(), TWIN_POLL_MS);
+    if (!targetId) return;
+    let live = true;
+    api.getAgent(targetId).then((row) => { if (live) setAgent(row); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [targetId, agentTick]);
+  const republishing = agent?.status === "deploying";
+  useEffect(() => {
+    if (!republishing) return;
+    const timer = window.setInterval(() => setAgentTick((n) => n + 1), AGENT_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [twinDeploying, loadTwins]);
-  // one running experiment per workspace: say so instead of letting the link 409
-  useEffect(() => {
-    if (!twinActive) return;
-    api.listExperiments().then((res) => setExperiments(res.experiments)).catch(() => setExperiments([]));
-  }, [twinActive]);
-  const runningExperiment = experiments.find((e) => e.status === "running") ?? null;
-
-  const canConvert = can("agents.convert");
-  const convertable = agentReady && !!harnessId && (!twin || twinFailed) && !converting;
-  const convertReason = !canConvert
-    ? t("assistantNext.ab.convert.noPermission")
-    : !agentReady ? t("assistantNext.run.agentNotReady") : undefined;
-  const convert = async () => {
-    if (!harnessId || !convertable) return;
-    setConverting(true);
-    setTwinError(null);
-    try {
-      const res = await api.convertAgent(harnessId);
-      setTwins((prev) => [res.agent, ...(prev ?? []).filter((a) => a.id !== res.agent.id)]);
-      toast("success", t("assistantNext.ab.convert.startedToast", { name: res.agent.name }));
-    } catch (err) {
-      const message = errorMessage(err);
-      setTwinError(message);
-      toast("error", message);
-    } finally {
-      setConverting(false);
-    }
-  };
-
-  // The agent every step targets: the active twin, else the deployed Harness.
-  const targetId = twinActive && twin ? twin.id : (deployed?.agentId ?? null);
-  const targetName = twinActive && twin ? twin.name : agentName;
-  const targetReady = twinActive || agentReady;
+  }, [republishing]);
+  const agentReady = agent
+    ? agent.status === "active"
+    : !!deployed?.agentId && deployed.jobStatus === "succeeded" && deployed.agentStatus === "active";
+  const isHarness = (agent?.method ?? "harness") === "harness";
 
   const runParams = new URLSearchParams({ view: "new" });
   if (targetId) runParams.set("agent", targetId);
@@ -160,11 +118,11 @@ export function NextStepsCard({
   const canRun = can("eval.run");
   // StartBatchEvaluation applies at most this many evaluators per run (service limit).
   const tooMany = evaluators.length > MAX_BATCH_EVALUATORS;
-  const startable = targetReady && !!targetId && !!datasetId && evaluators.length > 0 && !tooMany;
+  const startable = agentReady && !!targetId && !!datasetId && evaluators.length > 0 && !tooMany;
   const runLive = (runs ?? []).some((r) => !RUN_TERMINAL_STATUSES.has(r.status));
   const startReason = !canRun
     ? t("assistantNext.run.noPermission")
-    : !targetReady
+    : !agentReady
       ? t("assistantNext.run.agentNotReady")
       : !datasetId || evaluators.length === 0
         ? t("assistantNext.run.assetsMissing")
@@ -227,15 +185,11 @@ export function NextStepsCard({
     }
   };
 
-  // Baseline for the A/B: the newest cleanly completed run of the TWIN on this Dataset.
-  const baseline = twinActive
-    ? (runs ?? []).find((r) => evaluationRunPresentation(r).status === "completed") ?? null
-    : null;
+  // Recommendations are seeded from the newest cleanly completed run with a batch.
+  const baseline = (runs ?? []).find(
+    (r) => evaluationRunPresentation(r).status === "completed" && !!r.batch_eval_id,
+  ) ?? null;
   const baselineMean = baseline ? meanScore(baseline) : null;
-  const experimentParams = new URLSearchParams({ view: "new" });
-  if (targetId) experimentParams.set("agent", targetId);
-  if (baseline) experimentParams.set("baselineRun", baseline.id);
-  const experimentLink = `/v2/eval/experiments?${experimentParams.toString()}`;
 
   let n = 0;
   return (
@@ -245,7 +199,7 @@ export function NextStepsCard({
           n={++n}
           testId="v2-assistant-next-chat"
           title={t("assistantNext.chat.title")}
-          actions={targetReady && targetId ? (
+          actions={agentReady && targetId ? (
             <Link className="v2-btn sm primary" to={`/v2/chat?agent=${encodeURIComponent(targetId)}`}>
               {t("assistantNext.chat.open")}
             </Link>
@@ -253,13 +207,13 @@ export function NextStepsCard({
             <Link className="v2-btn sm" to="/v2/agents">{t("assistantNext.agents")}</Link>
           )}
         >
-          {targetReady
-            ? t("assistantNext.chat.body", { name: targetName })
+          {agentReady
+            ? t("assistantNext.chat.body", { name: agentName })
             : agentFailed
               ? t("assistantNext.chat.failed", { name: agentName })
               : t("assistantNext.chat.waiting", {
                 name: agentName,
-                status: String(deployed?.jobStatus ?? deployed?.agentStatus ?? "—"),
+                status: String(agent?.status ?? deployed?.jobStatus ?? deployed?.agentStatus ?? "—"),
               })}
         </Step>
 
@@ -281,14 +235,9 @@ export function NextStepsCard({
         >
           <div>
             {t("assistantNext.run.body", {
-              agent: targetName, dataset: datasetRes?.name ?? datasetId, items: datasetItems, n: evaluators.length,
+              agent: agentName, dataset: datasetRes?.name ?? datasetId, items: datasetItems, n: evaluators.length,
             })}
           </div>
-          {twinActive && twin && (
-            <div className="v2-tags" style={{ marginTop: 6 }}>
-              <Tag tone="green">{t("assistantNext.ab.target", { name: twin.name })}</Tag>
-            </div>
-          )}
           {evaluators.length > 0 && (
             <div className="v2-tags" style={{ marginTop: 6 }}>
               {evaluators.map((e) => (
@@ -340,6 +289,37 @@ export function NextStepsCard({
           {runError && <div style={{ marginTop: 8 }}><Alert tone="error">{runError}</Alert></div>}
         </Step>
 
+        <Step n={++n} testId="v2-assistant-next-recommend" title={t("assistantNext.recommend.title")}>
+          <div>{t("assistantNext.recommend.body")}</div>
+          {baseline ? (
+            <>
+              <div className="v2-assistant-sub-row" style={{ marginTop: 6 }}>
+                <span>{t("assistantNext.recommend.source")}</span>
+                <Tag tone="green">{t("assistantNext.run.runLine", { id: shortId(baseline.id) })}</Tag>
+                {baselineMean != null && (
+                  <span className="v2-muted">
+                    {t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
+                  </span>
+                )}
+                {agent?.version && <span className="v2-muted">{t("assistantNext.recommend.version", { v: agent.version })}</span>}
+              </div>
+              {republishing && (
+                <div style={{ marginTop: 8 }}><Alert>{t("assistantNext.recommend.publishing", { name: agentName })}</Alert></div>
+              )}
+              <div style={{ marginTop: 8 }}>
+                <RunRecommendations
+                  run={baseline}
+                  embedded
+                  acceptable={isHarness && agentReady}
+                  onAccepted={() => setAgentTick((k) => k + 1)}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="v2-muted" style={{ marginTop: 6 }}>{t("assistantNext.recommend.waiting")}</div>
+          )}
+        </Step>
+
         <Step
           n={++n}
           testId="v2-assistant-next-iterate"
@@ -352,69 +332,15 @@ export function NextStepsCard({
           }
         >
           <div>{t("assistantNext.iterate.body")}</div>
-          {harnessId && (
-            <div className="v2-assistant-sub-rows" data-testid="v2-assistant-next-ab" data-twin-status={twin?.status ?? "none"}>
-              <div style={{ fontWeight: 600 }}>{t("assistantNext.ab.title")}</div>
-              <div className="v2-muted">{t("assistantNext.ab.body")}</div>
-              <div className="v2-assistant-sub-row">
-                <span>{t("assistantNext.ab.convert.label")}</span>
-                {twin ? (
-                  <>
-                    <Tag tone={AGENT_TONE[twin.status] ?? "gray"} dot>{t(`status.${twin.status}`, { defaultValue: twin.status })}</Tag>
-                    <span className="mono">{twin.name}</span>
-                    {twinActive && <span className="v2-muted">{t("assistantNext.ab.convert.main")}</span>}
-                    {twinDeploying && <span className="v2-muted">{t("assistantNext.ab.convert.deploying")}</span>}
-                  </>
-                ) : (
-                  <span className="v2-muted">{t("assistantNext.ab.convert.none")}</span>
-                )}
-                {(!twin || twinFailed) && (
-                  <Button size="sm" kind="primary" disabled={!convertable || !canConvert} title={convertReason}
-                    onClick={() => setConfirmConvert(true)} testId="v2-assistant-next-convert">
-                    {converting ? t("assistantNext.ab.convert.starting")
-                      : twinFailed ? t("assistantNext.ab.convert.retry") : t("assistantNext.ab.convert.start")}
-                  </Button>
-                )}
-                {twinFailed && twin?.error && <div className="err">{twin.error}</div>}
-              </div>
-              <div className="v2-assistant-sub-row">
-                <span>{t("assistantNext.ab.baseline.label")}</span>
-                {baseline ? (
-                  <>
-                    <Tag tone="green">{t("assistantNext.run.runLine", { id: shortId(baseline.id) })}</Tag>
-                    {baselineMean != null && (
-                      <span className="v2-muted">
-                        {t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <span className="v2-muted">
-                    {twinActive ? t("assistantNext.ab.baseline.missing", { name: targetName }) : t("assistantNext.ab.baseline.waiting")}
-                  </span>
-                )}
-              </div>
-              <div className="v2-assistant-sub-row">
-                <span>{t("assistantNext.ab.experiment.label")}</span>
-                {twinActive && targetId ? (
-                  <Link to={experimentLink} data-testid="v2-assistant-next-experiment">{t("assistantNext.ab.experiment.open")} ›</Link>
-                ) : (
-                  <span className="v2-muted">{t("assistantNext.ab.experiment.waiting")}</span>
-                )}
-                {twinActive && !baseline && (
-                  <span style={{ color: "var(--v2-warning)" }}>{t("assistantNext.ab.experiment.noBaseline")}</span>
-                )}
-                {runningExperiment && (
-                  <span className="v2-muted" style={{ flexBasis: "100%" }}>
-                    {t("assistantNext.ab.experiment.running", { name: runningExperiment.name })}{" "}
-                    <Link to={`/v2/eval/experiments?view=detail&id=${encodeURIComponent(runningExperiment.id)}`}>
-                      {t("assistantNext.ab.experiment.openRunning")} ›
-                    </Link>
-                  </span>
-                )}
-              </div>
-              {twinError && <Alert tone="error">{twinError}</Alert>}
-            </div>
+          {targetId && isHarness && (
+            <HarnessCanary
+              agentId={targetId}
+              agentName={agentName}
+              agentActive={agentReady}
+              versionsKey={`${agent?.version ?? ""}:${agent?.status ?? ""}`}
+              account={operation.account_id}
+              region={operation.region}
+            />
           )}
         </Step>
 
@@ -434,12 +360,12 @@ export function NextStepsCard({
           {t("assistantNext.online.body")}
         </Step>
       </ol>
-      <div style={{ marginTop: 12 }}><Alert>{t("assistantNext.note")}</Alert></div>
+      <div style={{ marginTop: 12 }}><Alert>{t("assistantNext.noteHarness")}</Alert></div>
       <Confirm
         open={confirmStart}
         title={t("assistantNext.run.confirmTitle")}
         body={t("assistantNext.run.confirmBody", {
-          agent: targetName,
+          agent: agentName,
           dataset: datasetRes?.name ?? datasetId,
           items: datasetItems,
           n: evaluators.length,
@@ -449,19 +375,6 @@ export function NextStepsCard({
         confirmLabel={t("assistantNext.run.confirm")}
         onConfirm={() => { setConfirmStart(false); void startRun(); }}
         onClose={() => setConfirmStart(false)}
-      />
-      <Confirm
-        open={confirmConvert}
-        title={t("assistantNext.ab.convert.confirmTitle")}
-        body={t("assistantNext.ab.convert.confirmBody", {
-          name: agentName,
-          twin: `${agentName}-rt`,
-          account: operation.account_id,
-          region: operation.region,
-        })}
-        confirmLabel={t("assistantNext.ab.convert.confirm")}
-        onConfirm={() => { setConfirmConvert(false); void convert(); }}
-        onClose={() => setConfirmConvert(false)}
       />
     </Card>
   );

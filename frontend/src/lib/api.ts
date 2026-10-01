@@ -97,6 +97,8 @@ export interface AgentInfo {
     eligible: boolean;
     reason: string | null;
     reason_code: string | null;
+    /** "harness" ⇒ the canary A/Bs two existing Harness versions */
+    kind?: "harness";
   };
   invoke_capability: {
     eligible: boolean;
@@ -549,13 +551,18 @@ export interface RuntimeCanaryInfo {
   error: string | null;
   created_at: string | null;
   artifacts: {
+    /** absent ⇒ a Runtime canary (candidate minted from an edited spec) */
+    kind?: "harness";
     agent_meta?: {
       id: string;
       name: string;
       arn: string;
       resource_id: string;
       runtime_name: string;
+      harness_name?: string;
     };
+    /** Harness canaries A/B two existing versions */
+    harness?: { control_version: string; treatment_version: string };
     edited_spec?: Record<string, unknown>;
     // ``setup`` is persisted as a PARTIAL artifact (the block below) as soon as the
     // gateway + stable endpoint are up, so invoke keeps serving v_current during
@@ -621,6 +628,8 @@ export interface RuntimeCanaryInfo {
     rollback?: {
       winner: string;
       restored_version?: string;
+      // Harness canaries re-publish this (control) version as the restored one
+      restored_from_version?: string;
       restored_s3_key?: string;
       ab_test_status?: string;
       rolled_back_at?: string;
@@ -3911,6 +3920,14 @@ export const api = {
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** `POST …/recommendations/{recId}/accept` (202) — re-publishes the run's Harness
+   *  with the recommended system prompt (a NEW Harness version, DEFAULT follows it).
+   *  Needs `agents.deploy`; accepted once (409 afterwards). */
+  acceptRunRecommendation: (runId: string, recId: string) =>
+    request<{ agent: AgentInfo; job_id: string; deployment_id: string; recommendation: RunRecommendation }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/accept`,
+      { method: "POST" },
+    ),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>
@@ -4318,13 +4335,16 @@ export const api = {
     request<{ canaries: RuntimeCanaryInfo[] }>("/api/runtime-canaries"),
   getRuntimeCanary: (id: string) =>
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
+  /** Runtime agents send `candidate` (the edit to mint); a Harness sends
+   *  `harness_versions` — control (an earlier version) vs treatment (the latest). */
   createRuntimeCanary: (input: {
     agent_id: string;
-    candidate: {
+    candidate?: {
       system_prompt?: string;
       tool_description_overrides?: Record<string, string>;
       code?: string;
     };
+    harness_versions?: { control: string; treatment: string };
     source_experiment_id?: string;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {

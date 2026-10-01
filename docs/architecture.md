@@ -2502,7 +2502,34 @@ through the same backend routes and permission checks as the classic pages.
   Studio code, accepting the experiment's promote hand-off `champion=` / `sourceExp=`)
   and `canary=<id>` with setup plus one card per ramp stage (90/10 → 50/50 → 1/99:
   traffic, verdict, advance/complete with the non-significant override confirm),
-  rollback and cleanup. In V2 the classic
+  rollback and cleanup. A **Harness canary** (`artifacts.kind = "harness"`,
+  `optimization/canary_harness.py`) A/Bs two EXISTING versions of one managed Harness
+  instead of minting a candidate: `canary=new` asks for the control version (default the
+  first) against the latest, which `DEFAULT` already serves. A Harness ARN is not a valid
+  `http.agentcoreRuntime` Gateway target (the field validates a `runtime/` ARN), so setup
+  pins two Harness endpoints (`ctl<id6>` → control, `trt<id6>` → treatment) and fronts
+  each with an HTTP **passthrough** target (`protocolType CUSTOM`, SigV4
+  `bedrock-agentcore` via the gateway role, endpoint
+  `https://bedrock-agentcore.<region>.amazonaws.com/harnesses/invoke` with `harnessArn` +
+  `qualifier` as static query parameters), turns on the dedicated gateway's trace
+  delivery, and scores each variant with an online eval on that endpoint's telemetry
+  (`service.name = harness_<harnessName>.<endpoint>`, log group
+  `/aws/bedrock-agentcore/runtimes/<backingRuntimeId>-<endpoint>`, created up front
+  because CreateOnlineEvaluationConfig refuses a missing group). Measured live
+  2026-09-30: clients POST the InvokeHarness JSON body to `<gatewayUrl>/<target>/` (the
+  `/invocations` suffix is a 404, and the trailing slash is load-bearing: a bare
+  `/<target>` still answers 200 but bypasses the A/B test's `gatewayFilter`
+  `/<target>/*`, so no session is ever attributed or scored), the gateway role is authorised as
+  `InvokeAgentRuntime` on the harness ARN (CDK grants that plus `InvokeHarness` on
+  `harness/*`), and the Harness spans carry the gateway's `routing_experiment_variant_name`,
+  so `GetABTest` reports per-variant results. Complete is ledger-only (treatment is
+  already `DEFAULT`); rollback re-publishes the control version's behaviour (GetHarness
+  at that version → UpdateHarness, a new version); cleanup also deletes both Harness
+  endpoints and the trace delivery. While one is live, non-streaming platform invokes
+  of the agent go through its gateway (fallback: the control endpoint). The architect's
+  next-steps panel (`v2/pages/assistant/NextSteps.tsx`) drives this as step 3 (AI
+  recommendations from the first clean run; accepting one re-publishes the Harness as a
+  new version) and step 4's 金丝雀实验 (`HarnessCanary.tsx`). In V2 the classic
   `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
   in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
   its section nav are no longer reached from the V2 sidebar.

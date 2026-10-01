@@ -660,3 +660,149 @@ def test_another_workspaces_run_is_not_found(client, monkeypatch):
     assert client.post(f"/api/eval/runs/{run_id}/recommendations",
                        json={"kinds": ["system_prompt"], "system_prompt": "x"}
                        ).status_code == 404
+
+
+# ─── accept → a new Harness version ─────────────────────────────────────────
+def _harness_agent(**fields) -> str:
+    from app.schemas.agent import AgentSpec
+
+    spec = AgentSpec(name="rec-agent", method="harness", system_prompt="old prompt").model_dump()
+    return _agent(method="harness", spec=spec, version="1",
+                  arn="arn:aws:bedrock-agentcore:us-west-2:1:harness/rec_agent-abcdefghij",
+                  resource_id="rec_agent-abcdefghij", **fields)
+
+
+def _rec(run_id: str, **fields) -> str:
+    from app.evaluation.models import EvalRecommendation
+
+    db = SessionLocal()
+    try:
+        row = EvalRecommendation(workspace_id=DEFAULT_WORKSPACE_ID, run_id=run_id,
+                                 recommendation_id="rec-aws-1", name="rec_sp", **{
+                                     "kind": "system_prompt", "status": "COMPLETED",
+                                     "result": {"recommended_prompt": "new prompt"},
+                                     **fields})
+        db.add(row)
+        db.commit()
+        return row.id
+    finally:
+        db.close()
+
+
+def _no_deploy(monkeypatch) -> list[str]:
+    started: list[str] = []
+    monkeypatch.setattr("app.routers.agents.start_deploy_async", started.append)
+    return started
+
+
+def test_accept_republishes_the_harness_with_the_recommended_prompt(client, monkeypatch):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    agent_id = _harness_agent()
+    run_id = _run(agent_id)
+    rec_id = _rec(run_id)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+
+    assert res.status_code == 202, res.text
+    body = res.json()
+    assert started == [body["job_id"]]
+    accepted = body["recommendation"]["accepted"]
+    assert accepted["agent_id"] == agent_id
+    assert accepted["previous_version"] == "1"
+    assert accepted["job_id"] == body["job_id"]
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, agent_id)
+        assert agent.spec["system_prompt"] == "new prompt"
+        assert agent.status == "deploying"
+    finally:
+        db.close()
+    # accepted once
+    again = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+    assert again.status_code == 409
+    assert again.json()["code"] == "recommendation.already_accepted"
+    assert len(started) == 1
+
+
+def test_accept_drops_the_kb_section_the_deployer_appends(client, monkeypatch):
+    """The recommendation revised the LIVE prompt (spec prompt + the platform's KB
+    section); storing that verbatim made the next deploy append the section twice."""
+    from app.deployer.harness import _kb_prompt
+    from app.schemas.agent import AgentSpec
+
+    _stub(monkeypatch)
+    _no_deploy(monkeypatch)
+    spec = AgentSpec(name="rec-agent", method="harness", system_prompt="old prompt",
+                     knowledge_bases=[{"kb_id": "KB12345678", "name": "earnings"}])
+    agent_id = _agent(method="harness", spec=spec.model_dump(), version="1",
+                      arn="arn:aws:bedrock-agentcore:us-west-2:1:harness/rec_agent-abcdefghij",
+                      resource_id="rec_agent-abcdefghij")
+    run_id = _run(agent_id)
+    live = "revised prompt" + _kb_prompt(spec)
+    rec_id = _rec(run_id, result={"recommended_prompt": live})
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+
+    assert res.status_code == 202, res.text
+    db = SessionLocal()
+    try:
+        assert db.get(Agent, agent_id).spec["system_prompt"] == "revised prompt"
+    finally:
+        db.close()
+
+
+def test_strip_generated_prompt_tolerates_a_reflowed_kb_section():
+    from app.deployer.harness import strip_generated_prompt
+    from app.schemas.agent import AgentSpec
+
+    spec = AgentSpec(name="rec-agent", method="harness", system_prompt="p",
+                     knowledge_bases=[{"kb_id": "KB12345678", "name": "earnings"}])
+    reflowed = ("keep me\n## Knowledge bases\nRetrieval tools are mounted for you. (edited)\n"
+                "- earnings …\nGround answers on retrieved content and cite sources when you "
+                "use them.\nand this tail")
+    assert strip_generated_prompt(spec, reflowed) == "keep me\nand this tail"
+    assert strip_generated_prompt(spec, "no section") == "no section"
+
+
+@pytest.mark.parametrize(("rec_fields", "code", "status"), [
+    ({"kind": "tool_descriptions", "result": {"tools": {}}}, "recommendation.accept_kind", 400),
+    ({"status": "IN_PROGRESS", "result": {}}, "recommendation.not_completed", 409),
+    ({"result": {"recommended_prompt": "  "}}, "recommendation.not_completed", 409),
+])
+def test_accept_refuses_what_cannot_become_a_version(client, monkeypatch, rec_fields, code,
+                                                     status):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    run_id = _run(_harness_agent())
+    rec_id = _rec(run_id, **rec_fields)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+
+    assert res.status_code == status
+    assert res.json()["code"] == code
+    assert started == []
+
+
+def test_accept_needs_a_platform_harness(client, monkeypatch):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    run_id = _run(_agent(method="zip_runtime", spec={"system_prompt": "x"}))
+    rec_id = _rec(run_id)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+
+    assert res.status_code == 400
+    assert res.json()["code"] == "recommendation.accept_not_harness"
+    assert started == []
+
+
+def test_accept_of_another_runs_recommendation_is_not_found(client, monkeypatch):
+    _stub(monkeypatch)
+    _no_deploy(monkeypatch)
+    agent_id = _harness_agent()
+    rec_id = _rec(_run(agent_id))
+
+    res = client.post(f"/api/eval/runs/{_run(agent_id)}/recommendations/{rec_id}/accept")
+
+    assert res.status_code == 404

@@ -7,7 +7,7 @@ import { api, errorMessage } from "../../../lib/api";
 import type { EvaluationRunInfo, RunRecommendation, RunRecommendationKind } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Field, Select, Spin, Table, Tag, type TagTone } from "../../ui";
+import { Alert, Button, Card, Confirm, Field, Select, Spin, Table, Tag, type TagTone } from "../../ui";
 
 const POLL_MS = 10000;
 const ACTIVE = new Set(["PENDING", "IN_PROGRESS"]);
@@ -57,6 +57,12 @@ function EvaluatorGuide({ excluded }: { excluded: { id: string; reason: string }
   );
 }
 
+/** What accepting a recommendation hands back (a new Harness version is deploying). */
+export interface AcceptedRecommendation {
+  jobId: string;
+  rec: RunRecommendation;
+}
+
 interface ToolRow {
   key: number;
   name: string;
@@ -70,8 +76,19 @@ interface ToolRow {
  * The traces are that run's batch evaluation. A Managed Harness's system prompt and
  * tool descriptions arrive pre-filled from GetHarness; for any other agent the
  * operator types what the backend could not read (both inputs are required).
+ *
+ * `acceptable` (the architect's next steps, a Harness target) adds 接受并发布新版本 to a
+ * completed system-prompt recommendation: it re-publishes the Harness with that prompt.
  */
-export function RunRecommendations({ run }: { run: EvaluationRunInfo }) {
+export function RunRecommendations({
+  run, acceptable = false, onAccepted, embedded = false,
+}: {
+  run: EvaluationRunInfo;
+  acceptable?: boolean;
+  onAccepted?: (accepted: AcceptedRecommendation) => void;
+  /** render without the outer Card (inside another panel) */
+  embedded?: boolean;
+}) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const { can } = useAuth();
@@ -107,8 +124,11 @@ export function RunRecommendations({ run }: { run: EvaluationRunInfo }) {
     setWantTools(seed.tools_eligible && seed.tools.some((tool) => tool.description.trim()));
   }, [seed]);
 
-  if (inputs.loading && !seed) return <Card title={t("v2.rec.title")}><Spin /></Card>;
-  if (inputs.error && !seed) return <Card title={t("v2.rec.title")}><Alert tone="error">{inputs.error}</Alert></Card>;
+  if (inputs.loading && !seed) return embedded ? <Spin /> : <Card title={t("v2.rec.title")}><Spin /></Card>;
+  if (inputs.error && !seed) {
+    const failed = <Alert tone="error">{inputs.error}</Alert>;
+    return embedded ? failed : <Card title={t("v2.rec.title")}>{failed}</Card>;
+  }
   if (!seed) return null;
 
   const source = seed.source;
@@ -293,34 +313,73 @@ export function RunRecommendations({ run }: { run: EvaluationRunInfo }) {
     </div>
   );
 
-  return (
-    <Card
-      title={t("v2.rec.title")}
-      sub={t("v2.rec.sub")}
-      end={
-        seed.eligible && !formOpen ? (
-          <Button size="sm" disabled={!mayRun} onClick={() => setOpen(true)} testId="v2-rec-new">
-            {t("v2.rec.new")}
-          </Button>
-        ) : undefined
-      }
-      testId="v2-rec-card"
-    >
-      <div className="v2-form">
-        {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && form}
-        {list.error && <Alert tone="error">{list.error}</Alert>}
-        {recs.map((rec) => (
-          <RecommendationResult key={rec.id} rec={rec} />
-        ))}
+  const newButton = seed.eligible && !formOpen ? (
+    <Button size="sm" disabled={!mayRun} onClick={() => setOpen(true)} testId="v2-rec-new">
+      {t("v2.rec.new")}
+    </Button>
+  ) : undefined;
+  const body = (
+    <div className="v2-form">
+      {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && form}
+      {list.error && <Alert tone="error">{list.error}</Alert>}
+      {recs.map((rec) => (
+        <RecommendationResult
+          key={rec.id}
+          rec={rec}
+          runId={run.id}
+          acceptable={acceptable}
+          showToolNote={acceptable}
+          onAccepted={(accepted) => {
+            setTick((n) => n + 1);
+            onAccepted?.(accepted);
+          }}
+        />
+      ))}
+    </div>
+  );
+  if (embedded) {
+    return (
+      <div className="v2-form" data-testid="v2-rec-card">
+        {newButton && <div>{newButton}</div>}
+        {body}
       </div>
+    );
+  }
+  return (
+    <Card title={t("v2.rec.title")} sub={t("v2.rec.sub")} end={newButton} testId="v2-rec-card">
+      {body}
     </Card>
   );
 }
 
-function RecommendationResult({ rec }: { rec: RunRecommendation }) {
+function RecommendationResult({
+  rec, runId, acceptable, showToolNote, onAccepted,
+}: {
+  rec: RunRecommendation;
+  runId: string;
+  acceptable: boolean;
+  showToolNote: boolean;
+  onAccepted: (accepted: AcceptedRecommendation) => void;
+}) {
   const { t } = useTranslation();
   const toast = useV2Toast();
+  const { can } = useAuth();
+  const [confirm, setConfirm] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const done = rec.status === "COMPLETED";
+  const mayAccept = can("agents.deploy");
+  const accept = async () => {
+    setAccepting(true);
+    try {
+      const res = await api.acceptRunRecommendation(runId, rec.id);
+      toast("success", t("v2.rec.accept.startedToast"));
+      onAccepted({ jobId: res.job_id, rec: res.recommendation });
+    } catch (err) {
+      toast("error", errorMessage(err));
+    } finally {
+      setAccepting(false);
+    }
+  };
   const copy = (text: string) =>
     void navigator.clipboard.writeText(text).then(
       () => toast("success", t("v2.rec.copied")),
@@ -340,14 +399,40 @@ function RecommendationResult({ rec }: { rec: RunRecommendation }) {
       sub={[fmtTime(rec.created_at), rec.evaluator].filter(Boolean).join(" · ")}
       end={
         done && rec.kind === "system_prompt" && rec.result.recommended_prompt ? (
-          <Button size="sm" onClick={() => copy(rec.result.recommended_prompt ?? "")}>
-            {t("v2.rec.copy")}
-          </Button>
+          <span className="v2-row">
+            {acceptable && !rec.accepted && (
+              <Button
+                size="sm"
+                kind="primary"
+                disabled={!mayAccept || accepting}
+                title={mayAccept ? undefined : t("v2.rec.accept.noPermission")}
+                onClick={() => setConfirm(true)}
+                testId="v2-rec-accept"
+              >
+                {accepting ? t("v2.rec.accept.accepting") : t("v2.rec.accept.button")}
+              </Button>
+            )}
+            <Button size="sm" onClick={() => copy(rec.result.recommended_prompt ?? "")}>
+              {t("v2.rec.copy")}
+            </Button>
+          </span>
         ) : undefined
       }
       testId={`v2-rec-${rec.kind}`}
     >
       <div className="v2-form">
+        {rec.accepted && (
+          <Alert tone="success">
+            {t("v2.rec.accept.accepted", {
+              by: rec.accepted.by,
+              at: fmtTime(rec.accepted.at),
+              version: rec.accepted.previous_version ?? "—",
+            })}
+          </Alert>
+        )}
+        {showToolNote && done && rec.kind === "tool_descriptions" && (
+          <Alert>{t("v2.rec.accept.toolsNotApplied")}</Alert>
+        )}
         {ACTIVE.has(rec.status) && <span className="v2-muted">{t("v2.rec.running", { id: rec.recommendation_id })}</span>}
         {rec.skipped_tools.length > 0 && <Alert tone="warn">{t("v2.rec.skippedTools", { tools: rec.skipped_tools.join(", ") })}</Alert>}
         {rec.error && <Alert tone={rec.status === "FAILED" ? "error" : "warn"}>{rec.error}</Alert>}
@@ -390,6 +475,14 @@ function RecommendationResult({ rec }: { rec: RunRecommendation }) {
         )}
         <span className="v2-muted mono">{rec.recommendation_id}</span>
       </div>
+      <Confirm
+        open={confirm}
+        title={t("v2.rec.accept.confirmTitle")}
+        body={t("v2.rec.accept.confirmBody")}
+        confirmLabel={t("v2.rec.accept.button")}
+        onConfirm={() => { setConfirm(false); void accept(); }}
+        onClose={() => setConfirm(false)}
+      />
     </Card>
   );
 }

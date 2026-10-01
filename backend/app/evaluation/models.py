@@ -103,6 +103,9 @@ class EvalRecommendation(Base):
     skipped_tools: Mapped[list[str]] = mapped_column(JSON, default=list)
     result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # set once a system-prompt recommendation was accepted into a new Harness version:
+    # {by, at, agent_id, job_id, deployment_id, previous_version}
+    accepted: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

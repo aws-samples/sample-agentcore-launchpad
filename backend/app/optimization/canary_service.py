@@ -10,11 +10,13 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
 from app.models.ledger import Agent
-from app.optimization import canary_infra
+from app.optimization import canary_harness, canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
+from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client, data_client
+from app.services.memory import scoped_actor
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 Progress = Callable[[str], None]
@@ -124,6 +126,7 @@ def active_canary_route(agent_id: str) -> dict[str, Any] | None:
         if not (stable_endpoint and runtime_id and arn):
             return None
         route: dict[str, Any] = {
+            "kind": artifacts.get("kind") or "runtime",
             "runtime_id": runtime_id,
             "arn": arn,
             "stable_endpoint": stable_endpoint,
@@ -166,6 +169,19 @@ def clear_stale_running_actions() -> list[str]:
 
 
 def _agent_meta(agent: Any, control: Any) -> dict[str, Any]:
+    if agent.method == "harness":
+        harness = hc.get_harness(control, agent.resource_id)
+        return {
+            "id": agent.id,
+            "name": agent.name,
+            "arn": agent.arn,
+            "resource_id": agent.resource_id,
+            "harness_name": harness["harnessName"],
+            # the managed backing runtime names the endpoint telemetry
+            "runtime_name": f"harness_{harness['harnessName']}",
+            "backing_runtime_id": canary_harness.backing_runtime_id(harness),
+            "canary_capability": experiment_service.canary_capability(agent),
+        }
     return {
         "id": agent.id,
         "name": agent.name,
@@ -174,6 +190,51 @@ def _agent_meta(agent: Any, control: Any) -> dict[str, Any]:
         "runtime_name": experiment_service.rt_name(control, agent.resource_id),
         "canary_capability": experiment_service.canary_capability(agent),
     }
+
+
+def is_harness(row: RuntimeCanary) -> bool:
+    return (row.artifacts or {}).get("kind") == "harness"
+
+
+def start_harness_canary(
+    agent: Any,
+    *,
+    control_version: str,
+    treatment_version: str,
+    workspace: WorkspaceContext,
+) -> RuntimeCanary:
+    """Ledger row for a Harness canary: two EXISTING versions of one Harness.
+
+    ``treatment_version`` is the latest version (DEFAULT already serves it), so
+    ``complete`` never has to re-point anything on AWS; ``edited_spec`` is the
+    ledger spec at creation — the spec production runs once treatment wins."""
+    control = control_client(workspace)
+    row = RuntimeCanary(
+        workspace_id=agent.workspace_id,
+        name=f"CANARY-{agent.name[:32]}",
+        champion_agent_id=agent.id,
+        champion_agent_name=agent.name,
+        challenger_agent_id=agent.id,
+        challenger_agent_name=agent.name,
+        artifacts={
+            "kind": "harness",
+            "agent_meta": _agent_meta(agent, control),
+            "harness": {
+                "control_version": str(control_version),
+                "treatment_version": str(treatment_version),
+            },
+            "edited_spec": copy.deepcopy(agent.spec or {}),
+            "rounds": [],
+        },
+    )
+    db = SessionLocal()
+    try:
+        db.add(row)
+        db.commit()
+        row_id = row.id
+    finally:
+        db.close()
+    return _get(row_id)
 
 
 def start_canary(
@@ -362,11 +423,176 @@ def _refuse_system_subject(row: RuntimeCanary, action: str) -> None:
         refuse_system_agent_id(meta_id, action)
 
 
+def _create_target_ab_test(
+    data: Any,
+    *,
+    test_name: str,
+    gateway_arn: str,
+    role_arn: str,
+    control_target: str,
+    control_eval: dict[str, Any],
+    treatment_eval: dict[str, Any],
+    variants: list[dict[str, Any]],
+    progress: Progress,
+) -> dict[str, Any]:
+    """Target-routing A/B test at the first ramp weights (adopted on conflict)."""
+    progress("creating target-routing A/B test at 90/10…")
+    try:
+        return ac.create_ab_test(
+            data,
+            name=test_name,
+            gatewayArn=gateway_arn,
+            roleArn=role_arn,
+            enableOnCreate=True,
+            evaluationConfig={
+                "perVariantOnlineEvaluationConfig": [
+                    {
+                        "name": "C",
+                        "onlineEvaluationConfigArn": control_eval["online_eval_arn"],
+                    },
+                    {
+                        "name": "T1",
+                        "onlineEvaluationConfigArn": treatment_eval["online_eval_arn"],
+                    },
+                ]
+            },
+            gatewayFilter={"targetPaths": [f"/{control_target}/*"]},
+            variants=variants,
+        )
+    except Exception as exc:
+        if not experiment_service._is_conflict(exc):
+            raise
+        response = next(
+            (
+                test
+                for test in experiment_service.list_ab_tests(data)
+                if str(test.get("name", "")).lower() == test_name.lower()
+            ),
+            None,
+        )
+        if response is None:
+            raise
+        return response
+
+
+def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> dict[str, Any]:
+    """Harness canary setup: pin two Harness endpoints to the chosen versions, stand
+    up a dedicated Gateway (trace delivery on) with one passthrough target per
+    endpoint, one online eval per endpoint's telemetry, and the 90/10 A/B test.
+
+    The control endpoint is pinned and persisted FIRST: from then on the
+    "provisioning" route serves the control version to platform invokes, so a
+    partial setup never leaves them on an unscored treatment.
+    """
+    meta = row.artifacts["agent_meta"]
+    versions = row.artifacts["harness"]
+    v_control, v_treatment = versions["control_version"], versions["treatment_version"]
+    workspace = context_for_workspace(row.workspace_id)
+    control = control_client(workspace)
+    data = data_client(workspace)
+    logs = workspace.client("logs")
+    harness_id = meta["resource_id"]
+    role_arn = workspace.resources["execution_role_arn"]
+    stable = canary_harness.control_endpoint(canary_id)
+    treatment = canary_harness.treatment_endpoint(canary_id)
+
+    progress(f"pinning control endpoint {stable} → v{v_control}…")
+    hc.ensure_harness_endpoint(
+        control, harness_id, stable, v_control,
+        description=f"Launchpad canary {canary_id[:8]} control",
+    )
+    partial: dict[str, Any] = {
+        "runtime_id": harness_id,
+        "stable_endpoint": stable,
+        "v_current": v_control,
+    }
+    _update(canary_id, stage="setup", artifact={"setup": partial})
+
+    gw = canary_infra.create_canary_gateway(
+        control_client=control, workspace=workspace, canary_id=canary_id, log=progress
+    )
+    partial.update(
+        gateway_id=gw["gateway_id"], gateway_arn=gw["gateway_arn"], gateway_url=gw["gateway_url"],
+    )
+    _update(canary_id, stage="setup", artifact={"setup": partial})
+    tracing = canary_harness.enable_gateway_tracing(
+        logs, gateway_id=gw["gateway_id"], gateway_arn=gw["gateway_arn"], log=progress,
+    )
+
+    progress(f"pinning treatment endpoint {treatment} → v{v_treatment}…")
+    hc.ensure_harness_endpoint(
+        control, harness_id, treatment, v_treatment,
+        description=f"Launchpad canary {canary_id[:8]} treatment",
+    )
+
+    control_target = f"can{canary_id[:6]}c"
+    treatment_target = f"can{canary_id[:6]}t"
+    targets: dict[str, str] = {}
+    for name, endpoint in ((control_target, stable), (treatment_target, treatment)):
+        targets[name] = canary_harness.create_passthrough_target(
+            control, gateway_id=gw["gateway_id"], name=name, harness_arn=meta["arn"],
+            qualifier=endpoint, region=workspace.region, log=progress,
+        )
+
+    evals: dict[str, dict[str, Any]] = {}
+    for role, endpoint, suffix in (("control", stable, "oec"), ("treatment", treatment, "oet")):
+        log_group = canary_harness.endpoint_log_group(meta["backing_runtime_id"], endpoint)
+        canary_harness.ensure_log_group(logs, log_group)
+        progress(f"creating {role} online evaluation config…")
+        online_eval = experiment_service.create_online_eval_idempotent(
+            control,
+            name=f"can_{canary_id[:8]}_{suffix}",
+            log_group=log_group,
+            service_name=canary_harness.endpoint_service_name(meta["harness_name"], endpoint),
+            role_arn=role_arn,
+        )
+        evals[role] = {
+            "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
+            "online_eval_arn": online_eval.get("onlineEvaluationConfigArn"),
+        }
+
+    test_name = _test_name(canary_id)
+    variants = ac.target_variants(control_target, treatment_target)
+    response = _create_target_ab_test(
+        data,
+        test_name=test_name,
+        gateway_arn=gw["gateway_arn"],
+        role_arn=role_arn,
+        control_target=control_target,
+        control_eval=evals["control"],
+        treatment_eval=evals["treatment"],
+        variants=variants,
+        progress=progress,
+    )
+    result = {
+        **partial,
+        "test_name": test_name,
+        "ab_test_id": response.get("abTestId"),
+        "champion": {
+            "target_name": control_target, "target_id": targets[control_target],
+            **evals["control"],
+        },
+        "challenger": {
+            "target_name": treatment_target, "target_id": targets[treatment_target],
+            **evals["treatment"],
+        },
+        "ramp_stage": 0,
+        "weights": {variant["name"]: variant["weight"] for variant in variants},
+        "v_candidate": v_treatment,
+        "treatment_endpoint": treatment,
+        "trace_delivery": tracing,
+    }
+    _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
+    return result
+
+
 def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     """Mint the candidate version, stand up the dedicated Gateway + stable/
     treatment endpoints, and start the 90/10 target-based A/B test."""
     row = _get(canary_id)
     _refuse_system_subject(row, "setup")
+    if is_harness(row):
+        return _setup_harness(canary_id, row, progress)
     meta = row.artifacts["agent_meta"]
     spec = AgentSpec(**row.artifacts["edited_spec"])
     db = SessionLocal()
@@ -464,42 +690,17 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
 
     test_name = _test_name(canary_id)
     variants = ac.target_variants(control_target, treatment_target)
-    progress("creating target-routing A/B test at 90/10…")
-    try:
-        response = ac.create_ab_test(
-            data,
-            name=test_name,
-            gatewayArn=gw["gateway_arn"],
-            roleArn=role_arn,
-            enableOnCreate=True,
-            evaluationConfig={
-                "perVariantOnlineEvaluationConfig": [
-                    {
-                        "name": "C",
-                        "onlineEvaluationConfigArn": control_eval["online_eval_arn"],
-                    },
-                    {
-                        "name": "T1",
-                        "onlineEvaluationConfigArn": treatment_eval["online_eval_arn"],
-                    },
-                ]
-            },
-            gatewayFilter={"targetPaths": [f"/{control_target}/*"]},
-            variants=variants,
-        )
-    except Exception as exc:
-        if not experiment_service._is_conflict(exc):
-            raise
-        response = next(
-            (
-                test
-                for test in experiment_service.list_ab_tests(data)
-                if str(test.get("name", "")).lower() == test_name.lower()
-            ),
-            None,
-        )
-        if response is None:
-            raise
+    response = _create_target_ab_test(
+        data,
+        test_name=test_name,
+        gateway_arn=gw["gateway_arn"],
+        role_arn=role_arn,
+        control_target=control_target,
+        control_eval=control_eval,
+        treatment_eval=treatment_eval,
+        variants=variants,
+        progress=progress,
+    )
 
     # Finalize by merging the live keys onto the partial setup persisted at (4),
     # so the "provisioning" route (stable-endpoint) becomes the "live gateway"
@@ -541,12 +742,22 @@ def act_traffic(
         ac.get_ab_test(data_client(workspace), ab_test_id=setup["ab_test_id"])
     )
     baseline_n = metric_sample_count(metrics)
+    harness_seams: dict[str, Any] = {}
+    if is_harness(row):
+        # passthrough targets relay the InvokeHarness body at /<target>/; one
+        # synthetic, agent-scoped memory actor keeps replay out of real users' memory
+        actor = scoped_actor(row.champion_agent_id, "canary-traffic")
+        harness_seams = {
+            "path_suffix": canary_harness.TARGET_PATH_SUFFIX,
+            "body_for": lambda prompt, _sid: canary_harness.invoke_body(prompt, actor_id=actor),
+        }
     result = experiment_service.send_gateway_traffic(
         setup["gateway_url"],
         setup["champion"]["target_name"],
         prompts,
         workspace,
         progress=progress,
+        **harness_seams,
     )
     attempt = {
         **result,
@@ -706,6 +917,8 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     """
     row = _get(canary_id)
     _refuse_system_subject(row, "rollback")
+    if is_harness(row):
+        return _rollback_harness(canary_id, row, progress)
     setup = row.artifacts.get("setup") or {}
     meta = row.artifacts["agent_meta"]
     workspace = context_for_workspace(row.workspace_id)
@@ -759,6 +972,58 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
         stage="rollback",
         artifact={"rollback": result},
     )
+    return result
+
+
+def _prompt_text(system_prompt: Any) -> str:
+    """HarnessSystemPrompt ``[{text}]`` → the ledger's single system_prompt string."""
+    if isinstance(system_prompt, list):
+        return "\n\n".join(
+            str(block.get("text") or "") for block in system_prompt if isinstance(block, dict)
+        ).strip()
+    return str(system_prompt or "")
+
+
+def _rollback_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> dict[str, Any]:
+    """Harness rollback (roll-forward): stop the test, then re-publish the CONTROL
+    version's behaviour (GetHarness at that version → UpdateHarness) so DEFAULT —
+    which already serves the rejected treatment — mints a new version that behaves
+    like control. The ledger spec's system prompt follows it."""
+    setup = row.artifacts.get("setup") or {}
+    meta = row.artifacts["agent_meta"]
+    v_control = row.artifacts["harness"]["control_version"]
+    workspace = context_for_workspace(row.workspace_id)
+    control = control_client(workspace)
+    stopped: dict[str, Any] = {}
+    if setup.get("ab_test_id"):
+        stopped = experiment_service._stop_ab_test(
+            data_client(workspace), setup["ab_test_id"], progress, label="Harness canary A/B test",
+        )
+    harness_id = meta["resource_id"]
+    progress(f"re-publishing Harness v{v_control} as the production version…")
+    config = hc.get_harness(control, harness_id, version=v_control)
+    hc.update_harness(control, canary_harness.rollback_params(config, harness_id))
+    ready = hc.wait_harness_ready(control, harness_id, timeout_s=600)
+    v_restored = str(ready.get("harnessVersion") or "")
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, meta["id"])
+        if agent is not None:
+            spec = dict(agent.spec or {})
+            spec["system_prompt"] = _prompt_text(config.get("systemPrompt"))
+            agent.spec = spec
+            agent.version = v_restored or agent.version
+            db.commit()
+    finally:
+        db.close()
+    result = {
+        "winner": "champion",
+        "restored_version": v_restored,
+        "restored_from_version": v_control,
+        "ab_test_status": stopped.get("executionStatus"),
+        "rolled_back_at": _now(),
+    }
+    _update(canary_id, status="rolled_back", stage="rollback", artifact={"rollback": result})
     return result
 
 
@@ -910,18 +1175,32 @@ def act_cleanup(
         delete_gateway=False,
     )
     runtime_id = setup.get("runtime_id")
-    for endpoint_name in (setup.get("stable_endpoint"), setup.get("treatment_endpoint")):
+    harness = is_harness(row)
+    endpoint_names = [setup.get("stable_endpoint"), setup.get("treatment_endpoint")]
+    if harness:
+        # a failed setup may have pinned endpoints it never recorded
+        endpoint_names = [
+            canary_harness.control_endpoint(row.id), canary_harness.treatment_endpoint(row.id),
+        ]
+        runtime_id = runtime_id or row.artifacts["agent_meta"]["resource_id"]
+    for endpoint_name in endpoint_names:
         if not (endpoint_name and runtime_id):
             continue
         try:
-            canary_infra.delete_endpoint_quiet(
-                control,
-                runtime_id=runtime_id,
-                endpoint_name=endpoint_name,
-                log=progress,
-            )
+            status = "deleted"
+            if harness:
+                progress(f"deleting Harness endpoint {endpoint_name}…")
+                if not hc.delete_harness_endpoint(control, runtime_id, endpoint_name):
+                    status = "absent"
+            else:
+                canary_infra.delete_endpoint_quiet(
+                    control,
+                    runtime_id=runtime_id,
+                    endpoint_name=endpoint_name,
+                    log=progress,
+                )
             results.append(
-                {"category": f"endpoint:{endpoint_name}", "status": "deleted", "detail": ""}
+                {"category": f"endpoint:{endpoint_name}", "status": status, "detail": ""}
             )
         except Exception as exc:
             results.append({
@@ -929,6 +1208,8 @@ def act_cleanup(
                 "status": "skipped",
                 "detail": f"{type(exc).__name__}: {exc}",
             })
+    if gateway_id and harness:
+        results.extend(canary_harness.disable_gateway_tracing(workspace.client("logs"), gateway_id))
     if gateway_id:
         progress("deleting the dedicated canary gateway (draining A/B test)…")
         try:

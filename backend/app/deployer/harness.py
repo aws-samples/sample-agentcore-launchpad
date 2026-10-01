@@ -100,6 +100,31 @@ def _kb_prompt(spec: AgentSpec) -> str:
     return "\n".join(lines)
 
 
+_KB_MARKER = "\n## Knowledge bases\nRetrieval tools are mounted for you."
+_KB_END = "Ground answers on retrieved content and cite sources when you use them."
+
+
+def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
+    """Remove the platform-appended KB section from a prompt read back from AWS.
+
+    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec)``, so a
+    prompt revised from the LIVE Harness (an AI recommendation) carries that section
+    too; storing it as the spec prompt would make the next deploy append it twice
+    (measured live 2026-09-30). Exact block first; otherwise the marker through the
+    section's closing line, in case the revision reflowed the KB bullet lines."""
+    if not spec.knowledge_bases:
+        return text
+    block = _kb_prompt(spec)
+    if block in text:
+        return text.replace(block, "").rstrip()
+    start = text.find(_KB_MARKER)
+    if start < 0:
+        return text
+    end = text.find(_KB_END, start)
+    tail = text[end + len(_KB_END):] if end >= 0 else ""
+    return (text[:start] + tail).rstrip()
+
+
 def build_create_params(
     spec: AgentSpec,
     execution_role_arn: str,

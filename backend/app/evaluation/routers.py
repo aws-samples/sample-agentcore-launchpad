@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
@@ -1565,6 +1566,42 @@ def create_run_recommendations(
         tools={t.name: t.description for t in req.tools or []},
     )
     return {"recommendations": [recommendations.out(r) for r in rows]}
+
+
+@router.post("/runs/{run_id}/recommendations/{rec_id}/accept", status_code=202)
+def accept_run_recommendation(
+    run_id: str,
+    rec_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Accept a COMPLETED system-prompt recommendation: re-publish the run's Harness
+    with the recommended prompt (UpdateHarness → a NEW Harness version; DEFAULT
+    follows it). Same guards and async deploy job as ``POST /agents/{id}/redeploy``;
+    the acceptance is recorded on the recommendation (once)."""
+    from app.deployer.harness import strip_generated_prompt
+    from app.routers.agents import republish_agent
+
+    run = _run_in(db, ws, run_id)
+    row, agent, prompt = recommendations.acceptance_target(db, run, rec_id)
+    previous_version = agent.version
+    current = AgentSpec(**(agent.spec or {}))
+    # the recommendation revised the LIVE prompt, which already carries the
+    # KB section the deployer appends — keep only the operator-owned part
+    spec = current.model_copy(update={"system_prompt": strip_generated_prompt(current, prompt)})
+    spec = AgentSpec(**spec.model_dump())
+    result = republish_agent(db, agent, spec)
+    identity = getattr(request.state, "identity", None)
+    recommendations.record_acceptance(
+        db, row,
+        by=getattr(identity, "username", None) or "unknown",
+        agent_id=agent.id,
+        previous_version=previous_version,
+        job_id=result["job_id"],
+        deployment_id=result["deployment_id"],
+    )
+    return {**result, "recommendation": recommendations.out(row)}
 
 
 DELETABLE_RUN_STATUSES = ("failed", "stopped")

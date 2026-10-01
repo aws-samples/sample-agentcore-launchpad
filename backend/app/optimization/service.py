@@ -346,6 +346,16 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "not-active",
             "reason": "Canary agent must be active.",
         }
+    if agent_row.method == "harness":
+        # A Harness canary A/Bs two EXISTING versions (control vs the latest)
+        # behind passthrough gateway targets — nothing to mint from a spec.
+        if ":harness/" not in str(agent_row.arn or ""):
+            return {
+                **base,
+                "reason_code": "no-harness-arn",
+                "reason": "The agent has no deployed Harness ARN.",
+            }
+        return {**base, "eligible": True, "kind": "harness"}
     if agent_row.method not in {"zip_runtime", "container", "studio", "byoc"}:
         return {
             **base,
@@ -1230,8 +1240,14 @@ def send_gateway_traffic(
     workspace: WorkspaceContext,
     poster: Any = None, signer: Any = None, progress: Progress = _noop,
     concurrency: int | None = None, user_id: str = TRAFFIC_USER_ID,
+    path_suffix: str = "/invocations",
+    body_for: Callable[[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """SigV4 POST each prompt through the experiment gateway (A/B routes them).
+
+    ``path_suffix`` / ``body_for`` default to the Runtime target contract
+    (``/<target>/invocations`` + ``{prompt, sessionId}``); a Harness canary's
+    passthrough targets take ``/<target>`` and the InvokeHarness body instead.
 
     Prompts go out **concurrently**, at most ``TRAFFIC_MAX_CONCURRENCY`` in
     flight, because each prompt is an independent session: its ``uuid4`` session
@@ -1271,7 +1287,7 @@ def send_gateway_traffic(
     strings because the artifact round-trips through a JSON column, which would
     stringify int keys anyway.
     """
-    url = f"{gateway_url.rstrip('/')}/{target}/invocations"
+    url = f"{gateway_url.rstrip('/')}/{target}{path_suffix}"
     # (prompt, session_id) fixed up front: this is what makes the result order
     # independent of which request happens to come back first
     seeds = [(prompt, str(uuid.uuid4())) for prompt in prompts]
@@ -1282,9 +1298,11 @@ def send_gateway_traffic(
     workers = max(1, min(int(limit), TRAFFIC_MAX_CONCURRENCY, len(seeds)))
 
     def send_one(prompt: str, session_id: str) -> int:
+        body = (body_for(prompt, session_id) if body_for
+                else {"prompt": prompt, "sessionId": session_id})
         response = sigv4_post(
             url,
-            {"prompt": prompt, "sessionId": session_id},
+            body,
             workspace,
             session_id=session_id,
             user_id=user_id,
