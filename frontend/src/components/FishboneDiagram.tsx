@@ -1,8 +1,17 @@
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AssistantFishbone, FishboneBarrier, FishboneDimension } from "../lib/api";
+import type { AssistantFishbone, FishboneDimension } from "../lib/api";
 import { FISHBONE_DIMENSIONS } from "../lib/api";
+import {
+  boneNotes,
+  downloadFishboneJson,
+  downloadFishboneSvg,
+  FB,
+  FISHBONE_BOTTOM as BOTTOM,
+  FISHBONE_TOP as TOP,
+  wrapText,
+} from "../lib/fishbone";
 import { Btn } from "./Btn";
 import { Chip } from "./Chip";
 import type { ChipTone } from "./Chip";
@@ -15,18 +24,7 @@ import type { ChipTone } from "./Chip";
  * variables) so `outerHTML` is a complete, standalone file for DOWNLOAD SVG.
  */
 
-const W = 1200;
-const H = 640;
-const SPINE_Y = 340;
-const SPINE_X0 = 60;
-const SPINE_X1 = 930;
-const BONE_X = [300, 580, 860];
-const BONE_DX = 60;
-const BONE_DY = 215;
-const NOTE_W = 200;
-const NOTE_H = 56;
-const NOTE_T = [0.3, 0.58, 0.86];
-const HEAD = { x: 940, y: 292, w: 236, h: 96 };
+const { W, H, SPINE_Y, SPINE_X0, SPINE_X1, BONE_X, BONE_DX, BONE_DY, NOTE_W, NOTE_H, NOTE_T, HEAD } = FB;
 
 const C = {
   bg: "#141816",
@@ -39,47 +37,6 @@ const C = {
   note: "#0E1210",
   noteLine: "#2E3833",
 };
-
-const TOP: FishboneDimension[] = ["cognition", "quality", "responsibility"];
-const BOTTOM: FishboneDimension[] = ["cost", "performance", "other"];
-
-/** Greedy wrap by rendered width: CJK ≈ 1em, Latin ≈ 0.55em. */
-function wrap(text: string, maxUnits: number, maxLines: number): string[] {
-  const units = (ch: string) => (/[\u3000-\u9fff\uff00-\uffef]/.test(ch) ? 1 : 0.55);
-  const lines: string[] = [];
-  let cur = "";
-  let curUnits = 0;
-  for (const ch of text.trim()) {
-    const u = units(ch);
-    if (curUnits + u > maxUnits && cur) {
-      lines.push(cur);
-      cur = "";
-      curUnits = 0;
-      if (lines.length === maxLines) break;
-    }
-    cur += ch;
-    curUnits += u;
-  }
-  if (cur && lines.length < maxLines) lines.push(cur);
-  if (lines.length === maxLines) {
-    const consumed = lines.join("").length;
-    if (consumed < text.trim().length) lines[maxLines - 1] = `${lines[maxLines - 1].slice(0, -1)}…`;
-  }
-  return lines;
-}
-
-/**
- * The notes one bone carries: the selected barriers; else the confirmed ones (a model
- * that confirmed but did not select must not leave the bone blank); else the
- * architect's suggestions still awaiting the customer's yes (drawn dashed).
- */
-function boneNotes(fb: AssistantFishbone, dim: FishboneDimension): FishboneBarrier[] {
-  const all = fb.barriers[dim] ?? [];
-  const picked = all.filter((b) => b.selected && b.confirmed);
-  if (picked.length) return picked.slice(0, 3);
-  const confirmed = all.filter((b) => b.confirmed);
-  return (confirmed.length ? confirmed : all).slice(0, 3);
-}
 
 const COVERAGE_TONE: Record<string, ChipTone> = {
   confirmed: "good",
@@ -97,30 +54,11 @@ export function FishboneDiagram({ fishbone }: { fishbone: AssistantFishbone }) {
     return c ? t(`fishbone.coverage.${c}`) : "";
   };
 
-  const download = (name: string, mime: string, body: string) => {
-    const blob = new Blob([body], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  const slug = `${fishbone.customer}-${fishbone.date}-fishbone`.replace(/[^\w.-]+/g, "_");
-  const downloadSvg = () => {
-    const el = svgRef.current;
-    if (!el) return;
-    const markup = el.outerHTML.replace(
-      "<svg",
-      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"',
-    );
-    download(`${slug}.svg`, "image/svg+xml;charset=utf-8", `<?xml version="1.0" encoding="UTF-8"?>\n${markup}`);
-  };
-  const downloadJson = () =>
-    download(`${slug}.json`, "application/json;charset=utf-8", JSON.stringify(fishbone, null, 2));
+  const downloadSvg = () => downloadFishboneSvg(svgRef.current, fishbone);
+  const downloadJson = () => downloadFishboneJson(fishbone);
 
   const header = `${fishbone.customer} · ${fishbone.date} · ${t(`fishbone.target.${fishbone.service_target}`)}`;
-  const headLines = wrap(fishbone.use_case, 15, 3);
+  const headLines = wrapText(fishbone.use_case, 15, 3);
 
   const bone = (dim: FishboneDimension, bx: number, up: boolean) => {
     const dir = up ? -1 : 1;
@@ -150,8 +88,8 @@ export function FishboneDiagram({ fishbone }: { fishbone: AssistantFishbone }) {
           const y = py - NOTE_H / 2;
           const suggested = !n.confirmed;
           const lines = suggested
-            ? [t("fishbone.suggested"), ...wrap(n.sticky_text, 16, 2)]
-            : wrap(n.sticky_text, 16, 3);
+            ? [t("fishbone.suggested"), ...wrapText(n.sticky_text, 16, 2)]
+            : wrapText(n.sticky_text, 16, 3);
           return (
             <g key={i} data-suggested={suggested || undefined}>
               <line x1={px} y1={py} x2={x + NOTE_W} y2={py} stroke={C.line} strokeWidth={1.5} />

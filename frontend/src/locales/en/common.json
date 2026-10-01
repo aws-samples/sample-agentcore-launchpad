@@ -7073,7 +7073,13 @@
       "sharedTip": "Shared with all members by {{by}} · {{at}}",
       "sharedToast": "Shared with all members",
       "unshare": "Unshare",
-      "unsharedToast": "No longer shared"
+      "unsharedToast": "No longer shared",
+      "fishbone": {
+        "downloadSvg": "Download SVG",
+        "downloadJson": "Download JSON",
+        "allBarriers": "All barriers ({{n}}) — including those not selected for the diagram",
+        "parkingLot": "Parking lot ({{n}}) — solutions the customer raised, kept apart from the barriers"
+      }
     },
     "skillLab": {
       "tab": {
