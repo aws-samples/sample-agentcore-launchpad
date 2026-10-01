@@ -7421,6 +7421,7 @@
       "skippedTools": "Dropped because they never appear in the traces: {{tools}}",
       "explanation": "Explanation",
       "copy": "Copy prompt",
+      "copyTools": "Copy tool descriptions",
       "copied": "Copied",
       "copyFailed": "Copy failed",
       "includeTool": "Include this tool",
@@ -7457,7 +7458,8 @@
         "startedToast": "Accepted — publishing a new Harness version.",
         "confirmTitle": "Accept this recommendation?",
         "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback."
-      }
+      },
+      "toolDiff": "Tool description"
     }
   }
 }

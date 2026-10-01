@@ -7,7 +7,7 @@ import { api, errorMessage } from "../../../lib/api";
 import type { EvaluationRunInfo, RunRecommendation, RunRecommendationKind } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, Field, Select, Spin, Table, Tag, type TagTone } from "../../ui";
+import { Alert, Button, Card, Confirm, Field, Select, Spin, Tag, type TagTone } from "../../ui";
 
 const POLL_MS = 10000;
 const ACTIVE = new Set(["PENDING", "IN_PROGRESS"]);
@@ -121,8 +121,11 @@ export function RunRecommendations({
     setEvaluator(seed.default_evaluator);
     setTools(seed.tools.map((tool, i) => ({ key: i, name: tool.name, description: tool.description, include: !!tool.description.trim() })));
     setNextKey(seed.tools.length);
-    setWantTools(seed.tools_eligible && seed.tools.some((tool) => tool.description.trim()));
-  }, [seed]);
+    // A Harness version cannot take tool-description recommendations (a Gateway
+    // tool's description belongs to its target), so it starts unchecked there.
+    const harness = acceptable || seed.source === "harness";
+    setWantTools(!harness && seed.tools_eligible && seed.tools.some((tool) => tool.description.trim()));
+  }, [seed, acceptable]);
 
   if (inputs.loading && !seed) return embedded ? <Spin /> : <Card title={t("v2.rec.title")}><Spin /></Card>;
   if (inputs.error && !seed) {
@@ -210,6 +213,11 @@ export function RunRecommendations({
           </label>
         </div>
         {!seed.tools_eligible && <span className="v2-muted">{t("v2.rec.toolsIneligible")}</span>}
+        {seed.tools_eligible && (acceptable || source === "harness") && (
+          <div data-testid="v2-rec-tools-harness-note">
+            <Alert>{t("v2.rec.accept.toolsNotApplied")}</Alert>
+          </div>
+        )}
       </Field>
       {wantPrompt && (
         <>
@@ -416,6 +424,13 @@ function RecommendationResult({
               {t("v2.rec.copy")}
             </Button>
           </span>
+        ) : done && rec.kind === "tool_descriptions" && toolRows.length > 0 ? (
+          <Button
+            size="sm"
+            onClick={() => copy(JSON.stringify(Object.fromEntries(toolRows.map(([n, v]) => [n, v.description])), null, 2))}
+          >
+            {t("v2.rec.copyTools")}
+          </Button>
         ) : undefined
       }
       testId={`v2-rec-${rec.kind}`}
@@ -446,33 +461,28 @@ function RecommendationResult({
             />
           </Field>
         )}
-        {done && rec.kind === "tool_descriptions" && (
-          <>
-            <Table
-              columns={[
-                { key: "n", title: t("v2.experiments.toolName"), render: (r: [string, { description: string; explanation: string }]) => <span className="mono">{r[0]}</span> },
-                { key: "c", title: t("expPage.currentLabel"), render: (r) => rec.tools[r[0]] || "—" },
-                { key: "r", title: t("expPage.recommendedLabel"), render: (r) => r[1].description },
-              ]}
-              rows={toolRows}
-              rowKey={(r) => r[0]}
-              density="dense"
-            />
-            {/* the job's per-tool reasoning runs to paragraphs — kept out of the table */}
-            {toolRows
-              .filter(([, v]) => v.explanation)
-              .map(([name, v]) => (
-                <details key={name}>
-                  <summary className="v2-muted">
-                    {t("v2.rec.explanation")} · <span className="mono">{name}</span>
-                  </summary>
-                  <p className="v2-muted" style={{ whiteSpace: "pre-wrap", margin: "8px 0 0" }}>
-                    {v.explanation}
-                  </p>
-                </details>
-              ))}
-          </>
-        )}
+        {/* one diff per tool, laid out like the system-prompt diff: label, panes, reasoning */}
+        {done &&
+          rec.kind === "tool_descriptions" &&
+          toolRows.map(([name, v]) => (
+            <Field
+              key={name}
+              label={
+                <>
+                  {t("v2.rec.toolDiff")} · <span className="mono">{name}</span>
+                </>
+              }
+              hint={v.explanation || undefined}
+              full
+            >
+              <DiffPanes
+                before={rec.tools[name] ?? ""}
+                after={v.description}
+                beforeLabel={t("expPage.currentLabel")}
+                afterLabel={t("expPage.recommendedLabel")}
+              />
+            </Field>
+          ))}
         <span className="v2-muted mono">{rec.recommendation_id}</span>
       </div>
       <Confirm
