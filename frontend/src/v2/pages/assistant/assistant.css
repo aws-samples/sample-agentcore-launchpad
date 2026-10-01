@@ -60,7 +60,20 @@
 .v2 .v2-assistant-bindings li { font-family: var(--v2-mono); font-size: 12px; word-break: break-all; }
 .v2 .v2-assistant-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
 .v2 .v2-assistant-actions .spacer { flex: 1; }
-.v2 .v2-assistant-fishbone { overflow-x: auto; }
+
+/* Agent-DLC fishbone (Fishbone.tsx): coverage tags + downloads, the diagram, collapsible detail */
+.v2 .v2-assistant-fb-bar { margin-bottom: 12px; }
+.v2 .v2-assistant-fb-canvas { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); overflow-x: auto; background: #f7f8fa; }
+.v2 .v2-assistant-fb-foot { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.v2 .v2-assistant-fb-foot .end { margin-left: auto; display: flex; gap: 8px; }
+.v2 .v2-assistant-fb-more { margin-top: 12px; border-top: 1px solid var(--v2-line-2); padding-top: 12px; }
+.v2 .v2-assistant-fb-more summary { cursor: pointer; display: inline-flex; gap: 4px; align-items: center; list-style: none; font-size: 13px; color: var(--v2-primary); }
+.v2 .v2-assistant-fb-more summary::-webkit-details-marker { display: none; }
+.v2 .v2-assistant-fb-more summary:hover { color: var(--v2-primary-hover); }
+.v2 .v2-assistant-fb-more .chev { transition: transform 0.15s; }
+.v2 .v2-assistant-fb-more[open] .chev { transform: rotate(90deg); }
+.v2 .v2-assistant-fb-more[open] summary { margin-bottom: 8px; }
+.v2 .v2-assistant-fb-more ul { margin: 0; padding-left: 18px; font-size: 13px; }
 
 /* checkbox resource rows (preparation, editor) */
 .v2 .v2-assistant-options { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }

@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { FishboneDiagram } from "../../../components";
 import {
   type AgentInfo,
   type AssistantApproval,
@@ -18,6 +17,7 @@ import { MODEL_CATALOG, type ModelSource } from "../../../lib/models";
 import { fmtTime } from "../../format";
 import { Alert, Descriptions, Field, Select, Table, Tag } from "../../ui";
 import { AGENT_TONE, JOB_TONE, shortId, STAGE_TONE } from "./common";
+import { V2Fishbone } from "./Fishbone";
 
 const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
@@ -188,9 +188,7 @@ export function ProposalView({
       {isFishbone(c.fishbone) && (
         <Section title={t("assistantPage.fishbone")} testId="v2-assistant-fishbone">
           <div className="v2-muted" style={{ fontSize: 12.5, marginBottom: 8 }}>{t("assistantPage.fishboneNote")}</div>
-          <div className="v2-assistant-fishbone">
-            <FishboneDiagram fishbone={c.fishbone} />
-          </div>
+          <V2Fishbone fishbone={c.fishbone} />
         </Section>
       )}
       {list(c.requirements_baseline).length > 0 && (

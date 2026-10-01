@@ -7073,7 +7073,13 @@
       "sharedTip": "由 {{by}} 共享给所有用户 · {{at}}",
       "sharedToast": "已共享给所有用户",
       "unshare": "取消共享",
-      "unsharedToast": "已取消共享"
+      "unsharedToast": "已取消共享",
+      "fishbone": {
+        "downloadSvg": "下载 SVG",
+        "downloadJson": "下载 JSON",
+        "allBarriers": "全部障碍（{{n}}）——含未选入图中的条目",
+        "parkingLot": "Parking lot（{{n}}）——客户提出的方案，与障碍分开保存"
+      }
     },
     "skillLab": {
       "tab": {
