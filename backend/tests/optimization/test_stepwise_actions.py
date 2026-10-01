@@ -536,7 +536,8 @@ def test_canary_capability_is_independent_from_bundle_consumption():
 
     incompatible = [
         SimpleNamespace(method="zip_runtime", status="deploying", arn=runtime_arn, spec={}),
-        SimpleNamespace(method="harness", status="active", arn="arn:harness/x", spec={}),
+        # a Harness without a Harness ARN (eligible otherwise: version A/B)
+        SimpleNamespace(method="harness", status="active", arn=None, spec={}),
         SimpleNamespace(
             method="zip_runtime", status="active", arn=runtime_arn,
             spec={"protocol": "a2a"},

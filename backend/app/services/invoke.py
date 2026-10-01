@@ -19,7 +19,7 @@ from app.harness_tool_access import (
     selected_tool_patterns,
 )
 from app.models.ledger import Agent
-from app.optimization import canary_service
+from app.optimization import canary_harness, canary_service
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
@@ -233,6 +233,55 @@ def _invoke_via_canary(
         )
 
 
+def _invoke_harness_via_canary(
+    route: dict[str, Any],
+    prompt: str,
+    session_id: str | None,
+    actor_id: str,
+    workspace: WorkspaceContext,
+    harness_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Route a real Harness invocation for an active Harness canary.
+
+    Live gateway → POST the InvokeHarness body through the canary gateway's control
+    target (``/<target>/``, no ``/invocations``), which assigns a variant by sticky
+    session id; the reply is the raw Harness event stream. A gateway error — and the
+    provisioning window before the A/B test exists — serves the control endpoint
+    (the version under test's baseline), never DEFAULT (the treatment)."""
+    sticky = session_id if (session_id and len(session_id) >= 33) else hc.new_session_id()
+
+    def via_control() -> dict[str, Any]:
+        return hc.invoke_harness_text(
+            data_client(workspace), route["arn"], prompt,
+            session_id=sticky, actor_id=actor_id, qualifier=route["stable_endpoint"],
+            **harness_kwargs,
+        )
+
+    if not (route.get("gateway_url") and route.get("control_target")):
+        return via_control()
+    url = (f"{route['gateway_url'].rstrip('/')}/{route['control_target']}"
+           f"{canary_harness.TARGET_PATH_SUFFIX}")
+    body = canary_harness.invoke_body(
+        prompt, actor_id=actor_id, tools=harness_kwargs.get("tools"),
+        allowed_tools=harness_kwargs.get("allowed_tools"),
+    )
+    try:
+        response = gateway.sigv4_post(
+            url, body, workspace, session_id=sticky,
+            user_id=harness_kwargs.get("runtime_user_id") or actor_id,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"gateway route returned HTTP {response.status_code}")
+        return {"text": hc.event_stream_text(response.content), "session_id": sticky}
+    except Exception as exc:
+        logger.warning(
+            "harness canary gateway route failed (%s); falling back to control endpoint %s",
+            exc,
+            route.get("stable_endpoint"),
+        )
+        return via_control()
+
+
 def invoke_agent_text(
     agent: Agent,
     prompt: str,
@@ -258,6 +307,11 @@ def invoke_agent_text(
             overrides = harness_user_overrides(agent, workspace, gateway_access_token)
             harness_kwargs["tools"] = overrides["tools"]
             harness_kwargs["allowed_tools"] = overrides["allowedTools"]
+        route = canary_service.active_canary_route(agent.id)
+        if route is not None and route.get("kind") == "harness":
+            return _invoke_harness_via_canary(
+                route, prompt, session_id, actor_id, workspace, harness_kwargs,
+            )
         return hc.invoke_harness_text(
             data_client(workspace),
             agent.arn,

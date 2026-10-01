@@ -11,10 +11,11 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
-from app.optimization import canary_service, service
+from app.optimization import canary_harness, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
+from app.services.agentcore.client import control_client
 from app.services.harness_convert import graft_config_bundle
 from app.system_agents import service as system_agents
 
@@ -81,10 +82,47 @@ class CandidateEdit(BaseModel):
     code: str | None = None  # studio only
 
 
+class HarnessVersions(BaseModel):
+    """A Harness canary A/Bs two EXISTING versions: control (any earlier version)
+    against treatment (the latest version, which DEFAULT already serves)."""
+
+    control: str = Field(pattern=r"^[0-9]{1,9}$")
+    treatment: str = Field(pattern=r"^[0-9]{1,9}$")
+
+
 class RuntimeCanaryCreate(BaseModel):
     agent_id: str
-    candidate: CandidateEdit
+    # runtime canaries mint a candidate from this edit; harness canaries pick versions
+    candidate: CandidateEdit | None = None
+    harness_versions: HarnessVersions | None = None
     source_experiment_id: str | None = None
+
+
+def _validate_harness_versions(agent: Agent, versions: HarnessVersions, ws: WorkspaceScope) -> None:
+    if versions.control == versions.treatment:
+        raise AppError(
+            "canary.versions_identical",
+            "control and treatment must be different Harness versions",
+            status_code=400,
+        )
+    known = canary_harness.version_numbers(control_client(ws.context), agent.resource_id)
+    missing = [v for v in (versions.control, versions.treatment) if v not in known]
+    if missing:
+        raise AppError(
+            "canary.version_not_found",
+            f"Harness version(s) {', '.join(missing)} do not exist",
+            {"versions": known},
+            status_code=400,
+        )
+    if versions.treatment != known[-1]:
+        # DEFAULT always serves the latest version; pinning treatment there keeps
+        # promotion a ledger-only step (nothing on AWS has to be re-pointed)
+        raise AppError(
+            "canary.treatment_not_latest",
+            f"treatment must be the latest Harness version ({known[-1]})",
+            {"latest": known[-1]},
+            status_code=400,
+        )
 
 
 def _eligible_agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
@@ -173,7 +211,28 @@ def create_runtime_canary(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     agent = _eligible_agent(db, ws, req.agent_id)
+    if agent.method == "harness":
+        if req.harness_versions is None:
+            raise AppError(
+                "canary.versions_required",
+                "a Harness canary needs harness_versions {control, treatment}",
+                status_code=422,
+            )
+        _validate_harness_versions(agent, req.harness_versions, ws)
+        row = canary_service.start_harness_canary(
+            agent,
+            control_version=req.harness_versions.control,
+            treatment_version=req.harness_versions.treatment,
+            workspace=ws.context,
+        )
+        return _out(row)
     candidate = req.candidate
+    if candidate is None:
+        raise AppError(
+            "canary.candidate_empty",
+            "candidate must change something",
+            status_code=400,
+        )
     if not (
         (candidate.system_prompt or "").strip()
         or candidate.tool_description_overrides

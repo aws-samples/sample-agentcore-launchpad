@@ -311,6 +311,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs/{run_id}/recommendations"): MEMBER,
     # starts billable AWS recommendation jobs — same revocable grant as a run
     ("POST", "/api/eval/runs/{run_id}/recommendations"): PERM_EVAL_RUN,
+    # re-publishes the Harness (a new version) — the same grant as a redeploy
+    ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): PERM_AGENT_DEPLOY,
     ("DELETE", "/api/eval/runs/{run_id}"): PERM_EVAL_RUN,
     # online evaluation configs: create/resume start billed judge calls on live
     # traffic, the same cost class as starting a run; list/detail/results read AWS

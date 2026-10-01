@@ -248,6 +248,8 @@ def _migrate(bind) -> None:
         ("chat_messages", "attachments", "ALTER TABLE chat_messages ADD COLUMN attachments JSON"),
         ("chat_sessions", "runtime_version",
          "ALTER TABLE chat_sessions ADD COLUMN runtime_version VARCHAR(16)"),
+        ("eval_recommendations", "accepted",
+         "ALTER TABLE eval_recommendations ADD COLUMN accepted JSON"),
     ):
         if table in inspector.get_table_names():
             existing = {c["name"] for c in inspector.get_columns(table)}

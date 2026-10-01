@@ -3272,7 +3272,8 @@
       "not-runtime": "基于目标的金丝雀需要 AgentCore Runtime Agent。",
       "container-followup": "容器 Agent 的候选版本铸造需通过 CodeBuild，属于后续工作。",
       "a2a": "A2A Agent 不兼容 HTTP target-canary 流量。",
-      "no-runtime-arn": "该 Agent 尚无已部署的 AgentCore Runtime ARN。"
+      "no-runtime-arn": "该 Agent 尚无已部署的 AgentCore Runtime ARN。",
+      "no-harness-arn": "该 Agent 没有已部署的 Harness ARN。"
     },
     "meta": "真实生产流量 · 候选版本 A/B · 每金丝雀独立网关",
     "modeLabel": "实验流程",
@@ -4734,7 +4735,36 @@
       "body": "在线评估会用同一批评估器对线上会话抽样打分 — 依赖参考答案的评估器请不要在那里启用。请在离线运行稳定之后再开启，并从较低的采样率开始。",
       "open": "打开在线评估"
     },
-    "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。"
+    "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。",
+    "recommend": {
+      "title": "生成 AI 推荐的优化建议",
+      "body": "AgentCore Recommendations 读取最新一次无错误完成的运行的追踪，围绕你选择的评估器给出改写后的系统提示词（以及工具描述）。先查看差异；接受后，Launchpad 用该提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
+      "source": "追踪来源",
+      "version": "Harness 当前为 v{{v}}",
+      "publishing": "正在发布“{{name}}”的新 Harness 版本……部署完成后，第 4 步会列出该版本。",
+      "waiting": "第 2 步有一次运行无错误完成后可用——它的追踪用于生成建议。"
+    },
+    "canary": {
+      "title": "金丝雀实验",
+      "body": "在真实流量上，把最新的 Harness 版本（即你接受建议后发布的版本）与之前的版本作 A/B：专属 Gateway 在两个 Harness 端点之间按 90/10 → 50/50 → 1/99 分流，每个变体由各自的在线评估打分，最终由 A/B 测试裁定新版本是推广还是回滚。",
+      "versions": "版本",
+      "latest": "v{{v}} · 最新",
+      "control": "对照版本",
+      "firstSuffix": "（第一个）",
+      "treatment": "对比实验版本 v{{v}}（最新）",
+      "create": "开始金丝雀实验",
+      "creating": "创建中……",
+      "current": "金丝雀",
+      "open": "打开金丝雀",
+      "noPermission": "你的账号缺少 eval.run 权限，无法开始金丝雀实验。",
+      "agentNotActive": "Agent 需处于运行中（新版本可能仍在发布）。",
+      "needsTwoVersions": "至少需要两个 Harness 版本——请先在第 3 步接受一条建议。",
+      "alreadyRunning": "该 Agent 已有一个金丝雀在运行——请先在其页面完成或回滚。",
+      "startedToast": "金丝雀 {{name}} 已创建——正在执行 Setup。",
+      "confirmTitle": "在两个 Harness 版本之间开始金丝雀实验？",
+      "confirmBody": "Launchpad 将在 {{account}} / {{region}} 中为“{{name}}”固定两个端点（对照 v{{control}}，实验 v{{treatment}}），并创建一个开启追踪投递的专属 Gateway、两个 passthrough 目标、两个在线评估配置和一个 90/10 的目标路由 A/B 测试。这些都是真实、计费的 AWS 资源；金丝雀运行期间，平台对该 Agent 的调用会经由金丝雀 Gateway。结束后请在金丝雀页面清理。"
+    },
+    "noteHarness": "本面板以指引为主。会产生计费的操作——“一键启动评估”（与“新建运行”相同的请求）、生成与接受优化建议（接受会发布新的 Harness 版本）以及开始金丝雀实验——都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源。"
   },
   "fishbone": {
     "title": "Agent-DLC 五维鱼骨图 · 上线障碍",
@@ -7407,6 +7437,16 @@
         "ground_truth": "需要数据集参考答案，而优化建议读取的 trace 不带参考答案",
         "categorical": "分类评分，没有可优化的数值信号",
         "unavailable": "本任务使用过，但当前账号/区域中已不存在"
+      },
+      "accept": {
+        "button": "接受并发布新版本",
+        "accepting": "发布中……",
+        "noPermission": "你的账号缺少 agents.deploy 权限，无法发布新版本。",
+        "accepted": "已由 {{by}} 于 {{at}} 接受——已发布为新的 Harness 版本（原为 v{{version}}）。",
+        "toolsNotApplied": "工具描述建议不会写入 Harness 版本：Gateway 工具的描述属于其 Gateway 目标。",
+        "startedToast": "已接受——正在发布新的 Harness 版本。",
+        "confirmTitle": "接受这条建议？",
+        "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。"
       }
     }
   }

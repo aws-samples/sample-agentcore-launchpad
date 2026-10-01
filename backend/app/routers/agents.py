@@ -421,6 +421,12 @@ def redeploy_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
+    return republish_agent(db, agent, spec)
+
+
+def republish_agent(db: Session, agent: Agent, spec: AgentSpec) -> dict[str, Any]:
+    """The redeploy guards + an update-mode deploy job for an edited spec — shared
+    by the redeploy route and accepting an AI recommendation (a new Harness version)."""
     system_agents.refuse_system_mutation(agent, "redeploy")
     if agent.method == DISCOVERED_METHOD:
         raise AppError(

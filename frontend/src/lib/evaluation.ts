@@ -224,6 +224,15 @@ export interface RunRecommendation {
     tools?: Record<string, { description: string; explanation: string }>;
   };
   error: string | null;
+  /** set once the recommended prompt was accepted into a new Harness version */
+  accepted: {
+    by: string;
+    at: string;
+    agent_id: string;
+    previous_version: string | null;
+    job_id: string;
+    deployment_id: string;
+  } | null;
   created_at: string | null;
   updated_at: string | null;
 }

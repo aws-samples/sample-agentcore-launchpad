@@ -46,8 +46,15 @@ def wrap_params_for_update(params: dict[str, Any]) -> dict[str, Any]:
     return update
 
 
-def get_harness(client: Any, harness_id: str) -> dict[str, Any]:
-    return client.get_harness(harnessId=harness_id)["harness"]
+def get_harness(
+    client: Any, harness_id: str, version: str | None = None
+) -> dict[str, Any]:
+    """GetHarness; ``version`` reads one immutable version's full config (the
+    canary's rollback re-publishes an earlier version from it)."""
+    kwargs: dict[str, Any] = {"harnessId": harness_id}
+    if version:
+        kwargs["harnessVersion"] = str(version)
+    return client.get_harness(**kwargs)["harness"]
 
 
 def list_harnesses(client: Any) -> list[dict[str, Any]]:
@@ -96,6 +103,107 @@ def list_harness_endpoints(client: Any, harness_id: str) -> list[dict[str, Any]]
 
 def delete_harness(client: Any, harness_id: str) -> None:
     client.delete_harness(harnessId=harness_id)
+
+
+def get_harness_endpoint(client: Any, harness_id: str, endpoint_name: str) -> dict[str, Any]:
+    """GetHarnessEndpoint → the ``endpoint`` object ({status, liveVersion, arn, …})."""
+    return client.get_harness_endpoint(harnessId=harness_id, endpointName=endpoint_name)[
+        "endpoint"
+    ]
+
+
+def ensure_harness_endpoint(
+    client: Any,
+    harness_id: str,
+    endpoint_name: str,
+    version: str,
+    *,
+    description: str = "",
+    timeout_s: int = 300,
+    interval_s: int = 5,
+    sleeper: Any = time.sleep,
+) -> dict[str, Any]:
+    """Create (or re-point) a named endpoint pinned to ``version`` and wait READY.
+
+    Idempotent: a ConflictException means a previous attempt created it, in which
+    case it is re-pointed when it serves another version."""
+    try:
+        client.create_harness_endpoint(
+            harnessId=harness_id,
+            endpointName=endpoint_name,
+            targetVersion=str(version),
+            description=description,
+            clientToken=str(uuid.uuid4()),
+        )
+    except Exception as exc:
+        if type(exc).__name__ != "ConflictException":
+            raise
+        current = get_harness_endpoint(client, harness_id, endpoint_name)
+        if str(current.get("liveVersion") or "") != str(version):
+            client.update_harness_endpoint(
+                harnessId=harness_id, endpointName=endpoint_name,
+                targetVersion=str(version), clientToken=str(uuid.uuid4()),
+            )
+    deadline = time.monotonic() + timeout_s
+    while True:
+        endpoint = get_harness_endpoint(client, harness_id, endpoint_name)
+        status = endpoint.get("status")
+        if status == "READY" and str(endpoint.get("liveVersion") or "") == str(version):
+            return endpoint
+        if status in TERMINAL_FAILURES:
+            reason = endpoint.get("failureReason", "no failureReason provided")
+            raise RuntimeError(f"harness endpoint {endpoint_name} entered {status}: {reason}")
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"harness endpoint {endpoint_name} still {status}")
+        sleeper(interval_s)
+
+
+def delete_harness_endpoint(client: Any, harness_id: str, endpoint_name: str) -> bool:
+    """Delete a named endpoint; ``False`` when it is already gone."""
+    try:
+        client.delete_harness_endpoint(harnessId=harness_id, endpointName=endpoint_name)
+    except Exception as exc:
+        if type(exc).__name__ in {"ResourceNotFoundException", "NotFoundException"}:
+            return False
+        raise
+    return True
+
+
+def decode_event_stream(raw: bytes) -> list[dict[str, Any]]:
+    """Raw ``application/vnd.amazon.eventstream`` bytes → boto3-shaped events.
+
+    A canary gateway passthrough target relays InvokeHarness verbatim, so its HTTP
+    body is the event stream boto3 would otherwise decode: each message becomes
+    ``{<:event-type>: payload}`` (an ``exception`` message ``{<:exception-type>: …}``),
+    which is exactly what :func:`iter_harness_stream` consumes."""
+    import json
+
+    from botocore.eventstream import EventStreamBuffer
+
+    buffer = EventStreamBuffer()
+    buffer.add_data(raw)
+    events: list[dict[str, Any]] = []
+    for message in buffer:
+        headers = message.headers
+        kind = headers.get(":event-type") or headers.get(":exception-type") or "unknown"
+        try:
+            payload = json.loads(message.payload.decode("utf-8")) if message.payload else {}
+        except ValueError:
+            payload = {"message": message.payload.decode("utf-8", "replace")}
+        events.append({str(kind): payload})
+    return events
+
+
+def event_stream_text(raw: bytes) -> str:
+    """Concatenated assistant text of a raw Harness event stream (raises on a
+    stream error event, like the boto3 path)."""
+    parts: list[str] = []
+    with closing(iter_harness_stream(decode_event_stream(raw))) as events:
+        for event in events:
+            delta = event.get("contentBlockDelta", {}).get("delta", {})
+            if delta.get("text"):
+                parts.append(delta["text"])
+    return "".join(parts)
 
 
 def wait_harness_ready(
@@ -345,6 +453,7 @@ def invoke_harness_events(
     tools: list[dict[str, Any]] | None = None,
     allowed_tools: list[str] | None = None,
     inline_tools: frozenset[str] = frozenset(),
+    qualifier: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
     replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
@@ -363,6 +472,8 @@ def invoke_harness_events(
         overrides["tools"] = tools
     if allowed_tools is not None:
         overrides["allowedTools"] = allowed_tools
+    if qualifier:
+        overrides["qualifier"] = qualifier
     response = client.invoke_harness(
         harnessArn=harness_arn,
         runtimeSessionId=session_id,
@@ -433,12 +544,16 @@ def invoke_harness_text(
     runtime_user_id: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     allowed_tools: list[str] | None = None,
+    qualifier: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous invoke: send one user message, drain the event stream,
-    return the concatenated assistant text plus session id."""
+    return the concatenated assistant text plus session id. ``qualifier`` pins a
+    named endpoint (a canary's control endpoint); omitted ⇒ DEFAULT."""
     session_id = session_id or new_session_id()
     text_parts: list[str] = []
     overrides: dict[str, Any] = {}
+    if qualifier:
+        overrides["qualifier"] = qualifier
     if runtime_user_id:
         overrides["runtime_user_id"] = runtime_user_id
     if tools is not None:

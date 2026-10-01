@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.models import EvalRecommendation, EvalRun
 from app.models.ledger import Agent
@@ -672,6 +672,77 @@ def list_for_run(
     return rows
 
 
+def acceptance_target(
+    db: Session, run: EvalRun, rec_id: str
+) -> tuple[EvalRecommendation, Agent, str]:
+    """Validate accepting a recommendation into a new Harness version.
+
+    Only a COMPLETED system-prompt recommendation of a run whose agent is a live,
+    platform-deployed Harness qualifies, and only once: a tool-description
+    recommendation revises Gateway tool schemas the Harness version does not own.
+    Returns ``(row, agent, recommended_prompt)``; the caller re-publishes."""
+    row = db.get(EvalRecommendation, rec_id)
+    if row is None or row.run_id != run.id or row.workspace_id != run.workspace_id:
+        raise NotFoundError("recommendation.not_found", "recommendation not found")
+    if row.kind != "system_prompt":
+        raise AppError(
+            "recommendation.accept_kind",
+            "only a system-prompt recommendation can be accepted into a Harness version",
+            status_code=400,
+        )
+    prompt = str((row.result or {}).get("recommended_prompt") or "").strip()
+    if row.status != "COMPLETED" or not prompt:
+        raise AppError(
+            "recommendation.not_completed",
+            "the recommendation has not completed with a recommended prompt",
+            {"status": row.status}, status_code=409,
+        )
+    if row.accepted:
+        raise AppError(
+            "recommendation.already_accepted",
+            "this recommendation was already accepted",
+            {"accepted": row.accepted}, status_code=409,
+        )
+    agent = db.get(Agent, run.agent_id) if run.agent_id else None
+    if agent is None or agent.workspace_id != run.workspace_id or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "the run's agent no longer exists")
+    if agent.method != "harness":
+        raise AppError(
+            "recommendation.accept_not_harness",
+            "accepting a recommendation publishes a new Harness version — "
+            "this run's agent is not a platform-deployed Harness",
+            {"method": agent.method}, status_code=400,
+        )
+    if agent.status != "active":
+        raise AppError(
+            "recommendation.agent_not_active",
+            "the agent must be active before a new version can be published",
+            {"status": agent.status}, status_code=409,
+        )
+    if len(prompt) > SYSTEM_PROMPT_MAX:
+        raise AppError(
+            "recommendation.prompt_too_long",
+            f"the recommended prompt exceeds {SYSTEM_PROMPT_MAX} characters",
+            status_code=400,
+        )
+    return row, agent, prompt
+
+
+def record_acceptance(
+    db: Session, row: EvalRecommendation, *, by: str, agent_id: str,
+    previous_version: str | None, job_id: str, deployment_id: str,
+) -> None:
+    row.accepted = {
+        "by": by,
+        "at": datetime.now(UTC).isoformat(),
+        "agent_id": agent_id,
+        "previous_version": previous_version,
+        "job_id": job_id,
+        "deployment_id": deployment_id,
+    }
+    db.commit()
+
+
 def out(row: EvalRecommendation) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -687,6 +758,7 @@ def out(row: EvalRecommendation) -> dict[str, Any]:
         "skipped_tools": row.skipped_tools or [],
         "result": row.result or {},
         "error": row.error,
+        "accepted": row.accepted,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
