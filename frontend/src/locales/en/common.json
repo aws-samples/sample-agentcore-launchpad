@@ -4741,11 +4741,15 @@
     "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS.",
     "recommend": {
       "title": "Generate AI-recommended improvements",
-      "body": "AgentCore Recommendations reads the traces of your newest clean run and proposes a revised system prompt (and tool descriptions) aimed at the evaluator you pick. Review the diff; accepting it re-publishes the Harness with that prompt, and AWS creates a new Harness version (DEFAULT follows it).",
+      "body": "AgentCore Recommendations reads the traces of the run you pick (the newest clean run by default) and proposes a revised system prompt (and tool descriptions) aimed at the evaluator you pick. Review the diff; accepting it re-publishes the Harness with that prompt, and AWS creates a new Harness version (DEFAULT follows it).",
       "source": "Traces from",
       "version": "Harness now on v{{v}}",
       "publishing": "Publishing the new Harness version of “{{name}}”… Step 4 lists it once the deploy finishes.",
-      "waiting": "Available after a run in step 2 completes without errors — its traces seed the recommendation."
+      "waiting": "Available after a run in step 2 completes without errors — its traces seed the recommendation.",
+      "newest": "newest",
+      "historyTitle": "Recommendations from other runs ({{n}})",
+      "historyAccepted": "Accepted · published over v{{v}}",
+      "historyOpen": "Show here"
     },
     "canary": {
       "title": "Canary experiment",

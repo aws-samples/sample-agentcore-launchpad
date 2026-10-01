@@ -15,10 +15,11 @@ import { asRecord, type DeployedAgent } from "../../../lib/assistant";
 import { type EvaluationRunInfo, evaluationRunPresentation, RUN_TERMINAL_STATUSES } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, LinkButton, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, LinkButton, Select, Tag } from "../../ui";
 import { RunRecommendations } from "../tasks/RunRecommendations";
 import { CHIP_TAG, shortId } from "./common";
 import { HarnessCanary } from "./HarnessCanary";
+import { RecommendationHistory } from "./RecommendationHistory";
 
 /**
  * NEXT STEPS — shown under the evaluation assets once the creation operation has
@@ -185,10 +186,15 @@ export function NextStepsCard({
     }
   };
 
-  // Recommendations are seeded from the newest cleanly completed run with a batch.
-  const baseline = (runs ?? []).find(
+  // Recommendations are seeded from one cleanly completed run with a batch — the newest
+  // by default; the operator may pick an earlier one, and the other runs' recommendations
+  // (an accepted one included) stay listed instead of vanishing behind a newer run.
+  const completedRuns = (runs ?? []).filter(
     (r) => evaluationRunPresentation(r).status === "completed" && !!r.batch_eval_id,
-  ) ?? null;
+  );
+  const [sourceRunId, setSourceRunId] = useState<string | null>(null);
+  const baseline = completedRuns.find((r) => r.id === sourceRunId) ?? completedRuns[0] ?? null;
+  const otherRuns = completedRuns.filter((r) => r.id !== baseline?.id);
   const baselineMean = baseline ? meanScore(baseline) : null;
 
   let n = 0;
@@ -295,7 +301,24 @@ export function NextStepsCard({
             <>
               <div className="v2-assistant-sub-row" style={{ marginTop: 6 }}>
                 <span>{t("assistantNext.recommend.source")}</span>
-                <Tag tone="green">{t("assistantNext.run.runLine", { id: shortId(baseline.id) })}</Tag>
+                {completedRuns.length > 1 ? (
+                  <Select
+                    style={{ width: "auto", minWidth: 220 }}
+                    value={baseline.id}
+                    onChange={setSourceRunId}
+                    testId="v2-assistant-next-rec-source"
+                    options={completedRuns.map((r, i) => ({
+                      value: r.id,
+                      label: [
+                        t("assistantNext.run.runLine", { id: shortId(r.id) }),
+                        r.created_at ? fmtTime(r.created_at) : null,
+                        i === 0 ? t("assistantNext.recommend.newest") : null,
+                      ].filter(Boolean).join(" · "),
+                    }))}
+                  />
+                ) : (
+                  <Tag tone="green">{t("assistantNext.run.runLine", { id: shortId(baseline.id) })}</Tag>
+                )}
                 {baselineMean != null && (
                   <span className="v2-muted">
                     {t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
@@ -308,12 +331,14 @@ export function NextStepsCard({
               )}
               <div style={{ marginTop: 8 }}>
                 <RunRecommendations
+                  key={baseline.id}
                   run={baseline}
                   embedded
                   acceptable={isHarness && agentReady}
                   onAccepted={() => setAgentTick((k) => k + 1)}
                 />
               </div>
+              {otherRuns.length > 0 && <RecommendationHistory runs={otherRuns} onOpen={setSourceRunId} />}
             </>
           ) : (
             <div className="v2-muted" style={{ marginTop: 6 }}>{t("assistantNext.recommend.waiting")}</div>

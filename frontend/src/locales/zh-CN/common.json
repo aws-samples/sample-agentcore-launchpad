@@ -4741,11 +4741,15 @@
     "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。",
     "recommend": {
       "title": "生成 AI 推荐的优化建议",
-      "body": "AgentCore Recommendations 读取最新一次无错误完成的运行的追踪，围绕你选择的评估器给出改写后的系统提示词（以及工具描述）。先查看差异；接受后，Launchpad 用该提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
+      "body": "AgentCore Recommendations 读取所选运行（默认最新一次无错误完成的运行）的追踪，围绕你选择的评估器给出改写后的系统提示词（以及工具描述）。先查看差异；接受后，Launchpad 用该提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
       "source": "追踪来源",
       "version": "Harness 当前为 v{{v}}",
       "publishing": "正在发布“{{name}}”的新 Harness 版本……部署完成后，第 4 步会列出该版本。",
-      "waiting": "第 2 步有一次运行无错误完成后可用——它的追踪用于生成建议。"
+      "waiting": "第 2 步有一次运行无错误完成后可用——它的追踪用于生成建议。",
+      "newest": "最新",
+      "historyTitle": "其他运行生成的优化建议（{{n}}）",
+      "historyAccepted": "已接受 · 在 v{{v}} 之上发布",
+      "historyOpen": "在此查看"
     },
     "canary": {
       "title": "金丝雀实验",
