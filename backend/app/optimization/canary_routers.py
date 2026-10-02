@@ -95,6 +95,8 @@ class RuntimeCanaryCreate(BaseModel):
     # runtime canaries mint a candidate from this edit; harness canaries pick versions
     candidate: CandidateEdit | None = None
     harness_versions: HarnessVersions | None = None
+    # the ramp stage setup opens at: 0 = 90/10, 1 = 50/50 (skips 90/10; Harness only)
+    start_stage: int = Field(default=0, ge=0, le=canary_service.EARLY_COMPLETE_STAGE)
     source_experiment_id: str | None = None
 
 
@@ -224,8 +226,16 @@ def create_runtime_canary(
             control_version=req.harness_versions.control,
             treatment_version=req.harness_versions.treatment,
             workspace=ws.context,
+            start_stage=req.start_stage,
         )
         return _out(row)
+    if req.start_stage:
+        # a Runtime canary's candidate is not production yet: 90/10 is its blast-radius cap
+        raise AppError(
+            "canary.start_stage_harness_only",
+            "only a Harness canary may skip the 90/10 stage",
+            status_code=400,
+        )
     candidate = req.candidate
     if candidate is None:
         raise AppError(

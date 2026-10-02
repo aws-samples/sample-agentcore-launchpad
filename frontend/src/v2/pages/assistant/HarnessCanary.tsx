@@ -6,7 +6,8 @@ import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type RuntimeCanaryInfo } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Select, Tag } from "../../ui";
-import { CANARY_TONE, versionOptions, versionsLabel, weightsLabel } from "../canary/common";
+import { CANARY_TONE, openingWeights, versionOptions, versionsLabel, weightsLabel } from "../canary/common";
+import { RampPlan } from "../canary/RampPlan";
 
 const POLL_MS = 8000;
 
@@ -16,7 +17,8 @@ const byNumber = (a: string, b: string) => Number(a) - Number(b);
  * 金丝雀实验 (next steps, step 4) — A/B the Harness's latest version (the one
  * accepted in step 3) against an earlier version, default the first. Creating the
  * canary is behind a confirm and runs `setup` right away (dedicated gateway, two
- * Harness endpoints, per-variant online evals, a 90/10 A/B test); traffic, verdict,
+ * Harness endpoints, per-variant online evals, an A/B test at 90/10 — or 50/50 when
+ * the ramp plan drops 90/10); traffic, verdict,
  * ramp, promote/rollback and cleanup live on the canary's detail page.
  */
 export function HarnessCanary({
@@ -59,6 +61,7 @@ export function HarnessCanary({
   }, [live]);
 
   const [confirm, setConfirm] = useState(false);
+  const [runFirst, setRunFirst] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mayCreate = can("eval.run");
@@ -80,6 +83,7 @@ export function HarnessCanary({
       const row = await api.createRuntimeCanary({
         agent_id: agentId,
         harness_versions: { control, treatment: latest },
+        start_stage: runFirst ? 0 : 1,
       });
       await api.runtimeCanaryAction(row.id, { action: "setup" });
       toast("success", t("assistantNext.canary.startedToast", { name: row.name }));
@@ -142,6 +146,7 @@ export function HarnessCanary({
           {blocked && <span className="v2-muted" style={{ fontSize: 12.5 }}>{blocked}</span>}
         </div>
       )}
+      {!live && <RampPlan runFirst={runFirst} onChange={setRunFirst} disabled={creating} />}
       {current && (
         <div className="v2-assistant-sub-row" data-testid="v2-assistant-next-canary-current">
           <span>{t("assistantNext.canary.current")}</span>
@@ -160,7 +165,9 @@ export function HarnessCanary({
       <Confirm
         open={confirm}
         title={t("assistantNext.canary.confirmTitle")}
-        body={t("assistantNext.canary.confirmBody", { name: agentName, control, treatment: latest ?? "—", account, region })}
+        body={t("assistantNext.canary.confirmBody", {
+          name: agentName, control, treatment: latest ?? "—", account, region, weights: openingWeights(runFirst),
+        })}
         confirmLabel={t("assistantNext.canary.create")}
         onConfirm={() => { setConfirm(false); void create(); }}
         onClose={() => setConfirm(false)}

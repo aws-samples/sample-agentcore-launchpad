@@ -3319,7 +3319,9 @@
       "setup": "CANARY GATEWAY + CANDIDATE SETUP",
       "ramp": "{{control}}/{{treatment}} TRAFFIC + VERDICT",
       "locked": "Complete the previous stage's traffic, verdict, and advancement gate first.",
-      "skippedEarly": "Skipped — the canary completed at 50/50 on a treatment-wins verdict."
+      "skippedEarly": "Skipped — the canary completed straight from its 50/50 verdict.",
+      "skippedStart": "Skipped — the canary was created to start at 50/50.",
+      "skipped": "Skipped"
     },
     "list": {
       "title": "RUNTIME CANARIES",
@@ -3357,7 +3359,14 @@
       "note": "The candidate winning advances directly. Ties and non-significant results require override; the current version winning and insufficient evidence remain blocked."
     },
     "completeEarly": "Complete now (skip 1/99)",
-    "completeEarlyHint": "Harness canary: its traffic is Dataset replay, so the 1/99 stage would send almost every session to the treatment without adding comparative evidence. On this treatment-wins verdict you can complete straight away — the A/B test stops and production stays on the new version — or keep ramping to 1/99."
+    "completeEarlyHint": "Harness canary: its traffic is Dataset replay, so the 1/99 stage would send almost every session to the treatment without adding comparative evidence. On this verdict you can complete straight away — the A/B test stops and production stays on the new version; a tie or a non-significant result needs your explicit confirmation. You can also keep ramping to 1/99.",
+    "plan": {
+      "title": "Ramp plan",
+      "first": "Run the 90/10 traffic + verdict stage first",
+      "firstHint": "Untick to start at 50/50: the treatment is already production DEFAULT, so 90/10 caps no exposure and only starves the treatment of samples.",
+      "half": "50/50 traffic + verdict (required)",
+      "last": "1/99: decided after the 50/50 verdict"
+    }
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",
@@ -4754,7 +4763,7 @@
     },
     "canary": {
       "title": "Canary experiment",
-      "body": "A/B the newest Harness version (the recommendation you accepted) against an earlier version: a dedicated Gateway routes 90/10 → 50/50 between two Harness endpoints, each variant is scored by its own online evaluation, and once the 50/50 verdict is treatment-wins you can complete right away (1/99 is optional); control-wins rolls back.",
+      "body": "A/B the newest Harness version (the recommendation you accepted) against an earlier version: a dedicated Gateway splits traffic between two Harness endpoints and each variant is scored by its own online evaluation. The 90/10 stage can be dropped at creation to start at 50/50; once the 50/50 verdict is treatment-wins or a tie you can complete right away (1/99 is optional; a tie or a non-significant result needs your explicit confirmation); control-wins rolls back.",
       "versions": "Versions",
       "latest": "v{{v}} · latest",
       "control": "Control",
@@ -4770,7 +4779,7 @@
       "alreadyRunning": "A canary is already running for this agent — finish or roll it back on its page first.",
       "startedToast": "Canary {{name}} created — setup is running.",
       "confirmTitle": "Start a canary between Harness versions?",
-      "confirmBody": "Launchpad will pin two endpoints of “{{name}}” (control v{{control}}, treatment v{{treatment}}), create a dedicated Gateway with trace delivery, two passthrough targets, two online evaluation configs and a target-routing A/B test at 90/10 in {{account}} / {{region}}. These are real, billable AWS resources; while the canary runs, platform invocations of this agent go through the canary Gateway. Clean them up from the canary page when you are done."
+      "confirmBody": "Launchpad will pin two endpoints of “{{name}}” (control v{{control}}, treatment v{{treatment}}), create a dedicated Gateway with trace delivery, two passthrough targets, two online evaluation configs and a target-routing A/B test at {{weights}} in {{account}} / {{region}}. These are real, billable AWS resources; while the canary runs, platform invocations of this agent go through the canary Gateway. Clean them up from the canary page when you are done."
     },
     "noteHarness": "This panel is mostly guidance. The billable actions — START EVALUATION (the same request as New Run), generating and accepting a recommendation (accepting publishes a new Harness version) and starting a canary — each ask for confirmation. Every other link only opens an existing console page with the resources pre-selected."
   },

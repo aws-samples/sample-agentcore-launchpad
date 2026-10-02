@@ -116,7 +116,9 @@ def test_create_harness_canary_pins_two_existing_versions(client, monkeypatch):
     assert res.status_code == 201, res.text
     artifacts = res.json()["artifacts"]
     assert artifacts["kind"] == "harness"
-    assert artifacts["harness"] == {"control_version": "1", "treatment_version": "3"}
+    assert artifacts["harness"] == {
+        "control_version": "1", "treatment_version": "3", "start_stage": 0,
+    }
     assert artifacts["agent_meta"]["backing_runtime_id"] == BACKING
     assert artifacts["agent_meta"]["harness_name"] == "subject_h"
     assert artifacts["edited_spec"]["system_prompt"] == "accepted"
@@ -140,6 +142,57 @@ def test_create_harness_canary_validates_versions(client, monkeypatch, versions,
 
     assert res.status_code in {400, 422}
     assert res.json()["code"] == code
+    assert not SessionLocal().query(RuntimeCanary).count()
+
+
+def test_a_harness_canary_may_open_at_50_50(client, monkeypatch):
+    control = _versions_control("1", "2", "3")
+    monkeypatch.setattr(canary_routers, "control_client", lambda _ws=None: control)
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: control)
+
+    res = client.post("/api/runtime-canaries", json={
+        "agent_id": _agent(), "harness_versions": {"control": "1", "treatment": "3"},
+        "start_stage": 1,
+    })
+
+    assert res.status_code == 201, res.text
+    assert res.json()["artifacts"]["harness"]["start_stage"] == 1
+
+
+@pytest.mark.parametrize("stage", [2, -1])
+def test_a_canary_never_opens_past_50_50(client, monkeypatch, stage):
+    control = _versions_control("1", "2", "3")
+    monkeypatch.setattr(canary_routers, "control_client", lambda _ws=None: control)
+
+    res = client.post("/api/runtime-canaries", json={
+        "agent_id": _agent(), "harness_versions": {"control": "1", "treatment": "3"},
+        "start_stage": stage,
+    })
+
+    assert res.status_code == 422
+    assert not SessionLocal().query(RuntimeCanary).count()
+
+
+def test_a_runtime_canary_keeps_the_90_10_stage(client):
+    db = SessionLocal()
+    try:
+        agent = Agent(
+            workspace_id=DEFAULT_WORKSPACE_ID, name="subject-r", method="zip_runtime",
+            status="active", arn="arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/r-1",
+            resource_id="r-1", spec={"name": "subject-r", "method": "zip_runtime"},
+        )
+        db.add(agent)
+        db.commit()
+        agent_id = agent.id
+    finally:
+        db.close()
+
+    res = client.post("/api/runtime-canaries", json={
+        "agent_id": agent_id, "candidate": {"system_prompt": "edited"}, "start_stage": 1,
+    })
+
+    assert res.status_code == 400, res.text
+    assert res.json()["code"] == "canary.start_stage_harness_only"
     assert not SessionLocal().query(RuntimeCanary).count()
 
 
@@ -202,12 +255,49 @@ def test_setup_fronts_both_versions_with_passthrough_targets(monkeypatch):
     ]
     ab = data.create_ab_test.call_args.kwargs
     assert [v["weight"] for v in ab["variants"]] == [90, 10]
+    assert result["ramp_stage"] == 0 and result["start_stage"] == 0
     assert ab["gatewayFilter"] == {"targetPaths": [f"/{targets[0][0]}/*"]}
     assert result["v_current"] == "1" and result["v_candidate"] == "3"
     assert result["stable_endpoint"] == ctl and result["treatment_endpoint"] == trt
     assert result["runtime_id"] == HARNESS_ID
     stored = _reload(canary_id).artifacts["setup"]
     assert stored["ab_test_id"] == "ab-h"
+
+
+def test_setup_opens_at_50_50_when_the_canary_skips_90_10(monkeypatch):
+    canary_id = _canary(_agent(), harness={
+        "control_version": "1", "treatment_version": "3", "start_stage": 1,
+    })
+    monkeypatch.setattr(hc, "ensure_harness_endpoint", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        canary_svc.canary_infra, "create_canary_gateway",
+        lambda **kw: {"gateway_id": "gw-h", "gateway_arn": "arn:gw-h",
+                      "gateway_url": "https://gw-h"},
+    )
+    monkeypatch.setattr(canary_harness, "enable_gateway_tracing", lambda *a, **kw: {})
+    monkeypatch.setattr(canary_harness, "create_passthrough_target",
+                        lambda control, *, name, **kw: f"id-{name}")
+    monkeypatch.setattr(canary_harness, "ensure_log_group", lambda *a: None)
+    monkeypatch.setattr(
+        exp_svc, "create_online_eval_idempotent",
+        lambda control, **kw: {"onlineEvaluationConfigId": "i", "onlineEvaluationConfigArn": "a"},
+    )
+    data = MagicMock()
+    data.create_ab_test.return_value = {"abTestId": "ab-h"}
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: MagicMock())
+    messages: list[str] = []
+
+    result = canary_svc.act_setup(canary_id, messages.append)
+
+    ab = data.create_ab_test.call_args.kwargs
+    assert [v["weight"] for v in ab["variants"]] == [50, 50]
+    assert result["ramp_stage"] == 1 and result["start_stage"] == 1
+    assert result["weights"] == {"C": 50, "T1": 50}
+    assert any("50/50" in m for m in messages)
+    # the first round recorded is the 50/50 one
+    _, current = canary_svc._current_round(_reload(canary_id), create=True)
+    assert current["ramp_stage"] == 1
 
 
 def test_a_failed_setup_keeps_invokes_on_the_control_endpoint(monkeypatch):
@@ -310,13 +400,30 @@ def test_a_non_significant_early_win_still_needs_the_override(client, monkeypatc
     assert runs == ["complete"]
 
 
+def test_a_50_50_tie_may_complete_with_the_override(client, monkeypatch):
+    canary_id = _canary(_agent())
+    _at_stage(canary_id, 1, {"verdict": "tie", "significant": False})
+    runs: list[str] = []
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+
+    refused = _complete(client, canary_id)
+    overridden = _complete(client, canary_id, allow_non_significant=True)
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "canary.override_required"
+    assert overridden.status_code == 202, overridden.text
+    assert runs == ["complete"]
+
+
 @pytest.mark.parametrize(("stage", "verdict", "harness"), [
     (0, {"verdict": "treatment-wins", "significant": True}, True),   # 90/10 is too early
-    (1, {"verdict": "tie", "significant": False}, True),             # a tie goes on to 1/99
+    (1, {"verdict": "control-wins", "significant": True}, True),     # control-wins stays blocked
+    (1, {"verdict": "insufficient-n", "significant": False}, True),  # so does too little data
     (1, {"verdict": "treatment-wins", "significant": True}, False),  # Runtime keeps the full ramp
+    (1, {"verdict": "tie", "significant": False}, False),
 ])
-def test_early_complete_is_only_a_harness_50_50_treatment_win(client, monkeypatch, stage,
-                                                              verdict, harness):
+def test_early_complete_is_only_a_harness_50_50_win_or_tie(client, monkeypatch, stage,
+                                                           verdict, harness):
     canary_id = _canary(_agent())
     _at_stage(canary_id, stage, verdict, harness=harness)
     runs: list[str] = []

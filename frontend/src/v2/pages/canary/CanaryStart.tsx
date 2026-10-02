@@ -6,6 +6,7 @@ import { api, errorMessage } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
 import { versionOptions } from "./common";
+import { RampPlan } from "./RampPlan";
 
 /**
  * 新建金丝雀: the champion agent and the candidate edit (system prompt, plus the
@@ -49,6 +50,7 @@ export function CanaryStart() {
   const latest = versions[versions.length - 1] ?? "";
   const earlier = versions.filter((v) => v !== latest);
   const [control, setControl] = useState("");
+  const [runFirst, setRunFirst] = useState(true);
   useEffect(() => {
     setControl((prev) => (earlier.includes(prev) ? prev : (earlier[0] ?? "")));
   }, [earlier.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -72,7 +74,7 @@ export function CanaryStart() {
       if (isStudio && code.trim()) candidate.code = code;
       const row = await api.createRuntimeCanary(
         isHarness
-          ? { agent_id: agentId, harness_versions: { control, treatment: latest } }
+          ? { agent_id: agentId, harness_versions: { control, treatment: latest }, start_stage: runFirst ? 0 : 1 }
           : { agent_id: agentId, candidate, ...(sourceExp ? { source_experiment_id: sourceExp } : {}) },
       );
       toast("success", t("v2.canary.created", { name: row.name }));
@@ -132,6 +134,7 @@ export function CanaryStart() {
               />
             </Field>
             <span className="v2-muted">{t("assistantNext.canary.treatment", { v: latest || "—" })}</span>
+            <RampPlan runFirst={runFirst} onChange={setRunFirst} />
           </div>
         </Card>
       ) : (

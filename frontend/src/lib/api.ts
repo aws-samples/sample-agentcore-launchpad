@@ -562,7 +562,7 @@ export interface RuntimeCanaryInfo {
       harness_name?: string;
     };
     /** Harness canaries A/B two existing versions */
-    harness?: { control_version: string; treatment_version: string };
+    harness?: { control_version: string; treatment_version: string; start_stage?: number };
     edited_spec?: Record<string, unknown>;
     // ``setup`` is persisted as a PARTIAL artifact (the block below) as soon as the
     // gateway + stable endpoint are up, so invoke keeps serving v_current during
@@ -579,6 +579,8 @@ export interface RuntimeCanaryInfo {
       test_name?: string;
       ab_test_id?: string;
       ramp_stage?: number;
+      // the stage setup opened at (1 ⇒ a Harness canary skipped 90/10); absent = 0
+      start_stage?: number;
       weights?: Record<string, number>;
       v_candidate?: string;
       // zip behind v_candidate; cleanup deletes it unless it is still live
@@ -4343,7 +4345,8 @@ export const api = {
   getRuntimeCanary: (id: string) =>
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
   /** Runtime agents send `candidate` (the edit to mint); a Harness sends
-   *  `harness_versions` — control (an earlier version) vs treatment (the latest). */
+   *  `harness_versions` — control (an earlier version) vs treatment (the latest) —
+   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). */
   createRuntimeCanary: (input: {
     agent_id: string;
     candidate?: {
@@ -4352,6 +4355,7 @@ export const api = {
       code?: string;
     };
     harness_versions?: { control: string; treatment: string };
+    start_stage?: 0 | 1;
     source_experiment_id?: string;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {

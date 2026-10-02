@@ -7,7 +7,15 @@ import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
 import { StageCard } from "../experiments/StageCard";
-import { CANARY_TONE, EARLY_COMPLETE_STAGE, RAMP_STAGES, verdictTone, versionsLabel, weightsLabel } from "./common";
+import {
+  CANARY_TONE,
+  EARLY_COMPLETE_STAGE,
+  EARLY_COMPLETE_VERDICTS,
+  RAMP_STAGES,
+  verdictTone,
+  versionsLabel,
+  weightsLabel,
+} from "./common";
 
 const POLL_MS = 8000;
 const FAST_POLL_MS = 2500;
@@ -88,6 +96,10 @@ export function CanaryDetail({ id }: { id: string }) {
   const isHarness = a.kind === "harness";
   // the stage `complete` left from: the final one, or 50/50 for an early Harness completion
   const completedStage = a.complete?.completed_at_stage ?? RAMP_STAGES.length - 1;
+  // stages before the one setup opened at never ran (a Harness canary that skipped 90/10)
+  const startStage = liveSetup?.start_stage ?? 0;
+  const skippedAt = (i: number): "start" | "early" | null =>
+    i < startStage ? "start" : isHarness && !!a.complete && i > completedStage ? "early" : null;
 
   /** Button while pending → progress line; a stored `<action>: …` error turns it into a retry. */
   const actionButton = (
@@ -147,10 +159,11 @@ export function CanaryDetail({ id }: { id: string }) {
       !!verdict && (verdict.verdict === "control-wins" || verdict.verdict === "insufficient-data" || verdict.verdict === "insufficient-n");
     const needsOverride = !blocked && !!verdict && (verdict.verdict === "tie" || verdict.significant === false);
     const action = index === RAMP_STAGES.length - 1 ? "complete" : "advance";
-    // a Harness canary may complete straight from 50/50 on a treatment-wins verdict
-    const earlyComplete = isHarness && index === EARLY_COMPLETE_STAGE && verdict?.verdict === "treatment-wins";
-    const skipped = isHarness && !!a.complete && index > completedStage;
-    const done = index < currentStage || (index === completedStage && !!a.complete);
+    // a Harness canary may complete straight from 50/50 on a treatment-wins or tie verdict
+    const earlyComplete =
+      isHarness && index === EARLY_COMPLETE_STAGE && !!verdict && EARLY_COMPLETE_VERDICTS.includes(verdict.verdict);
+    const skipped = skippedAt(index);
+    const done = !skipped && (index < currentStage || (index === completedStage && !!a.complete));
     const advanceLabel = action === "complete" ? t("canaryPage.complete") : t("canaryPage.advance");
     const state = skipped ? "skipped" : done ? "done" : current && canary.status === "running" ? "active" : "pending";
 
@@ -163,7 +176,9 @@ export function CanaryDetail({ id }: { id: string }) {
         state={state}
       >
         {skipped ? (
-          <span className="v2-muted">{t("canaryPage.stage.skippedEarly")}</span>
+          <span className="v2-muted">
+            {t(skipped === "start" ? "canaryPage.stage.skippedStart" : "canaryPage.stage.skippedEarly")}
+          </span>
         ) : !reached ? (
           <span className="v2-muted">{t("canaryPage.stage.locked")}</span>
         ) : (
@@ -265,14 +280,15 @@ export function CanaryDetail({ id }: { id: string }) {
   };
 
   const pipeline = [
-    { key: "setup", label: t("canaryPage.stage.setup"), done: !!liveSetup, active: !liveSetup && !terminal },
+    { key: "setup", label: t("canaryPage.stage.setup"), sub: undefined as string | undefined, done: !!liveSetup, active: !liveSetup && !terminal },
     ...RAMP_STAGES.map((r, i) => ({
       key: `ramp-${i}`,
       label: `${r.control}/${r.treatment}`,
-      done: i < currentStage || (i === completedStage && !!a.complete),
+      sub: skippedAt(i) ? t("canaryPage.stage.skipped") : undefined,
+      done: !skippedAt(i) && (i < currentStage || (i === completedStage && !!a.complete)),
       active: !!liveSetup && i === currentStage && !terminal,
     })),
-    { key: "finish", label: t("v2.canary.finish"), done: terminal, active: false },
+    { key: "finish", label: t("v2.canary.finish"), sub: undefined, done: terminal, active: false },
   ];
 
   return (
@@ -343,6 +359,7 @@ export function CanaryDetail({ id }: { id: string }) {
               <span className="n">{s.done ? "✓" : i + 1}</span>
               <div className="b">
                 <div className="t">{s.label}</div>
+                {s.sub && <div className="v2-muted" style={{ fontSize: 12 }}>{s.sub}</div>}
               </div>
             </div>
           ))}
