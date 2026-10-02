@@ -202,12 +202,15 @@ def start_harness_canary(
     control_version: str,
     treatment_version: str,
     workspace: WorkspaceContext,
+    start_stage: int = 0,
 ) -> RuntimeCanary:
     """Ledger row for a Harness canary: two EXISTING versions of one Harness.
 
     ``treatment_version`` is the latest version (DEFAULT already serves it), so
     ``complete`` never has to re-point anything on AWS; ``edited_spec`` is the
-    ledger spec at creation — the spec production runs once treatment wins."""
+    ledger spec at creation — the spec production runs once treatment wins.
+    ``start_stage`` 1 opens the A/B test at 50/50: with DEFAULT already on the
+    treatment, 90/10 caps no exposure and only starves the treatment of samples."""
     control = control_client(workspace)
     row = RuntimeCanary(
         workspace_id=agent.workspace_id,
@@ -222,6 +225,7 @@ def start_harness_canary(
             "harness": {
                 "control_version": str(control_version),
                 "treatment_version": str(treatment_version),
+                "start_stage": int(start_stage),
             },
             "edited_spec": copy.deepcopy(agent.spec or {}),
             "rounds": [],
@@ -354,23 +358,26 @@ def stage_not_ready_reason(row: RuntimeCanary, action: str) -> str | None:
 
 
 EARLY_COMPLETE_STAGE = 1  # the 50/50 ramp stage
+EARLY_COMPLETE_VERDICTS = frozenset({"treatment-wins", "tie"})
 
 
 def early_complete_allowed(row: RuntimeCanary) -> bool:
-    """A Harness canary may complete straight from 50/50 on a treatment-wins verdict.
+    """A Harness canary may complete straight from 50/50 on a treatment-wins or tie verdict.
 
     The architect's Harness canary gets its traffic from Dataset replay, so the 1/99
     stage would replay almost every session into the treatment and add one more
-    verdict wait without new comparative evidence. Runtime canaries keep the full
-    90/10 → 50/50 → 1/99 ramp. A non-significant win still needs the operator
-    override (``assert_verdict_allows``), exactly as advancing would."""
+    verdict wait without new comparative evidence — whether to run it is decided on
+    the 50/50 verdict. Runtime canaries keep the full 90/10 → 50/50 → 1/99 ramp. A tie
+    or a non-significant win still needs the operator override
+    (``assert_verdict_allows``), exactly as advancing would; control-wins and
+    insufficient evidence stay blocked."""
     if not is_harness(row):
         return False
     setup = row.artifacts.get("setup") or {}
     if int(setup.get("ramp_stage", 0)) != EARLY_COMPLETE_STAGE:
         return False
     _, current = _current_round(row)
-    return ((current or {}).get("verdict") or {}).get("verdict") == "treatment-wins"
+    return ((current or {}).get("verdict") or {}).get("verdict") in EARLY_COMPLETE_VERDICTS
 
 
 def assert_verdict_allows(
@@ -456,8 +463,9 @@ def _create_target_ab_test(
     variants: list[dict[str, Any]],
     progress: Progress,
 ) -> dict[str, Any]:
-    """Target-routing A/B test at the first ramp weights (adopted on conflict)."""
-    progress("creating target-routing A/B test at 90/10…")
+    """Target-routing A/B test at the opening ramp weights (adopted on conflict)."""
+    weights = "/".join(str(variant["weight"]) for variant in variants)
+    progress(f"creating target-routing A/B test at {weights}…")
     try:
         return ac.create_ab_test(
             data,
@@ -573,7 +581,12 @@ def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> di
         }
 
     test_name = _test_name(canary_id)
-    variants = ac.target_variants(control_target, treatment_target)
+    start_stage = int(versions.get("start_stage", 0))
+    control_weight, treatment_weight = RAMP_WEIGHTS[start_stage]
+    variants = ac.target_variants(
+        control_target, treatment_target,
+        control_weight=control_weight, treatment_weight=treatment_weight,
+    )
     response = _create_target_ab_test(
         data,
         test_name=test_name,
@@ -597,7 +610,9 @@ def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> di
             "target_name": treatment_target, "target_id": targets[treatment_target],
             **evals["treatment"],
         },
-        "ramp_stage": 0,
+        "ramp_stage": start_stage,
+        # < start_stage ⇒ skipped (never ran); the detail page marks those stages so
+        "start_stage": start_stage,
         "weights": {variant["name"]: variant["weight"] for variant in variants},
         "v_candidate": v_treatment,
         "treatment_endpoint": treatment,

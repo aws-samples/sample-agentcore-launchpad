@@ -293,6 +293,8 @@ export function RuntimeCanaryView() {
   const provisioning = !!setup && !liveSetup;
   const rounds = canary?.artifacts.rounds ?? [];
   const currentStage = liveSetup?.ramp_stage ?? 0;
+  // stages before the one setup opened at never ran (a Harness canary that skipped 90/10)
+  const startStage = liveSetup?.start_stage ?? 0;
   const terminal = canary?.status !== "running";
 
   const createForm = (
@@ -563,7 +565,8 @@ export function RuntimeCanaryView() {
               </StageCard>
 
               {RAMP_STAGES.map((ramp, index) => {
-                const reached = !!liveSetup && index <= currentStage;
+                const skipped = index < startStage;
+                const reached = !!liveSetup && index <= currentStage && !skipped;
                 const current = !!liveSetup && index === currentStage;
                 const round = rounds.find((item) => item.ramp_stage === index);
                 const attempts = round?.traffic_attempts ?? [];
@@ -589,10 +592,15 @@ export function RuntimeCanaryView() {
                       treatment: ramp.treatment,
                     })}
                     active={current && canary.status === "running"}
-                    done={index < currentStage
-                      || (index === 2 && !!canary.artifacts.complete)}
+                    done={!skipped && (index < currentStage
+                      || (index === 2 && !!canary.artifacts.complete))}
                   >
-                    {!reached && (
+                    {skipped && (
+                      <div className="mono dim" style={{ fontSize: 10 }}>
+                        {t("canaryPage.stage.skippedStart")}
+                      </div>
+                    )}
+                    {!reached && !skipped && (
                       <div className="mono dim" style={{ fontSize: 10 }}>
                         {t("canaryPage.stage.locked")}
                       </div>
