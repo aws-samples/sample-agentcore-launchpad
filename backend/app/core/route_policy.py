@@ -45,7 +45,8 @@ Consequences worth knowing before editing this table:
   member still sees and can mutate the same shared agents, records, datasets and
   gateways, but a member only reaches the workspaces an admin granted them
   (`user_workspaces`), and a resource id belonging to another workspace answers
-  404. `ADMIN` marks user/workspace management and announcement publication;
+  404. `ADMIN` marks user/workspace management, announcement publication and
+  the gateway's consent portal (it passes an operator-named IAM role);
   it does not generically mark "state changes".
 * The studio local-exec surface (`/api/execute*`, conversations writes) stays safe
   in production through its own handler guard (`local_exec`, refused outright in
@@ -79,6 +80,8 @@ PERM_AGENT_IMPORT = "perm:agents.import"
 PERM_AGENT_DELETE = "perm:agents.delete"
 PERM_AGENT_CONVERT = "perm:agents.convert"
 PERM_EVAL_RUN = "perm:eval.run"
+PERM_IDENTITY_MANAGE = "perm:identity.manage"
+PERM_IDENTITY_GRANT = "perm:identity.grant"
 _PERM_PREFIX = "perm:"
 
 API_PREFIX = "/api"
@@ -103,11 +106,13 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/uploads"): PERM_AGENT_DEPLOY,
     ("GET", "/api/agents/uploads/{upload_id}"): MEMBER,
     ("GET", "/api/agents/{agent_id}"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/identity"): MEMBER,
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
     ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
     ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
     ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,
+    ("POST", "/api/agents/{agent_id}/inbound-auth"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
     ("GET", "/api/jobs/{job_id}"): MEMBER,
     # ---- system-managed presets: status is a ledger read; install/repair and
@@ -214,6 +219,37 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/registry/sync-defaults"): MEMBER,
     ("GET", "/api/registry/attachables"): MEMBER,
     ("POST", "/api/registry/a2a-demo"): MEMBER,  # an invoke; parity with Chat
+    # ---- identity: Connections (credential providers) and gateway targets
+    # bound to one. Reads are plain member; creating/deleting a vault entry or a
+    # target is the member-grantable identity.manage permission ----
+    ("GET", "/api/identity/connections"): MEMBER,
+    ("GET", "/api/identity/connections/templates"): MEMBER,
+    ("GET", "/api/identity/connections/oidc-sources"): MEMBER,
+    ("GET", "/api/identity/connections/{kind}/{name}"): MEMBER,
+    ("POST", "/api/identity/connections/oauth2"): PERM_IDENTITY_MANAGE,
+    ("POST", "/api/identity/connections/api-key"): PERM_IDENTITY_MANAGE,
+    ("DELETE", "/api/identity/connections/{kind}/{name}"): PERM_IDENTITY_MANAGE,
+    ("GET", "/api/identity/gateway-targets"): MEMBER,
+    ("POST", "/api/identity/gateway-targets"): PERM_IDENTITY_MANAGE,
+    ("DELETE", "/api/identity/gateway-targets/{target_id}"): PERM_IDENTITY_MANAGE,
+    # as_user (3LO): binding a consent into the vault or revoking one is the
+    # member-grantable identity.grant permission; reading one's OWN grants
+    # (the router scopes every query to the caller) is plain member
+    ("POST", "/api/identity/oauth/complete"): PERM_IDENTITY_GRANT,
+    ("GET", "/api/identity/grants"): MEMBER,
+    ("GET", "/api/identity/grants/{connection}/status"): MEMBER,
+    ("DELETE", "/api/identity/grants/{connection}"): PERM_IDENTITY_GRANT,
+    # the gateway's Consent Portal is workspace infrastructure
+    ("GET", "/api/identity/consent-portal"): MEMBER,
+    # gateway-wide singleton whose create passes an operator-named IAM role to
+    # AgentCore: an administrator decision, not member-grantable
+    ("POST", "/api/identity/consent-portal"): ADMIN,
+    ("DELETE", "/api/identity/consent-portal"): ADMIN,
+    # inbound JWT auth (P3): reading the workspace default is member (the
+    # wizard shows the effective value); changing it flips how every inheriting
+    # agent authenticates its callers on next deploy
+    ("GET", "/api/identity/inbound-auth/default"): MEMBER,
+    ("PUT", "/api/identity/inbound-auth/default"): PERM_IDENTITY_MANAGE,
     # ---- tools + demos: /tools/call can mutate external systems through a
     # gateway target, and the demos open billable cloud sessions ----
     ("GET", "/api/tools"): MEMBER,

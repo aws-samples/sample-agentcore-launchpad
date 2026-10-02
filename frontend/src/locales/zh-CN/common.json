@@ -116,7 +116,9 @@
     "assistant": "架构助手",
     "learn": "学习",
     "videos": "视频介绍",
-    "announcements": "公告管理"
+    "announcements": "公告管理",
+    "connections": "连接",
+    "myConnections": "我的连接"
   },
   "videos": {
     "kicker": "// 学习",
@@ -2362,7 +2364,47 @@
     "dataset.kind_unsupported": "模拟用户数据集不能接收观测到的轨迹。",
     "pipeline.running": "该 Pipeline 正在运行中。",
     "pipeline.not_found": "Pipeline 不存在。",
-    "agent.converted_locked": "转换来的 Agent 的系统提示词和模型已写入导出的代码，重新部署时不能修改。"
+    "agent.converted_locked": "转换来的 Agent 的系统提示词和模型已写入导出的代码，重新部署时不能修改。",
+    "identity.connection_exists": "此工作区已存在同名连接。",
+    "identity.system_connection": "平台连接不能在此删除。",
+    "identity.connection_referenced": "此连接仍被 Agent 或网关目标使用。",
+    "identity.connection_not_found": "找不到连接。",
+    "identity.connection_unknown": "有工具引用了此工作区中不存在的连接。",
+    "identity.kind_mismatch": "工具的认证类型与其连接不匹配。",
+    "identity.mode_unsupported": "此处不支持该代理模式。",
+    "identity.unsupported_vendor": "暂不支持此身份提供方。",
+    "identity.missing_endpoints": "请填写 Discovery URL，或填写 Issuer 以及授权端点和令牌端点。",
+    "identity.endpoints_custom_only": "仅自定义 OAuth2 提供方可设置端点。",
+    "identity.no_gateway": "此工作区没有网关，请先完成工作区引导。",
+    "identity.invalid_target_name": "目标名称无效。",
+    "identity.invalid_openapi": "OpenAPI Schema 无效（需为 OpenAPI 3，且包含 https 服务器 URL）。",
+    "identity.invalid_mcp_endpoint": "MCP 服务器端点必须是 https URL。",
+    "identity.target_auth_unsupported": "MCP 服务器目标仅支持 OAuth2 连接。",
+    "identity.target_exists": "网关上已存在同名目标。",
+    "identity.target_not_found": "找不到网关目标。",
+    "identity.system_target": "平台目标不能在此删除。",
+    "identity.target_unbound": "此目标未绑定连接，请在创建它的位置管理。",
+    "identity.as_user_requires_user_jwt": "该工具以你的身份执行，但本轮使用工作区机器令牌调用了智能体。请开启“以用户身份调用”后重试。通过 /v1 或直接调用时，JWT 入站智能体上的 as_user 工具需要用户 JWT。",
+    "identity.session_unknown": "该授权会话不存在或已被使用。请在对话中重试该请求以获取新链接。",
+    "identity.session_user_mismatch": "该授权由另一位用户发起。请以该用户登录，或在你自己的对话中重试该请求。",
+    "identity.session_expired": "该授权会话已过期。请在对话中重试该请求以获取新链接。",
+    "identity.session_completion_failed": "AgentCore Identity 未能完成授权。请在对话中重试该请求以获取新链接。",
+    "identity.gateway_missing": "此工作区没有网关，请先运行 bootstrap。",
+    "identity.invalid_portal_name": "门户名称只能包含字母、数字、_ 和 -（最多 50 个字符）。",
+    "identity.invalid_role_arn": "执行角色必须是 IAM 角色 ARN。",
+    "identity.role_account_mismatch": "执行角色必须是本工作区所在 AWS 账号与分区中的 IAM 角色。",
+    "identity.portal_scopes": "同意门户通过 OIDC 登录用户，权限范围必须包含 openid。",
+    "identity.consent_portal_exists": "此工作区的网关已有同意门户。",
+    "identity.consent_portal_required": "以用户身份调用的网关目标需要工作区网关上有一个 ACTIVE 的同意门户。",
+    "identity.consent_portal_not_found": "没有可删除的同意门户。",
+    "agent.inbound_issuer_mismatch": "该智能体的 JWT 授权器信任的身份提供方不是工作区 Cognito 用户池。控制台聊天（“以用户身份调用”与机器令牌路径）、/v1 API、直接调用和评估出示的都是工作区 Cognito 令牌，因此会被该智能体拒绝。只有持有其自身 IdP 所签发令牌的调用方才能调用它（见智能体页面上的调用示例）。",
+    "agent.inbound_auth_rejected": "智能体的 JWT 授权器拒绝了该令牌：其客户端、受众、作用域或声明不符合智能体的限制条件。",
+    "agent.inbound_auth_invalid": "该智能体已保存的配置无法以此入站认证重新发布。",
+    "agent.inbound_auth_unsupported": "只有 HTTP Runtime 智能体（zip、Studio、容器、BYOC）可以使用 JWT 授权器。",
+    "identity.m2m_unavailable": "该工作区没有 Cognito 机器客户端，平台无法为此 JWT 智能体签发令牌。请运行工作区引导，或使用你自己的 Bearer 令牌调用 Runtime。",
+    "identity.m2m_token_failed": "无法从工作区 Cognito 客户端获取机器令牌。",
+    "identity.discovery_unreachable": "无法获取 OIDC 发现文档。请检查发现 URL，并确认 IdP 可通过 HTTPS 访问。",
+    "identity.discovery_invalid": "该 URL 返回的不是 OIDC 发现文档（缺少 jwks_uri），因此无法校验任何令牌签名。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -4111,7 +4153,7 @@
     "deleted": "已删除 {{username}}。",
     "permissionsUpdated": "已更新 {{username}} 的权限。",
     "permissionsAll": "全部（管理员）",
-    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部四项。",
+    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部能力。",
     "workspacesAll": "全部（管理员）",
     "workspacesHint": "工作区访问权限——点击授予或收回。管理员按角色可访问所有工作区。",
     "workspacesUpdated": "已更新 {{username}} 的工作区访问权限。",
@@ -4122,7 +4164,9 @@
       "import": "导入",
       "delete": "删除",
       "convert": "转换",
-      "run": "评估运行"
+      "run": "评估运行",
+      "manage": "身份",
+      "grant": "身份授权"
     },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",
@@ -5495,6 +5539,52 @@
         "convertedModelLocked": "导出的代码直接调用该模型，转换来的 Agent 在此只读。",
         "memoryOff": "关闭",
         "memoryLongOnly": "仅长期"
+      },
+      "identity": {
+        "open": "身份",
+        "title": "身份 · {{name}}",
+        "manageConnections": "连接",
+        "workloadTitle": "工作负载身份",
+        "workloadSub": "AgentCore Runtime 为此 Agent 签发的身份，出站凭证换取均以它进行。",
+        "status": "状态",
+        "workload": {
+          "ready": "就绪",
+          "none": "未上报",
+          "managed": "由 Harness 托管",
+          "not_deployed": "未部署",
+          "missing": "找不到 Runtime"
+        },
+        "workloadName": "名称",
+        "returnUrls": "允许的回跳 URL",
+        "inboundTitle": "入站",
+        "inboundSub": "调用方如何向此 Agent 认证。",
+        "inboundMode": "模式",
+        "inbound": {
+          "iam": "IAM（SigV4）",
+          "jwt": "JWT Bearer"
+        },
+        "downstreamTitle": "下游",
+        "downstreamSub": "此 Agent 的每一个出站调用、代理模式及所用连接。",
+        "downstreamEmpty": "此 Agent 没有通过连接调用任何下游。",
+        "colDownstream": "下游",
+        "colVia": "换取方",
+        "colMode": "代理模式",
+        "colConnection": "连接",
+        "colScopes": "Scopes",
+        "type": {
+          "tool": "工具",
+          "gateway": "网关",
+          "gateway_target": "网关目标"
+        },
+        "via": {
+          "agent": "Agent",
+          "gateway": "网关"
+        },
+        "connection": {
+          "ready": "就绪",
+          "missing": "缺失",
+          "unbound": "未绑定"
+        }
       }
     },
     "data": {
@@ -6388,7 +6478,29 @@
       "keyEnabled": "已启用",
       "keyDisabled": "已停用",
       "enable": "启用",
-      "disable": "停用"
+      "disable": "停用",
+      "auth": {
+        "title": "需要授权",
+        "pending": "等待授权",
+        "requested": "已请求授权",
+        "authorized": "已授权",
+        "expiredTag": "链接已过期",
+        "body": "工具 {{tool}} 会以你的身份调用 {{connection}}。请到提供方登录并授权；Launchpad 不会看到你的令牌。",
+        "restored": "本会话曾请你为工具 {{tool}} 授权 {{connection}}。授权链接只能使用一次，未被保存；如仍需要，请重试该请求以获取新链接。",
+        "authorizedBody": "已授予访问权限。请重试该请求以继续。",
+        "expired": "授权链接已过期。请重试该请求以获取新链接。",
+        "open": "打开授权页面",
+        "waiting": "请在新标签页中完成登录，此卡片会自动更新。",
+        "retry": "重试请求",
+        "noPrompt": "本会话中没有可重试的上一条消息。",
+        "scopes": "权限范围"
+      },
+      "asUser": "以用户身份调用",
+      "asUserHint": "开启：Runtime 收到你本人的登录 JWT。关闭：使用工作区 M2M 令牌。两种方式下记忆都按你隔离。",
+      "caller": {
+        "user_jwt": "以你的身份调用",
+        "m2m": "以 M2M 客户端调用"
+      }
     },
     "knowledge": {
       "basic": "基本信息",
@@ -7051,7 +7163,9 @@
         "rollout": "策略发布",
         "evidence": "AWS 证据",
         "promote": "提升",
-        "retryCutover": "重试切换"
+        "retryCutover": "重试切换",
+        "toolPrefill": "已为网关目标 {{target}} 预填工具级白名单：仅包含其动作，以 LOG_ONLY 创建，便于先审阅决策再强制执行。",
+        "toolPrefillNone": "网关目标 {{target}} 尚无工具 Schema，未预填动作；请手动添加或先同步该目标。"
       },
       "tools": {
         "title": "工具目录",
@@ -7252,7 +7366,9 @@
         "import": "导入",
         "delete": "删除",
         "convert": "转换",
-        "run": "评估运行"
+        "run": "评估运行",
+        "manage": "管理身份",
+        "grant": "授权本人访问"
       }
     },
     "workspaces": {
@@ -7474,6 +7590,334 @@
         "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。"
       },
       "toolDiff": "工具描述"
+    },
+    "connections": {
+      "title": "连接",
+      "desc": "此工作区 AgentCore Identity 令牌库中的凭证提供方。密钥直接发送至 AWS，Launchpad 从不存储或展示。",
+      "tab": {
+        "connections": "连接",
+        "targets": "网关目标"
+      },
+      "listTitle": "连接",
+      "listSub": "OAuth2 与 API 密钥凭证提供方。Agent 与网关目标按名称引用它们。",
+      "new": "新建连接",
+      "empty": "暂无连接。",
+      "colName": "名称",
+      "colKind": "类型",
+      "colVendor": "提供方",
+      "colSource": "来源",
+      "colRefs": "引用方",
+      "colCreated": "创建时间",
+      "refCount_one": "{{count}} 处引用",
+      "refCount_other": "{{count}} 处引用",
+      "refType": {
+        "agent": "Agent",
+        "gateway_target": "网关目标"
+      },
+      "source": {
+        "system": "平台",
+        "launchpad": "Launchpad",
+        "external": "外部"
+      },
+      "status": {
+        "missing": "缺失"
+      },
+      "missingHint": "Launchpad 记录了此连接，但令牌库中已不存在。",
+      "callback": "回调 URL",
+      "created": "已创建连接 {{name}}。",
+      "deleted": "已删除连接 {{name}}。",
+      "deleteTitle": "删除连接 {{name}}？",
+      "deleteBody": "将从令牌库删除该凭证提供方及其密钥，且无法恢复。",
+      "deleteReferenced": "仍被以下对象使用：{{names}}。在它们停止引用前，删除会被拒绝。",
+      "createTitle": "新建连接",
+      "create": "创建",
+      "nameHint": "字母、数字、- 和 _（最多 128 个字符）。Agent 通过此名称引用连接。",
+      "scopesHint": "以逗号或空格分隔。",
+      "secretHint": "仅发送至 AWS，不会存储，也不会再次显示。",
+      "errName": "仅可使用字母、数字、- 和 _（1–128 个字符）。",
+      "errRequired": "必填。",
+      "errDiscovery": "须为以 /.well-known/openid-configuration 或 /.well-known/oauth-authorization-server 结尾的 https URL。",
+      "field": {
+        "template": "模板",
+        "name": "名称",
+        "description": "描述",
+        "client_id": "Client ID",
+        "client_secret": "Client Secret",
+        "discovery_url": "Discovery URL",
+        "issuer": "Issuer",
+        "authorization_endpoint": "授权端点",
+        "token_endpoint": "令牌端点",
+        "scopes": "Scopes",
+        "api_key": "API 密钥"
+      },
+      "template": {
+        "cognito": "Amazon Cognito",
+        "custom_oidc": "自定义 OIDC",
+        "custom_endpoints": "自定义端点",
+        "github": "GitHub",
+        "google": "Google",
+        "slack": "Slack",
+        "salesforce": "Salesforce",
+        "microsoft": "Microsoft",
+        "atlassian": "Atlassian",
+        "linkedin": "LinkedIn",
+        "api_key": "API 密钥"
+      },
+      "callbackTitle": "回调 URL · {{name}}",
+      "callbackBody": "请在身份提供方的应用客户端中登记此重定向 URI。AgentCore Identity 在此接收提供方的授权响应。",
+      "callbackMissing": "AWS 未返回此连接的回调 URL。",
+      "callbackM2m": "Client Credentials（以 Agent 身份）调用不经过重定向；用户授权流程才需要它。",
+      "callbackDone": "完成",
+      "copy": "复制",
+      "copied": "已复制。",
+      "targets": {
+        "title": "网关目标",
+        "sub": "工作区网关 {{id}} 上的目标。挂载该网关的任何 Agent 都会获得目标的出站认证。",
+        "subNone": "此工作区没有网关。",
+        "noGateway": "此工作区尚无网关，请先完成工作区引导。",
+        "new": "新建目标",
+        "empty": "网关上暂无目标。",
+        "colName": "名称",
+        "colSource": "来源",
+        "colConnection": "连接",
+        "colMode": "代理模式",
+        "colStatus": "状态",
+        "source": {
+          "openapi": "OpenAPI",
+          "mcp": "MCP 服务器",
+          "lambda": "Lambda",
+          "smithy": "Smithy",
+          "unknown": "其他"
+        },
+        "auth": {
+          "gateway_iam_role": "网关 IAM 角色",
+          "none": "无出站认证",
+          "oauth": "OAuth",
+          "api_key": "API 密钥",
+          "caller_iam_credentials": "调用方 IAM 凭证",
+          "jwt_passthrough": "JWT 透传"
+        },
+        "created": "已创建目标 {{name}}。",
+        "oboIssuerMismatch": "目标已创建，但连接 {{connection}} 在 {{connectionIssuer}} 交换令牌，而网关的入站令牌由 {{gatewayIssuer}} 签发。要使代表用户（OBO）交换生效，该 IdP 必须信任网关的入站 issuer（例如配置联合信任）。本次创建未被阻止。",
+        "deleted": "已删除目标 {{name}}。",
+        "deleteTitle": "删除目标 {{name}}？",
+        "deleteBody": "将从网关移除该目标，连接会保留。",
+        "createTitle": "新建网关目标",
+        "nameHint": "字母、数字和单个连字符（最多 100 个字符）。",
+        "schema": "OpenAPI Schema",
+        "schemaHint": "OpenAPI 3 JSON 或 YAML，需包含 https 服务器 URL。",
+        "endpoint": "MCP 服务器端点",
+        "mcpOauthOnly": "MCP 服务器目标仅支持 OAuth2 连接。",
+        "prefix": "值前缀",
+        "errName": "仅可使用字母、数字和单个连字符（1–100 个字符）。",
+        "errEndpoint": "请输入 https 端点。",
+        "errConnection": "请选择连接。",
+        "modeHints": {
+          "as_agent": "网关以 Agent 身份换取连接的 Client Credentials（或 API 密钥）。",
+          "as_user": "每位用户通过工作区授权门户完成一次授权（三方 OAuth），之后网关以该用户的令牌调用。",
+          "obo": "网关在连接的 IdP 处用调用方的入站 JWT 换取仅限此目标的令牌，无需用户授权。"
+        },
+        "oboNeeds": "代表用户模式要求网关使用 CUSTOM_JWT 授权方（才有可换取的用户令牌），且连接须针对支持 RFC 8693 或 RFC 7523 的 IdP 开启令牌交换。否则创建会以 422/409 拒绝并指出缺少的条件。",
+        "policy": "Cedar 策略"
+      },
+      "obo": {
+        "title": "代表用户令牌交换（OBO）",
+        "hint": "允许“代表用户”模式的网关目标在此 IdP 处交换调用方的 JWT。IdP 须支持 RFC 8693（令牌交换）或 RFC 7523（JWT Bearer）；Launchpad 会检查发现文档，拒绝两者都未声明的 IdP。",
+        "enable": "开启代表用户令牌交换",
+        "grant": "授权类型",
+        "grantExchange": "令牌交换（RFC 8693）",
+        "grantJwtBearer": "JWT Bearer（RFC 7523）",
+        "actor": "Actor 令牌",
+        "actorHint": "交换时是否同时出示 Agent 自身的 M2M 令牌作为 RFC 8693 的 actor_token。",
+        "actorNone": "无",
+        "actorM2m": "Agent M2M 令牌",
+        "actorScopes": "Actor 令牌 Scope",
+        "cognito": "Amazon Cognito 不支持 OAuth 令牌交换（RFC 8693）和 JWT Bearer 授权（RFC 7523），因此 Cognito 连接无法用于代表用户目标。请改用 Okta、Auth0、Keycloak 或 Microsoft Entra ID 等 IdP。"
+      }
+    },
+    "authReturn": {
+      "title": {
+        "binding": "正在绑定你的账号…",
+        "done": "授权完成",
+        "failed": "授权失败"
+      },
+      "binding": "正在把授权绑定到你的 Launchpad 账号，请保持此标签页打开。",
+      "done": "已为你的账号授权 {{connection}}。",
+      "doneAgent": "已为 {{agent}} 授权 {{connection}}。",
+      "doneHint": "请回到对话并重试该请求。",
+      "missing": "打开此页面时没有携带授权会话。请从对话中重新开始。",
+      "tool": "工具",
+      "back": "回到发起请求的标签页",
+      "myConnections": "查看我的连接"
+    },
+    "myConnections": {
+      "title": "我的连接",
+      "desc": "Agent 以你的身份调用的下游服务（as_user，3LO）。撤销后，下一次调用会请你重新登录授权。",
+      "listTitle": "我的授权",
+      "empty": "还没有 Agent 请求以你的身份调用。",
+      "colConnection": "连接",
+      "colAgent": "Agent",
+      "colTool": "工具",
+      "colScopes": "权限范围",
+      "colStatus": "状态",
+      "colAuthorized": "授权时间",
+      "status": {
+        "authorized": "已授权",
+        "pending": "待授权",
+        "revoked": "已撤销"
+      },
+      "forceReauth": "下次调用需重新授权",
+      "revoke": "撤销",
+      "revoking": "正在撤销…",
+      "revoked": "已撤销 {{connection}}。下一次调用会请你重新登录。",
+      "confirmTitle": "撤销 {{connection}}？",
+      "confirmBody_one": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
+      "confirmBody_other": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
+      "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。"
+    }
+  },
+  "identity": {
+    "kind": {
+      "oauth2": "OAuth2",
+      "api_key": "API 密钥"
+    },
+    "mode": {
+      "as_agent": "以 Agent 身份",
+      "as_user": "以用户身份",
+      "obo": "代表用户"
+    },
+    "tools": {
+      "title": "身份",
+      "sub": "此 Agent 调用的 REST 与 MCP 工具，以及每个工具使用的连接。生成的 Agent 在调用时用工作负载身份换取凭证，Launchpad 不会接触凭证本身。",
+      "subByoc": "声明你的代码要使用的连接。Launchpad 仅为执行角色授予这些凭证，并通过 LAUNCHPAD_OUTBOUND_AUTH 传入配置，由你的代码完成换取。",
+      "manage": "管理连接",
+      "retry": "重试",
+      "empty": "暂无带出站认证的工具。",
+      "type": "工具类型",
+      "typeRest": "REST API",
+      "typeMcp": "MCP 服务器",
+      "name": "工具名称",
+      "connection": "连接",
+      "connectionNone": "不使用连接（公开 API）",
+      "connectionGone": "{{name}}（不存在）",
+      "url": "端点 URL",
+      "scopes": "Scopes",
+      "scopesPlaceholder": "scopes，逗号分隔",
+      "keyIn": "密钥位置",
+      "keyInHeader": "请求头",
+      "keyInQuery": "查询参数",
+      "keyName": "参数名",
+      "modeHint": "代理模式：Agent 以自身服务身份调用（M2M / API 密钥）。",
+      "addRest": "添加 REST 工具",
+      "addMcp": "添加 MCP 工具",
+      "err": {
+        "nameRest": "工具名称须以字母开头，仅含字母、数字、_ 和 -（最多 64 个字符）。",
+        "name": "请输入工具名称。",
+        "nameDuplicate": "工具名称不能重复。",
+        "url": "请输入 http(s) 端点 URL。",
+        "connectionMcp": "此处的 MCP 工具必须选择连接。",
+        "connectionByoc": "BYOC 声明必须选择连接。",
+        "connectionMissing": "连接“{{name}}”已不在此工作区中。请改选其他连接或移除该工具，否则无法保存 Agent。",
+        "connectionKind": "“{{name}}”不是 {{kind}} 类型的连接。",
+        "mode": "此工具不支持代理模式“{{mode}}”。",
+        "scopes": "有 scope 超过 256 个字符。",
+        "unsupported": "工具级认证仅支持 HTTP 协议。请移除这些工具，或将协议切回 HTTP。",
+        "catalogPending": "正在检查工作区连接……",
+        "catalogError": "无法加载工作区连接，因此无法校验下列工具。"
+      },
+      "mode": "调用身份",
+      "modeHintUser": "调用身份：Agent 以当前对话用户的身份调用。首次调用会请用户到提供方登录授权（3LO）；令牌保存在 AgentCore Identity 令牌库中。"
+    }
+  },
+  "inboundAuth": {
+    "title": "入站认证",
+    "wizardSub": "谁可以调用此 Runtime：AWS IAM（SigV4）或 OAuth/OIDC JWT 授权器。",
+    "detailSub": "线上 Runtime 当前的授权器。切换会在同一个 Runtime 上发布新版本。",
+    "manageDefault": "工作区默认值",
+    "modeLabel": "模式",
+    "choice": {
+      "inherit": "继承工作区默认值",
+      "iam": "IAM（SigV4）",
+      "jwt": "JWT"
+    },
+    "mode": {
+      "iam": "IAM",
+      "jwt": "JWT"
+    },
+    "inheritNote": "在部署时解析。当前工作区默认值为",
+    "iamNote": "只有拥有 bedrock-agentcore:InvokeAgentRuntime 权限的 AWS 主体可以调用此 Runtime。控制台使用平台角色签名。",
+    "jwtNote": "调用方需携带此身份提供商签发的 Bearer JWT；SigV4 调用会返回 403。至少需要一项限制（客户端、受众、范围或声明）。",
+    "useCognito": "使用工作区 Cognito 用户池",
+    "idpSource": {
+      "label": "身份提供商",
+      "pickConnection": "从连接选择…",
+      "none": "没有可推导出 OIDC 发现 URL 的 OAuth2 连接",
+      "unavailable": "无法加载连接",
+      "clientHint": "只填入发现 URL。连接的客户端 ID 是此智能体的出站客户端（智能体调用工具时使用），不是调用方，请自行在“允许的客户端”中填写调用方的客户端 ID。",
+      "fromConnection": "来自连接 {{name}}"
+    },
+    "reachability": {
+      "title": "控制台无法调用此智能体",
+      "body": "此身份提供商（{{issuer}}）不是工作区 Cognito 用户池（{{workspaceIssuer}}）。控制台对话（“以用户身份调用”和默认的 M2M 路径）、/v1 API、直接调用和评估都携带工作区 Cognito 令牌，因此会被此智能体拒绝。只有持有此身份提供商签发令牌的外部调用方才能调用它。",
+      "defaultTitle": "控制台无法调用继承此默认值的智能体",
+      "defaultBody": "此身份提供商（{{issuer}}）不是工作区 Cognito 用户池（{{workspaceIssuer}}）。控制台对话（“以用户身份调用”和默认的 M2M 路径）、/v1 API、直接调用和评估都携带工作区 Cognito 令牌，因此继承此默认值的智能体在下次部署后都会拒绝它们。只有持有此身份提供商签发令牌的外部调用方才能调用这些智能体。"
+    },
+    "discoveryUrl": "OIDC 发现 URL",
+    "allowedClients": "允许的客户端",
+    "allowedAudience": "允许的受众",
+    "allowedScopes": "允许的范围",
+    "listPlaceholder": "以逗号分隔；留空表示不限制",
+    "customClaims": "自定义声明",
+    "customClaimsNote": "每一行都必须匹配：声明名称、值类型、运算符和取值。",
+    "claimName": "声明名称",
+    "claimValueType": "值类型",
+    "claimOperator": "运算符",
+    "claimValues": "取值（逗号分隔）",
+    "addClaim": "添加声明",
+    "problems": {
+      "discoveryUrl": "请输入以 /.well-known/openid-configuration 结尾的 https URL。",
+      "noRestriction": "请至少添加一项限制：允许的客户端、受众、范围或自定义声明。",
+      "claimPattern": "声明名称和取值只能包含字母、数字和 . _ : - ；每个声明至少需要一个取值。"
+    },
+    "pinLabel": "来源",
+    "pin": {
+      "iam": "此智能体固定为 IAM",
+      "jwt": "此智能体固定为 JWT",
+      "inherit": "继承工作区默认值"
+    },
+    "restrictions": "限制条件",
+    "notCapable": "此创建方式或协议不支持 JWT 授权器，保持 IAM。",
+    "callerTitle": "使用令牌调用",
+    "callerNote": "机器调用方先从 IdP 获取 client_credentials 令牌，再以 Bearer 方式发送。会话 ID 请求头至少 33 个字符。",
+    "switch": {
+      "to": {
+        "iam": "切换为 IAM",
+        "jwt": "切换为 JWT"
+      },
+      "started": "正在切换为 {{mode}}：同一个 Runtime 上正在部署新版本。",
+      "confirmTitle": {
+        "iam": "将此智能体切换为 IAM？",
+        "jwt": "将此智能体切换为 JWT？"
+      },
+      "inPlace": "原地更新同一个 Runtime：保留其 ARN、端点和版本历史，并发布一个新版本。",
+      "effect": {
+        "iam": "新版本生效后，Bearer 令牌调用方会收到 403；只有 SigV4 调用方可以调用。",
+        "jwt": "新版本生效后，SigV4 调用方会收到 403；调用方必须携带满足以下限制的 JWT。"
+      },
+      "prefillNote": "预填来源：{{source}}。所有字段均可编辑。要使用自己的 OIDC 身份提供商（Okta、Auth0、Keycloak、Entra 等），请填写其发现 URL 或从连接选择。",
+      "fromDefault": "工作区默认值",
+      "fromCognito": "工作区 Cognito 用户池",
+      "fromEmpty": "没有可预填的配置：请在下方填写身份提供商"
+    },
+    "default": {
+      "title": "入站认证默认值",
+      "sub": "所有未单独固定的 HTTP Runtime 智能体在下次部署时采用此设置。",
+      "saved": "默认值已保存。已部署的智能体在重新部署前保持原授权器。",
+      "current": "当前默认值：",
+      "implicit": "（未配置：IAM）",
+      "jwtNote": "保存不会影响已部署的智能体；它们会在下次部署时采用此设置。",
+      "discard": "放弃更改",
+      "readOnly": "只有身份管理员可以修改默认值。"
     }
   }
 }

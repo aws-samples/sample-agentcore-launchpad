@@ -10,14 +10,15 @@ from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.db import SessionLocal, get_db
-from app.core.errors import AppError, NotFoundError, mapped_aws_error
+from app.core.errors import AppError, NotFoundError, envelope, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest
+from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
-from app.services import policy_identity
+from app.services import oauth_sessions, policy_identity
 from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import stop_agent_session
@@ -29,6 +30,11 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 class ChatRequest(AttachmentRequest):
     session_id: str | None = None
+    # "Invoke as me" for JWT-inbound agents (identity P3): True presents the
+    # signed-in user's own Cognito JWT, False the workspace M2M token, None
+    # (older clients) the user JWT when one can be minted, else M2M. Ignored
+    # by IAM agents, whose caller is always the platform's SigV4 role.
+    as_user: bool | None = None
 
 
 def _session_actor(
@@ -118,6 +124,39 @@ def _track_session(
         db.close()
 
 
+def _chat_bearer_token(
+    agent: Agent,
+    as_user: bool | None,
+    ws: WorkspaceScope,
+    identity: Any,
+    gateway_access_token: str | None,
+) -> str | None:
+    """The bearer a JWT-inbound agent's chat turn presents, or None (= M2M).
+
+    The user JWT is the same Cognito token the Gateway policy path mints
+    (console app client, groups per role) — reused when this turn already
+    minted it. The Memory/session actor is unaffected either way: it stays
+    the compound ``scoped_actor`` the payload carries, so toggling mid-session
+    keeps one conversation and one memory partition.
+    """
+    if not inbound_auth_service.is_jwt_mode(agent) or as_user is False:
+        return None
+    token = gateway_access_token or policy_identity.gateway_user_token(
+        ws.context, identity.username, identity.role, identity.email,
+    )
+    if token is None and as_user:
+        # An explicit "as me" with no signed-in pool user (auth gate off) must
+        # not quietly become the machine identity.
+        raise AppError(
+            "chat.as_user_unavailable",
+            "invoking as yourself needs a console sign-in through the workspace "
+            "user pool — turn off \"invoke as me\" to call with the workspace "
+            "machine token",
+            status_code=409,
+        )
+    return token
+
+
 @router.post("/chat/{agent_id}")
 def chat(
     agent_id: str,
@@ -155,6 +194,7 @@ def chat(
         if needs_gateway_identity
         else None
     )
+    bearer_token = _chat_bearer_token(agent, req.as_user, ws, identity, gateway_access_token)
 
     # The stream outlives the request scope, so it carries the plain id and the
     # already-built context rather than reaching back for the resolved scope.
@@ -166,6 +206,17 @@ def chat(
         # the playground can restore a session's history exactly as rendered.
         session_id = req.session_id
         answer_parts: list[str] = []
+        pending_asks: list[tuple[str, str | None]] = []
+
+        def close_bubble() -> None:
+            if answer_parts and session_id:
+                _save_message(workspace_id, agent.id, session_id, "agent",
+                              "".join(answer_parts))
+            answer_parts.clear()
+            for provider, tool in pending_asks:
+                _save_message(workspace_id, agent.id, session_id, "auth", provider, name=tool)
+            pending_asks.clear()
+
         stream_kwargs: dict[str, Any] = {}
         if prepared:
             stream_kwargs["attachments"] = prepared
@@ -173,6 +224,8 @@ def chat(
             stream_kwargs["runtime_user_id"] = identity.username
         if gateway_access_token:
             stream_kwargs["gateway_access_token"] = gateway_access_token
+        if bearer_token:
+            stream_kwargs["bearer_token"] = bearer_token
         for event in chat_stream(
             agent,
             req.prompt,
@@ -182,6 +235,15 @@ def chat(
             **stream_kwargs,
         ):
             kind, data = event["event"], event["data"]
+            if kind == "error" and data.get("code") == oauth_sessions.AS_USER_REQUIRES_USER_JWT:
+                # the console's fix is the "invoke as me" toggle, not a user JWT
+                detail = data.get("detail") or {}
+                refusal = oauth_sessions.as_user_requires_user_jwt(
+                    provider=detail.get("provider", ""), tool=detail.get("tool", ""),
+                    agent_id=detail.get("agent_id", ""), console=True,
+                )
+                data = envelope(refusal.code, refusal.message, refusal.detail)
+                event = {"event": kind, "data": data}
             if kind == "meta":
                 session_id = data["session_id"]
                 _track_session(
@@ -192,25 +254,32 @@ def chat(
                     attachments=prepared.metadata if prepared else None,
                 )
             elif kind == "tool" and session_id:
-                if answer_parts:  # a tool call splits the answer bubble live — mirror it
-                    _save_message(workspace_id, agent.id, session_id, "agent",
-                                  "".join(answer_parts))
-                    answer_parts.clear()
+                close_bubble()  # a tool call splits the answer bubble live — mirror it
                 _save_message(workspace_id, agent.id, session_id, "tool", "",
                               name=data.get("name"))
+            elif kind == "auth_required" and session_id:
+                # as_user consent ask: the Connection name and tool only — the
+                # authorization URL is single-use and is never persisted, so a
+                # restored card re-asks by retrying the previous user message.
+                # The card does not close an open answer bubble live, so it is
+                # saved after that bubble's text, not between its halves.
+                ask = (str(data.get("provider") or ""), data.get("tool"))
+                if answer_parts:
+                    pending_asks.append(ask)
+                else:
+                    _save_message(workspace_id, agent.id, session_id, "auth", ask[0],
+                                  name=ask[1])
             elif kind == "delta":
                 answer_parts.append(data.get("text", ""))
             elif kind == "error" and session_id:
-                if answer_parts:  # keep the partial answer the user saw
-                    _save_message(workspace_id, agent.id, session_id, "agent",
-                                  "".join(answer_parts))
-                    answer_parts.clear()
+                close_bubble()  # keep the partial answer the user saw
                 _save_message(workspace_id, agent.id, session_id, "error",
                               data.get("message", ""))
-            elif kind == "done" and session_id and answer_parts:
-                _save_message(workspace_id, agent.id, session_id, "agent",
-                              "".join(answer_parts))
+            elif kind == "done" and session_id:
+                close_bubble()
             yield sse_encode(event)
+        if session_id:  # a stream that ended without done still keeps its asks
+            close_bubble()
 
     return StreamingResponse(
         generate(),

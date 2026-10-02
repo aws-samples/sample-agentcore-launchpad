@@ -171,6 +171,43 @@ running, failed first deploy, deleted, or a shape that is neither Runtime nor
 Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
 the standard 4xx envelope.
 
+## Console Identity API — Connections and bound Gateway targets
+
+A **Connection** is an AgentCore Identity credential provider (OAuth2 or API key) in
+the workspace's token vault; see [identity.md](identity.md) for the service-model
+findings and the design. Reads are open to members; every mutation requires the
+`identity.manage` agent permission (`perm:identity.manage` in `ROUTE_POLICY`).
+Secrets (`client_secret`, `api_key`) are forwarded to AWS and never stored in the
+ledger nor returned.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/identity/connections` | `{connections[{name, kind: oauth2\|api_key, vendor, arn, callback_url, client_id, scopes, template, description, created_at, created_by, system, source: system\|launchpad\|external, status: ready\|missing, referenced_by[{type: agent\|gateway_target, id, name}]}]}` — the token vault joined with the ledger; `missing` = recorded by Launchpad but gone from the vault |
+| `GET` | `/api/identity/connections/templates` | `{templates[{id, kind, vendor, fields[], discovery_hint?}]}` — the create form's provider templates |
+| `GET` | `/api/identity/connections/oidc-sources` | member — `{sources[{name, vendor, discovery_url, issuer, derived_from: discovery_url\|issuer}]}`: OAuth2 Connections whose stored `oauthDiscovery` yields an OIDC discovery URL (the inbound JWT form's "Choose from a Connection"). System providers and GitHub are left out; the Connection's client id is never returned |
+| `GET` | `/api/identity/connections/{kind}/{name}` | one Connection (same shape), re-read from AWS — the callback URL dialog uses it |
+| `POST` | `/api/identity/connections/oauth2` | `201` Connection. Body `{name, vendor, template?, description?, client_id, client_secret, discovery_url? \| issuer+authorization_endpoint+token_endpoint, scopes[], obo?{grant_type: TOKEN_EXCHANGE\|JWT_AUTHORIZATION_GRANT, actor_token_content?: NONE\|M2M, actor_token_scopes?[]}}`. `obo` (P3) sets `onBehalfOfTokenExchangeConfig` — CustomOauth2 only (`422 identity.obo_vendor_unsupported`), refused for Cognito or an IdP whose discovery document omits the grant (`422 identity.obo_unsupported`); the Connection item echoes it as `obo` |
+| `POST` | `/api/identity/connections/api-key` | `201` Connection. Body `{name, description?, api_key}` |
+| `DELETE` | `/api/identity/connections/{kind}/{name}` | `{deleted: true}`; refused with `409 identity.connection_referenced` while an agent spec or a gateway target references it |
+| `GET` | `/api/identity/gateway-targets` | `{gateway_id, targets[{target_id, name, description, status, status_reasons, source, system, auth, connection, mode, scopes}]}` for the workspace gateway |
+| `POST` | `/api/identity/gateway-targets` | `201` target + `warnings[{code, message, detail}]` (non-blocking). Body `{name, description?, source: openapi\|mcp, openapi_schema \| mcp_endpoint, connection, kind, mode: as_agent\|as_user\|obo, scopes[], api_key?{location: HEADER\|QUERY_PARAMETER, parameter_name, prefix?}}`; an MCP server target takes an OAuth2 Connection only. `mode: obo` sets `grantType: TOKEN_EXCHANGE` and needs a CUSTOM_JWT gateway (`409 identity.obo_needs_jwt_gateway`) and an OBO-configured Connection (`422 identity.obo_unsupported`). When the Connection's issuer differs from the gateway's JWT authorizer issuer, the target is still created and `warnings` carries `identity.obo_issuer_mismatch` `{connection, connection_issuer, gateway_issuer}`: the IdP must trust the gateway's inbound issuer |
+| `DELETE` | `/api/identity/gateway-targets/{target_id}` | `{deleted: true}`; only Connection-bound, non-system targets |
+| `GET` | `/api/agents/{agent_id}/identity` | member — `{agent_id, name, method, workload_identity{status, name, arn, allowed_return_urls}, inbound{mode: iam\|jwt, source}, downstreams[{type, name, tool_type, via: agent\|gateway, mode, connection, kind, scopes, connection_status: ready\|missing\|unbound}]}` — the read-only 身份 page |
+| `POST` | `/api/agents/{agent_id}/inbound-auth` | `agent.deploy` — `202 {agent, job_id, deployment_id}`. Body `{inbound_auth: {mode: iam\|jwt, jwt?} \| null}` (`null` unpins → workspace default; the key is required and unknown keys are refused with `422 validation.invalid_request`, so a mistyped body never starts a redeploy). Re-publishes the stored spec with the pin swapped: UpdateAgentRuntime on the same runtime, new version. `422 agent.inbound_auth_unsupported` (JWT on harness / A2A), `422 agent.inbound_auth_invalid`, `409 agent.deploy_in_progress` |
+| `GET` | `/api/identity/inbound-auth/default` | member — `{workspace_id, default: {mode: iam\|jwt, jwt?}, configured, cognito, cognito_issuer}`; `configured=false` = implicit IAM; `cognito` is a ready-to-use JWT config for the workspace pool, or null before bootstrap; `cognito_issuer` is the pool's issuer (the issuer of every token the console, `/v1` and evaluation present), or null |
+| `PUT` | `/api/identity/inbound-auth/default` | `identity.manage` — body `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → the GET shape. `source_connection` is display-only and never reaches the authorizer. The discovery document is probed first (`422 identity.discovery_unreachable` / `identity.discovery_invalid`). Deployed agents keep their authorizer until redeployed |
+
+Error codes (`identity.*`): 409 — `connection_exists`, `target_exists`,
+`connection_referenced`, `system_connection`, `system_target`, `target_unbound`,
+`no_gateway`; 404 — `connection_not_found`, `target_not_found`; 422 —
+`unsupported_vendor`, `missing_endpoints`, `endpoints_custom_only`,
+`invalid_target_name`, `invalid_openapi`, `invalid_mcp_endpoint`,
+`target_auth_unsupported`, `obo_invalid`, `obo_vendor_unsupported`, `obo_unsupported`,
+`discovery_unreachable`, `discovery_invalid`; 409 — `obo_needs_jwt_gateway`. Agent create/redeploy additionally rejects a `ToolRef.auth`
+naming an unknown Connection (`connection_unknown`), a kind that does not match it
+(`kind_mismatch`), `as_user` on an api_key Connection (422 from the schema), or `obo` on a
+tool (`mode_unsupported`; obo runs on a Gateway target).
+
 ## Console System Agents API — managed presets
 
 System-managed presets (see architecture → *System-managed presets*) are installed,
@@ -644,7 +681,7 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt?, attachments?, session_id?}`, a missing id starts a new session; message text or at least one attachment is required |
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt?, attachments?, session_id?}`, a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
 | `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |

@@ -27,9 +27,11 @@ from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.deployer.return_url import register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
+from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.requirements_txt import RESOLVE_FIX_HINTS, summarize_resolver_failure
@@ -534,10 +536,15 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
+        # Resolve inbound auth ONCE per deploy (spec > workspace default > IAM)
+        # and snapshot the choice onto the row below — consumers (Chat, /v1,
+        # the console badge) read the snapshot, never re-resolve.
+        resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
+        authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = runtime_environment(spec, resources)
+            environment = runtime_environment(spec, resources, agent_id=row.id)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or resources.get("artifacts_bucket", ""),
@@ -549,6 +556,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # A2A runtimes must echo the protocol on update too —
                 # UpdateAgentRuntime resets an omitted protocolConfiguration
                 "protocol": spec.protocol,
+                # Same contract as protocol: echoed on every update. None (IAM)
+                # omits the field, which resets a JWT runtime back to SigV4 —
+                # that IS the JWT→IAM transition.
+                "authorizer_configuration": authorizer,
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
@@ -558,10 +569,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 ctx.log,
             )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
+            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
-                f"new version {row.version}"
+                f"new version {row.version} · inbound auth {resolved_auth.mode}"
             )
         elif row.resource_id:
             runtime_id = row.resource_id
@@ -577,8 +589,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.resource_id = runtime_id
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
+            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
-            ctx.log(f"CreateAgentRuntime accepted · runtimeId {runtime_id}")
+            ctx.log(
+                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"inbound auth {resolved_auth.mode}"
+            )
 
         ready = rt.wait_runtime_ready(
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
@@ -589,6 +605,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         stamp_input_contract(ctx, db, row)
         db.commit()
+        # as_user return-URL allow-list on the runtime's auto-created workload
+        # identity, reconciled on every deploy (create and redeploy)
+        register_return_url_stage(client, AgentSpec(**row.spec), runtime_id, ctx.log)
         return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
     finally:
         db.close()

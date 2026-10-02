@@ -59,6 +59,11 @@ class Workspace(Base):
     bootstrap_status: Mapped[str] = mapped_column(String(16), default="registered")
     # registered | bootstrapping | ready | failed
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Operator-owned workspace policy blob (vs `resources`, which bootstrap owns).
+    # Keys: "inbound_auth_default" — the InboundAuth agents inherit when their
+    # spec carries none. Unlike `resources`, this is ledger-authoritative for
+    # EVERY workspace including `default` (the startup mirror leaves it alone).
+    settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -106,6 +111,15 @@ class Agent(Base):
     # payload — ``AgentSpec`` has no such field — and never editable through the
     # ordinary lifecycle routes, which refuse rows that carry it.
     system_key: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
+    # Inbound auth actually deployed onto the Runtime — the RESOLVED choice
+    # (spec > workspace default > iam), snapshotted by the deploy stage so the
+    # invoke path and the console never re-resolve against a default that may
+    # have changed since. "iam" | "jwt"; NULL for rows that predate the feature
+    # (which all deployed without an authorizer, i.e. IAM).
+    inbound_auth_mode: Mapped[str | None] = mapped_column(String(8), default=None)
+    # The resolved InboundAuth dict when mode is jwt (discovery url, allowed
+    # clients/audience/scopes, custom claims — no secrets live here).
+    inbound_auth_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -291,7 +305,7 @@ class ChatMessage(Base):
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
     session_id: Mapped[str] = mapped_column(String(80), index=True)
-    role: Mapped[str] = mapped_column(String(16))  # user | agent | tool | error
+    role: Mapped[str] = mapped_column(String(16))  # user | agent | tool | auth | error
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
@@ -308,6 +322,156 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class IdentityProvider(Base):
+    """Ledger row for a Connection: an AgentCore Identity credential provider
+    created through Launchpad.
+
+    Identifiers only — the client secret / API key goes straight to the token
+    vault and is never stored or logged here. AWS stays the source of truth: the
+    list endpoint reconciles against ``List*CredentialProviders`` and a row the
+    vault no longer has surfaces as ``missing``. Same table (name, columns and
+    unique index) the earlier identity fork shipped, plus the P1 columns
+    ``client_id`` / ``scopes`` / ``template`` / ``description``.
+    """
+
+    __tablename__ = "identity_providers"
+    __table_args__ = (
+        # Provider names are unique per token vault = per (account, region) = per
+        # workspace. An index rather than a table constraint so the workspace
+        # migration rehearsal can drop workspace_id (as uq_system_skill_records_*).
+        Index(
+            "uq_identity_providers_ws_kind_name",
+            "workspace_id",
+            "kind",
+            "name",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # oauth2 | api_key
+    vendor: Mapped[str] = mapped_column(String(32), default="")  # CustomOauth2 | ... | ""
+    arn: Mapped[str] = mapped_column(String(512), default="")
+    # OAuth2 only: the redirect URI the operator registers at the IdP
+    callback_url: Mapped[str | None] = mapped_column(String(1024), default=None)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # OAuth2 only: the (non-secret) client id, for display
+    client_id: Mapped[str | None] = mapped_column(String(256), default=None)
+    # OAuth2 only: the scope range the operator allows agents/targets to request
+    scopes: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    # the console template the Connection was created from (e.g. "github")
+    template: Mapped[str | None] = mapped_column(String(32), default=None)
+    description: Mapped[str | None] = mapped_column(String(200), default=None)
+
+
+class UserTokenRevocation(Base):
+    """A member's pending 3LO re-consent request for one Connection (identity P2).
+
+    The service models no token-revocation operation, so "revoke" is deferred
+    force-reauth: the next invoke for this (provider, user) passes
+    ``forceAuthentication``. Claimed isomorphically from the earlier identity
+    fork's ledgers so the table is not orphaned.
+
+    Unlike the fork, the row stays in force until the user completes a NEW
+    consent for the Connection (``oauth_sessions.complete``): every invoke in
+    between sends ``forceAuthentication``, so a turn that happened not to call
+    the tool cannot silently cancel the revocation.
+    """
+
+    __tablename__ = "user_token_revocations"
+    __table_args__ = (
+        Index(
+            "uq_user_token_revocations_ws_provider_user",
+            "workspace_id",
+            "provider",
+            "user_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    provider: Mapped[str] = mapped_column(String(128))
+    user_id: Mapped[str] = mapped_column(String(128))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class OauthPendingSession(Base):
+    """One in-flight 3LO consent session awaiting ``CompleteResourceTokenAuth``
+    (identity P2). The user id comes from this row, never from the browser.
+    Claimed isomorphically from the earlier identity fork's ledgers.
+    """
+
+    __tablename__ = "oauth_pending_sessions"
+    __table_args__ = (
+        Index(
+            "uq_oauth_pending_sessions_session_uri",
+            "workspace_id",
+            "session_uri",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    session_uri: Mapped[str] = mapped_column(String(512), index=True)
+    provider: Mapped[str] = mapped_column(String(128))
+    user_id: Mapped[str] = mapped_column(String(128))
+    agent_id: Mapped[str] = mapped_column(String(32), default="")
+    tool: Mapped[str] = mapped_column(String(80), default="")
+    # Who the Runtime saw as the caller when it asked (identity P3): "iam"
+    # (SigV4 + runtimeUserId), "user_jwt" (the user's own Cognito JWT) or
+    # "m2m" (the workspace client_credentials token). Under a JWT authorizer
+    # the vault keys the user on the inbound JWT, so the completion leg must
+    # present a JWT of the same subject instead of the bare user id.
+    caller_kind: Mapped[str] = mapped_column(String(16), default="iam")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class UserGrant(Base):
+    """One user's as_user (3LO) grant state for one Connection on one agent.
+
+    The token itself lives in the AgentCore token vault, keyed by (workload
+    identity, user id, provider) — so a grant is per agent: each runtime has its
+    own workload identity. The vault exposes no read of "is a token bound", so
+    this row is derived progress the platform observes on its own legs:
+    ``pending`` when an ``auth_required`` ask was forwarded, ``authorized`` when
+    ``CompleteResourceTokenAuth`` succeeded, ``revoked`` when the user revoked
+    the Connection (``user_token_revocations``). Token expiry stays with the
+    vault: an expired binding simply asks again and the row goes ``pending``.
+    """
+
+    __tablename__ = "user_grants"
+    __table_args__ = (
+        Index(
+            "uq_user_grants_ws_user_provider_agent",
+            "workspace_id",
+            "user_id",
+            "provider",
+            "agent_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    user_id: Mapped[str] = mapped_column(String(128))
+    provider: Mapped[str] = mapped_column(String(128))
+    agent_id: Mapped[str] = mapped_column(String(32), default="")
+    tool: Mapped[str] = mapped_column(String(80), default="")
+    scopes: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    authorized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class PolicyDecision(Base):

@@ -8,9 +8,11 @@ import type {
   AgentSdk,
   AgentSpecInput,
   ByocArtifactKind,
+  ConnectionKind,
   ByocConfigInput,
   ByocPythonVersion,
   HarnessNativeTool,
+  InboundAuth,
   Toolkit,
 } from "./api";
 import type { ModelSource, ReasoningEffort } from "./models";
@@ -21,6 +23,15 @@ import {
   SPEC_DEFAULT_MODEL_ID,
 } from "./models";
 import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import {
+  choiceFromSpec,
+  EMPTY_JWT_FORM,
+  inboundAuthFromChoice,
+  inboundCapable,
+  type InboundChoice,
+  type JwtFormState,
+  jwtFormProblem,
+} from "./inbound-auth";
 import {
   DEFAULT_MAX_ITERATIONS,
   EFFORT_NONE,
@@ -252,6 +263,138 @@ export type StoredGatewayConfig = Record<
   { record_id: string; gateway_id: string; tools?: string[] }
 >;
 
+/* ── tool-level outbound auth (AgentCore Identity Connections) ──────────── */
+
+/** Same rules as the backend's `CONNECTION_NAME_RE` / rest tool name. */
+export const CONNECTION_NAME_RE = /^[a-zA-Z0-9\-_]{1,128}$/;
+export const REST_TOOL_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+/** Acting modes a tool can use (`obo` runs on a Gateway target instead). `as_user` (3LO)
+ *  takes an OAuth2 Connection only. */
+export const SUPPORTED_ACTING_MODES = ["as_agent", "as_user"] as const;
+export const DEFAULT_KEY_NAME = "Authorization";
+
+/** A tool's `auth` block as stored (current shape, or the earlier fork's
+ *  `provider` / `flow` vocabulary, which the backend maps the same way). */
+export interface StoredToolAuth {
+  connection?: string;
+  provider?: string;
+  kind?: ConnectionKind;
+  flow?: string;
+  mode?: string;
+  scopes?: string[];
+  audience?: string | null;
+  api_key?: { in?: "header" | "query"; name?: string } | null;
+}
+
+/**
+ * One row of the wizard's Identity section: a `rest` tool (open or behind a
+ * Connection) or an `mcp` tool behind a Connection. The row owns the tool's
+ * `auth` block outright, so a re-publish always states it — see `republishSpec`.
+ */
+export interface AuthToolRow {
+  type: "rest" | "mcp";
+  name: string;
+  url: string;
+  description: string;
+  /** "" ⇒ no Connection (an open rest API) */
+  connection: string;
+  kind: ConnectionKind;
+  /** carried as stored; only `as_agent` passes validation today */
+  mode: string;
+  /** comma/space separated (oauth2 only) */
+  scopes: string;
+  audience: string;
+  keyIn: "header" | "query";
+  keyName: string;
+  /** config keys the row does not edit (method, body, headers, …), carried verbatim */
+  extraConfig: Record<string, unknown>;
+}
+
+export const emptyAuthToolRow = (type: AuthToolRow["type"] = "rest"): AuthToolRow => ({
+  type,
+  name: "",
+  url: "",
+  description: "",
+  connection: "",
+  kind: "oauth2",
+  mode: "as_agent",
+  scopes: "",
+  audience: "",
+  keyIn: "header",
+  keyName: DEFAULT_KEY_NAME,
+  extraConfig: {},
+});
+
+export interface StoredTool {
+  type: string;
+  name: string;
+  config?: {
+    url?: string;
+    record_id?: string;
+    gateway_id?: string;
+    tools?: string[];
+    [key: string]: unknown;
+  };
+  auth?: StoredToolAuth | null;
+}
+
+/** Whether a stored tool belongs to the Identity section rather than a catalog pick. */
+export const isAuthTool = (tool: StoredTool) =>
+  tool.type === "rest" || (tool.auth != null && typeof tool.auth === "object");
+
+export function authRowFromStored(tool: StoredTool): AuthToolRow {
+  const auth = tool.auth ?? null;
+  const { url, description, ...extraConfig } = tool.config ?? {};
+  const kind: ConnectionKind = auth?.kind ?? (auth?.flow === "API_KEY" ? "api_key" : "oauth2");
+  return {
+    type: tool.type === "mcp" ? "mcp" : "rest",
+    name: tool.name,
+    url: typeof url === "string" ? url : "",
+    description: typeof description === "string" ? description : "",
+    connection: auth?.connection ?? auth?.provider ?? "",
+    kind,
+    mode: auth?.mode ?? (auth?.flow === "USER_FEDERATION" ? "as_user" : "as_agent"),
+    scopes: (auth?.scopes ?? []).join(", "),
+    audience: auth?.audience ?? "",
+    keyIn: auth?.api_key?.in ?? "header",
+    keyName: auth?.api_key?.name ?? DEFAULT_KEY_NAME,
+    extraConfig,
+  };
+}
+
+export const splitScopes = (s: string) => s.split(/[\s,]+/).filter(Boolean);
+
+/** The ToolRefs the Identity rows post. A row without a Connection sends
+ *  `auth: null` explicitly — "open on purpose", which `republishSpec` never
+ *  back-fills — while a tool that arrives without the key at all is one some
+ *  other path built, whose stored auth a re-publish carries. */
+export const authToolRefs = (rows: AuthToolRow[]) =>
+  rows.map((row) => {
+    const config: Record<string, unknown> = { ...row.extraConfig };
+    if (row.url.trim()) config.url = row.url.trim();
+    if (row.description.trim()) config.description = row.description.trim();
+    const oauth = row.kind === "oauth2";
+    const placement =
+      !oauth && (row.keyIn !== "header" || row.keyName.trim() !== DEFAULT_KEY_NAME)
+        ? { api_key: { in: row.keyIn, name: row.keyName.trim() || DEFAULT_KEY_NAME } }
+        : {};
+    return {
+      type: row.type,
+      name: row.name.trim(),
+      config,
+      auth: row.connection
+        ? {
+            connection: row.connection,
+            kind: row.kind,
+            mode: row.mode,
+            scopes: oauth ? splitScopes(row.scopes) : [],
+            ...(oauth && row.audience.trim() ? { audience: row.audience.trim() } : {}),
+            ...placement,
+          }
+        : null,
+    };
+  });
+
 /** Everything the member can set in the configure step, for every method. Fields a
  *  method does not use are carried (a method switch keeps them) but never sent. */
 export interface AgentForm {
@@ -305,6 +448,15 @@ export interface AgentForm {
   byocModels: string[];
   byocEnvRows: EnvRow[];
   byocDescription: string;
+  /** zip_runtime (HTTP) / byoc: rest + mcp tools with their Connection auth */
+  authTools: AuthToolRow[];
+  /**
+   * Inbound auth of an HTTP Runtime agent. Optional so a form that does not own
+   * it (the classic wizard) omits `inbound_auth` and a re-publish carries the
+   * stored pin; the V2 wizard always states it (`inherit` ⇒ `null`).
+   */
+  inbound?: InboundChoice;
+  inboundJwt?: JwtFormState;
 }
 
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
@@ -348,6 +500,9 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   byocModels: [defaultModelFor(sourceForMethod(method))],
   byocEnvRows: [],
   byocDescription: "",
+  authTools: [],
+  inbound: "inherit",
+  inboundJwt: { ...EMPTY_JWT_FORM },
 });
 
 /** Spec fields read back when an existing agent is loaded into the form. */
@@ -362,11 +517,7 @@ export interface StoredAgentSpec {
   max_iterations?: number;
   timeout_seconds?: number;
   system_prompt?: string;
-  tools?: {
-    type: string;
-    name: string;
-    config?: { url?: string; record_id?: string; gateway_id?: string; tools?: string[] };
-  }[];
+  tools?: StoredTool[];
   toolkits?: Toolkit[];
   skills?: string[];
   allowed_tools?: string[] | null;
@@ -383,6 +534,7 @@ export interface StoredAgentSpec {
   };
   network?: { subnets?: string[]; security_groups?: string[] };
   byoc?: ByocConfigInput;
+  inbound_auth?: InboundAuth | null;
 }
 
 /** What a loaded agent contributes besides the form itself: the gateway configs and
@@ -426,7 +578,8 @@ export function formFromStoredSpec(
     tools: tools.filter((x) => x.type === "builtin").map((x) => x.name),
     toolkits: (spec.toolkits ?? []).filter((k) => TOOLKITS.some((x) => x.name === k)),
     selectedGateway: gatewayTools.map((x) => x.name),
-    selectedMcp: tools.filter((x) => x.type === "mcp").map((x) => x.name),
+    // an mcp tool carrying auth is an Identity row, not a catalog pick
+    selectedMcp: tools.filter((x) => x.type === "mcp" && !isAuthTool(x)).map((x) => x.name),
     selectedKbs: (spec.knowledge_bases ?? []).map((k) => k.kb_id),
     skills: spec.skills ?? [],
     allowedTools: spec.allowed_tools ?? null,
@@ -462,6 +615,10 @@ export function formFromStoredSpec(
       byocEnvRows: Object.entries(spec.env ?? {}).map(([key, value]) => ({ key, value })),
     });
   }
+  form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
+  const inbound = choiceFromSpec(spec.inbound_auth);
+  form.inbound = inbound.choice;
+  form.inboundJwt = inbound.form;
   const storedGatewayConfig: StoredGatewayConfig = Object.fromEntries(
     gatewayTools.flatMap((tool) =>
       tool.config?.record_id && tool.config.gateway_id
@@ -531,6 +688,22 @@ export const byocModelList = (models: string[]) => models.map((m) => m.trim()).f
 export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts">) =>
   form.s3Mounts.length > 0 || form.efsMounts.length > 0;
 
+/**
+ * `inbound_auth` as the form states it: nothing for a method that cannot carry a
+ * JWT authorizer or a form that does not own the choice, `null` for inherit
+ * (drops a stored pin), else the pin.
+ */
+export function inboundAuthSpec(form: AgentForm): Pick<AgentSpecInput, "inbound_auth"> {
+  if (form.inbound === undefined || !inboundCapable(form.method, form.protocol)) return {};
+  return { inbound_auth: inboundAuthFromChoice(form.inbound, form.inboundJwt ?? EMPTY_JWT_FORM) ?? null };
+}
+
+/** The inbound choice's gate: a JWT pin needs a valid authorizer config. */
+export const inboundValid = (form: AgentForm) =>
+  form.inbound !== "jwt" ||
+  !inboundCapable(form.method, form.protocol) ||
+  jwtFormProblem(form.inboundJwt ?? EMPTY_JWT_FORM) === null;
+
 export function buildByocSpec(form: AgentForm): AgentSpecInput {
   const env = byocEnv(form.byocEnvRows);
   const models = byocModelList(form.byocModels);
@@ -547,6 +720,9 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
     system_prompt: form.byocDescription,
     memory: { short_term: true, long_term: false },
     ...(Object.keys(env).length ? { env } : {}),
+    // byoc tools are outbound-auth declarations for the member's own code
+    ...(form.authTools.length ? { tools: authToolRefs(form.authTools) } : {}),
+    ...inboundAuthSpec(form),
     byoc: {
       artifact_kind: kind,
       ...(kind === "container_image"
@@ -603,7 +779,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
           : // An HTTP zip runtime calls the shared Gateway from generated client
             // code; the A2A template carries no MCP client.
             method === "zip_runtime" && protocol === "http"
-            ? gatewayToolRefs(form, cat)
+            ? [...gatewayToolRefs(form, cat), ...authToolRefs(form.authTools)]
             : [],
     memory: {
       short_term: true,
@@ -641,6 +817,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     ...(method === "harness"
       ? { allowed_tools: form.allowedTools, native_tools: form.nativeTools }
       : {}),
+    ...inboundAuthSpec(form),
     ...(method === "container" && form.mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
       : {}),
@@ -679,11 +856,41 @@ export const REPUBLISH_CARRIED_FIELDS = [
   "code",
   "code_bundle",
   "conversion_notes",
+  // the classic wizard has no inbound input; the V2 form states it (null ⇒ inherit)
+  "inbound_auth",
   "requirements",
   "source_harness",
   "studio_flow",
   "tool_description_overrides",
 ] as const;
+
+/**
+ * Per-tool fields a re-publish carries from the stored tool of the same type and
+ * name when the built tool does not state them. The Identity rows always state
+ * `auth` (an object, or `null` for "open on purpose"), so this only fills in a
+ * tool some other path built — an auth block is never dropped by omission.
+ */
+export const REPUBLISH_CARRIED_TOOL_FIELDS = ["auth"] as const;
+
+function carryToolFields(
+  built: AgentSpecInput["tools"],
+  stored: unknown,
+): AgentSpecInput["tools"] {
+  if (!built || !Array.isArray(stored)) return built;
+  const byKey = new Map(
+    (stored as StoredTool[]).map((tool) => [`${tool.type}:${tool.name}`, tool as unknown as Record<string, unknown>]),
+  );
+  return built.map((tool) => {
+    const prior = byKey.get(`${tool.type}:${tool.name}`);
+    if (!prior) return tool;
+    const carried = Object.fromEntries(
+      REPUBLISH_CARRIED_TOOL_FIELDS.flatMap((key) =>
+        !(key in tool) && prior[key] != null ? [[key, prior[key]]] : [],
+      ),
+    );
+    return { ...tool, ...carried };
+  });
+}
 
 /** A re-publish of `stored`: the form's spec plus the stored fields it does not own. */
 export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpecInput {
@@ -696,7 +903,13 @@ export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpec
   const storedShort = (source.memory as { short_term?: unknown } | undefined)?.short_term;
   const memory =
     built.memory && typeof storedShort === "boolean" ? { ...built.memory, short_term: storedShort } : built.memory;
-  return { ...carried, ...built, ...(memory ? { memory } : {}) } as AgentSpecInput;
+  const tools = carryToolFields(built.tools, source.tools);
+  return {
+    ...carried,
+    ...built,
+    ...(memory ? { memory } : {}),
+    ...(tools ? { tools } : {}),
+  } as AgentSpecInput;
 }
 
 /* ── validation ─────────────────────────────────────────────────────────── */
@@ -777,13 +990,91 @@ export function byocIssues(form: AgentForm): ByocIssues {
 export const byocValid = (form: AgentForm) =>
   form.method !== "byoc" || !Object.values(byocIssues(form)).some(Boolean);
 
+/** A workspace Connection as the validation needs it (`GET /api/identity/connections`). */
+export interface ConnectionRef {
+  name: string;
+  kind: ConnectionKind;
+  /** "missing" ⇒ an audit row whose provider left the vault — not usable */
+  status?: "ready" | "missing";
+}
+
+export interface AuthRowIssues {
+  name?: "invalid" | "duplicate";
+  url?: boolean;
+  /** required: byoc / mcp rows need one; missing: not in the workspace catalog;
+   *  kind: the name exists as the other kind */
+  connection?: "required" | "missing" | "kind";
+  mode?: boolean;
+  scopes?: boolean;
+}
+
+/** Identity-section problems (all empty/false ⇒ valid). */
+export interface AuthToolIssues {
+  rows: Record<number, AuthRowIssues>;
+  /** rows exist on a method/protocol that would not send them */
+  unsupported: boolean;
+  /** a row names a Connection but the catalog has not loaded (or failed) —
+   *  nothing can be verified, so nothing is submitted */
+  catalogPending: boolean;
+}
+
+export const authToolsCarried = (form: Pick<AgentForm, "method" | "protocol">) =>
+  form.method === "byoc" || (form.method === "zip_runtime" && form.protocol === "http");
+
+/**
+ * The P0-1 guard: an edited agent whose stored auth names a Connection the
+ * workspace no longer has must NOT be re-published with that auth silently
+ * dropped — the row stays, flagged, and the form refuses to submit until the
+ * member picks a live Connection or removes the tool.
+ */
+export function authToolIssues(form: AgentForm, connections: ConnectionRef[] | null | undefined): AuthToolIssues {
+  const rows: AuthToolIssues["rows"] = {};
+  const rowsOf = form.authTools;
+  const names = rowsOf.map((row) => row.name.trim());
+  const live = (connections ?? []).filter((c) => c.status !== "missing");
+  let catalogPending = false;
+  rowsOf.forEach((row, i) => {
+    const issues: AuthRowIssues = {};
+    const name = names[i];
+    if (row.type === "rest" ? !REST_TOOL_NAME_RE.test(name) : !name) issues.name = "invalid";
+    else if (names.indexOf(name) !== i) issues.name = "duplicate";
+    const url = row.url.trim();
+    if (form.method !== "byoc" && !/^https?:\/\//.test(url)) issues.url = true;
+    if (!row.connection) {
+      if (form.method === "byoc" || row.type === "mcp") issues.connection = "required";
+    } else if (connections == null) {
+      catalogPending = true;
+    } else if (!live.some((c) => c.name === row.connection && c.kind === row.kind)) {
+      issues.connection = live.some((c) => c.name === row.connection) ? "kind" : "missing";
+    }
+    if (
+      row.connection &&
+      (!(SUPPORTED_ACTING_MODES as readonly string[]).includes(row.mode) ||
+        (row.mode === "as_user" && row.kind !== "oauth2"))
+    )
+      issues.mode = true;
+    if (row.kind === "oauth2" && splitScopes(row.scopes).some((scope) => scope.length > 256)) issues.scopes = true;
+    if (Object.keys(issues).length) rows[i] = issues;
+  });
+  return { rows, unsupported: rowsOf.length > 0 && !authToolsCarried(form), catalogPending };
+}
+
+export const authToolsValid = (form: AgentForm, connections: ConnectionRef[] | null | undefined) => {
+  if (form.authTools.length === 0) return true;
+  const issues = authToolIssues(form, connections);
+  return !issues.unsupported && !issues.catalogPending && Object.keys(issues.rows).length === 0;
+};
+
 /** The configure step's gate for launch (the classic `configValid`). `knobIssues`
- *  are the harness knob problems (`knobProblems`), empty for the other methods. */
+ *  are the harness knob problems (`knobProblems`), empty for the other methods.
+ *  `connections` is the workspace Connection catalog (null while loading). */
 export function agentFormValid(
   form: AgentForm,
   cat: AgentFormCatalogs,
-  opts: { knobIssues: string[]; byocUploading: boolean },
+  opts: { knobIssues: string[]; byocUploading: boolean; connections?: ConnectionRef[] | null },
 ): boolean {
+  if (!authToolsValid(form, opts.connections)) return false;
+  if (!inboundValid(form)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
   }

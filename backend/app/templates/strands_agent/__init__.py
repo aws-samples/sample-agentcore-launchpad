@@ -9,6 +9,7 @@ from pathlib import Path
 from app.schemas.agent import AgentSpec
 from app.templates.attachment_support import render_attachment_source
 from app.templates.gateway_support import render_gateway_source, uses_gateway
+from app.templates.identity_support import render_identity_source, uses_identity
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
     KB_TOOL_NAME,
@@ -58,6 +59,17 @@ def render_main_py(spec: AgentSpec) -> str:
         .replace(
             "__LAUNCHPAD_GATEWAY_TOOLS_FN__",
             "gateway_tools" if uses_gateway(spec) else "lambda _stack, _user_token=None: []",
+        )
+        .replace("__LAUNCHPAD_IDENTITY_SOURCE__", render_identity_source(spec))
+        .replace(
+            "__LAUNCHPAD_IDENTITY_TOOLS_FN__",
+            "identity_tools"
+            if uses_identity(spec)
+            else 'lambda _stack, _session_id="", _force_reauth=(): []',
+        )
+        .replace(
+            "__LAUNCHPAD_IDENTITY_NOTICES_FN__",
+            "identity_drain_auth_notices" if uses_identity(spec) else "lambda: []",
         )
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(

@@ -76,6 +76,17 @@
   align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 13px;
   border: 1px dashed var(--v2-line); border-radius: 6px; background: var(--v2-fill); color: var(--v2-ink-2);
 }
+.v2 .v2-chat-auth {
+  align-self: flex-start; max-width: 82%; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; font-size: 13px;
+  border: 1px solid var(--v2-warning); border-radius: var(--v2-radius); background: var(--v2-warning-soft); color: var(--v2-ink);
+}
+.v2 .v2-chat-auth.ok { border-color: var(--v2-success); background: var(--v2-success-soft); }
+.v2 .v2-chat-auth-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.v2 .v2-chat-auth-body { color: var(--v2-ink-2); line-height: 1.5; }
+.v2 .v2-chat-auth-scopes { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--v2-ink-3); }
+.v2 .v2-chat-auth-scopes code { font-size: 11.5px; }
+.v2 .v2-chat-auth-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.v2 .v2-chat-auth-actions a.v2-btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 .v2 .v2-chat-memline { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--v2-ink-3); }
 .v2 .v2-chat-memline code { font-size: 11.5px; }
 .v2 .v2-chat-error { max-width: 82%; }

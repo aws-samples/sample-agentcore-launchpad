@@ -176,10 +176,20 @@ __LAUNCHPAD_TOOLKIT_SOURCE__
 
 __LAUNCHPAD_GATEWAY_SOURCE__
 
+
+__LAUNCHPAD_IDENTITY_SOURCE__
+
 # Per-request Gateway MCP tool loader. Rendered as the real loader only when this
 # spec carries a `gateway` ToolRef; otherwise a no-op, so an agent without one
 # behaves exactly as it did before Gateway support existed.
 GATEWAY_TOOLS = __LAUNCHPAD_GATEWAY_TOOLS_FN__
+
+# Per-request loader for the spec's auth-carrying rest/mcp tools (AgentCore
+# Identity outbound auth). Same no-op contract as GATEWAY_TOOLS. The session id
+# feeds the as_user customState (which chat to return to after IdP consent);
+# the notice drain turns as_user consent asks into `auth_required` events.
+IDENTITY_TOOLS = __LAUNCHPAD_IDENTITY_TOOLS_FN__
+IDENTITY_AUTH_NOTICES = __LAUNCHPAD_IDENTITY_NOTICES_FN__
 
 # Tools contributed by the platform toolkits this spec selected — empty when none.
 # A selected toolkit REPLACES the template's own calculator/current_utc_time (they
@@ -373,10 +383,13 @@ async def _turn_events(
         session_manager = memory_session_manager(actor_id, session_id)
         if session_manager is not None:
             stack.enter_context(session_manager)
+        # as_user revocations the platform asks this turn to honor
+        force_reauth = payload.get("force_reauth_providers") or []
         agent = build_agent(
             actor_id,
             session_id,
-            GATEWAY_TOOLS(stack, gateway_access_token),
+            GATEWAY_TOOLS(stack, gateway_access_token)
+            + IDENTITY_TOOLS(stack, session_id, force_reauth),
             session_manager=session_manager,
         )
         known = recall_context(actor_id, prompt)
@@ -385,8 +398,16 @@ async def _turn_events(
         model_input = _launchpad_strands_input(prompt, payload.get("attachments"))
         if payload.get("attachments"):
             yield {"event": "attachments", "contract": "v1"}
+        # an as_user MCP tool asks at load time (its session cannot open
+        # without the user's token) — surface that before the answer starts
+        for notice in IDENTITY_AUTH_NOTICES():
+            yield {"event": "auth_required", **notice}
         async for event in agent_events(agent, model_input):
             yield event
+            # an as_user rest tool asks inside the tool call — drain after
+            # every event so the card renders live
+            for notice in IDENTITY_AUTH_NOTICES():
+                yield {"event": "auth_required", **notice}
 
 
 @app.entrypoint

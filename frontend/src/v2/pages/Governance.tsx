@@ -17,7 +17,7 @@ const TABS: Tab[] = ["gateways", "tools"];
  * 治理 — MCP Gateway governance (management tags, Registry publication, Policy
  * Engine + Cedar policies, rate limits, decisions, audit) and the tool catalog
  * with the built-in Code Interpreter / Browser demos. Sub-pages are `?view=`
- * states: `gateway&gateway=&section=`, `policy&gateway=[&policy=]`,
+ * states: `gateway&gateway=&section=`, `policy&gateway=[&policy=|&target=]`,
  * `rate-limit&gateway=[&limit=]`.
  */
 export function V2Governance() {
@@ -33,7 +33,14 @@ export function V2Governance() {
   }
   if (view === "policy" && gatewayId) {
     const policyId = params.get("policy");
-    return <PolicyEditor key={`${gatewayId}:${policyId ?? "new"}`} gatewayId={gatewayId} policyId={policyId} />;
+    return (
+      <PolicyEditor
+        key={`${gatewayId}:${policyId ?? "new"}`}
+        gatewayId={gatewayId}
+        policyId={policyId}
+        target={policyId ? null : params.get("target")}
+      />
+    );
   }
   if (view === "rate-limit" && gatewayId) {
     const limitId = params.get("limit");

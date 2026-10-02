@@ -12,6 +12,7 @@ import {
   type AgentFormCatalogs,
   agentFormValid,
   type AgentMethod,
+  authToolIssues,
   buildAgentSpec,
   byocIssues,
   defaultModelForMethod,
@@ -20,6 +21,7 @@ import {
   filesystemIssues,
   formFromStoredSpec,
   gatewaySelectionsValid,
+  inboundValid,
   republishSpec,
   resolveKb,
   type StoredAgentExtras,
@@ -46,6 +48,8 @@ import {
   StrandsToolsCard,
 } from "./MethodSections";
 import { MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
+import { IdentityCard } from "./IdentityCard";
+import { InboundCard } from "./InboundAuthFields";
 import { WizardReview } from "./WizardReview";
 
 const METHODS: AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
@@ -139,6 +143,12 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const attachables = useLoad(() => api.registryAttachables(), "attachables");
   const kbs = useLoad(() => api.listAttachableKnowledgeBases(), "kbs");
   const memories = useLoad(() => api.memoryResources(), "memories");
+  // Unlike the catalogs above, a failed Connection read DOES block a spec whose
+  // Identity rows name a Connection: nothing could verify it (authToolIssues).
+  const connectionsLoad = useLoad(() => api.listConnections(), "connections");
+  const connections = connectionsLoad.data?.connections ?? null;
+  // what an "inherit" choice resolves to at deploy; a failed read reads as IAM
+  const inboundDefault = useLoad(() => api.getInboundAuthDefault(), "inbound-default");
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
@@ -209,10 +219,19 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     method === "harness"
       ? knobProblems({ max_tokens: form.maxTokens, max_iterations: form.maxIterations, timeout_seconds: form.timeoutSeconds }, t)
       : [];
-  const valid = agentFormValid(form, specCatalogs, { knobIssues, byocUploading: ui.byocUploading });
+  const valid = agentFormValid(form, specCatalogs, {
+    knobIssues,
+    byocUploading: ui.byocUploading,
+    connections,
+  });
   const problems = useMemo(() => {
     const out: Record<string, string> = {};
     if (!AGENT_NAME_RE.test(form.name)) out.name = t("v2.agents.wizard.errName");
+    if (!inboundValid(form)) out.inbound = "inbound";
+    if (form.authTools.length) {
+      const auth = authToolIssues(form, connections);
+      if (auth.unsupported || auth.catalogPending || Object.keys(auth.rows).length) out.identity = "identity";
+    }
     if (method === "byoc") {
       const b = byocIssues(form);
       if (b.models) out.byocModels = t("v2.agents.wizard.errByocModels");
@@ -242,7 +261,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     return out;
     // specCatalogs is derived from cat
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, method, cat, t]);
+  }, [form, method, cat, connections, t]);
   const err = (key: string) => (touched ? problems[key] : undefined);
 
   const toReview = () => {
@@ -281,6 +300,16 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const section = { form, set, cat, err, nameLocked: Boolean(edit), promptLocked: converted };
   const skillsKb = (kbNote: string) => (
     <SkillsKbCard {...section} customSkills={customSkills} setCustomSkills={setCustomSkills} kbNote={kbNote} />
+  );
+  const inboundCard = (
+    <InboundCard
+      form={form}
+      set={set}
+      touched={touched}
+      workspaceDefault={inboundDefault.data?.default ?? null}
+      cognito={inboundDefault.data?.cognito ?? null}
+      cognitoIssuer={inboundDefault.data?.cognito_issuer ?? null}
+    />
   );
   const modelCard = (extra: Partial<Parameters<typeof ModelCard>[0]> = {}) => (
     <ModelCard
@@ -394,6 +423,17 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
                 : {},
           )}
           <StrandsToolsCard {...section} />
+          {(form.protocol === "http" || form.authTools.length > 0) && (
+            <IdentityCard
+              form={form}
+              set={set}
+              touched={touched}
+              connections={connections}
+              catalogError={Boolean(connectionsLoad.error)}
+              onRetry={connectionsLoad.reload}
+            />
+          )}
+          {inboundCard}
           {skillsKb(t("create.configure.kbNoteDirect"))}
           <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
         </>
@@ -407,6 +447,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           <ContainerToolsCard {...section} />
           {skillsKb(t("create.configure.kbNoteDirect"))}
           <FilesystemCard form={form} set={set} touched={touched} />
+          {inboundCard}
           <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
         </>
       )}
@@ -424,6 +465,15 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           />
           <ByocModelsCard form={form} set={set} err={err} applySource={applySource} />
           <ByocEnvCard form={form} set={set} />
+          <IdentityCard
+            form={form}
+            set={set}
+            touched={touched}
+            connections={connections}
+            catalogError={Boolean(connectionsLoad.error)}
+            onRetry={connectionsLoad.reload}
+          />
+          {inboundCard}
         </>
       )}
 
@@ -433,6 +483,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           cat={cat}
           ui={{ ...ui, customSkills }}
           shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
+          workspaceDefault={inboundDefault.data?.default ?? null}
+          cognitoIssuer={inboundDefault.data?.cognito_issuer ?? null}
         />
       )}
     </>

@@ -40,6 +40,7 @@ from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
 from app.routers.execution import router as execution_router
 from app.routers.governance import router as governance_router
+from app.routers.identity import router as identity_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
@@ -146,6 +147,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(agents_router)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)
+    app.include_router(identity_router)  # Connections + Connection-bound gateway targets
     app.include_router(registry_router)
     app.include_router(system_agents_router)
     app.include_router(assistant_router)  # architect assistant (SE-039)

@@ -23,6 +23,7 @@ import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Spin, Tag } from "../../ui";
 import { ExternalTag, HubTag, StatusTag } from "./tags";
 import { GrantsCard } from "./GrantsCard";
+import { InboundDefaultCard } from "./InboundDefaultCard";
 
 const POLL_MS = 2000;
 
@@ -411,6 +412,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       )}
 
       <GrantsCard workspaceId={workspaceId} onTotal={setGrantedTotal} />
+      {(row.is_default || row.bootstrap_status === "ready") && <InboundDefaultCard workspaceId={workspaceId} />}
 
       <Confirm
         open={confirm === "bootstrap"}

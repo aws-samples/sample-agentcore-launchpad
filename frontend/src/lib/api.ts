@@ -107,6 +107,12 @@ export interface AgentInfo {
   };
   /** Absent on older servers; native support is always a server-owned verdict. */
   attachment_capability?: AttachmentCapability;
+  /** Inbound auth of the LIVE runtime (deploy-time snapshot; "iam" for rows
+   * predating the feature). Discovered imports project their scanned
+   * authorizer type here too. */
+  inbound_auth_mode?: InboundAuthMode;
+  /** The resolved JWT config the runtime was deployed with; null in IAM mode. */
+  inbound_auth_config?: { mode: InboundAuthMode; jwt?: JwtInboundConfig | null } | null;
   created_at: string | null;
   updated_at: string | null;
   deployment?: DeploymentInfo;
@@ -142,6 +148,10 @@ export interface ChatRequest {
   prompt: string;
   session_id: string | null;
   attachments?: ChatAttachment[];
+  /** JWT-inbound agents: `true` sends the member's own Cognito JWT, `false` the
+   * workspace M2M token; omitted ⇒ the user JWT when one can be minted. Ignored
+   * for IAM agents. */
+  as_user?: boolean;
 }
 
 export interface ChatStreamPayload {
@@ -151,6 +161,14 @@ export interface ChatStreamPayload {
   code?: string;
   message?: string;
   attachments?: ChatAttachmentMetadata[];
+  /** meta of a JWT-inbound agent's turn: who the Runtime authenticated */
+  inbound?: { mode: "jwt"; caller: "user_jwt" | "m2m" };
+  /** `auth_required` (as_user consent ask) — see AuthRequiredEvent */
+  provider?: string;
+  tool?: string;
+  url?: string;
+  scopes?: string[];
+  agent_id?: string;
 }
 
 export interface ChatHistoryMessage {
@@ -771,7 +789,13 @@ export interface AgentSpecInput {
   max_iterations?: number;
   timeout_seconds?: number;
   tool_description_overrides?: Record<string, string>;
-  tools?: { type: string; name: string; config?: Record<string, unknown> }[];
+  tools?: {
+    type: string;
+    name: string;
+    config?: Record<string, unknown>;
+    /** tool-level outbound auth; `null` = explicitly open (see `republishSpec`) */
+    auth?: ToolAuthInput | null;
+  }[];
   /**
    * Platform-owned local tool sets inlined into the generated agent (zip_runtime
    * only). Not a `tools` entry: a toolkit is source, not an external resource.
@@ -798,6 +822,9 @@ export interface AgentSpecInput {
   network?: VpcNetworkInput;
   /** required iff method="byoc" */
   byoc?: ByocConfigInput;
+  /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
+   * default at deploy time; an explicit value pins the agent. */
+  inbound_auth?: InboundAuth | null;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -2526,13 +2553,303 @@ export interface OverviewInfo {
 
 export type ConsoleRole = "admin" | "member";
 
+/* ── AgentCore Identity: Connections, bound Gateway targets, agent identity ── */
+
+export type ConnectionKind = "oauth2" | "api_key";
+export type ActingMode = "as_agent" | "as_user" | "obo";
+
+/** `ToolRef.auth` as posted (backend `ToolAuth`). */
+export interface ToolAuthInput {
+  connection: string;
+  kind: ConnectionKind;
+  mode?: string;
+  scopes?: string[];
+  audience?: string;
+  api_key?: { in: "header" | "query"; name: string };
+}
+
+export interface ConnectionReference {
+  type: "agent" | "gateway_target";
+  id: string;
+  name: string;
+}
+
+/** One credential provider in the workspace token vault. Never carries a secret. */
+export interface ConnectionInfo {
+  name: string;
+  kind: ConnectionKind;
+  vendor: string;
+  arn: string;
+  /** OAuth2 only: the redirect URI to register at the identity provider */
+  callback_url: string | null;
+  client_id: string | null;
+  scopes: string[];
+  template: string | null;
+  description: string | null;
+  created_at: string;
+  created_by: string;
+  system: boolean;
+  source: "system" | "launchpad" | "external";
+  status: "ready" | "missing";
+  referenced_by: ConnectionReference[];
+  /** create/Get echo only: the provider's on-behalf-of token-exchange config */
+  obo?: OboConfig | null;
+}
+
+/** A CustomOauth2 provider's `onBehalfOfTokenExchangeConfig` (docs/identity.md §8.3). */
+export interface OboConfig {
+  /** RFC 8693 token-exchange or RFC 7523 jwt-bearer */
+  grant_type: "TOKEN_EXCHANGE" | "JWT_AUTHORIZATION_GRANT";
+  actor_token_content?: "NONE" | "M2M";
+  /** M2M actor token only */
+  actor_token_scopes?: string[];
+}
+
+export type ConnectionTemplateField =
+  | "client_id"
+  | "client_secret"
+  | "discovery_url"
+  | "issuer"
+  | "authorization_endpoint"
+  | "token_endpoint"
+  | "scopes"
+  | "api_key";
+
+export interface ConnectionTemplate {
+  id: string;
+  kind: ConnectionKind;
+  vendor: string;
+  fields: ConnectionTemplateField[];
+  discovery_hint?: string;
+}
+
+export interface CreateOauth2ConnectionInput {
+  name: string;
+  vendor: string;
+  template?: string;
+  description?: string;
+  client_id: string;
+  client_secret: string;
+  discovery_url?: string;
+  authorization_endpoint?: string;
+  token_endpoint?: string;
+  issuer?: string;
+  scopes?: string[];
+  /** CustomOauth2 only; refused (422) for IdPs without RFC 8693 / 7523 */
+  obo?: OboConfig;
+}
+
+export interface CreateApiKeyConnectionInput {
+  name: string;
+  description?: string;
+  api_key: string;
+}
+
+export interface IdentityGatewayTarget {
+  target_id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  status_reasons: string[];
+  source: string;
+  system: boolean;
+  /** oauth2 | api_key | gateway_iam_role | none | … */
+  auth: string;
+  connection: string | null;
+  mode: ActingMode | null;
+  scopes: string[];
+  /** create response only: non-blocking hints (e.g. `identity.obo_issuer_mismatch`) */
+  warnings?: TargetWarning[];
+}
+
+export interface TargetWarning {
+  code: string;
+  message: string;
+  detail: { connection?: string; connection_issuer?: string; gateway_issuer?: string };
+}
+
+export interface CreateIdentityGatewayTargetInput {
+  name: string;
+  description?: string;
+  source: "openapi" | "mcp";
+  openapi_schema?: string;
+  mcp_endpoint?: string;
+  connection: string;
+  kind: ConnectionKind;
+  mode?: ActingMode;
+  scopes?: string[];
+  api_key?: { location: "HEADER" | "QUERY_PARAMETER"; parameter_name: string; prefix?: string };
+}
+
+export interface AgentIdentityDownstream {
+  type: "tool" | "gateway" | "gateway_target";
+  name: string;
+  tool_type: string;
+  via: "agent" | "gateway";
+  mode: string;
+  connection: string | null;
+  kind: ConnectionKind;
+  scopes: string[];
+  connection_status: "ready" | "missing" | "unbound";
+}
+
+export interface AgentIdentityInfo {
+  agent_id: string;
+  name: string;
+  method: string;
+  workload_identity: {
+    status: "ready" | "none" | "managed" | "not_deployed" | "missing";
+    name: string | null;
+    arn: string | null;
+    allowed_return_urls: string[];
+  };
+  inbound: AgentInboundInfo;
+  downstreams: AgentIdentityDownstream[];
+}
+
+/** An agent's inbound auth as read back from AWS (`source: "aws"`), or from the
+ * ledger snapshot when the runtime cannot be read. */
+export interface AgentInboundInfo {
+  mode: InboundAuthMode;
+  source: "aws" | "ledger" | "managed";
+  /** the live authorizer; custom claims are listed by name only */
+  jwt: (Omit<JwtInboundConfig, "custom_claims"> & { custom_claims: string[] }) | null;
+  /** an HTTP Runtime method — the only agents a JWT authorizer can front */
+  capable: boolean;
+  /** the spec's pin; null ⇒ the agent inherits the workspace default */
+  pinned: InboundAuthMode | null;
+  ledger_mode: InboundAuthMode;
+  /** the Runtime's HTTPS invocation URL (bearer callers); null before deploy */
+  invoke_url: string | null;
+}
+
+/* ── inbound auth (how callers authenticate to an agent's Runtime) ─────── */
+
+export type InboundAuthMode = "iam" | "jwt";
+
+export interface InboundCustomClaim {
+  name: string;
+  value_type: "STRING" | "STRING_ARRAY";
+  match_operator: "EQUALS" | "CONTAINS" | "CONTAINS_ANY";
+  match_values: string[];
+}
+
+export interface JwtInboundConfig {
+  discovery_url: string;
+  allowed_clients: string[];
+  allowed_audience: string[];
+  allowed_scopes: string[];
+  custom_claims: InboundCustomClaim[];
+  /** display-only: the Connection the discovery URL was picked from; never
+   * reaches the authorizer */
+  source_connection?: string | null;
+}
+
+/** One inbound-auth choice: IAM (SigV4) or a JWT authorizer. */
+export interface InboundAuth {
+  mode: InboundAuthMode;
+  jwt?: JwtInboundConfig | null;
+}
+
+export interface InboundAuthDefaultResult {
+  workspace_id: string;
+  /** the stored default; implicit IAM when `configured` is false */
+  default: InboundAuth;
+  configured: boolean;
+  /** a ready-to-use JWT config for this workspace's own Cognito pool
+   * (console + M2M clients pre-listed), or null before bootstrap */
+  cognito: JwtInboundConfig | null;
+  /** the workspace pool's issuer (`https://cognito-idp.{region}.amazonaws.com/{pool}`)
+   * — the only issuer platform invokes can present — or null before bootstrap */
+  cognito_issuer?: string | null;
+}
+
+/** An OAuth2 Connection whose OIDC discovery URL is derivable (the inbound
+ * JWT picker). Carries no client id: that is the agent's outbound client. */
+export interface OidcSource {
+  name: string;
+  vendor: string;
+  discovery_url: string;
+  issuer: string;
+  derived_from: "discovery_url" | "issuer";
+}
+
+/* ── as_user (3LO): consent completion, my grants, revoke ── */
+
+/** The `auth_required` chat event: the user must consent at the IdP first. */
+export interface AuthRequiredEvent {
+  provider: string;
+  tool: string;
+  /** single-use authorization URL — never persisted, never reusable */
+  url: string;
+  scopes: string[];
+  agent_id: string;
+}
+
+export type UserGrantStatus = "none" | "pending" | "authorized" | "revoked";
+
+export interface UserGrantInfo {
+  connection: string;
+  agent_id: string;
+  agent_name: string | null;
+  tool: string;
+  scopes: string[];
+  status: Exclude<UserGrantStatus, "none">;
+  /** a revocation is in force: the next call restarts consent */
+  force_reauth: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  authorized_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface UserGrantState {
+  connection: string;
+  agent_id: string;
+  status: UserGrantStatus;
+  force_reauth: boolean;
+  authorized_at: string | null;
+}
+
+export interface CompleteOauthSessionResult {
+  completed: boolean;
+  provider: string;
+  agent_id: string;
+  agent_name: string | null;
+  tool: string;
+}
+
+export interface ConsentPortalInfo {
+  id: string;
+  name: string;
+  status: string;
+  status_reason: string | null;
+  portal_url: string | null;
+  execution_role_arn: string | null;
+  connection: string | null;
+  scopes: string[];
+  audience: string | null;
+  callbacks: { idp_callback: string; target_return: string } | null;
+}
+
+export interface CreateConsentPortalInput {
+  name: string;
+  description?: string;
+  connection: string;
+  scopes?: string[];
+  audience?: string;
+  execution_role_arn: string;
+}
+
 /** Member-grantable agent-management capabilities (default granted). */
 export type AgentPermission =
   | "agents.deploy"
   | "agents.import"
   | "agents.delete"
   | "agents.convert"
-  | "eval.run";
+  | "eval.run"
+  | "identity.manage"
+  | "identity.grant";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
@@ -2540,6 +2857,8 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.delete",
   "agents.convert",
   "eval.run",
+  "identity.manage",
+  "identity.grant",
 ];
 
 export interface AuthStatus {
@@ -4338,6 +4657,95 @@ export const api = {
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  agentIdentity: (id: string) => request<AgentIdentityInfo>(`/api/agents/${id}/identity`),
+  /** Switch inbound auth in place: pins `inbound_auth` on the stored spec
+   * (`null` ⇒ inherit the workspace default) and re-publishes the same runtime. */
+  switchInboundAuth: (id: string, inbound_auth: InboundAuth | null) =>
+    request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
+      `/api/agents/${id}/inbound-auth`,
+      { method: "POST", body: JSON.stringify({ inbound_auth }) },
+    ),
+  /** The workspace's inbound-auth default (what agents inherit on deploy).
+   * `workspaceId` pins the read to the workspace a detail view displays. */
+  getInboundAuthDefault: (workspaceId?: string | null) =>
+    request<InboundAuthDefaultResult>("/api/identity/inbound-auth/default", {
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  /** Persists the default; a JWT config is probed (discovery document GET)
+   * before saving and rejected with the reason if unreachable. Deployed
+   * agents keep their current authorizer until redeployed. */
+  putInboundAuthDefault: (auth: InboundAuth, workspaceId?: string | null) =>
+    request<InboundAuthDefaultResult>("/api/identity/inbound-auth/default", {
+      method: "PUT", body: JSON.stringify(auth), headers: pinnedWorkspace(workspaceId),
+    }),
+  listConnections: () =>
+    request<{ connections: ConnectionInfo[] }>("/api/identity/connections"),
+  /** OAuth2 Connections with a derivable OIDC discovery URL (inbound JWT picker). */
+  listOidcSources: (workspaceId?: string | null) =>
+    request<{ sources: OidcSource[] }>("/api/identity/connections/oidc-sources", {
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  connectionTemplates: () =>
+    request<{ templates: ConnectionTemplate[] }>("/api/identity/connections/templates"),
+  getConnection: (kind: ConnectionKind, name: string) =>
+    request<ConnectionInfo>(
+      `/api/identity/connections/${kind}/${encodeURIComponent(name)}`,
+    ),
+  createOauth2Connection: (input: CreateOauth2ConnectionInput) =>
+    request<ConnectionInfo>("/api/identity/connections/oauth2", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  createApiKeyConnection: (input: CreateApiKeyConnectionInput) =>
+    request<ConnectionInfo>("/api/identity/connections/api-key", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deleteConnection: (kind: ConnectionKind, name: string) =>
+    request<{ deleted: boolean }>(
+      `/api/identity/connections/${kind}/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  listIdentityGatewayTargets: () =>
+    request<{ gateway_id: string | null; targets: IdentityGatewayTarget[] }>(
+      "/api/identity/gateway-targets",
+    ),
+  createIdentityGatewayTarget: (input: CreateIdentityGatewayTargetInput) =>
+    request<IdentityGatewayTarget>("/api/identity/gateway-targets", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deleteIdentityGatewayTarget: (targetId: string) =>
+    request<{ deleted: boolean }>(
+      `/api/identity/gateway-targets/${encodeURIComponent(targetId)}`,
+      { method: "DELETE" },
+    ),
+  completeOauthSession: (sessionId: string) =>
+    request<CompleteOauthSessionResult>("/api/identity/oauth/complete", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+  listMyGrants: () => request<{ grants: UserGrantInfo[] }>("/api/identity/grants"),
+  userTokenStatus: (connection: string, agentId: string) =>
+    request<UserGrantState>(
+      `/api/identity/grants/${encodeURIComponent(connection)}/status?agent_id=${encodeURIComponent(agentId)}`,
+    ),
+  revokeUserToken: (connection: string) =>
+    request<{ revoked: boolean; provider: string; agents: number }>(
+      `/api/identity/grants/${encodeURIComponent(connection)}`,
+      { method: "DELETE" },
+    ),
+  getConsentPortal: () =>
+    request<{ gateway_id: string | null; portal: ConsentPortalInfo | null }>(
+      "/api/identity/consent-portal",
+    ),
+  createConsentPortal: (input: CreateConsentPortalInput) =>
+    request<{ gateway_id: string; portal: ConsentPortalInfo }>("/api/identity/consent-portal", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deleteConsentPortal: () =>
+    request<{ deleted: boolean }>("/api/identity/consent-portal", { method: "DELETE" }),
   getJob: (id: string, workspaceId?: string | null) =>
     request<JobInfo>(`/api/jobs/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   listRuntimeCanaries: () =>

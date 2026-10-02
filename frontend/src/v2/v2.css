@@ -241,6 +241,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: var(--v2-ink); }
 .v2-check input { accent-color: var(--v2-primary); width: 14px; height: 14px; }
 .v2-check.disabled { cursor: not-allowed; color: var(--v2-ink-4); }
+.v2-chat-asuser { margin-top: 8px; font-size: 13px; flex-wrap: wrap; }
 .v2-checks { display: flex; flex-wrap: wrap; gap: 10px 20px; }
 
 /* option cards (data source / strategy pickers) */
@@ -334,6 +335,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-alert.error { background: var(--v2-danger-soft); color: #cb2634; }
 .v2-alert.success { background: var(--v2-success-soft); color: #008026; }
 .v2-alert .v2-link { margin-left: auto; }
+.v2-desc + .v2-alert { margin-top: 12px; }
 .v2-muted { color: var(--v2-ink-3); }
 .v2-pre {
   background: var(--v2-fill); border: 1px solid var(--v2-line); border-radius: 6px; padding: 12px 14px; font-family: var(--v2-mono);
@@ -413,6 +415,8 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-mask.drawer { justify-content: flex-end; align-items: stretch; padding: 0; }
 .v2-modal { background: #fff; border-radius: var(--v2-radius); width: 520px; max-width: 100%; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14); display: flex; flex-direction: column; max-height: 80vh; }
 .v2-modal.wide { width: 760px; }
+.v2-mask.tall { padding-top: 24px; }
+.v2-modal.tall { max-height: calc(100vh - 48px); }
 .v2-drawer { background: #fff; width: 640px; max-width: 100%; height: 100%; display: flex; flex-direction: column; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.1); }
 .v2-modal-head { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--v2-line-2); font-weight: 600; font-size: 16px; }
 .v2-modal-head button { margin-left: auto; border: 0; background: none; cursor: pointer; color: var(--v2-ink-3); display: grid; }
@@ -481,3 +485,6 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-tags .v2-tag { max-width: 100%; }
 .v2-tag:has(> .mono) { height: auto; min-height: 22px; padding-top: 2px; padding-bottom: 2px; }
 .v2-tag > .mono { white-space: normal; word-break: break-all; }
+
+/* inbound JWT field set: the three allow-lists share one row (one column when narrow) */
+.v2-ia-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 16px; }
