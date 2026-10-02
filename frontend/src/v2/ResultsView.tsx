@@ -105,9 +105,11 @@ export function EvaluatorBreakdown({ summary }: { summary: ResultSummary }) {
 function ResultDrawer({ row, range, onClose }: { row: ResultRow; range: V2Range; onClose: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // Transcript only — the full session view's 7-day span query is what made
+  // this drawer slow, and it shows nothing from it.
   const session = useLoad(
-    () => (row.sessionId ? api.obsSession(row.sessionId, range) : Promise.resolve(null)),
-    `result-session:${row.sessionId}:${range}`,
+    () => (row.sessionId ? api.obsSessionTranscript(row.sessionId, row.agentId) : Promise.resolve(null)),
+    `result-transcript:${row.sessionId}:${row.agentId ?? ""}`,
   );
   const [adding, setAdding] = useState(false);
   const turns = session.data?.transcript.turns ?? [];

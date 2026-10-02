@@ -2407,6 +2407,11 @@ export interface ObsTranscript {
   long_term_records?: number | null;
 }
 
+export interface ObsSessionTranscript {
+  session_id: string;
+  transcript: ObsTranscript;
+}
+
 export interface ObsSessionDetail {
   session_id: string;
   range: string;
@@ -4676,6 +4681,13 @@ export const api = {
   obsSession: (sessionId: string, range: string, force = false) =>
     request<ObsSessionDetail>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}?${obsQuery(range, force)}`,
+    ),
+  /** Conversation only, no span query — `agentId` attributes an unclaimed session. */
+  obsSessionTranscript: (sessionId: string, agentId?: string | null) =>
+    request<ObsSessionTranscript>(
+      `/api/observability/sessions/${encodeURIComponent(sessionId)}/transcript${
+        agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""
+      }`,
     ),
   obsEvaluateSession: (sessionId: string, body: ObsSessionScoreBody) =>
     request<ObsSessionScore>(

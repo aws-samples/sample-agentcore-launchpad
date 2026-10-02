@@ -152,6 +152,24 @@ def session_detail(
     return payload
 
 
+@router.get("/sessions/{session_id}/transcript")
+def session_transcript(
+    session_id: SessionIdParam,
+    request: Request,
+    agent_id: AgentParam = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Conversation only (no span query) — the evaluation result drawer's read;
+    `agent_id` attributes a session no ledger row claims."""
+    private = _private(request, ws, db)
+    private.require_visible(session_id)
+    payload = observability.get_session_transcript(session_id, db, ws.context, agent_id)
+    if private.mentions_hidden(payload):
+        raise NotFoundError("observability.session_not_found", "session not found")
+    return payload
+
+
 class SessionEvaluateBody(BaseModel):
     """SCORE NOW: 1..5 evaluator ids (built-in `Builtin.*`, third-party
     `ThirdParty.*` or a custom evaluator id) applied to one session's spans."""

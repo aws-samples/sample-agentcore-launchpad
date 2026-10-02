@@ -890,6 +890,38 @@ def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
     assert result["transcript"]["available"] is False
 
 
+def test_get_session_reads_roots_of_its_own_traces_only(monkeypatch):
+    """Roots are fetched for the session's trace ids (an unfiltered 7d roots
+    scan was the slow half, and its newest-N cap could miss older sessions)."""
+    monkeypatch.setattr(obs, "session_transcript",
+                        lambda *a, **k: {"available": False, "reason": "not_platform_session"})
+    fake = _fake_logs()
+    db = SessionLocal()
+    result = obs.get_session("s" * 64, "7d", db, ws_ctx(), logs=fake, force=True)
+    db.close()
+    roots = [k["queryString"] for k in fake.start_kwargs
+             if "fields name, traceId" in k["queryString"]]
+    assert len(roots) == 1 and f'traceId in ["{"b" * 32}"]' in roots[0]
+    assert result["traces"][0]["root_operation"] == "POST /invocations"
+
+
+def test_get_session_without_traces_skips_the_roots_query(monkeypatch):
+    monkeypatch.setattr(obs, "session_transcript",
+                        lambda *a, **k: {"available": False, "reason": "not_platform_session"})
+    fake = _fake_logs()
+    fake.rows_by_marker["by traceId"] = []
+    db = SessionLocal()
+    result = obs.get_session("z" * 64, "7d", db, ws_ctx(), logs=fake, force=True)
+    db.close()
+    assert result["traces"] == []
+    assert not any("fields name, traceId" in k["queryString"] for k in fake.start_kwargs)
+
+
+def test_q_root_spans_rejects_bad_trace_ids():
+    with pytest.raises(AppError):
+        obs.q_root_spans(['"] or 1=1'])
+
+
 def _content_record(trace_id, ts_ns, body, session_id="e" * 64):
     return json.dumps({
         "scope": {"name": "strands.telemetry.tracer"},
@@ -1033,6 +1065,75 @@ def test_transcript_eval_falls_back_to_content_logs(monkeypatch, method):
     assert seen["started_at"] == datetime(2026, 7, 11, 1, 0, 0)
     assert "-DEFAULT" in seen["log_group"]
     assert [t["text"] for t in result["turns"]] == ["hi"]
+
+
+def _seed_eval_run(agent_id, sid):
+    from datetime import datetime
+
+    from app.evaluation.models import EvalRun
+
+    db = SessionLocal()
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                  agent_name="hr-assistant", mode="evaluators", evaluators=[],
+                  status="completed", session_ids=[sid],
+                  created_at=datetime(2026, 10, 1, 13, 11, 25))
+    db.add(run)
+    db.commit()
+    db.close()
+
+
+def test_transcript_eval_harness_reads_backing_runtime_logs(monkeypatch):
+    """A harness with memory disabled writes no events — its eval turns live in
+    the hidden BACKING runtime's log group (id != harnessId), which
+    resolve_telemetry discovers."""
+    from app.evaluation import service as eval_service
+
+    agent_id = _seed_agent(method="harness")
+    sid = "9" * 64
+    _seed_eval_run(agent_id, sid)
+    backing = "/aws/bedrock-agentcore/runtimes/harness_hr_assistant-9whgxVAoEz-DEFAULT"
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(
+        eval_service, "resolve_telemetry",
+        lambda agent, ws, logs_client=None: ("harness_hr_assistant.DEFAULT", backing),
+    )
+    seen: dict = {}
+
+    def fake_logs_turns(log_group, session_id, started_at, logs=None):
+        seen["log_group"] = log_group
+        return [{"role": "USER", "text": "how many days?", "at": "t"},
+                {"role": "ASSISTANT", "text": "3.5", "at": "t"}]
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
+    db = SessionLocal()
+    result = obs.session_transcript(db, sid, ws_ctx())
+    db.close()
+    assert seen["log_group"] == backing
+    assert result["origin"] == "logs"
+    assert [t["text"] for t in result["turns"]] == ["how many days?", "3.5"]
+
+
+def test_transcript_eval_harness_without_telemetry_degrades(monkeypatch):
+    from app.core.errors import AppError
+    from app.evaluation import service as eval_service
+
+    agent_id = _seed_agent(method="harness")
+    sid = "8" * 64
+    _seed_eval_run(agent_id, sid)
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+
+    def no_group(agent, ws, logs_client=None):
+        raise AppError("eval.harness_no_telemetry", "none yet", status_code=400)
+
+    def must_not_scan(*args, **kwargs):
+        raise AssertionError("no log group — nothing to scan")
+
+    monkeypatch.setattr(eval_service, "resolve_telemetry", no_group)
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", must_not_scan)
+    db = SessionLocal()
+    result = obs.session_transcript(db, sid, ws_ctx())
+    db.close()
+    assert result["available"] is True and result["turns"] == []
 
 
 def test_transcript_decodes_harness_envelopes(monkeypatch):
@@ -1217,6 +1318,38 @@ def test_session_routes_accept_composite_external_ids(client, mocked_aws, monkey
     assert detail.status_code == 200
     assert detail.json()["session_id"] == sid
     assert client.get(f"/api/observability/traces?session={encoded}").status_code == 200
+
+
+def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, monkeypatch):
+    """The eval result drawer's read: the conversation alone, no span query;
+    agent_id attributes an unclaimed session, a foreign workspace's id is dropped."""
+    agent_id = _seed_agent()
+    seen: list = []
+
+    def fake_transcript(db, session_id, workspace, agent=None):
+        seen.append(agent.id if agent is not None else None)
+        return {"available": True, "turns": [{"role": "USER", "text": "hi", "at": "t"}]}
+
+    monkeypatch.setattr(obs, "session_transcript", fake_transcript)
+    url = f"/api/observability/sessions/{'s' * 64}/transcript"
+    res = client.get(f"{url}?agent_id={agent_id}")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["session_id"] == "s" * 64
+    assert body["transcript"]["turns"][0]["text"] == "hi"
+    assert mocked_aws.start_calls == 0  # no Logs Insights query
+
+    db = SessionLocal()
+    foreign = Agent(workspace_id="other-ws", name="x", method="harness",
+                    status="active", resource_id="x-1")
+    db.add(foreign)
+    db.commit()
+    foreign_id = foreign.id
+    db.close()
+    client.get(f"{url}?agent_id={foreign_id}")
+    client.get(url)
+    assert seen == [agent_id, None, None]
+    assert client.get(f"{url}?agent_id=bad$id").status_code == 422
 
 
 # ── SCORE NOW: on-demand session scoring via the data-plane Evaluate API ────
