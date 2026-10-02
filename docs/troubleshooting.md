@@ -156,3 +156,18 @@ entry below was observed during implementation — none is speculative.
   stays disabled until real ALLOW and DENY Policy spans establish the preview
   field shape. The UI does not substitute local demo decisions. Promotion with
   zero evidence requires the exact Gateway name and a non-empty audit reason.
+
+## Identity
+
+- **`agent.inbound_issuer_mismatch` (409) on Chat, `/v1`, invoke or
+  evaluation.** The agent's JWT authorizer trusts an IdP other than the
+  workspace Cognito pool, and every platform invoke presents a workspace-Cognito
+  token. This is a limit, not a fault: call the agent externally with a token
+  from its IdP (`samples/inbound-jwt/`), or switch it to the Cognito preset or
+  IAM on the agent page. The detail names both issuers
+  ([identity.md §8.1](identity.md#81-inbound-auth-iam-sigv4-vs-jwt-bearer)).
+- **The obo target was created with an issuer warning.** The Connection's IdP
+  is not the gateway's inbound issuer. The exchange succeeds only if that IdP
+  trusts the gateway issuer's tokens as subject tokens; configure that trust at
+  the IdP or pick a Connection on the same issuer
+  ([identity.md §8.3](identity.md#83-obo-on-behalf-of-token-exchange)).

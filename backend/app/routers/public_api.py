@@ -107,12 +107,17 @@ def v1_invoke(
         actor_id=scoped_actor(agent.id, req.actor_id),
         **extra,
     )
-    return {
+    body = {
         "agent": agent.name,
         "text": result["text"],
         "session_id": result["session_id"],
         "latency_ms": int((time.monotonic() - started) * 1000),
     }
+    if result.get("auth_required"):
+        # as_user tools whose user has not consented yet: {provider, tool, url,
+        # scopes, agent_id}. The URL is single-use; re-invoke after consent.
+        body["auth_required"] = result["auth_required"]
+    return body
 
 
 @router.post("/agents/{agent_id}/invoke-stream", summary="Invoke an agent (SSE stream)")

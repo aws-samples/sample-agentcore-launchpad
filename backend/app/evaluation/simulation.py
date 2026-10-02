@@ -38,11 +38,15 @@ def run_simulated_scenario(
     actor_model_id: str,
     protocol: str = "http",
     runtime_user_id: str | None = None,
+    invoke_text: Any = None,
 ) -> str:
     """Drive one persona scenario to completion; returns the runtime session id.
 
     Raises RuntimeError when the executor reports FAILED (it swallows its own
     exceptions into the result) so execute_run fails the run honestly.
+    ``invoke_text(prompt, session_id) -> {text, session_id}`` overrides the
+    default SigV4 runtime call for HTTP runtimes — the JWT-inbound bearer path
+    rides through it (harness/A2A keep their own dispatch).
     """
     if not actor_model_id:
         raise RuntimeError(
@@ -61,6 +65,8 @@ def run_simulated_scenario(
             result = rt.invoke_a2a_text(
                 data_client, agent_arn, prompt, session_id=state["session_id"]
             )
+        elif invoke_text is not None:
+            result = invoke_text(prompt, state["session_id"])
         else:
             result = rt.invoke_runtime_text(
                 data_client,

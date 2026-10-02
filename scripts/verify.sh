@@ -48,6 +48,9 @@ if [ -d "$ROOT/frontend" ]; then
   section "frontend · tsc"
   (cd "$ROOT/frontend" && npx tsc --noEmit); result $? "tsc"
 
+  section "frontend · vitest"
+  (cd "$ROOT/frontend" && npm run --silent test); result $? "vitest"
+
   section "frontend · vite build"
   (cd "$ROOT/frontend" && npm run --silent build); result $? "vite build"
 fi

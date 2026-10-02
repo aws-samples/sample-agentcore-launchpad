@@ -85,11 +85,17 @@ def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -
 
     Takes the stored spec dict rather than an ``AgentSpec`` so discovered/foreign
     runtimes — whose stored spec may not validate — cost nothing here.
+
+    Also sent when any tool carries an ``auth`` block (tool-level outbound auth,
+    ``templates/identity_support``): the token exchange those tools perform needs
+    the same Runtime-injected workload token the Gateway client uses.
     """
     tools = (spec or {}).get("tools") or []
-    if not any(
-        isinstance(tool, dict) and tool.get("type") == "gateway" for tool in tools
-    ):
+    needs_token = any(
+        isinstance(tool, dict) and (tool.get("type") == "gateway" or tool.get("auth"))
+        for tool in tools
+    )
+    if not needs_token:
         return None
     return (actor_id or "default")[:1024]
 

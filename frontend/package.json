@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "node ../scripts/validate_video_catalog.mjs && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@babel/runtime": "^7.29.7",
@@ -43,7 +44,8 @@
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.19.0",
     "vite": "^6.0.0",
-    "vite-plugin-static-copy": "^4.1.1"
+    "vite-plugin-static-copy": "^4.1.1",
+    "vitest": "^3.2.7"
   },
   "overrides": {
     "dompurify": "^3.4.13"

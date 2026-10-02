@@ -116,7 +116,9 @@
     "assistant": "Architect assistant",
     "learn": "LEARN",
     "videos": "Video introductions",
-    "announcements": "Announcements"
+    "announcements": "Announcements",
+    "connections": "Connections",
+    "myConnections": "My connections"
   },
   "videos": {
     "kicker": "// LEARN",
@@ -2362,7 +2364,47 @@
     "dataset.kind_unsupported": "Simulated-persona datasets cannot receive observed trajectories.",
     "pipeline.running": "This pipeline is already running.",
     "pipeline.not_found": "Pipeline not found.",
-    "agent.converted_locked": "A converted agent's system prompt and model are part of its exported code and can't change on redeploy."
+    "agent.converted_locked": "A converted agent's system prompt and model are part of its exported code and can't change on redeploy.",
+    "identity.connection_exists": "A Connection with this name already exists in this workspace.",
+    "identity.system_connection": "Platform Connections cannot be deleted here.",
+    "identity.connection_referenced": "This Connection is still used by an agent or Gateway target.",
+    "identity.connection_not_found": "Connection not found.",
+    "identity.connection_unknown": "A tool references a Connection that does not exist in this workspace.",
+    "identity.kind_mismatch": "A tool's auth kind does not match its Connection.",
+    "identity.mode_unsupported": "This acting mode is not supported here.",
+    "identity.unsupported_vendor": "This identity provider is not supported yet.",
+    "identity.missing_endpoints": "Enter a discovery URL, or the issuer plus the authorization and token endpoints.",
+    "identity.endpoints_custom_only": "Endpoints can only be set on a custom OAuth2 provider.",
+    "identity.no_gateway": "This workspace has no gateway. Run the workspace bootstrap first.",
+    "identity.invalid_target_name": "Invalid target name.",
+    "identity.invalid_openapi": "The OpenAPI schema is invalid (OpenAPI 3 with an https server URL is required).",
+    "identity.invalid_mcp_endpoint": "The MCP server endpoint must be an https URL.",
+    "identity.target_auth_unsupported": "An MCP server target takes an OAuth2 Connection only.",
+    "identity.target_exists": "A target with this name already exists on the gateway.",
+    "identity.target_not_found": "Gateway target not found.",
+    "identity.system_target": "Platform targets cannot be deleted here.",
+    "identity.target_unbound": "This target is not bound to a Connection; manage it where it was created.",
+    "identity.as_user_requires_user_jwt": "This tool acts as you, but this turn called the agent with the workspace machine token. Turn on \"Invoke as me\" and retry. On /v1 and direct invoke, as_user tools on a JWT-inbound agent need a user JWT.",
+    "identity.session_unknown": "This authorization session is unknown or was already used. Retry the request in the chat to get a new link.",
+    "identity.session_user_mismatch": "This authorization was started by a different user. Sign in as that user, or retry the request from your own chat.",
+    "identity.session_expired": "This authorization session has expired. Retry the request in the chat to get a new link.",
+    "identity.session_completion_failed": "AgentCore Identity could not complete the authorization. Retry the request in the chat to get a new link.",
+    "identity.gateway_missing": "This workspace has no gateway. Run bootstrap first.",
+    "identity.invalid_portal_name": "Portal names are letters, digits, _ and - (max 50).",
+    "identity.invalid_role_arn": "The execution role must be an IAM role ARN.",
+    "identity.role_account_mismatch": "The execution role must be an IAM role in this workspace's own AWS account and partition.",
+    "identity.portal_scopes": "The consent portal signs users in with OIDC; its scopes must include openid.",
+    "identity.consent_portal_exists": "This workspace's gateway already has a consent portal.",
+    "identity.consent_portal_required": "An as_user gateway target needs an ACTIVE consent portal on the workspace gateway.",
+    "identity.consent_portal_not_found": "There is no consent portal to delete.",
+    "agent.inbound_issuer_mismatch": "This agent's JWT authorizer trusts a different identity provider than the workspace Cognito pool. Console Chat (\"Invoke as me\" and the machine-token path), the /v1 API, direct invoke and evaluation all present workspace Cognito tokens, so this agent refuses them. Only callers holding a token from its own IdP can invoke it (see the caller example on the agent page).",
+    "agent.inbound_auth_rejected": "The agent's JWT authorizer rejected the token: its client, audience, scopes or claims do not match the agent's restrictions.",
+    "agent.inbound_auth_invalid": "The agent's stored configuration cannot be re-published with this inbound auth.",
+    "agent.inbound_auth_unsupported": "Only HTTP Runtime agents (zip, Studio, container, BYOC) can use a JWT authorizer.",
+    "identity.m2m_unavailable": "This workspace has no Cognito machine client, so the platform cannot mint a token for this JWT agent. Run the workspace bootstrap, or call the Runtime with your own bearer token.",
+    "identity.m2m_token_failed": "Could not mint a machine token from the workspace Cognito client.",
+    "identity.discovery_unreachable": "The OIDC discovery document could not be fetched. Check the discovery URL and that the IdP is reachable over HTTPS.",
+    "identity.discovery_invalid": "The URL did not return an OIDC discovery document (no jwks_uri), so no token signature could be validated."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -4111,7 +4153,7 @@
     "deleted": "{{username}} was deleted.",
     "permissionsUpdated": "Permissions updated for {{username}}.",
     "permissionsAll": "ALL (ADMIN)",
-    "permissionsHint": "Agent Management capability — click to toggle. Members hold all four by default.",
+    "permissionsHint": "Agent Management capability — click to toggle. Members hold all of them by default.",
     "workspacesAll": "ALL (ADMIN)",
     "workspacesHint": "Workspace access — click to grant or revoke. Administrators reach every workspace by role.",
     "workspacesUpdated": "Workspace access updated for {{username}}.",
@@ -4122,7 +4164,9 @@
       "import": "IMPORT",
       "delete": "DELETE",
       "convert": "CONVERT",
-      "run": "EVAL RUN"
+      "run": "EVAL RUN",
+      "manage": "IDENTITY",
+      "grant": "IDENTITY GRANT"
     },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",
@@ -5495,6 +5539,52 @@
         "convertedModelLocked": "The exported code calls this model directly — read-only for a converted agent.",
         "memoryOff": "Off",
         "memoryLongOnly": "Long-term only"
+      },
+      "identity": {
+        "open": "Identity",
+        "title": "Identity · {{name}}",
+        "manageConnections": "Connections",
+        "workloadTitle": "Workload identity",
+        "workloadSub": "The identity AgentCore Runtime issues this agent; outbound credential exchanges are made as it.",
+        "status": "Status",
+        "workload": {
+          "ready": "Ready",
+          "none": "Not reported",
+          "managed": "Managed by the harness",
+          "not_deployed": "Not deployed",
+          "missing": "Runtime not found"
+        },
+        "workloadName": "Name",
+        "returnUrls": "Allowed return URLs",
+        "inboundTitle": "Inbound",
+        "inboundSub": "How callers authenticate to this agent.",
+        "inboundMode": "Mode",
+        "inbound": {
+          "iam": "IAM (SigV4)",
+          "jwt": "JWT bearer"
+        },
+        "downstreamTitle": "Downstreams",
+        "downstreamSub": "Every outbound call this agent makes, the acting mode, and the Connection it uses.",
+        "downstreamEmpty": "This agent calls nothing through a Connection.",
+        "colDownstream": "Downstream",
+        "colVia": "Exchanged by",
+        "colMode": "Acting mode",
+        "colConnection": "Connection",
+        "colScopes": "Scopes",
+        "type": {
+          "tool": "Tool",
+          "gateway": "Gateway",
+          "gateway_target": "Gateway target"
+        },
+        "via": {
+          "agent": "Agent",
+          "gateway": "Gateway"
+        },
+        "connection": {
+          "ready": "Ready",
+          "missing": "Missing",
+          "unbound": "Unbound"
+        }
       }
     },
     "data": {
@@ -6388,7 +6478,29 @@
       "keyEnabled": "Enabled",
       "keyDisabled": "Disabled",
       "enable": "Enable",
-      "disable": "Disable"
+      "disable": "Disable",
+      "auth": {
+        "title": "Authorization required",
+        "pending": "Waiting for consent",
+        "requested": "Consent requested",
+        "authorized": "Authorized",
+        "expiredTag": "Link expired",
+        "body": "The {{tool}} tool calls {{connection}} as you. Sign in at the provider to grant access; Launchpad never sees your token.",
+        "restored": "This session asked you to authorize {{connection}} for the {{tool}} tool. The authorization link is single-use and was not kept; retry the request to get a new one if it is still needed.",
+        "authorizedBody": "Access granted. Retry the request to continue.",
+        "expired": "This authorization link has expired. Retry the request to get a new one.",
+        "open": "Open authorization page",
+        "waiting": "Finish signing in in the new tab; this card updates on its own.",
+        "retry": "Retry request",
+        "noPrompt": "No earlier message in this session to retry.",
+        "scopes": "Scopes"
+      },
+      "asUser": "Invoke as me",
+      "asUserHint": "On: the Runtime receives your own sign-in JWT. Off: the workspace M2M token. Memory stays scoped to you either way.",
+      "caller": {
+        "user_jwt": "Called as you",
+        "m2m": "Called as M2M client"
+      }
     },
     "knowledge": {
       "basic": "Basic info",
@@ -7051,7 +7163,9 @@
         "rollout": "Policy rollout",
         "evidence": "AWS evidence",
         "promote": "Promote",
-        "retryCutover": "Retry cutover"
+        "retryCutover": "Retry cutover",
+        "toolPrefill": "Prefilled a tool-level allowlist for gateway target {{target}}: exactly its actions, created LOG_ONLY so you can review decisions before enforcing.",
+        "toolPrefillNone": "Gateway target {{target}} exposes no tool schema yet, so no actions were prefilled — add them manually or sync the target first."
       },
       "tools": {
         "title": "Tool catalog",
@@ -7252,7 +7366,9 @@
         "import": "Import",
         "delete": "Delete",
         "convert": "Convert",
-        "run": "Eval run"
+        "run": "Eval run",
+        "manage": "Manage identity",
+        "grant": "Grant own access"
       }
     },
     "workspaces": {
@@ -7474,6 +7590,334 @@
         "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback."
       },
       "toolDiff": "Tool description"
+    },
+    "connections": {
+      "title": "Connections",
+      "desc": "Credential providers in this workspace's AgentCore Identity token vault. Secrets go straight to AWS and are never stored or shown by Launchpad.",
+      "tab": {
+        "connections": "Connections",
+        "targets": "Gateway targets"
+      },
+      "listTitle": "Connections",
+      "listSub": "OAuth2 and API-key credential providers. Agents and Gateway targets reference them by name.",
+      "new": "New Connection",
+      "empty": "No Connections yet.",
+      "colName": "Name",
+      "colKind": "Kind",
+      "colVendor": "Provider",
+      "colSource": "Source",
+      "colRefs": "Used by",
+      "colCreated": "Created",
+      "refCount_one": "{{count}} reference",
+      "refCount_other": "{{count}} references",
+      "refType": {
+        "agent": "Agent",
+        "gateway_target": "Gateway target"
+      },
+      "source": {
+        "system": "Platform",
+        "launchpad": "Launchpad",
+        "external": "External"
+      },
+      "status": {
+        "missing": "Missing"
+      },
+      "missingHint": "Launchpad recorded this Connection but the token vault no longer has it.",
+      "callback": "Callback URL",
+      "created": "Connection {{name}} created.",
+      "deleted": "Connection {{name}} deleted.",
+      "deleteTitle": "Delete Connection {{name}}?",
+      "deleteBody": "The credential provider and its stored secret are deleted from the token vault. This cannot be undone.",
+      "deleteReferenced": "Still used by: {{names}}. The delete will be refused until they stop referencing it.",
+      "createTitle": "New Connection",
+      "create": "Create",
+      "nameHint": "Letters, digits, - and _ (max 128). Agents reference the Connection by this name.",
+      "scopesHint": "Comma or space separated.",
+      "secretHint": "Sent to AWS only; never stored or shown again.",
+      "errName": "Use letters, digits, - and _ only (1–128).",
+      "errRequired": "Required.",
+      "errDiscovery": "Must be an https URL ending in /.well-known/openid-configuration or /.well-known/oauth-authorization-server.",
+      "field": {
+        "template": "Template",
+        "name": "Name",
+        "description": "Description",
+        "client_id": "Client ID",
+        "client_secret": "Client secret",
+        "discovery_url": "Discovery URL",
+        "issuer": "Issuer",
+        "authorization_endpoint": "Authorization endpoint",
+        "token_endpoint": "Token endpoint",
+        "scopes": "Scopes",
+        "api_key": "API key"
+      },
+      "template": {
+        "cognito": "Amazon Cognito",
+        "custom_oidc": "Custom OIDC",
+        "custom_endpoints": "Custom endpoints",
+        "github": "GitHub",
+        "google": "Google",
+        "slack": "Slack",
+        "salesforce": "Salesforce",
+        "microsoft": "Microsoft",
+        "atlassian": "Atlassian",
+        "linkedin": "LinkedIn",
+        "api_key": "API key"
+      },
+      "callbackTitle": "Callback URL · {{name}}",
+      "callbackBody": "Register this redirect URI with the identity provider's app client. AgentCore Identity receives the provider's authorization response here.",
+      "callbackMissing": "AWS did not return a callback URL for this Connection.",
+      "callbackM2m": "Client-credentials (as agent) calls do not use the redirect; it is needed for user-consent flows.",
+      "callbackDone": "Done",
+      "copy": "Copy",
+      "copied": "Copied.",
+      "targets": {
+        "title": "Gateway targets",
+        "sub": "Targets on the workspace gateway {{id}}. Any agent that attaches the gateway gets the target's outbound auth.",
+        "subNone": "The workspace has no gateway.",
+        "noGateway": "This workspace has no gateway yet. Run the workspace bootstrap first.",
+        "new": "New target",
+        "empty": "The gateway has no targets.",
+        "colName": "Name",
+        "colSource": "Source",
+        "colConnection": "Connection",
+        "colMode": "Acting mode",
+        "colStatus": "Status",
+        "source": {
+          "openapi": "OpenAPI",
+          "mcp": "MCP server",
+          "lambda": "Lambda",
+          "smithy": "Smithy",
+          "unknown": "Other"
+        },
+        "auth": {
+          "gateway_iam_role": "Gateway IAM role",
+          "none": "No outbound auth",
+          "oauth": "OAuth",
+          "api_key": "API key",
+          "caller_iam_credentials": "Caller IAM credentials",
+          "jwt_passthrough": "JWT passthrough"
+        },
+        "created": "Target {{name}} created.",
+        "oboIssuerMismatch": "Target created, but connection {{connection}} exchanges tokens at {{connectionIssuer}} while the gateway's inbound tokens are issued by {{gatewayIssuer}}. For on-behalf-of to work, that IdP must trust the gateway's inbound issuer for token exchange (for example, a federated trust). Nothing was blocked.",
+        "deleted": "Target {{name}} deleted.",
+        "deleteTitle": "Delete target {{name}}?",
+        "deleteBody": "The target is removed from the gateway. The Connection is kept.",
+        "createTitle": "New Gateway target",
+        "nameHint": "Letters, digits and single hyphens (max 100).",
+        "schema": "OpenAPI schema",
+        "schemaHint": "OpenAPI 3 JSON or YAML with an https server URL.",
+        "endpoint": "MCP server endpoint",
+        "mcpOauthOnly": "An MCP server target takes an OAuth2 Connection only.",
+        "prefix": "Value prefix",
+        "errName": "Use letters, digits and single hyphens (1–100).",
+        "errEndpoint": "Enter an https endpoint.",
+        "errConnection": "Pick a Connection.",
+        "modeHints": {
+          "as_agent": "The gateway exchanges the Connection's client credentials (or API key) as the agent.",
+          "as_user": "Each user consents once (3-legged OAuth) through the workspace consent portal; the gateway then calls with that user's token.",
+          "obo": "The gateway exchanges the caller's inbound JWT at the Connection's IdP for a token scoped to this target — no consent step."
+        },
+        "oboNeeds": "On-behalf-of needs a gateway with a CUSTOM_JWT authorizer (there is a user token to exchange) and a Connection created with token exchange against an IdP that implements RFC 8693 or RFC 7523. Otherwise creation is refused with a 422/409 that names what is missing.",
+        "policy": "Cedar policy"
+      },
+      "obo": {
+        "title": "On-behalf-of token exchange",
+        "hint": "Lets gateway targets in 'On behalf of' mode exchange the caller's JWT at this IdP. The IdP must implement RFC 8693 (token exchange) or RFC 7523 (JWT bearer); Launchpad checks the discovery document and refuses IdPs that declare neither.",
+        "enable": "Enable on-behalf-of token exchange",
+        "grant": "Grant type",
+        "grantExchange": "Token exchange (RFC 8693)",
+        "grantJwtBearer": "JWT bearer (RFC 7523)",
+        "actor": "Actor token",
+        "actorHint": "Whether the exchange also presents the agent's own M2M token as the RFC 8693 actor_token.",
+        "actorNone": "None",
+        "actorM2m": "Agent M2M token",
+        "actorScopes": "Actor token scopes",
+        "cognito": "Amazon Cognito does not implement OAuth token exchange (RFC 8693) or the JWT bearer grant (RFC 7523), so a Cognito connection cannot back on-behalf-of targets. Use an IdP such as Okta, Auth0, Keycloak or Microsoft Entra ID for that."
+      }
+    },
+    "authReturn": {
+      "title": {
+        "binding": "Linking your account…",
+        "done": "Authorization complete",
+        "failed": "Authorization failed"
+      },
+      "binding": "Binding the authorization to your Launchpad account. Keep this tab open.",
+      "done": "{{connection}} is now authorized for your account.",
+      "doneAgent": "{{connection}} is now authorized for {{agent}}.",
+      "doneHint": "Go back to the chat and retry the request.",
+      "missing": "This page was opened without an authorization session. Start again from the chat.",
+      "tool": "Tool",
+      "back": "Back to the tab that started the request",
+      "myConnections": "View my connections"
+    },
+    "myConnections": {
+      "title": "My connections",
+      "desc": "Downstream services that agents call as you (as_user, 3LO). Revoking makes the next call ask you to sign in again.",
+      "listTitle": "My grants",
+      "empty": "No agent has asked to act as you yet.",
+      "colConnection": "Connection",
+      "colAgent": "Agent",
+      "colTool": "Tool",
+      "colScopes": "Scopes",
+      "colStatus": "Status",
+      "colAuthorized": "Authorized at",
+      "status": {
+        "authorized": "Authorized",
+        "pending": "Pending",
+        "revoked": "Revoked"
+      },
+      "forceReauth": "Re-auth on next call",
+      "revoke": "Revoke",
+      "revoking": "Revoking…",
+      "revoked": "Revoked {{connection}}. The next call asks you to sign in again.",
+      "confirmTitle": "Revoke {{connection}}?",
+      "confirmBody_one": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grant listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
+      "confirmBody_other": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grants listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
+      "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them."
+    }
+  },
+  "identity": {
+    "kind": {
+      "oauth2": "OAuth2",
+      "api_key": "API key"
+    },
+    "mode": {
+      "as_agent": "As agent",
+      "as_user": "As user",
+      "obo": "On behalf of"
+    },
+    "tools": {
+      "title": "Identity",
+      "sub": "REST and MCP tools this agent calls, and the Connection each one authenticates through. The generated agent exchanges its workload identity for the credential at call time; Launchpad never sees it.",
+      "subByoc": "Declare the Connections your code calls through. Launchpad grants the execution role exactly these credentials and passes the wiring as LAUNCHPAD_OUTBOUND_AUTH; your code performs the exchange.",
+      "manage": "Manage Connections",
+      "retry": "Retry",
+      "empty": "No tools with outbound auth.",
+      "type": "Tool type",
+      "typeRest": "REST API",
+      "typeMcp": "MCP server",
+      "name": "Tool name",
+      "connection": "Connection",
+      "connectionNone": "No Connection (open API)",
+      "connectionGone": "{{name}} (not found)",
+      "url": "Endpoint URL",
+      "scopes": "Scopes",
+      "scopesPlaceholder": "scopes, comma separated",
+      "keyIn": "Send key in",
+      "keyInHeader": "Header",
+      "keyInQuery": "Query parameter",
+      "keyName": "Parameter name",
+      "modeHint": "Acting mode: the agent calls as its own service identity (M2M / API key).",
+      "addRest": "Add REST tool",
+      "addMcp": "Add MCP tool",
+      "err": {
+        "nameRest": "Tool name: start with a letter; letters, digits, _ and - only (max 64).",
+        "name": "Enter a tool name.",
+        "nameDuplicate": "Tool names must be unique.",
+        "url": "Enter an http(s) endpoint URL.",
+        "connectionMcp": "An MCP tool in this section needs a Connection.",
+        "connectionByoc": "A BYOC declaration needs a Connection.",
+        "connectionMissing": "Connection \"{{name}}\" no longer exists in this workspace. Pick another one or remove the tool; the agent cannot be saved until then.",
+        "connectionKind": "\"{{name}}\" is not a {{kind}} Connection.",
+        "mode": "Acting mode \"{{mode}}\" is not supported on this tool.",
+        "scopes": "A scope is longer than 256 characters.",
+        "unsupported": "Tool-level auth is supported on the HTTP protocol only. Remove these tools or switch the protocol back to HTTP.",
+        "catalogPending": "Checking the workspace Connections…",
+        "catalogError": "Couldn't load the workspace Connections, so the tools below can't be verified."
+      },
+      "mode": "Acting mode",
+      "modeHintUser": "Acting mode: the agent calls as the chatting user. The first call asks the user to sign in at the provider (3LO); the token stays in the AgentCore Identity vault."
+    }
+  },
+  "inboundAuth": {
+    "title": "Inbound auth",
+    "wizardSub": "Who may invoke this Runtime: AWS IAM (SigV4) or an OAuth/OIDC JWT authorizer.",
+    "detailSub": "The authorizer on the live Runtime. Switching publishes a new version of the same Runtime.",
+    "manageDefault": "Workspace default",
+    "modeLabel": "Mode",
+    "choice": {
+      "inherit": "Inherit workspace default",
+      "iam": "IAM (SigV4)",
+      "jwt": "JWT"
+    },
+    "mode": {
+      "iam": "IAM",
+      "jwt": "JWT"
+    },
+    "inheritNote": "Resolved at deploy time. The workspace default is currently",
+    "iamNote": "Only AWS principals with bedrock-agentcore:InvokeAgentRuntime may call this Runtime. The console signs with the platform role.",
+    "jwtNote": "Callers present a bearer JWT from this identity provider; SigV4 calls are rejected with 403. At least one restriction (clients, audience, scopes or a claim) is required.",
+    "useCognito": "Use the workspace Cognito pool",
+    "idpSource": {
+      "label": "Identity provider",
+      "pickConnection": "Choose from a Connection…",
+      "none": "No OAuth2 Connection with a derivable OIDC discovery URL",
+      "unavailable": "Could not load Connections",
+      "clientHint": "Only the discovery URL is taken. The Connection's client id is this agent's outbound client (how the agent calls tools), not a caller, so list your callers' client ids under Allowed clients yourself.",
+      "fromConnection": "From Connection {{name}}"
+    },
+    "reachability": {
+      "title": "The console cannot invoke this agent",
+      "body": "This identity provider ({{issuer}}) is not the workspace Cognito pool ({{workspaceIssuer}}). Console Chat (both \"Invoke as me\" and the default M2M path), the /v1 API, direct invoke and evaluation present workspace-Cognito tokens, so this agent will refuse them. Only external callers holding tokens issued by this identity provider can invoke it.",
+      "defaultTitle": "The console cannot invoke agents that inherit this default",
+      "defaultBody": "This identity provider ({{issuer}}) is not the workspace Cognito pool ({{workspaceIssuer}}). Console Chat (both \"Invoke as me\" and the default M2M path), the /v1 API, direct invoke and evaluation present workspace-Cognito tokens, so every agent that inherits this default refuses them after its next deploy. Only external callers holding tokens issued by this identity provider can invoke those agents."
+    },
+    "discoveryUrl": "OIDC discovery URL",
+    "allowedClients": "Allowed clients",
+    "allowedAudience": "Allowed audience",
+    "allowedScopes": "Allowed scopes",
+    "listPlaceholder": "Comma-separated; leave blank to not restrict",
+    "customClaims": "Custom claims",
+    "customClaimsNote": "Each row must match: claim name, value type, operator and values.",
+    "claimName": "Claim name",
+    "claimValueType": "Value type",
+    "claimOperator": "Operator",
+    "claimValues": "Values (comma-separated)",
+    "addClaim": "Add claim",
+    "problems": {
+      "discoveryUrl": "Enter an https URL ending in /.well-known/openid-configuration.",
+      "noRestriction": "Add at least one restriction: allowed clients, audience, scopes or a custom claim.",
+      "claimPattern": "Claim names and values may only use letters, digits and . _ : - ; each claim needs at least one value."
+    },
+    "pinLabel": "Source",
+    "pin": {
+      "iam": "Pinned to IAM on this agent",
+      "jwt": "Pinned to JWT on this agent",
+      "inherit": "Inherits the workspace default"
+    },
+    "restrictions": "Restrictions",
+    "notCapable": "This creation method or protocol cannot use a JWT authorizer; it stays on IAM.",
+    "callerTitle": "Calling with a token",
+    "callerNote": "A machine caller fetches a client_credentials token from the IdP and sends it as a bearer. The session id header must be at least 33 characters.",
+    "switch": {
+      "to": {
+        "iam": "Switch to IAM",
+        "jwt": "Switch to JWT"
+      },
+      "started": "Switching to {{mode}}: a new version is deploying on the same Runtime.",
+      "confirmTitle": {
+        "iam": "Switch this agent to IAM?",
+        "jwt": "Switch this agent to JWT?"
+      },
+      "inPlace": "The same Runtime is updated in place: its ARN, endpoint and version history are kept, and a new version is published.",
+      "effect": {
+        "iam": "Bearer-token callers will get 403 once the new version is live; only SigV4 callers can invoke it.",
+        "jwt": "SigV4 callers will get 403 once the new version is live; callers must present a JWT that passes the restrictions below."
+      },
+      "prefillNote": "Prefilled from: {{source}}. Every field is editable. To use your own OIDC identity provider (Okta, Auth0, Keycloak, Entra…), enter its discovery URL or choose a Connection.",
+      "fromDefault": "Workspace default",
+      "fromCognito": "Workspace Cognito pool",
+      "fromEmpty": "Nothing to prefill: enter your identity provider below"
+    },
+    "default": {
+      "title": "Inbound auth default",
+      "sub": "What every HTTP Runtime agent without its own pin resolves to on its next deploy.",
+      "saved": "Default saved. Deployed agents keep their authorizer until redeployed.",
+      "current": "Current default:",
+      "implicit": "(not configured: IAM)",
+      "jwtNote": "Saving does not touch deployed agents; each picks this up on its next deploy.",
+      "discard": "Discard changes",
+      "readOnly": "Only identity managers can change the default."
     }
   }
 }

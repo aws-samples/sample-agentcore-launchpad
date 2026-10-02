@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.attachments import AttachmentRequest
+from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
 
 # Latest Sonnet inference profile available in the target account (verified via
@@ -60,17 +61,112 @@ KB_METHODS = {"harness", "zip_runtime", "container"}
 Toolkit = Literal["hr_assistant"]
 
 
+_REST_TOOL_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
+CONNECTION_NAME_RE = r"^[a-zA-Z0-9\-_]{1,128}$"
+# Tool-level auth is honoured by exactly these methods: zip_runtime renders the
+# generated identity client, byoc gets the declaration (IAM + env) for its own code.
+TOOL_AUTH_METHODS = ("zip_runtime", "byoc")
+# Acting modes implemented today; the schema accepts the others so a stored spec
+# stays loadable, and request-time validation refuses them (identity_providers).
+SUPPORTED_ACTING_MODES = ("as_agent", "as_user")
+
+
+class ApiKeyPlacement(BaseModel):
+    """Where the runtime puts a fetched API key.
+
+    The default renders ``Authorization: Bearer <key>``; any other header name
+    sends the bare key (``x-api-key: <key>``), as does a query parameter.
+    """
+
+    in_: Literal["header", "query"] = Field(default="header", alias="in")
+    name: str = Field(default="Authorization", min_length=1, max_length=128)
+
+    # stored and echoed as {"in": ...} — the console's field name
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+# legacy (earlier fork) flow → (kind, mode)
+_LEGACY_FLOWS = {
+    "M2M": ("oauth2", "as_agent"),
+    "API_KEY": ("api_key", "as_agent"),
+    "USER_FEDERATION": ("oauth2", "as_user"),
+}
+
+
+class ToolAuth(BaseModel):
+    """Outbound auth for one tool, backed by a Connection (an AgentCore Identity
+    credential provider in this workspace's token vault).
+
+    ``connection`` names the credential provider (not its ARN). Whether it exists
+    — and whether its kind matches ``kind`` — is validated at request time against
+    the live vault (``services.identity_providers.validate_tool_auth``), not here:
+    the valid name space lives in AWS, and a stored spec must keep validating
+    after its Connection is deleted (the next save fails loudly instead).
+
+    Declared on the schema on purpose: ``AgentSpec`` ignores unknown keys, so an
+    undeclared ``auth`` would be dropped silently on every save.
+    """
+
+    connection: str = Field(pattern=CONNECTION_NAME_RE)
+    kind: Literal["oauth2", "api_key"]
+    mode: Literal["as_agent", "as_user", "obo"] = "as_agent"
+    scopes: list[str] = Field(default_factory=list, max_length=32)
+    audience: str | None = Field(default=None, max_length=512)
+    # api_key only: key placement. None ⇒ Authorization: Bearer <key>.
+    api_key: ApiKeyPlacement | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_shape(cls, data: Any) -> Any:
+        """Accept the earlier fork's ``{provider, flow}`` vocabulary."""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if "connection" not in data and "provider" in data:
+            data["connection"] = data.pop("provider")
+        flow = data.pop("flow", None)
+        if flow in _LEGACY_FLOWS:
+            kind, mode = _LEGACY_FLOWS[flow]
+            data.setdefault("kind", kind)
+            data.setdefault("mode", mode)
+        data.pop("force_reauth", None)
+        return data
+
+    @model_validator(mode="after")
+    def _kind_shape(self) -> "ToolAuth":
+        if self.kind == "api_key":
+            if self.scopes:
+                raise ValueError("scopes apply to oauth2 Connections only")
+            if self.audience:
+                raise ValueError("audience applies to oauth2 Connections only")
+            if self.mode != "as_agent":
+                raise ValueError("an api_key Connection can only act as the agent")
+        elif self.api_key is not None:
+            raise ValueError("api_key placement applies to api_key Connections only")
+        for scope in self.scopes:
+            if not scope or len(scope) > 256:
+                raise ValueError("each scope must be 1-256 characters")
+        return self
+
+
 class ToolRef(BaseModel):
     """Reference to a tool the agent may call.
 
     type=builtin → AgentCore builtin (code-interpreter / browser)
     type=gateway → MCP tool via the shared gateway (wired in phase 6)
     type=mcp     → remote MCP server URL
+    type=rest    → plain HTTP API (config.url) called directly from the runtime;
+                   carries ``auth`` when the API is protected
     """
 
-    type: Literal["builtin", "gateway", "mcp"]
+    type: Literal["builtin", "gateway", "mcp", "rest"]
     name: str
     config: dict[str, Any] = Field(default_factory=dict)
+    # Tool-level outbound auth (rest/mcp only). type=gateway stays implicit: the
+    # gateway authenticates its own targets (see routers/identity gateway targets).
+    # Omitted from the dump when unset, so a stored spec without tool auth keeps
+    # its exact pre-identity shape.
+    auth: ToolAuth | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def _gateway_tool_list(self) -> "ToolRef":
@@ -442,6 +538,38 @@ class AgentSpec(BaseModel):
     a2a_skills: list[A2ASkill] = Field(default_factory=list, max_length=20)
     # Bring-your-own-code settings — required iff method="byoc"
     byoc: ByocConfig | None = None
+    # Inbound authentication of this agent's Runtime. None = inherit the
+    # workspace default (resolved at deploy time by
+    # ``schemas.inbound_auth.resolve_inbound_auth``); an explicit value pins the
+    # agent regardless of later workspace-default changes. The RESOLVED choice
+    # is snapshotted onto the Agent row (``inbound_auth_mode`` /
+    # ``inbound_auth_config``) by the deploy stage, so consumers never re-derive.
+    inbound_auth: InboundAuth | None = None
+
+    @model_validator(mode="after")
+    def _inbound_auth_supported(self) -> "AgentSpec":
+        """An explicit JWT choice is refused where no Runtime authorizer exists.
+
+        The managed harness is invoked via InvokeHarness (SigV4) and A2A
+        runtimes are called by other agents over SigV4 JSON-RPC — deploying
+        either with a JWT authorizer would produce an agent the platform cannot
+        invoke. Inheritance is handled separately: ``resolve_inbound_auth``
+        quietly resolves these methods to IAM under a JWT workspace default.
+        """
+        if self.inbound_auth is None or self.inbound_auth.mode != "jwt":
+            return self
+        if self.method not in JWT_CAPABLE_METHODS:
+            raise ValueError(
+                f"inbound_auth mode 'jwt' is not supported by the {self.method} "
+                "method — only Runtime-backed agents (zip_runtime, studio, "
+                "container, byoc) can carry a JWT authorizer"
+            )
+        if self.protocol == "a2a":
+            raise ValueError(
+                "inbound_auth mode 'jwt' is not supported by protocol=a2a "
+                "runtimes — A2A peers invoke over SigV4"
+            )
+        return self
 
     @model_validator(mode="after")
     def _byoc_constraints(self) -> "AgentSpec":
@@ -463,12 +591,23 @@ class AgentSpec(BaseModel):
             raise ValueError("method='byoc' requires the byoc settings block")
         if self.protocol != "http":
             raise ValueError("byoc agents speak the HTTP runtime contract only in v1")
-        for field_name in ("tools", "toolkits", "skills", "knowledge_bases"):
+        for field_name in ("toolkits", "skills", "knowledge_bases"):
             if getattr(self, field_name):
                 raise ValueError(
                     f"{field_name} are not supported by the byoc method in v1 — "
                     "the platform does not generate this agent's code, so it "
                     "cannot wire them in; configure them inside your own code"
+                )
+        # byoc tools are outbound-auth declarations only: an entry carrying
+        # ``auth`` drives IAM grants + LAUNCHPAD_OUTBOUND_AUTH, and the member's
+        # own code performs the exchange. A tool without auth would ask the
+        # platform to wire code it does not generate — refused.
+        for tool in self.tools:
+            if tool.auth is None:
+                raise ValueError(
+                    "tools are not supported by the byoc method in v1 unless they "
+                    "carry an auth block — byoc tools are outbound-auth declarations "
+                    "for your own code; wire the tool itself inside your code"
                 )
         if self.code or self.code_bundle:
             raise ValueError(
@@ -508,6 +647,57 @@ class AgentSpec(BaseModel):
         if self.byoc and self.byoc.allowed_models:
             return list(self.byoc.allowed_models)
         return [self.model_id]
+
+    @model_validator(mode="after")
+    def _tool_auth_placement(self) -> "AgentSpec":
+        """Where an ``auth`` block may sit, and what a ``rest`` tool must carry.
+
+        ``rest`` tools and ``auth`` blocks are honoured by zip_runtime (the strands
+        template renders the identity client) and byoc (declaration only), so every
+        other method refuses them instead of deploying an agent whose console
+        shows auth its runtime never performs. Harness/container/studio agents get
+        outbound auth through a Gateway target bound to a Connection instead.
+        """
+        carriers = [t for t in self.tools if t.auth is not None or t.type == "rest"]
+        if not carriers:
+            return self
+        if self.method not in TOOL_AUTH_METHODS:
+            raise ValueError(
+                "rest tools / tool auth are supported by the zip_runtime and byoc "
+                "methods only — attach a Gateway target bound to a Connection for "
+                "the other methods"
+            )
+        if self.protocol != "http":
+            raise ValueError(
+                "rest tools / tool auth are not supported by protocol=a2a runtimes"
+            )
+        if self.code or self.code_bundle:
+            raise ValueError(
+                "rest tools / tool auth cannot be combined with code/code_bundle — "
+                "those specs deploy their own source and never render the identity "
+                "client"
+            )
+        names = [t.name for t in carriers]
+        if len(names) != len(set(names)):
+            raise ValueError("rest / auth tool names must be unique")
+        for tool in self.tools:
+            if tool.type == "rest" and not _REST_TOOL_NAME_RE.match(tool.name):
+                raise ValueError(
+                    f"rest tool name {tool.name!r} must match {_REST_TOOL_NAME_RE.pattern} "
+                    "(it becomes the model-facing function name)"
+                )
+            if tool.type == "rest" and self.method != "byoc":
+                url = str((tool.config or {}).get("url") or "")
+                if not url.startswith(("http://", "https://")):
+                    raise ValueError(
+                        f"rest tool '{tool.name}' requires config.url (http/https)"
+                    )
+            if tool.auth is not None and tool.type not in ("rest", "mcp"):
+                raise ValueError(
+                    f"tool '{tool.name}': auth applies to rest and mcp tools only — "
+                    "gateway tools are authenticated by the gateway's own targets"
+                )
+        return self
 
     @model_validator(mode="after")
     def _a2a_constraints(self) -> "AgentSpec":

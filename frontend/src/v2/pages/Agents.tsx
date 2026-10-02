@@ -11,10 +11,14 @@ import {
   api,
   type DeploymentInfo,
   errorMessage,
+  type InboundAuth,
   type JobInfo,
   type StageInfo,
 } from "../../lib/api";
+import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { fmtTime } from "../format";
+import { AgentIdentity } from "./agents/AgentIdentity";
+import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
 import { v2EditPath } from "./agents/classicUrl";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
@@ -539,6 +543,11 @@ function AgentDetail({ id }: { id: string }) {
               <Button onClick={() => navigate(`/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
             )}
             <Button onClick={() => navigate("/observability")}>{t("v2.agents.observability")}</Button>
+            {agent.method !== "discovered_runtime" && (
+              <Button onClick={() => setParams({ view: "identity", id: agent.id })} testId="v2-agent-identity-open">
+                {t("v2.agents.identity.open")}
+              </Button>
+            )}
             {perms.canConvert(agent) && (
               <Button onClick={() => actions.askConvert(agent)}>{t("v2.agents.convert")}</Button>
             )}
@@ -594,6 +603,19 @@ function AgentDetail({ id }: { id: string }) {
         />
       </Card>
       {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} />}
+      {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
+        <InboundSwitchCard
+          agentId={agent.id}
+          mode={agent.inbound_auth_mode ?? "iam"}
+          pinned={((spec.inbound_auth as InboundAuth | null | undefined)?.mode as "iam" | "jwt" | undefined) ?? null}
+          capable
+          canSwitch={perms.canEdit(agent)}
+          busy={deploying}
+          jwt={agent.inbound_auth_config?.jwt ?? null}
+          invokeUrl={bearerInvokeUrl(agent.arn)}
+          onSwitched={() => setNonce((n) => n + 1)}
+        />
+      )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>
@@ -647,5 +669,6 @@ export function V2Agents() {
   if (view === "detail" && id) return <AgentDetail key={id} id={id} />;
   if (view === "new") return <AgentWizard />;
   if (view === "edit" && id) return <AgentEdit key={id} id={id} />;
+  if (view === "identity" && id) return <AgentIdentity key={id} id={id} />;
   return <AgentList />;
 }

@@ -101,14 +101,16 @@ export function Tag({
   dot,
   children,
   title,
+  testId,
 }: {
   tone?: TagTone;
   dot?: boolean;
   children: ReactNode;
   title?: string;
+  testId?: string;
 }) {
   return (
-    <span className={`v2-tag ${tone ?? ""}`} title={title}>
+    <span className={`v2-tag ${tone ?? ""}`} title={title} data-testid={testId}>
       {dot && <span className="dot" />}
       {children}
     </span>
@@ -946,6 +948,7 @@ export function Modal({
   onClose,
   footer,
   wide,
+  tall,
   children,
   testId,
 }: {
@@ -954,12 +957,14 @@ export function Modal({
   onClose: () => void;
   footer?: ReactNode;
   wide?: boolean;
+  /** a long form: sits near the top and may use almost the full viewport height */
+  tall?: boolean;
   children: ReactNode;
   testId?: string;
 }) {
   if (!open) return null;
   return (
-    <ModalFrame title={title} onClose={onClose} footer={footer} wide={wide} testId={testId}>
+    <ModalFrame title={title} onClose={onClose} footer={footer} wide={wide} tall={tall} testId={testId}>
       {children}
     </ModalFrame>
   );
@@ -970,6 +975,7 @@ function ModalFrame({
   onClose,
   footer,
   wide,
+  tall,
   children,
   testId,
 }: {
@@ -977,14 +983,16 @@ function ModalFrame({
   onClose: () => void;
   footer?: ReactNode;
   wide?: boolean;
+  tall?: boolean;
   children: ReactNode;
   testId?: string;
 }) {
   const { t } = useTranslation();
   useEscape(onClose);
+  const modalClass = ["v2-modal", wide && "wide", tall && "tall"].filter(Boolean).join(" ");
   return (
-    <div className="v2-mask" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={wide ? "v2-modal wide" : "v2-modal"} role="dialog" aria-modal="true" data-testid={testId}>
+    <div className={tall ? "v2-mask tall" : "v2-mask"} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={modalClass} role="dialog" aria-modal="true" data-testid={testId}>
         <div className="v2-modal-head">
           {title}
           <button type="button" onClick={onClose} aria-label={t("v2.common.close")}>

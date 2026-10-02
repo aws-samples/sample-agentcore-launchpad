@@ -108,7 +108,7 @@ export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker    # set before starting the backend
 ## 6. Quality gate & teardown
 
 ```bash
-make verify       # canonical gate: backend ruff+pytest, infra ruff+pytest, frontend eslint+tsc+build, i18n parity
+make verify       # canonical gate: backend ruff+pytest, infra ruff+pytest, frontend eslint+tsc+vitest+build, i18n parity
 ```
 
 Foreground `make dev`: Ctrl-C (its trap kills both children). Background

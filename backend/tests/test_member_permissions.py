@@ -32,6 +32,14 @@ PROBES = [
     ("agents.delete", "DELETE", "/api/agents/no-such-agent", None, 404),
     ("agents.convert", "POST", "/api/agents/no-such-agent/convert", None, 404),
     ("eval.run", "POST", "/api/eval/runs", {}, 422),
+    ("identity.manage", "POST", "/api/identity/connections/oauth2", {}, 422),
+    ("identity.manage", "POST", "/api/identity/connections/api-key", {}, 422),
+    # an unknown kind fails path validation, after the policy dependency ran
+    ("identity.manage", "DELETE", "/api/identity/connections/nope/x", None, 422),
+    ("identity.manage", "POST", "/api/identity/gateway-targets", {}, 422),
+    ("identity.grant", "POST", "/api/identity/oauth/complete", {}, 422),
+    # a Connection name outside the pattern fails path validation
+    ("identity.grant", "DELETE", "/api/identity/grants/not%20a%20name", None, 422),
 ]
 
 
@@ -131,6 +139,22 @@ def test_admin_is_never_gated_by_member_permissions(sessions):
     for _, method, path, body, expected in PROBES:
         response = _request(admin, method, path, body)
         assert response.status_code == expected, (method, path, response.text)
+
+
+@pytest.mark.parametrize("method", ["POST", "DELETE"])
+def test_consent_portal_writes_are_admin_only(sessions, method):
+    """The portal passes an operator-named IAM role to AgentCore: no member
+    holds that by default, and no member permission grants it."""
+    admin, member, _ = sessions
+    denied = _request(member, method, "/api/identity/consent-portal", {})
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["code"] == "auth.forbidden"
+    # the member still holds identity.manage — it is simply not enough
+    assert "identity.manage" in member.get("/api/auth/status").json()["permissions"]
+    assert member.get("/api/identity/consent-portal").status_code != 403
+    if method == "POST":
+        # an administrator passes the gate (the empty body then fails validation)
+        assert _request(admin, method, "/api/identity/consent-portal", {}).status_code == 422
 
 
 def test_permissions_patch_rejects_unknown_keys_and_non_booleans(sessions):

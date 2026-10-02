@@ -1,0 +1,36 @@
+.v2 .v2-conn-name { display: inline-flex; flex-direction: column; gap: 2px; }
+.v2 .v2-conn-name .v2-tag { align-self: flex-start; }
+.v2 .v2-conn-actions { display: inline-flex; gap: 12px; }
+.v2 .v2-conn-templates { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.v2 .v2-conn-template {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 8px 10px; border: 1px solid var(--v2-line); border-radius: 6px; background: #fff;
+  cursor: pointer; font: inherit; text-align: left;
+}
+.v2 .v2-conn-template:hover { border-color: var(--v2-primary-hover); }
+.v2 .v2-conn-template.on { border-color: var(--v2-primary); box-shadow: 0 0 0 2px var(--v2-primary-soft); }
+.v2 .v2-conn-callback {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--v2-line); border-radius: 6px; background: var(--v2-fill);
+}
+.v2 .v2-conn-callback code { flex: 1; word-break: break-all; font-size: 12.5px; }
+.v2 .v2-identity-downstream { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- /auth/return (outside the shell) ---------- */
+.v2.v2-auth-return { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--v2-bg); }
+.v2 .v2-auth-return-card { width: 100%; max-width: 480px; text-align: center; }
+.v2 .v2-auth-return-card .v2-card-body { padding: 32px 32px 28px; }
+.v2 .v2-auth-return-icon { display: inline-flex; width: 52px; height: 52px; align-items: center; justify-content: center; border-radius: 50%; margin-bottom: 14px; }
+.v2 .v2-auth-return-icon.binding { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2 .v2-auth-return-icon.binding svg { animation: v2authspin 1s linear infinite; }
+.v2 .v2-auth-return-icon.done { background: var(--v2-success-soft); color: var(--v2-success); }
+.v2 .v2-auth-return-icon.failed { background: var(--v2-danger-soft); color: var(--v2-danger); }
+@keyframes v2authspin { to { transform: rotate(360deg); } }
+.v2 .v2-auth-return-title { font-size: 18px; font-weight: 600; margin: 0 0 8px; color: var(--v2-ink); }
+.v2 .v2-auth-return-body { margin: 0 0 6px; color: var(--v2-ink-2); line-height: 1.6; overflow-wrap: anywhere; }
+.v2 .v2-auth-return-hint { margin: 0 0 6px; color: var(--v2-ink-3); font-size: 13px; }
+.v2 .v2-auth-return-meta { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--v2-ink-3); font-size: 12.5px; }
+.v2 .v2-auth-return-actions { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 20px; }
+.v2 .v2-auth-return-actions .v2-btn { min-width: 220px; justify-content: center; }
+.v2 .v2-grant-scopes { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.v2 .v2-grant-scopes code { font-size: 11.5px; }

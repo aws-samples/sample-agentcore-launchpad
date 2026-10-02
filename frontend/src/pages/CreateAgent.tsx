@@ -28,6 +28,7 @@ import type {
   AgentSpecInput,
   ByocArtifactKind,
   ByocConfigInput,
+  ConnectionInfo,
   ByocPythonVersion,
   ByocUploadInfo,
   DeploymentInfo,
@@ -49,6 +50,8 @@ import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
   agentFormValid,
+  authRowFromStored,
+  authToolsCarried,
   BUILTIN_TOOLS,
   buildAgentSpec,
   BYOC_MODELS_MAX,
@@ -57,6 +60,7 @@ import {
   defaultModelForMethod,
   entrypointAfterUpload,
   hasByoMounts,
+  isAuthTool,
   promptWithToolkit,
   republishSpec,
   resolveKb,
@@ -75,9 +79,12 @@ import type {
   AttachableKb,
   AttachableMcp,
   AttachableSkill,
+  AuthToolRow,
   KbRef,
   MountRow,
+  StoredTool,
 } from "../lib/agent-spec";
+import ClassicIdentitySection from "../components/ClassicIdentitySection";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
@@ -161,11 +168,7 @@ interface StoredSpec {
   max_iterations?: number;
   timeout_seconds?: number;
   system_prompt?: string;
-  tools?: {
-    type: string;
-    name: string;
-    config?: { url?: string; record_id?: string; gateway_id?: string };
-  }[];
+  tools?: StoredTool[];
   toolkits?: Toolkit[];
   skills?: string[];
   allowed_tools?: string[] | null;
@@ -900,6 +903,19 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [byocModelCustomOpen, setByocModelCustomOpen] = useState(false);
   const [byocModelDraft, setByocModelDraft] = useState("");
   const [byocEnvRows, setByocEnvRows] = useState<{ key: string; value: string }[]>([]);
+  // zip_runtime (HTTP) / byoc: rest + mcp tools behind a Connection (Identity section)
+  const [authTools, setAuthTools] = useState<AuthToolRow[]>([]);
+  // the workspace Connection catalog; null until loaded (and after a failed read),
+  // which blocks a spec whose rows name a Connection — see authToolIssues
+  const [connections, setConnections] = useState<ConnectionInfo[] | null>(null);
+  const [connectionsError, setConnectionsError] = useState(false);
+  const loadConnections = () => {
+    setConnectionsError(false);
+    api
+      .listConnections()
+      .then((d) => alive.current && setConnections(d.connections))
+      .catch(() => alive.current && setConnectionsError(true));
+  };
   const [byocContractOpen, setByocContractOpen] = useState(false);
   const [byocDescription, setByocDescription] = useState("");
   const byocFileRef = useRef<HTMLInputElement>(null);
@@ -939,6 +955,8 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const kbCatalogGen = useRef(0);
   const editorGen = useRef(0);
   const nextEditorIntent = () => ++editorGen.current;
+
+  useEffect(loadConnections, []);
 
   useEffect(() => {
     // Mountable assets come from the registry catalog: only APPROVED records
@@ -1100,6 +1118,7 @@ const deployLock = !canDeploy
     setSelectedGateway([]);
     setStoredGatewayConfig({});
     setSelectedMcp([]);
+    setAuthTools([]);
     setSelectedKbs([]);
     setSpecKbs([]);
     setDetailKbs([]);
@@ -1229,6 +1248,7 @@ const deployLock = !canDeploy
     byocModels,
     byocEnvRows,
     byocDescription,
+    authTools,
   });
   const specCatalogs: AgentFormCatalogs = { gatewayTargets, remoteMcp, storedGatewayConfig, kbInfo };
 
@@ -1494,7 +1514,11 @@ const deployLock = !canDeploy
         ),
       ),
     );
-    setSelectedMcp((spec.tools ?? []).filter((x) => x.type === "mcp").map((x) => x.name));
+    // an mcp tool carrying auth is an Identity row, not a catalog pick
+    setSelectedMcp(
+      (spec.tools ?? []).filter((x) => x.type === "mcp" && !isAuthTool(x)).map((x) => x.name),
+    );
+    setAuthTools((spec.tools ?? []).filter(isAuthTool).map(authRowFromStored));
     // absent on every zip spec written before toolkits existed
     setToolkits((spec.toolkits ?? []).filter((k) => TOOLKITS.some((x) => x.name === k)));
     setSelectedKbs((spec.knowledge_bases ?? []).map((k) => k.kb_id));
@@ -1761,7 +1785,11 @@ const deployLock = !canDeploy
 
   /* ── configure-step gate (per-method rules in lib/agent-spec.ts) ─────── */
 
-  const configValid = agentFormValid(agentForm(), specCatalogs, { knobIssues, byocUploading });
+  const configValid = agentFormValid(agentForm(), specCatalogs, {
+    knobIssues,
+    byocUploading,
+    connections,
+  });
 
   return (
     <section>
@@ -2308,6 +2336,13 @@ const deployLock = !canDeploy
                     + {t("create.configure.byocEnvAdd")}
                   </Btn>
                 </div>
+                <ClassicIdentitySection
+                  form={agentForm()}
+                  setRows={setAuthTools}
+                  connections={connections}
+                  catalogError={connectionsError}
+                  onRetry={loadConnections}
+                />
                 <div className="field">
                   <button
                     type="button"
@@ -2818,6 +2853,15 @@ const deployLock = !canDeploy
                   </div>
                 )}
             </div>
+            )}
+            {method === "zip_runtime" && (authToolsCarried({ method, protocol }) || authTools.length > 0) && (
+              <ClassicIdentitySection
+                form={agentForm()}
+                setRows={setAuthTools}
+                connections={connections}
+                catalogError={connectionsError}
+                onRetry={loadConnections}
+              />
             )}
             {method === "harness" && !systemEdit && (
               <div className="field" data-testid="harness-native-tools">
