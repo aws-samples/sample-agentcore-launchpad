@@ -46,6 +46,6 @@
     "vite-plugin-static-copy": "^4.1.1"
   },
   "overrides": {
-    "dompurify": "^3.4.13"
+    "dompurify": "^3.4.16"
   }
 }
