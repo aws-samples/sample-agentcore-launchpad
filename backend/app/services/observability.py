@@ -43,6 +43,7 @@ BIN_BY_RANGE = {"1h": "5m", "6h": "15m", "24h": "1h", "7d": "6h"}
 # List caps: the UI paginates client-side (50/100/200 per page), so fetch a
 # deeper window per Logs Insights query; row counts this size are cheap.
 TRACE_LIMIT = 500
+ROOT_TRACE_CHUNK = 100  # trace ids per roots query (~3.5k chars of filter)
 SESSION_LIMIT = 500
 SPANS_PER_TRACE = 500
 # On-demand scoring sends a whole session to Evaluate (model cap 20k spans);
@@ -300,12 +301,21 @@ def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) 
 """
 
 
-def q_root_spans(limit: int = 3 * TRACE_LIMIT) -> str:
+def q_root_spans(trace_ids: list[str] | None = None, limit: int = 3 * TRACE_LIMIT) -> str:
     # No session variant: root spans don't reliably carry session.id, so session
-    # views join roots by traceId against the session-filtered aggregates.
+    # views join roots by traceId against the session-filtered aggregates —
+    # `trace_ids` narrows the scan to those traces (an unfiltered roots query
+    # over 7d is the slow half of a session view, and its newest-N cap can miss
+    # an older session's roots entirely).
+    filters = ["ispresent(startTimeUnixNano)", "not ispresent(parentSpanId)"]
+    if trace_ids is not None:
+        for trace_id in trace_ids:
+            _require(TRACE_ID_RE, trace_id, "trace id")
+        quoted = ", ".join(f'"{t}"' for t in trace_ids)
+        filters.insert(0, f"traceId in [{quoted}]")
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
+| filter {" and ".join(filters)}
 | fields name, traceId, resource.attributes.service.name as service,
          durationNano, startTimeUnixNano, status.code as status_code
 | sort startTimeUnixNano desc
@@ -1266,17 +1276,29 @@ def get_session(session_id: str, range_key: str, db: Session,
     hours = RANGE_HOURS[range_key]
 
     def build() -> dict[str, Any]:
-        results = run_insights_queries(
-            {"aggregates": q_trace_aggregates(session_id=session_id), "roots": q_root_spans()},
+        aggregates = run_insights_queries(
+            {"aggregates": q_trace_aggregates(session_id=session_id)},
             hours,
             logs=logs,
             workspace=workspace,
-        )
-        roots = {row.get("traceId"): row for row in results["roots"]}
+        )["aggregates"]
+        trace_ids = [row["traceId"] for row in aggregates if row.get("traceId")]
+        # Second pass, roots of THESE traces only; chunked so each query string
+        # stays well under the Logs Insights length cap, chunks run concurrently.
+        chunks = {
+            f"roots{i}": q_root_spans(trace_ids[i:i + ROOT_TRACE_CHUNK])
+            for i in range(0, len(trace_ids), ROOT_TRACE_CHUNK)
+        }
+        root_rows = run_insights_queries(
+            chunks, hours, logs=logs, workspace=workspace
+        ) if chunks else {}
+        roots = {
+            row.get("traceId"): row for rows in root_rows.values() for row in rows
+        }
         map_agent = build_agent_mapper(db, workspace.id)
         rows = [
             _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
-            for agg in results["aggregates"]
+            for agg in aggregates
         ]
         tokens = {
             "input": sum(r["tokens"]["input"] for r in rows),
@@ -1323,6 +1345,26 @@ def get_session(session_id: str, range_key: str, db: Session,
         agent=_agent_from_traces(db, workspace.id, payload["traces"]),
     )
     return {**payload, "transcript": transcript}
+
+
+def get_session_transcript(
+    session_id: str, db: Session, workspace: WorkspaceContext, agent_id: str | None = None
+) -> dict[str, Any]:
+    """The session's conversation alone — no Logs Insights pass.
+
+    For views that already know the session's agent (an evaluation result row):
+    `get_session` would spend seconds on span aggregates just to recover the
+    agent that `session_transcript` falls back on for unattributed sessions.
+    """
+    agent = None
+    if agent_id:
+        agent = db.get(Agent, agent_id)
+        if agent is not None and agent.workspace_id != workspace.id:
+            agent = None
+    return {
+        "session_id": session_id,
+        "transcript": session_transcript(db, session_id, workspace, agent=agent),
+    }
 
 
 # ── Memory transcript (platform sessions only) ──────────────────────────────
@@ -1408,6 +1450,28 @@ def _eval_run_for_session(
 # byoc included: its runtime writes the same log group; whether the member's own
 # code emits gen_ai content records is up to their instrumentation.
 RUNTIME_LOG_METHODS = {"zip_runtime", "studio", "container", "byoc"}
+
+
+def _eval_content_log_group(agent: Agent, workspace: WorkspaceContext) -> str | None:
+    """The log group holding an agent's otel-rt-logs content records, or None.
+
+    A harness logs under its hidden BACKING runtime (id ≠ harnessId), found by
+    prefix in `resolve_telemetry`; without memory enabled that is the only copy
+    of its eval conversations. No telemetry group yet degrades to None.
+    """
+    if not agent.resource_id:
+        return None
+    if agent.method in RUNTIME_LOG_METHODS:
+        return f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
+    if agent.method != "harness":
+        return None
+    # Local import — the evaluation service sits above this module.
+    from app.evaluation.service import resolve_telemetry
+
+    try:
+        return resolve_telemetry(agent, workspace)[1]
+    except (AppError, ClientError):
+        return None
 
 
 def _part_list_text(raw: Any) -> str | None:
@@ -1796,21 +1860,17 @@ def session_transcript(
                 "actor_id": actor_display,
             }
 
-    # Runtime-backed agents write no memory events during eval runs — rebuild
-    # the conversation from the runtime's OTEL content logs instead.
-    if (
-        not turns
-        and run is not None
-        and agent is not None
-        and agent.method in RUNTIME_LOG_METHODS
-        and agent.resource_id
-    ):
-        log_group = f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
-        turns = eval_turns_from_content_logs(
-            log_group, session_id, run.created_at, workspace
-        )
-        if turns:
-            origin = "logs"
+    # Runtime-backed agents (and harnesses with memory disabled) write no memory
+    # events during eval runs — rebuild the conversation from the runtime's OTEL
+    # content logs instead.
+    if not turns and run is not None and agent is not None:
+        log_group = _eval_content_log_group(agent, workspace)
+        if log_group:
+            turns = eval_turns_from_content_logs(
+                log_group, session_id, run.created_at, workspace
+            )
+            if turns:
+                origin = "logs"
     # Long-term records only make sense for chat sessions — eval traffic all
     # shares the bare "default" actor, so its namespaces aggregate across
     # every agent's runs and say nothing about this session.

@@ -10,6 +10,7 @@ export interface ResultRow {
   taskKey: string;
   taskName: string;
   agent: string;
+  agentId: string | null;
   source: TaskSource;
   sessionId: string | null;
   traceId: string | null;
@@ -41,6 +42,7 @@ export function rowsFromRun(task: V2Task, results: EvaluationRunResults): Result
         taskKey: `${task.kind}:${task.id}`,
         taskName: task.name,
         agent: task.agentName,
+        agentId: task.agentId,
         source: task.source,
         sessionId: session.session_id,
         traceId: null,
@@ -68,6 +70,7 @@ export function rowsFromOnline(task: V2Task, records: OnlineEvalResultsRecord[])
       taskKey: `${task.kind}:${task.id}`,
       taskName: task.name,
       agent: task.agentName,
+      agentId: task.agentId,
       source: task.source,
       sessionId: r.session_id,
       traceId: r.trace_id,
