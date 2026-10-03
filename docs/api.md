@@ -37,7 +37,7 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
 Pass the returned `session_id` on the next call to continue the conversation
 (session context + AgentCore Memory ride on it).
 
-Ordinary Agent/proposal `timeout_seconds` defaults to **180 seconds**; explicit
+Ordinary Agent/proposal `timeout_seconds` defaults to **600 seconds**; explicit
 values are retained. Harness executes the corresponding native `timeoutSeconds`
 budget. A timeout returns `504 harness.execution_timeout`; cancellation returns
 `502 harness.execution_cancelled`; exhausted execution limits return

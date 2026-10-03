@@ -1159,7 +1159,7 @@ grant runtime access. A tool-name check cannot distinguish read-only shell comma
 from writes. Skill loading is retained automatically; additional Skill files or
 scripts may require explicitly reviewed file/command capabilities.
 
-Ordinary Agent and assistant-proposal execution budgets default to **180 seconds**.
+Ordinary Agent and assistant-proposal execution budgets default to **600 seconds**.
 Explicit user budgets and preset-specific defaults remain explicit. For Harness,
 Launchpad sends `timeout_seconds` as the native `timeoutSeconds` parameter; AWS
 enforces it independently of the console SDK's socket-read timeout. Sync invocation,

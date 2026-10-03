@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.5.0
+version: 1.5.1
 ---
 
 # AWS Agent Solution Architect
@@ -276,7 +276,7 @@ An evaluation allowlist cannot permit an unselected native tool. Tool-name rules
 cannot constrain shell command contents, so keep business-write assertions separate.
 Never broaden access merely because a previous trace contains an unlisted tool.
 
-Use 180 seconds as the default agent execution budget unless the user explicitly
+Use 600 seconds as the default agent execution budget unless the user explicitly
 chooses another value. A response-time objective is not automatically an execution
 cutoff: a 30-second Harness limit can cancel multi-step retrieval before a final
 answer. Record latency goals separately and explain any shorter execution budget.
