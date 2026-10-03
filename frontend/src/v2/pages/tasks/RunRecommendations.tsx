@@ -3,11 +3,12 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { DiffPanes } from "../../../components/DiffPanes";
-import { api, errorMessage } from "../../../lib/api";
+import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
 import type { EvaluationRunInfo, RunRecommendation, RunRecommendationKind } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, Field, Select, Spin, Tag, type TagTone } from "../../ui";
+import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
+import { Alert, Button, Card, Field, Modal, Select, Spin, Tag, type TagTone } from "../../ui";
 
 const POLL_MS = 10000;
 const ACTIVE = new Set(["PENDING", "IN_PROGRESS"]);
@@ -77,11 +78,16 @@ interface ToolRow {
  * tool descriptions arrive pre-filled from GetHarness; for any other agent the
  * operator types what the backend could not read (both inputs are required).
  *
- * `acceptable` (the architect's next steps, a Harness target) adds 接受并发布新版本 to a
- * completed system-prompt recommendation: it re-publishes the Harness with that prompt.
+ * The system prompt may instead come from a registered 3rd-party provider (GEPA-lite:
+ * one Bedrock reflection over this run's scored sessions) — the fallback when the
+ * AgentCore job refuses the input.
+ *
+ * `acceptable` adds 接受并发布新版本 to a completed system-prompt recommendation: the
+ * operator reviews (and may edit) the prompt, then it re-publishes the Harness. Left
+ * undefined it follows the run's agent: any Managed Harness run qualifies.
  */
 export function RunRecommendations({
-  run, acceptable = false, onAccepted, embedded = false,
+  run, acceptable: acceptableProp, onAccepted, embedded = false,
 }: {
   run: EvaluationRunInfo;
   acceptable?: boolean;
@@ -94,6 +100,14 @@ export function RunRecommendations({
   const { can } = useAuth();
   const [tick, setTick] = useState(0);
   const inputs = useLoad(() => api.runRecommendationInputs(run.id), `rec-inputs:${run.id}`);
+  const providersLoad = useLoad(
+    () => api.experimentProviders().catch(() => ({ providers: [] as RecommendProviderInfo[] })),
+    "rec-providers",
+  );
+  const providers = providersLoad.data?.providers ?? [];
+  const [providerId, setProviderId] = useState("agentcore");
+  const [modelChoice, setModelChoice] = useState("");
+  const [modelCustom, setModelCustom] = useState("");
   const list = useLoad(() => api.runRecommendations(run.id), `rec-list:${run.id}:${tick}`);
   const recs = useMemo(() => list.data?.recommendations ?? [], [list.data]);
   const active = recs.some((r) => ACTIVE.has(r.status));
@@ -123,9 +137,9 @@ export function RunRecommendations({
     setNextKey(seed.tools.length);
     // A Harness version cannot take tool-description recommendations (a Gateway
     // tool's description belongs to its target), so it starts unchecked there.
-    const harness = acceptable || seed.source === "harness";
+    const harness = acceptableProp || seed.source === "harness" || seed.agent_method === "harness";
     setWantTools(!harness && seed.tools_eligible && seed.tools.some((tool) => tool.description.trim()));
-  }, [seed, acceptable]);
+  }, [seed, acceptableProp]);
 
   if (inputs.loading && !seed) return embedded ? <Spin /> : <Card title={t("v2.rec.title")}><Spin /></Card>;
   if (inputs.error && !seed) {
@@ -134,13 +148,18 @@ export function RunRecommendations({
   }
   if (!seed) return null;
 
+  const acceptable = acceptableProp ?? seed.agent_method === "harness";
+  const provider = providers.find((p) => p.id === providerId);
+  const thirdParty = provider && provider.id !== "agentcore" ? provider : null;
+  const modelId = modelChoice === CUSTOM_MODEL_OPTION ? modelCustom.trim() : modelChoice || (thirdParty?.default_model_id ?? "");
+  const modelMissing = !!thirdParty && wantPrompt && modelChoice === CUSTOM_MODEL_OPTION && !modelCustom.trim();
   const source = seed.source;
   const formOpen = open ?? recs.length === 0;
   const filledTools = tools.filter((row) => row.include && row.name.trim());
   const promptMissing = wantPrompt && !prompt.trim();
   const toolsMissing = wantTools && filledTools.length === 0;
   const descMissing = wantTools && filledTools.some((row) => !row.description.trim());
-  const invalid = (!wantPrompt && !wantTools) || promptMissing || toolsMissing || descMissing;
+  const invalid = (!wantPrompt && !wantTools) || promptMissing || toolsMissing || descMissing || modelMissing;
   const mayRun = can("eval.run");
 
   const setTool = (key: number, patch: Partial<ToolRow>) =>
@@ -162,7 +181,7 @@ export function RunRecommendations({
       await api.createRunRecommendations(run.id, {
         kinds,
         input_source: source,
-        ...(wantPrompt ? { system_prompt: prompt, evaluator } : {}),
+        ...(wantPrompt ? { system_prompt: prompt, ...(thirdParty ? { provider: thirdParty.id, ...(modelId ? { model_id: modelId } : {}) } : { evaluator }) } : {}),
         ...(wantTools
           ? { tools: filledTools.map((row) => ({ name: row.name.trim(), description: row.description.trim() })) }
           : {}),
@@ -238,6 +257,49 @@ export function RunRecommendations({
               data-testid="v2-rec-prompt"
             />
           </Field>
+          {providers.length > 1 && (
+            <Field label={t("expPage.providerLabel")}>
+              <Select
+                value={provider?.id ?? "agentcore"}
+                onChange={(v) => { setProviderId(v); setModelChoice(""); setModelCustom(""); }}
+                testId="v2-rec-provider"
+                options={providers.map((p) => ({ value: p.id, label: p.label }))}
+              />
+            </Field>
+          )}
+          {thirdParty && (
+            <>
+              {thirdParty.models.length > 0 && (
+                <Field label={t("expPage.providerModel")} error={touched && modelMissing ? t("v2.rec.modelRequired") : null}>
+                  <Select
+                    value={modelChoice}
+                    onChange={setModelChoice}
+                    testId="v2-rec-model"
+                    options={[
+                      ...thirdParty.models.map((m) => ({
+                        value: m.model_id === thirdParty.default_model_id ? "" : m.model_id,
+                        label: `${m.label}${m.model_id === thirdParty.default_model_id ? ` · ${t("expPage.providerDefaultModel")}` : ""}`,
+                      })),
+                      { value: CUSTOM_MODEL_OPTION, label: t("expPage.providerCustomModel") },
+                    ]}
+                  />
+                  {modelChoice === CUSTOM_MODEL_OPTION && (
+                    <input
+                      className="v2-input mono"
+                      style={{ marginTop: 8 }}
+                      placeholder="global.anthropic.claude-sonnet-5"
+                      value={modelCustom}
+                      onChange={(e) => setModelCustom(e.target.value)}
+                      data-testid="v2-rec-model-custom"
+                    />
+                  )}
+                </Field>
+              )}
+              <Alert>{t("v2.rec.providerNote")}</Alert>
+            </>
+          )}
+          {!thirdParty && (
+          <>
           <Field label={t("v2.rec.evaluator")}>
             <Select
               value={evaluator}
@@ -255,6 +317,8 @@ export function RunRecommendations({
             />
           </Field>
           <EvaluatorGuide excluded={seed.excluded_evaluators} />
+          </>
+          )}
         </>
       )}
       {wantTools && (
@@ -372,14 +436,16 @@ function RecommendationResult({
   const { t } = useTranslation();
   const toast = useV2Toast();
   const { can } = useAuth();
-  const [confirm, setConfirm] = useState(false);
+  // the review dialog: the recommended prompt, editable before it is published
+  const [review, setReview] = useState<string | null>(null);
   const [accepting, setAccepting] = useState(false);
   const done = rec.status === "COMPLETED";
   const mayAccept = can("agents.deploy");
-  const accept = async () => {
+  const recommended = rec.result.recommended_prompt ?? "";
+  const accept = async (reviewed: string) => {
     setAccepting(true);
     try {
-      const res = await api.acceptRunRecommendation(runId, rec.id);
+      const res = await api.acceptRunRecommendation(runId, rec.id, reviewed);
       toast("success", t("v2.rec.accept.startedToast"));
       onAccepted({ jobId: res.job_id, rec: res.recommendation });
     } catch (err) {
@@ -402,9 +468,14 @@ function RecommendationResult({
           {rec.kind === "system_prompt" ? t("expPage.recTypePrompt") : t("expPage.recTypeTools")}
           <Tag tone={STATUS_TONE[rec.status] ?? "gray"}>{rec.status}</Tag>
           <Tag tone="outline">{t(`v2.rec.source.${rec.input_source}`)}</Tag>
+          {rec.result.provider && (
+            <Tag tone="blue" title={t("v2.rec.providerTag")}>
+              {[rec.result.provider, rec.result.provider_model_id].filter(Boolean).join(" · ")}
+            </Tag>
+          )}
         </span>
       }
-      sub={[fmtTime(rec.created_at), rec.evaluator].filter(Boolean).join(" · ")}
+      sub={[fmtTime(rec.created_at), rec.evaluator ?? (rec.result.provider ? t("v2.rec.providerAllEvaluators") : null)].filter(Boolean).join(" · ")}
       end={
         done && rec.kind === "system_prompt" && rec.result.recommended_prompt ? (
           <span className="v2-row">
@@ -414,7 +485,7 @@ function RecommendationResult({
                 kind="primary"
                 disabled={!mayAccept || accepting}
                 title={mayAccept ? undefined : t("v2.rec.accept.noPermission")}
-                onClick={() => setConfirm(true)}
+                onClick={() => setReview(recommended)}
                 testId="v2-rec-accept"
               >
                 {accepting ? t("v2.rec.accept.accepting") : t("v2.rec.accept.button")}
@@ -443,12 +514,17 @@ function RecommendationResult({
               at: fmtTime(rec.accepted.at),
               version: rec.accepted.previous_version ?? "—",
             })}
+            {rec.accepted.edited ? ` ${t("v2.rec.accept.acceptedEdited")}` : ""}
           </Alert>
         )}
         {showToolNote && done && rec.kind === "tool_descriptions" && (
           <Alert>{t("v2.rec.accept.toolsNotApplied")}</Alert>
         )}
-        {ACTIVE.has(rec.status) && <span className="v2-muted">{t("v2.rec.running", { id: rec.recommendation_id })}</span>}
+        {ACTIVE.has(rec.status) && (
+          <span className="v2-muted">
+            {rec.result.progress ?? t("v2.rec.running", { id: rec.recommendation_id })}
+          </span>
+        )}
         {rec.skipped_tools.length > 0 && <Alert tone="warn">{t("v2.rec.skippedTools", { tools: rec.skipped_tools.join(", ") })}</Alert>}
         {rec.error && <Alert tone={rec.status === "FAILED" ? "error" : "warn"}>{rec.error}</Alert>}
         {done && rec.kind === "system_prompt" && (
@@ -485,14 +561,47 @@ function RecommendationResult({
           ))}
         <span className="v2-muted mono">{rec.recommendation_id}</span>
       </div>
-      <Confirm
-        open={confirm}
+      <Modal
+        open={review !== null}
+        wide
         title={t("v2.rec.accept.confirmTitle")}
-        body={t("v2.rec.accept.confirmBody")}
-        confirmLabel={t("v2.rec.accept.button")}
-        onConfirm={() => { setConfirm(false); void accept(); }}
-        onClose={() => setConfirm(false)}
-      />
+        onClose={() => setReview(null)}
+        testId="v2-rec-accept-dialog"
+        footer={
+          <>
+            <Button onClick={() => setReview(null)}>{t("v2.common.cancel")}</Button>
+            <Button
+              kind="primary"
+              disabled={!review?.trim() || accepting}
+              onClick={() => { const text = review ?? ""; setReview(null); void accept(text); }}
+              testId="v2-rec-accept-confirm"
+            >
+              {review !== null && review.trim() !== recommended.trim() ? t("v2.rec.accept.buttonEdited") : t("v2.rec.accept.button")}
+            </Button>
+          </>
+        }
+      >
+        <div className="v2-form">
+          <Alert>{t("v2.rec.accept.confirmBody")}</Alert>
+          <Alert tone="warn">{t("v2.rec.accept.reviewHint")}</Alert>
+          <Field label={t("v2.rec.accept.reviewLabel")} full>
+            <textarea
+              className="v2-textarea code"
+              rows={16}
+              value={review ?? ""}
+              maxLength={20000}
+              onChange={(e) => setReview(e.target.value)}
+              data-testid="v2-rec-accept-prompt"
+            />
+          </Field>
+          {review !== null && review.trim() !== recommended.trim() && (
+            <span className="v2-muted">{t("v2.rec.accept.editedNote")}</span>
+          )}
+          {review !== null && review.trim() !== recommended.trim() && (
+            <Button size="sm" onClick={() => setReview(recommended)}>{t("v2.rec.accept.resetEdit")}</Button>
+          )}
+        </div>
+      </Modal>
     </Card>
   );
 }

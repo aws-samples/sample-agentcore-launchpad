@@ -222,6 +222,12 @@ export interface RunRecommendation {
     recommended_prompt?: string;
     explanation?: string;
     tools?: Record<string, { description: string; explanation: string }>;
+    /** a 3rd-party provider row (e.g. gepa_lite): who produced it, with which model */
+    provider?: string;
+    provider_model_id?: string;
+    provider_meta?: { evidence_sessions?: number; evidence_records?: number; latency_ms?: number };
+    /** the provider job's last progress line while it runs */
+    progress?: string;
   };
   error: string | null;
   /** set once the recommended prompt was accepted into a new Harness version */
@@ -232,6 +238,8 @@ export interface RunRecommendation {
     previous_version: string | null;
     job_id: string;
     deployment_id: string;
+    /** the published prompt was the operator's edit of the recommendation */
+    edited?: boolean;
   } | null;
   created_at: string | null;
   updated_at: string | null;

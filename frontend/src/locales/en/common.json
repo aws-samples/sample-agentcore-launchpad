@@ -4507,7 +4507,10 @@
     "memoryNoShared": "this workspace has no shared memory — only “disabled” is possible",
     "kbGatewayMissing": "no ready KB gateway here — mounting a KB is manual work",
     "bindingsAuth": "auth:",
-    "bindingsDigest": "content"
+    "bindingsDigest": "content",
+    "editRetry": "Edit & retry",
+    "retryNote": "Retrying turn {{turn}}: its failed exchange stays in the thread but is no longer sent to the assistant. You can edit the message above first.",
+    "turnRetried": "This turn was retried and is no longer sent to the assistant."
   },
   "assistantEval": {
     "title": "EVALUATION ASSETS",
@@ -4751,7 +4754,7 @@
     "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS.",
     "recommend": {
       "title": "Generate AI-recommended improvements",
-      "body": "AgentCore Recommendations reads the traces of the run you pick (the newest clean run by default) and proposes a revised system prompt (and tool descriptions) aimed at the evaluator you pick. Review the diff; accepting it re-publishes the Harness with that prompt, and AWS creates a new Harness version (DEFAULT follows it).",
+      "body": "An AI recommendation reads the traces of the run you pick (the newest clean run by default — any of this agent's runs, on any dataset) and proposes a revised system prompt (and tool descriptions): AgentCore Recommendations aimed at the evaluator you pick by default, or GEPA-lite. Review the diff; you can still edit the prompt when accepting, and Launchpad re-publishes the Harness with the final text, so AWS creates a new Harness version (DEFAULT follows it).",
       "source": "Traces from",
       "version": "Harness now on v{{v}}",
       "publishing": "Publishing the new Harness version of “{{name}}”… Step 4 lists it once the deploy finishes.",
@@ -5616,7 +5619,16 @@
       "recordsSub": "Input is required; expected output is the ground truth some evaluators need.",
       "addRow": "Add record",
       "inputPlaceholder": "User input",
-      "expectedPlaceholder": "Expected output (optional)"
+      "expectedPlaceholder": "Expected output (optional)",
+      "copySelected": "Copy selected to a new dataset ({{count}})",
+      "copyPickHint": "Tick the records to copy below first.",
+      "pickAll": "Select all",
+      "pickRow": "Select record {{n}}",
+      "copyTitle": "Copy {{count}} records to a new dataset",
+      "copyHint": "Copies the selected records as stored — every turn's input and reference answer, the assertions and the expected tool trajectory; the source dataset is unchanged.",
+      "copyConfirm": "Create dataset",
+      "copyDescription": "{{count}} records copied from “{{name}}”.",
+      "copied": "Created dataset “{{name}}” ({{count}} records)."
     },
     "pipelines": {
       "colName": "Task name / description",
@@ -7471,9 +7483,19 @@
         "toolsNotApplied": "Tool-description recommendations are not written into a Harness version: a Gateway tool's description belongs to its Gateway target.",
         "startedToast": "Accepted — publishing a new Harness version.",
         "confirmTitle": "Accept this recommendation?",
-        "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback."
+        "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback.",
+        "buttonEdited": "Publish the edited prompt",
+        "reviewHint": "Review it before publishing: an AI recommendation can loosen a red line (for example turning a ban into \"allowed after the user confirms\"). Edit it below — what you publish is this text.",
+        "reviewLabel": "System prompt to publish",
+        "editedNote": "Edited: the acceptance is recorded as edited by you.",
+        "resetEdit": "Reset to the recommendation",
+        "acceptedEdited": "The prompt was edited before publishing."
       },
-      "toolDiff": "Tool description"
+      "toolDiff": "Tool description",
+      "modelRequired": "Enter the custom model ID.",
+      "providerNote": "GEPA-lite runs one Bedrock reflection over this run's evaluator scores, judge explanations and session transcripts and proposes a revised system prompt directly — without the AgentCore recommendation service (use it, for example, when that service refuses the input). Tool-description recommendations still come from AgentCore.",
+      "providerAllEvaluators": "all evaluators",
+      "providerTag": "The provider and model that produced this recommendation"
     }
   }
 }

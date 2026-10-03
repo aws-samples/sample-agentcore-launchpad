@@ -976,6 +976,52 @@ def test_replay_pairs_by_turn_bounds_the_final_request_and_discloses_omissions(
     assert harness.calls[-1]["messages"][-1]["content"][0]["text"].endswith(big)  # never cut
 
 
+def test_a_retried_failed_turn_is_kept_but_never_replayed_again(client, ready, harness):
+    cid = _open(client)
+    harness.reply("Q1?")
+    _turn(client, cid, "first")
+    harness.fail_after = 0  # turn 2 fails (the poisoned message)
+    assert _turn(client, cid, "poisoned wording")[-1][0] == "error"
+    harness.fail_after = None
+    harness.reply("Fixed.")
+
+    res = client.post(f"{BASE}/conversations/{cid}/turns",
+                      json={"prompt": "reworded", "retry_of_turn": 2})
+
+    assert res.status_code == 200, res.text
+    assert _sse(res)[-1][0] == "done"
+    sent = " ".join(m["content"][0]["text"] for m in harness.calls[-1]["messages"])
+    assert "poisoned wording" not in sent and sent.endswith("reworded")
+    # later turns keep it out of the replay, and the thread still shows it
+    harness.reply("Q3?")
+    _turn(client, cid, "next")
+    sent = " ".join(m["content"][0]["text"] for m in harness.calls[-1]["messages"])
+    assert "poisoned wording" not in sent and "reworded" in sent
+    rows = _latest(client, cid)["messages"]
+    assert any(m["text"] == "poisoned wording" for m in rows)
+    assert any(m["role"] == "error" and m["name"] == service.TURN_RETRIED_NAME and m["turn"] == 2
+               for m in rows)
+
+
+def test_only_the_latest_failed_turn_can_be_retried(client, ready, harness):
+    cid = _open(client)
+    harness.reply("Q1?")
+    _turn(client, cid, "first")
+    ok = client.post(f"{BASE}/conversations/{cid}/turns",
+                     json={"prompt": "x", "retry_of_turn": 1})
+    assert ok.status_code == 409 and ok.json()["code"] == "assistant.retry_not_allowed"
+    harness.fail_after = 0
+    _turn(client, cid, "second")
+    harness.fail_after = None
+    harness.reply("Q3?")
+    _turn(client, cid, "third")
+    stale = client.post(f"{BASE}/conversations/{cid}/turns",
+                        json={"prompt": "x", "retry_of_turn": 2})
+    assert stale.status_code == 409
+    calls = len(harness.calls)
+    assert len(harness.calls) == calls  # refused before any data-plane call
+
+
 def test_oversized_current_message_is_refused_never_truncated(client, ready, harness):
     cid = _open(client)
     res = client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "😀" * 90_000})
