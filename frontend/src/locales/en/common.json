@@ -444,7 +444,7 @@
       "file_operations": "file_operations — read and write files in the agent runtime",
       "none": "None selected",
       "unavailable": "None selected — publishing this configuration leaves shell and file_operations unavailable.",
-      "selectedHint": "Only selected attachments, Skills and native tools are allowed. Native tools start unselected. Enable shell only when command execution is required, and file_operations only when file access is required.",
+      "selectedHint": "Only selected attachments, Skills and native tools are allowed. A new Managed Harness starts with both native tools ticked. Untick shell when command execution is not needed, and file_operations when file access is not needed.",
       "overrideTitle": "Expert tool override is active",
       "overrideHint": "These allowed_tools patterns control access instead of the selections below. \"*\" allows all tools, including shell and file_operations; an empty list exposes no native tools, while mounted knowledge-base support is retained. Native checkboxes are disabled until you switch to selected tools.",
       "overrideSummary": "These saved allowed_tools patterns control access instead of native selections. \"*\" allows all tools, including shell and file_operations; an empty list exposes no native tools, while mounted knowledge-base support is retained.",
@@ -5376,7 +5376,7 @@
         "remoteMcp": "Remote MCP servers",
         "noMcp": "No approved remote MCP servers",
         "nativeTools": "Native execution",
-        "nativeToolsHint": "Off by default: lets the agent run shell commands or read and write files in its session.",
+        "nativeToolsHint": "On by default: lets the agent run shell commands (for example, to read the current date) or read and write files in its session; untick what it does not need.",
         "native": {
           "shell": "Shell",
           "file_operations": "File operations"
