@@ -7,11 +7,11 @@ from app.schemas.agent import AgentSpec
 from app.system_agents.presets import ARCHITECT
 
 
-def test_ordinary_creation_and_proposal_mapping_default_to_180_seconds():
+def test_ordinary_creation_and_proposal_mapping_default_to_600_seconds():
     spec = AgentSpec(name="ordinary-agent", method="harness", system_prompt="Be helpful.")
     proposal = ProposalContent(name="ordinary-agent", system_prompt="Be helpful.")
     mapped = to_agent_spec(proposal, {"tools": [], "skills": [], "knowledge_bases": []})
-    assert spec.timeout_seconds == proposal.timeout_seconds == mapped.timeout_seconds == 180
+    assert spec.timeout_seconds == proposal.timeout_seconds == mapped.timeout_seconds == 600
 
 
 @pytest.mark.parametrize("budget", [30, 300, 900, 1200])
