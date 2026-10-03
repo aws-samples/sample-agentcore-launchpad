@@ -464,6 +464,7 @@ def test_native_harness_tools_can_be_explicitly_allowed_but_are_never_added(cata
 def test_native_permission_is_bound_to_proposal_and_cannot_be_granted_by_evaluator(native):
     rule = {"id": "native", "type": "tool_set", "allowed": [native]}
     raw = _source(rule, {})
+    raw["native_tools"] = []  # an explicit opt-out; omitted means both (the default)
     for parsed, errors in (proposals.parse_content(raw), _validate_plan(raw)):
         assert parsed is None
         assert any("not selected for this Harness runtime" in e for e in errors)

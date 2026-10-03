@@ -206,11 +206,12 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   lookups of a server that also writes): this is enforced as the Harness's runtime
   tool filter, so it is the least-privilege control, not an evaluation rule. When a
   key's callable names are unavailable, do not guess — ask for a catalog refresh.
-- `native_tools`: optional list containing only `"shell"` and/or `"file_operations"`.
-  Default is empty: Launchpad does not expose these native tools unless explicitly
-  selected and reviewed. Do not add shell just to calculate a number or read a date.
-  Propose a native tool only when the user explicitly requests that capability and
-  explain its command/file access in the readable proposal.
+- `native_tools`: list containing only `"shell"` and/or `"file_operations"`. Default
+  is both (the Create Agent wizard ticks both for a new Managed Harness): shell lets
+  the agent read the current date/time and compute in its sandbox, file_operations
+  lets it work with files there. Keep both unless the user declines them or a
+  requirement forbids command or file access; send `[]` (or one of them) explicitly
+  then. Disclose the command/file access in the readable proposal either way.
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
@@ -337,8 +338,9 @@ refusal assertions when the Agent needs Skill loading or KB retrieval. Specify t
 prohibited business action instead.
 Although AWS Harness provides native `shell` and `file_operations`, Launchpad sends
 an explicit runtime allowedTools filter derived from the selected attachments,
-Skill loading and `native_tools`. Empty native_tools means neither native tool is
-exposed. Evaluation allowlists must not allow native tools absent from that selection.
+Skill loading and `native_tools` (both by default). An empty native_tools list means
+neither native tool is exposed. Evaluation allowlists must not allow native tools
+absent from that selection.
 A tool-name rule cannot distinguish a read-only shell command from a write. Loading
 a Skill's main instructions is included; using additional files or scripts may need
 an explicitly reviewed native file/command capability. Never add a tool merely
@@ -370,8 +372,8 @@ Hard rules of this environment:
 def catalog_section(catalog: dict[str, Any]) -> str:
     lines = ["## Available resources in this workspace (reference by key)", ""]
     lines.append(
-        "Optional native Harness tools: `shell`, `file_operations` (disabled unless "
-        "explicitly selected in `native_tools`; not resource `tools` keys)."
+        "Native Harness tools: `shell`, `file_operations` (selected by default in "
+        "`native_tools`; not resource `tools` keys)."
     )
     tools = [t for t in catalog.get("tools") or [] if t.get("attachable", True)]
     lines.append("Tools (`tools` keys):")

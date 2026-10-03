@@ -853,7 +853,10 @@ re-publish, and `POST …/skill-registration` remains for an explicit API regist
 every session unless `allowedTools` restricts them. Launchpad always sends that
 member on deployment: `AgentSpec.allowed_tools=None` derives exact selectors from
 the final resolved tool configurations, Skill loading and explicit `native_tools`
-choices. Native choices default to empty; a completely empty selection sends `[]`.
+choices. A new Managed Harness (both create wizards and architect proposals) starts with
+both native tools selected; `AgentSpec.native_tools` itself still defaults to empty, so
+an API spec or a stored agent never gains shell on redeploy. A completely empty selection
+sends `[]`.
 An explicit `allowed_tools` list remains an expert override (entries are 1–64 chars
 matching `*|@?name(/tool)?`). The preset retains its explicit
 `["shell", "file_*", "@aws_knowledge"]` override: the Harness sandbox shell, the file
@@ -1152,8 +1155,8 @@ Proposal/plan validation rejects attachment selectors such as `mcp:aws-knowledge
 inside literal tool-rule fields and positive allowlists that omit mounted support
 tools. Saving and approving a plan additionally check its allowed names against the selected
 conversation catalog. Named business-write bans remain independent of discovery.
-Native Harness `shell` and `file_operations` must first be explicitly selected in
-`native_tools` (or admitted by an explicit expert runtime override) before an
+Native Harness `shell` and `file_operations` must be selected in `native_tools` (both
+are by default for a new Harness) (or admitted by an explicit expert runtime override) before an
 evaluation rule can permit or require them. Availability in the catalog does not
 grant runtime access. A tool-name check cannot distinguish read-only shell commands
 from writes. Skill loading is retained automatically; additional Skill files or

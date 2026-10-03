@@ -113,9 +113,10 @@ def test_partial_edit_helper_matches_backend_contract() -> None:
     assert "DEFAULT_MAX_ITERATIONS = 10" in helpers
     defaults = _src(FRONTEND / "lib" / "agent-defaults.ts")
     assert "DEFAULT_TIMEOUT_SECONDS = 600" in defaults
-    assert 'import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";' in _src(WIZARD)
+    defaults_import = "import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from"
+    assert f'{defaults_import} "../lib/agent-defaults";' in _src(WIZARD)
     # the assistant's proposal → spec mapping (shared by both consoles) lives in lib/
-    assert 'import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";' in _src(
+    assert f'{defaults_import} "./agent-defaults";' in _src(
         FRONTEND / "lib" / "assistant.ts"
     )
     from app.schemas.agent import MAX_TOKENS_CEILING, AgentSpec

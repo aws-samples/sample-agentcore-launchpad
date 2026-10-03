@@ -5,7 +5,7 @@
  * and its validation, the creation-progress state machine, the evaluation-plan
  * row edits and the knowledge-base readiness rules. Nothing here renders.
  */
-import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import {
   ApiError,
   api,
@@ -157,7 +157,7 @@ export function proposalDraftFrom(content: AssistantProposal["content"]): Propos
     native_tools: Array.isArray(content.native_tools)
       ? content.native_tools.filter((tool): tool is HarnessNativeTool =>
         HARNESS_NATIVE_TOOLS.some((name) => name === tool))
-      : [],
+      : [...DEFAULT_HARNESS_NATIVE_TOOLS],
     skills: Array.isArray(content.skills) ? content.skills.map(String) : [],
     knowledge_bases: Array.isArray(content.knowledge_bases) ? content.knowledge_bases.map(String) : [],
     memory: content.memory === "workspace" ? "workspace" : "disabled",
