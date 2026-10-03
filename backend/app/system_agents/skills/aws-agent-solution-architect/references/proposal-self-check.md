@@ -147,8 +147,8 @@ as a whole — after the member has already read and approved the design.
     runtime catalog, never `mcp:` / `gateway:` attachment selectors. A positive
     allowlist includes mounted `skills` and KB retrieval support names. Missing
     catalogs remain unresolved; do not guess names or copy arbitrary observed calls.
-    Native Harness `shell` / `file_operations` must first be selected in `native_tools`
-    and disclosed for review; they are off by default. Evaluation rules cannot grant
+    Native Harness `shell` / `file_operations` must be selected in `native_tools`
+    (both by default) and disclosed for review. Evaluation rules cannot grant
     runtime access. Tool names cannot enforce read-only shell commands.
   - Required `tool_count min > 0` and nonempty `tool_sequence` names must also
     belong to the selected runtime catalog. After MCP preparation changes, review

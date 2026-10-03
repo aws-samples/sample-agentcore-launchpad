@@ -234,9 +234,10 @@ class ProposalContent(BaseModel):
     # from the stored content when absent (hash stability, like ``evaluation_plan``).
     tool_functions: dict[Key, Annotated[list[ToolName], Field(min_length=1, max_length=50)]] \
         | None = Field(default=None, max_length=20)
-    # Explicit opt-in to native command/filesystem tools; these are not attachments.
+    # Native command/filesystem tools (not attachments): a proposal starts with both,
+    # like the Create Agent wizard; an explicit list (including []) is kept as given.
     native_tools: list[Literal["shell", "file_operations"]] = Field(
-        default_factory=list, max_length=2,
+        default_factory=lambda: ["shell", "file_operations"], max_length=2,
     )
     # Catalog skill names (registry AGENT_SKILLS records), never S3 paths.
     skills: list[Key] = Field(default_factory=list, max_length=10)

@@ -20,7 +20,7 @@ import {
   defaultModelFor,
   SPEC_DEFAULT_MODEL_ID,
 } from "./models";
-import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import {
   DEFAULT_MAX_ITERATIONS,
   EFFORT_NONE,
@@ -326,7 +326,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   selectedKbs: [],
   skills: [],
   allowedTools: null,
-  nativeTools: [],
+  nativeTools: method === "harness" ? [...DEFAULT_HARNESS_NATIVE_TOOLS] : [],
   longTerm: true,
   memoryId: "",
   mcpServers: "",

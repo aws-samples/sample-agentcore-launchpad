@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.5.1
+version: 1.5.2
 ---
 
 # AWS Agent Solution Architect
@@ -265,13 +265,17 @@ functions belong in the business allowlist. Preserve deliberate write prohibitio
 Required tool counts and sequences must use callable names from selected resources.
 Adding an MCP never enables native shell or file access.
 
-AWS Harness includes native `shell` and `file_operations`, but Launchpad now closes
-them by default using explicit runtime `allowedTools`. Proposals opt in through
-`native_tools: ["shell"]` and/or `"file_operations"`; the default is an empty list.
-Only propose these when the user explicitly asks for their command/file capability,
-and disclose the choice for review. The runtime filter also keeps the selected
-MCP/Gateway/KB tools and Skill loading available. Extra Skill files or scripts may
-require an explicitly selected native tool; do not silently enable it.
+AWS Harness includes native `shell` and `file_operations`; Launchpad exposes them
+through explicit runtime `allowedTools`. A new Managed Harness starts with both
+selected (`native_tools: ["shell", "file_operations"]`, the Create Agent default):
+shell gives the agent the current date/time and sandboxed computation, file
+operations let it work with files in its sandbox. Keep both unless the user declines
+them or a requirement forbids command or file access, and disclose the choice for
+review either way. When the agent must resolve relative dates ("last month", "近一个月",
+"YTD"), have the system prompt tell it to read the current date with shell (`date`)
+before searching or filtering, never to guess "today" from model memory or page
+dates. The runtime filter also keeps the selected MCP/Gateway/KB tools and Skill
+loading available.
 An evaluation allowlist cannot permit an unselected native tool. Tool-name rules
 cannot constrain shell command contents, so keep business-write assertions separate.
 Never broaden access merely because a previous trace contains an unlisted tool.

@@ -44,7 +44,7 @@ import type {
   Toolkit,
 } from "../lib/api";
 import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
-import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
+import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
 import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
@@ -814,7 +814,7 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [skills, setSkills] = useState<string[]>(prefillSkill ? [prefillSkill] : []);
   // Preserve expert overrides until the member explicitly opts into derivation.
   const [allowedTools, setAllowedTools] = useState<string[] | null>(null);
-  const [nativeTools, setNativeTools] = useState<HarnessNativeTool[]>([]);
+  const [nativeTools, setNativeTools] = useState<HarnessNativeTool[]>([...DEFAULT_HARNESS_NATIVE_TOOLS]);
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState(defaultModelFor(DEFAULT_MODEL_SOURCE));
   const [modelSource, setModelSource] = useState<ModelSource>(DEFAULT_MODEL_SOURCE);
@@ -1105,7 +1105,7 @@ const deployLock = !canDeploy
     setDetailKbs([]);
     setSkills([]);
     setAllowedTools(null);
-    setNativeTools([]);
+    setNativeTools([...DEFAULT_HARNESS_NATIVE_TOOLS]);
     setLongTerm(true);
     setMcpServers("");
     setCustomSkills([]);
