@@ -21,6 +21,13 @@ The job is asynchronous on AWS; nothing here polls in the background. Every read
 of a non-terminal row refreshes it with one ``GetRecommendation`` (AWS is the
 source of truth, the row is the pointer + last-seen result), so a restart loses
 nothing.
+
+A system-prompt recommendation may instead come from a registered 3rd-party
+provider (``gepa_lite``): the same reflective pipeline the experiment RECOMMEND
+stage runs (the run's own batch-evaluation results joined with each session's
+transcript → one Bedrock reflection), executed here on a background thread. Its
+row carries a ``gepa-`` pointer instead of an AWS recommendation id; a row left
+non-terminal by a restart reads as interrupted.
 """
 
 from __future__ import annotations
@@ -48,6 +55,12 @@ from app.services.agentcore.client import control_client, data_client
 from app.services.workspace import WorkspaceContext
 
 KINDS = ("system_prompt", "tool_descriptions")
+AGENTCORE_PROVIDER = "agentcore"
+PROVIDER_JOB_PREFIX = "provider-"  # recommendation_id of a 3rd-party provider row
+# provider jobs running in THIS process; a non-terminal provider row not listed here
+# was interrupted (the server restarted while it ran)
+_live_provider_jobs: set[str] = set()
+_live_provider_lock = threading.Lock()
 DEFAULT_EVALUATOR = "Builtin.GoalSuccessRate"
 # The devguide's two recommended optimization targets ("Choosing an evaluator"):
 # GoalSuccessRate for an agent with a clear task, Helpfulness for an open-ended one.
@@ -505,6 +518,8 @@ def start(
     system_prompt: str | None,
     evaluator: str | None,
     tools: dict[str, str] | None,
+    provider: str | None = None,
+    model_id: str | None = None,
 ) -> list[EvalRecommendation]:
     gate = eligibility(run)
     if not gate["eligible"]:
@@ -530,11 +545,14 @@ def start(
             raise AppError("recommendation.tool_description_required",
                            "every tool needs its current description",
                            {"tools": empty}, status_code=422)
+    third_party = bool(provider) and provider != AGENTCORE_PROVIDER
+    if third_party and "system_prompt" in kinds:
+        provider_source = _provider_preflight(run, workspace, provider)
     # every AWS read that can refuse happens before the first Start, so a refusal
     # never leaves one kind running and the other unstarted
     evaluator_id = evaluator or DEFAULT_EVALUATOR
     evaluator_arn = batch_arn = ""
-    if "system_prompt" in kinds:
+    if "system_prompt" in kinds and not third_party:
         evaluator_arn = _evaluator_arn(db, evaluator_id, workspace)
         batch_arn = _batch_arn(run, workspace)
     spans: list[dict[str, Any]] = []
@@ -555,6 +573,12 @@ def start(
     created: list[EvalRecommendation] = []
     for kind in KINDS:
         if kind not in kinds:
+            continue
+        if kind == "system_prompt" and third_party:
+            created.append(_start_provider_job(
+                db, run, workspace, provider=str(provider), model_id=model_id,
+                prompt=prompt, input_source=input_source, source=provider_source,
+            ))
             continue
         if kind == "system_prompt":
             name = _job_name(run.id, kind)
@@ -578,6 +602,116 @@ def start(
         db.commit()
         created.append(row)
     return created
+
+
+def _provider_preflight(run: EvalRun, workspace: WorkspaceContext, provider: str) -> dict[str, Any]:
+    """Validate a 3rd-party provider request before anything starts; returns the
+    run's pinned trace source (its batch's results stream — the provider's evidence)."""
+    from app.optimization import providers as rec_providers
+    from app.optimization import service as opt_service
+
+    if provider not in rec_providers.PROVIDER_IDS:
+        raise AppError("recommendation.provider_unknown", f"unknown provider {provider!r}",
+                       {"providers": list(rec_providers.PROVIDER_IDS)}, status_code=422)
+    if not run.agent_id:
+        # the evidence joins each session's transcript through the agent's telemetry
+        raise AppError(
+            "recommendation.provider_needs_agent",
+            "a 3rd-party provider reflects on a platform agent's sessions — this run has "
+            "no agent", status_code=422,
+        )
+    source = opt_service.resolve_recommend_source(run.agent_id, run.id, workspace)
+    if not (source.get("results_log_group") and source.get("results_log_stream")):
+        raise AppError(
+            "recommendation.provider_no_results",
+            "the run's batch evaluation has no results log stream for the provider to read",
+            status_code=409,
+        )
+    return source
+
+
+def _spawn(fn: Any) -> None:
+    """Run ``fn`` on a daemon thread (tests replace this to run inline)."""
+    threading.Thread(target=fn, name="run-rec-provider", daemon=True).start()
+
+
+def _start_provider_job(
+    db: Session, run: EvalRun, workspace: WorkspaceContext, *, provider: str,
+    model_id: str | None, prompt: str, input_source: str, source: dict[str, Any],
+) -> EvalRecommendation:
+    from app.optimization import providers as rec_providers
+
+    prov = rec_providers.get_provider(provider)
+    model = (model_id or "").strip() or prov.default_model_id() or ""
+    row = EvalRecommendation(
+        workspace_id=run.workspace_id, run_id=run.id, kind="system_prompt",
+        recommendation_id=f"{PROVIDER_JOB_PREFIX}{prov.id}-{uuid.uuid4().hex[:12]}",
+        name=f"{prov.id} · {model}", status="IN_PROGRESS", input_source=input_source,
+        system_prompt=prompt, evaluator=None, tools={}, skipped_tools=[],
+        result={"provider": prov.id, "provider_model_id": model},
+    )
+    db.add(row)
+    db.commit()
+    row_id, agent_id = row.id, str(run.agent_id)
+    with _live_provider_lock:
+        _live_provider_jobs.add(row_id)
+    _spawn(lambda: _run_provider_job(row_id, agent_id, workspace, prov.id, model, prompt, source))
+    return row
+
+
+def _run_provider_job(
+    row_id: str, agent_id: str, workspace: WorkspaceContext, provider: str, model: str,
+    prompt: str, source: dict[str, Any],
+) -> None:
+    """The provider's reflection, start to finish; its outcome lands on the row."""
+    from app.core.db import SessionLocal
+    from app.optimization import service as opt_service
+
+    def note(message: str) -> None:
+        db = SessionLocal()
+        try:
+            row = db.get(EvalRecommendation, row_id)
+            if row is not None and row.status not in ac.REC_TERMINAL:
+                row.result = {**(row.result or {}), "progress": message[:300]}
+                db.commit()
+        finally:
+            db.close()
+
+    try:
+        db = SessionLocal()
+        try:
+            agent = db.get(Agent, agent_id)
+            meta = {"id": agent_id, "name": getattr(agent, "name", ""),
+                    "method": getattr(agent, "method", ""), "system_prompt": prompt}
+        finally:
+            db.close()
+        out_keys = opt_service._third_party_prompt_recommendation(
+            "", meta, workspace, note, provider_id=provider, model_id=model, source=source,
+        )
+        status = str(out_keys.get("system_prompt_status") or "FAILED")
+        text = str(out_keys.get("recommended_prompt") or "")
+        result = {"provider": provider, "provider_model_id": model,
+                  "provider_meta": out_keys.get("provider_meta") or {}}
+        error = None
+        if status == "COMPLETED" and text:
+            result.update(recommended_prompt=text, explanation=out_keys.get("explanation") or "")
+        else:
+            status = "FAILED"
+            error = str(out_keys.get("system_prompt_error") or "the provider produced no prompt")
+    except Exception as exc:  # the row must always reach a terminal state
+        status, error = "FAILED", f"{type(exc).__name__}: {exc}"[:1000]
+        result = {"provider": provider, "provider_model_id": model}
+    db = SessionLocal()
+    try:
+        row = db.get(EvalRecommendation, row_id)
+        if row is not None:
+            row.status, row.result, row.error = status, result, error
+            db.commit()
+    finally:
+        db.close()
+        # only once the outcome is durable — a read in between must not see an orphan
+        with _live_provider_lock:
+            _live_provider_jobs.discard(row_id)
 
 
 # ─── refresh / read ─────────────────────────────────────────────────────────
@@ -640,6 +774,14 @@ def refresh(
     db: Session, row: EvalRecommendation, run: EvalRun, workspace: WorkspaceContext
 ) -> None:
     if row.status in ac.REC_TERMINAL:
+        return
+    if row.recommendation_id.startswith(PROVIDER_JOB_PREFIX):
+        with _live_provider_lock:
+            live = row.id in _live_provider_jobs
+        if not live:  # its thread died with a previous server process
+            row.status = "FAILED"
+            row.error = "the recommendation was interrupted (the server restarted while it ran)"
+            db.commit()
         return
     try:
         detail = ac.get_recommendation(data_client(workspace),
@@ -730,9 +872,10 @@ def acceptance_target(
 
 def record_acceptance(
     db: Session, row: EvalRecommendation, *, by: str, agent_id: str,
-    previous_version: str | None, job_id: str, deployment_id: str,
+    previous_version: str | None, job_id: str, deployment_id: str, edited: bool = False,
 ) -> None:
     row.accepted = {
+        "edited": edited,
         "by": by,
         "at": datetime.now(UTC).isoformat(),
         "agent_id": agent_id,

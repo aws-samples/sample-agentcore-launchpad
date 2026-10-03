@@ -110,6 +110,10 @@ HEARTBEAT_S = 1.0
 # ``name`` of the transcript row that records Launchpad's rejection of a model-emitted
 # proposal block; ``compose_messages`` replays it to the model on the next turn.
 PROPOSAL_REJECTED_NAME = "proposal_rejected"
+# An ``error`` row with this name marks a failed turn the member retried (usually with
+# an edited message): the turn stays in the ledger and the thread, but is never
+# replayed to the model again — a poisoned exchange must not follow the retry.
+TURN_RETRIED_NAME = "turn_retried"
 REJECTION_NOTE_MAX_CHARS = 2400
 
 
@@ -1327,6 +1331,20 @@ def _strip_proposal_blocks(text: str) -> str:
     return _REPLAY_PROPOSAL_RE.sub(REPLAY_PROPOSAL_MARKER, text)
 
 
+def check_retry(db: Session, conversation: AssistantConversation, turn: int) -> None:
+    """A retry names the conversation's LATEST turn, and only one that failed."""
+    rows = [m for m in _messages(db, conversation.id) if m.turn == turn]
+    latest = max((m.turn for m in _messages(db, conversation.id)), default=0)
+    failed = any(m.role == "error" and m.name not in (PROPOSAL_REJECTED_NAME, TURN_RETRIED_NAME)
+                 for m in rows)
+    if not rows or turn != latest or not failed:
+        raise AppError(
+            "assistant.retry_not_allowed",
+            "only the latest turn, and only a failed one, can be retried",
+            {"turn": turn, "latest": latest}, status_code=409,
+        )
+
+
 def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
     """The current message is never truncated: too large for the final request → 413."""
     if len(prompt) > MAX_PROMPT_CHARS or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
@@ -1362,8 +1380,9 @@ def compose_messages(
     by_turn: dict[int, dict[str, list[str]]] = {}
     preamble = _preamble(conversation, inline=inline)
     strip = _base_of(conversation) is not None
+    retried = {m.turn for m in history if m.role == "error" and m.name == TURN_RETRIED_NAME}
     for m in history:
-        if not m.text:
+        if not m.text or m.turn in retried:
             continue
         if m.role == "error" and m.name == PROPOSAL_REJECTED_NAME:
             # Launchpad's own verdict on that turn's block, replayed as the member's
@@ -1781,6 +1800,7 @@ def run_turn(
     identity: Identity,
     prompt: str,
     run: TurnRun | None = None,
+    retry_of: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     """One assistant turn as SSE-ready events:
     ``meta → (tool|delta)* → (proposal)? → done`` or ``error``.
@@ -1813,6 +1833,8 @@ def run_turn(
         overrides = harness_tool_overrides(workspace, agent)
         submissions = _submissions(db, conversation) if overrides is not None else None
         history = [m for m in _messages(db, conversation_id) if m.turn != turn]
+        if retry_of is not None:  # the retried exchange is not replayed (see TURN_RETRIED_NAME)
+            history = [m for m in history if m.turn != retry_of]
         messages, omitted = compose_messages(conversation, history, prompt,
                                              inline=overrides is not None)
         # the FIRST write is fenced like every other one: composing the replay took
@@ -1827,6 +1849,12 @@ def run_turn(
             turn=turn, role="user", text=prompt, runtime_session_id=session_id,
             author=identity.username,
         ))
+        if retry_of is not None:
+            db.add(AssistantMessage(
+                workspace_id=conversation.workspace_id, conversation_id=conversation_id,
+                turn=retry_of, role="error", name=TURN_RETRIED_NAME,
+                text=f"retried in turn {turn}",
+            ))
         if not conversation.title:
             conversation.title = prompt.strip().splitlines()[0][:120] if prompt.strip() else ""
         conversation.preset_agent_id = agent.id

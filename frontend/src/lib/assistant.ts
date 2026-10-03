@@ -102,10 +102,28 @@ export interface AssistantLiveMessage {
   /** sender of a user row; absent for a row typed in this tab (the caller) */
   author?: string | null;
   streaming?: boolean;
+  /** the stored turn number; absent on rows streamed in this tab until the reload */
+  turn?: number;
 }
 
+/** Backend ``TURN_RETRIED_NAME``: marks a failed turn the member retried (never replayed). */
+export const TURN_RETRIED_NAME = "turn_retried";
+const PROPOSAL_REJECTED_NAME = "proposal_rejected";
+
 export function toLiveMessages(rows: AssistantMessage[]): AssistantLiveMessage[] {
-  return rows.map((m) => ({ role: m.role, text: m.text, name: m.name, author: m.author }));
+  return rows.map((m) => ({ role: m.role, text: m.text, name: m.name, author: m.author, turn: m.turn }));
+}
+
+/** The latest turn when it failed and was not retried yet: `{turn, prompt}` to retry. */
+export function retryableTurn(messages: AssistantLiveMessage[]): { turn: number; prompt: string } | null {
+  const turns = messages.map((m) => m.turn).filter((n): n is number => typeof n === "number");
+  if (!turns.length) return null;
+  const latest = Math.max(...turns);
+  const rows = messages.filter((m) => m.turn === latest);
+  const failed = rows.some((m) => m.role === "error" && m.name !== PROPOSAL_REJECTED_NAME && m.name !== TURN_RETRIED_NAME);
+  const retried = rows.some((m) => m.role === "error" && m.name === TURN_RETRIED_NAME);
+  const prompt = rows.find((m) => m.role === "user")?.text ?? "";
+  return failed && !retried && prompt ? { turn: latest, prompt } : null;
 }
 
 /** The typed proposal pane shows the block; the transcript shows a pointer instead. */

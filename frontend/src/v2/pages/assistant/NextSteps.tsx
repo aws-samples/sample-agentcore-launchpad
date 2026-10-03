@@ -161,6 +161,17 @@ export function NextStepsCard({
     }
   }, [targetId, datasetId]);
   useEffect(() => { void loadRuns(); }, [loadRuns]);
+  // step 3 may seed from ANY completed evaluator run of this agent — a focused dataset
+  // the member ran from 评估任务 included, not only the plan's own dataset
+  const [agentRuns, setAgentRuns] = useState<EvaluationRunInfo[] | null>(null);
+  useEffect(() => {
+    if (!targetId) { setAgentRuns([]); return; }
+    let cancelled = false;
+    api.listEvaluationRuns({ agent_id: targetId, mode: "evaluators", limit: RUN_HISTORY_LIMIT })
+      .then((res) => { if (!cancelled) setAgentRuns(res.runs); })
+      .catch(() => { if (!cancelled) setAgentRuns(null); });
+    return () => { cancelled = true; };
+  }, [targetId, runs]);
   useEffect(() => {
     if (!runLive) return;
     const timer = window.setInterval(() => void loadRuns(), RUN_POLL_MS);
@@ -189,7 +200,7 @@ export function NextStepsCard({
   // Recommendations are seeded from one cleanly completed run with a batch — the newest
   // by default; the operator may pick an earlier one, and the other runs' recommendations
   // (an accepted one included) stay listed instead of vanishing behind a newer run.
-  const completedRuns = (runs ?? []).filter(
+  const completedRuns = (agentRuns ?? runs ?? []).filter(
     (r) => evaluationRunPresentation(r).status === "completed" && !!r.batch_eval_id,
   );
   const [sourceRunId, setSourceRunId] = useState<string | null>(null);
@@ -311,6 +322,7 @@ export function NextStepsCard({
                       value: r.id,
                       label: [
                         t("assistantNext.run.runLine", { id: shortId(r.id) }),
+                        r.dataset_id && r.dataset_id !== datasetId ? (r.dataset_name ?? r.dataset_id) : null,
                         r.created_at ? fmtTime(r.created_at) : null,
                         i === 0 ? t("assistantNext.recommend.newest") : null,
                       ].filter(Boolean).join(" · "),

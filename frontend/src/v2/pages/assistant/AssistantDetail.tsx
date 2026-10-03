@@ -71,6 +71,8 @@ export function AssistantDetail({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantLiveMessage[]>([]);
   const [input, setInput] = useState("");
+  // edit-and-retry: the failed turn the next send replaces in the model replay
+  const [retryOf, setRetryOf] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [approving, setApproving] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -511,9 +513,21 @@ export function AssistantDetail({
           onInput={setInput}
           busy={busy}
           preparing={preparing}
-          onSend={() => void send({ prompt: input })}
+          onSend={() => {
+            const retry = retryOf;
+            setRetryOf(null);
+            void send(retry === null ? { prompt: input } : { prompt: input, retry_of_turn: retry });
+          }}
           onRefreshCatalog={() => void refreshCatalog()}
           threadRef={threadRef}
+          retryOf={retryOf}
+          onRetry={(target) => {
+            setRetryOf(target?.turn ?? null);
+            if (target) {
+              setInput(target.prompt);
+              document.getElementById(COMPOSER_ID)?.focus();
+            }
+          }}
         />
 
         {/* resource preparation precedes the proposal it feeds: discuss → prepare → review */}

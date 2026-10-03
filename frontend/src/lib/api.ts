@@ -1223,6 +1223,8 @@ export interface AssistantEvalPlanRepair {
 export interface AssistantTurnRequest {
   prompt: string;
   evaluation_plan_repair?: AssistantEvalPlanRepair;
+  /** retry the latest FAILED turn: kept in the thread, no longer replayed to the model */
+  retry_of_turn?: number;
 }
 
 /** `GET …/conversations/{id}/footprint` — what CLEAR would remove and what blocks it. */
@@ -3923,6 +3925,9 @@ export const api = {
       system_prompt?: string;
       evaluator?: string;
       tools?: { name: string; description: string }[];
+      /** the system-prompt generator: the AgentCore job (default) or a 3rd-party provider */
+      provider?: string;
+      model_id?: string;
     },
   ) =>
     request<{ recommendations: RunRecommendation[] }>(
@@ -3932,10 +3937,12 @@ export const api = {
   /** `POST …/recommendations/{recId}/accept` (202) — re-publishes the run's Harness
    *  with the recommended system prompt (a NEW Harness version, DEFAULT follows it).
    *  Needs `agents.deploy`; accepted once (409 afterwards). */
-  acceptRunRecommendation: (runId: string, recId: string) =>
+  /** `systemPrompt` = the operator-reviewed text to publish (the recommendation as
+   *  generated when omitted). */
+  acceptRunRecommendation: (runId: string, recId: string, systemPrompt?: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string; recommendation: RunRecommendation }>(
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/accept`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(systemPrompt === undefined ? {} : { system_prompt: systemPrompt }) },
     ),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),

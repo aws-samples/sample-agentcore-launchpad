@@ -678,7 +678,8 @@ def _rec(run_id: str, **fields) -> str:
     db = SessionLocal()
     try:
         row = EvalRecommendation(workspace_id=DEFAULT_WORKSPACE_ID, run_id=run_id,
-                                 recommendation_id="rec-aws-1", name="rec_sp", **{
+                                 name="rec_sp", **{
+                                     "recommendation_id": "rec-aws-1",
                                      "kind": "system_prompt", "status": "COMPLETED",
                                      "result": {"recommended_prompt": "new prompt"},
                                      **fields})
@@ -806,3 +807,180 @@ def test_accept_of_another_runs_recommendation_is_not_found(client, monkeypatch)
     res = client.post(f"/api/eval/runs/{_run(agent_id)}/recommendations/{rec_id}/accept")
 
     assert res.status_code == 404
+
+
+# ─── 3rd-party provider (GEPA-lite) ─────────────────────────────────────────
+SOURCE = {"kind": "batch_evaluation", "run_id": "r", "batch_eval_id": "be-1",
+          "results_log_group": "/aws/bedrock-agentcore/evaluations/x", "results_log_stream": "s"}
+
+
+def _provider_stubs(monkeypatch, outcome: dict | Exception) -> list[dict]:
+    """Run the provider thread inline; ``outcome`` is what the reflection returns."""
+    from app.optimization import service as opt_service
+
+    calls: list[dict] = []
+    monkeypatch.setattr(recs, "_spawn", lambda fn: fn())
+    monkeypatch.setattr(opt_service, "resolve_recommend_source", lambda *_a: dict(SOURCE))
+
+    def reflect(exp_id, agent, workspace, progress, **kw):
+        calls.append({"agent": agent, **kw})
+        progress("reflecting…")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(opt_service, "_third_party_prompt_recommendation", reflect)
+    return calls
+
+
+def test_a_provider_recommendation_never_starts_an_aws_job(client, monkeypatch):
+    _, data = _stub(monkeypatch)
+    calls = _provider_stubs(monkeypatch, {
+        "system_prompt_status": "COMPLETED", "recommended_prompt": "Better prompt.",
+        "explanation": "fixed the date rule", "provider_meta": {"evidence_sessions": 6},
+    })
+    agent_id = _harness_agent()
+    run_id = _run(agent_id)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
+        "kinds": ["system_prompt"], "input_source": "harness", "system_prompt": "Old.",
+        "provider": "gepa_lite", "model_id": "global.anthropic.claude-sonnet-5",
+    })
+
+    assert res.status_code == 201, res.text
+    row = res.json()["recommendations"][0]
+    assert row["recommendation_id"].startswith(recs.PROVIDER_JOB_PREFIX + "gepa_lite-")
+    data.start_recommendation.assert_not_called()
+    assert calls[0]["provider_id"] == "gepa_lite"
+    assert calls[0]["model_id"] == "global.anthropic.claude-sonnet-5"
+    assert calls[0]["agent"]["system_prompt"] == "Old."
+    assert calls[0]["source"] == SOURCE
+    listed = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
+    assert listed["status"] == "COMPLETED"
+    assert listed["result"]["recommended_prompt"] == "Better prompt."
+    assert listed["result"]["provider"] == "gepa_lite"
+    assert listed["result"]["provider_model_id"] == "global.anthropic.claude-sonnet-5"
+    assert listed["evaluator"] is None
+    data.get_recommendation.assert_not_called()
+
+
+@pytest.mark.parametrize("outcome", [
+    {"system_prompt_status": "FAILED", "system_prompt_error": "no scored sessions"},
+    RuntimeError("bedrock throttled"),
+])
+def test_a_failed_provider_run_reads_as_failed(client, monkeypatch, outcome):
+    _stub(monkeypatch)
+    _provider_stubs(monkeypatch, outcome)
+    run_id = _run(_harness_agent())
+
+    client.post(f"/api/eval/runs/{run_id}/recommendations", json={
+        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "gepa_lite"})
+
+    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
+    assert row["status"] == "FAILED"
+    assert ("no scored sessions" in row["error"]) or ("bedrock throttled" in row["error"])
+    assert "recommended_prompt" not in row["result"]
+
+
+def test_a_provider_row_left_running_by_a_restart_reads_as_interrupted(client, monkeypatch):
+    _, data = _stub(monkeypatch)
+    run_id = _run(_harness_agent())
+    _rec(run_id, recommendation_id=recs.PROVIDER_JOB_PREFIX + "gepa_lite-abc",
+         status="IN_PROGRESS", result={"provider": "gepa_lite"})
+
+    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
+
+    assert row["status"] == "FAILED"
+    assert "interrupted" in row["error"]
+    data.get_recommendation.assert_not_called()
+
+
+def test_a_provider_needs_an_agent_run(client, monkeypatch):
+    _stub(monkeypatch)
+    _provider_stubs(monkeypatch, {})
+    run_id = _run("")
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
+        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "gepa_lite"})
+
+    assert res.status_code == 422
+    assert res.json()["code"] == "recommendation.provider_needs_agent"
+
+
+def test_an_unknown_provider_is_refused(client, monkeypatch):
+    _stub(monkeypatch)
+    run_id = _run(_harness_agent())
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
+        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "mystery"})
+    assert res.status_code == 422
+
+
+def test_a_provider_recommendation_can_be_accepted(client, monkeypatch):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    _provider_stubs(monkeypatch, {"system_prompt_status": "COMPLETED",
+                                  "recommended_prompt": "Better prompt."})
+    agent_id = _harness_agent()
+    run_id = _run(agent_id)
+    rec_id = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
+        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "gepa_lite",
+    }).json()["recommendations"][0]["id"]
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+
+    assert res.status_code == 202, res.text
+    assert len(started) == 1
+    db = SessionLocal()
+    try:
+        assert db.get(Agent, agent_id).spec["system_prompt"] == "Better prompt."
+    finally:
+        db.close()
+
+
+# ─── accept a reviewed (edited) prompt ──────────────────────────────────────
+def test_accept_publishes_the_reviewed_prompt_and_records_the_edit(client, monkeypatch):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    agent_id = _harness_agent()
+    run_id = _run(agent_id)
+    rec_id = _rec(run_id)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept",
+                      json={"system_prompt": "  new prompt, minus the loosened rule  "})
+
+    assert res.status_code == 202, res.text
+    assert res.json()["recommendation"]["accepted"]["edited"] is True
+    assert len(started) == 1
+    db = SessionLocal()
+    try:
+        published = db.get(Agent, agent_id).spec["system_prompt"]
+        assert published == "new prompt, minus the loosened rule"
+    finally:
+        db.close()
+
+
+def test_accepting_the_unchanged_text_is_not_an_edit(client, monkeypatch):
+    _stub(monkeypatch)
+    _no_deploy(monkeypatch)
+    run_id = _run(_harness_agent())
+    rec_id = _rec(run_id)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept",
+                      json={"system_prompt": "new prompt"})
+
+    assert res.status_code == 202, res.text
+    assert res.json()["recommendation"]["accepted"]["edited"] is False
+
+
+def test_an_empty_reviewed_prompt_is_refused(client, monkeypatch):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    run_id = _run(_harness_agent())
+    rec_id = _rec(run_id)
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept",
+                      json={"system_prompt": "   "})
+
+    assert res.status_code == 422
+    assert res.json()["code"] == "recommendation.accept_prompt_empty"
+    assert started == []

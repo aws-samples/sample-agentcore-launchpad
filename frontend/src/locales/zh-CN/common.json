@@ -4507,7 +4507,10 @@
     "memoryNoShared": "本 Workspace 没有共享记忆 — 只能选择“已禁用”",
     "kbGatewayMissing": "此处没有就绪的知识库 Gateway — 挂载知识库需手动完成",
     "bindingsAuth": "认证：",
-    "bindingsDigest": "内容"
+    "bindingsDigest": "内容",
+    "editRetry": "编辑后重试",
+    "retryNote": "将重试第 {{turn}} 轮：这一轮的失败交流保留在记录里，但不会再发送给助手。可以先修改上面的消息。",
+    "turnRetried": "这一轮已重试，不会再发送给助手。"
   },
   "assistantEval": {
     "title": "评估资产",
@@ -4751,7 +4754,7 @@
     "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。",
     "recommend": {
       "title": "生成 AI 推荐的优化建议",
-      "body": "AgentCore Recommendations 读取所选运行（默认最新一次无错误完成的运行）的追踪，围绕你选择的评估器给出改写后的系统提示词（以及工具描述）。先查看差异；接受后，Launchpad 用该提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
+      "body": "AI 推荐读取所选运行（默认最新一次无错误完成的运行；可以是这个 Agent 在任意数据集上的运行）的追踪，给出改写后的系统提示词（以及工具描述）：默认由 AgentCore Recommendations 围绕你选择的评估器生成，也可改用 GEPA-lite。先查看差异；接受时可以再修改，Launchpad 用最终的提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
       "source": "追踪来源",
       "version": "Harness 当前为 v{{v}}",
       "publishing": "正在发布“{{name}}”的新 Harness 版本……部署完成后，第 4 步会列出该版本。",
@@ -5616,7 +5619,16 @@
       "recordsSub": "输入必填；预期输出即部分评估器所需的标准答案。",
       "addRow": "添加记录",
       "inputPlaceholder": "用户输入",
-      "expectedPlaceholder": "预期输出（选填）"
+      "expectedPlaceholder": "预期输出（选填）",
+      "copySelected": "复制所选到新数据集（{{count}}）",
+      "copyPickHint": "先在下方勾选要复制的记录。",
+      "pickAll": "全选",
+      "pickRow": "选择第 {{n}} 条",
+      "copyTitle": "复制 {{count}} 条记录到新数据集",
+      "copyHint": "原样复制所选记录的全部内容：每一轮输入与参考回答、断言和期望工具轨迹；原数据集不变。",
+      "copyConfirm": "创建数据集",
+      "copyDescription": "从“{{name}}”复制的 {{count}} 条记录。",
+      "copied": "已创建数据集“{{name}}”（{{count}} 条）。"
     },
     "pipelines": {
       "colName": "任务名称 / 描述",
@@ -7471,9 +7483,19 @@
         "toolsNotApplied": "工具描述建议不会写入 Harness 版本：Gateway 工具的描述属于其 Gateway 目标。",
         "startedToast": "已接受——正在发布新的 Harness 版本。",
         "confirmTitle": "接受这条建议？",
-        "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。"
+        "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。",
+        "buttonEdited": "发布修改后的提示词",
+        "reviewHint": "发布前逐条核对：AI 建议可能放松红线（例如把限制改成“用户确认后即可”）。可直接在下方修改，发布的就是这里的文本。",
+        "reviewLabel": "将要发布的系统提示词",
+        "editedNote": "已修改：发布后会记录为“人工修改后接受”。",
+        "resetEdit": "恢复为 AI 建议原文",
+        "acceptedEdited": "发布前经过人工修改。"
       },
-      "toolDiff": "工具描述"
+      "toolDiff": "工具描述",
+      "modelRequired": "请输入自定义模型 ID。",
+      "providerNote": "GEPA-lite 用一次 Bedrock 反思，读取这次运行的全部评估器分数与评审说明以及会话记录，直接给出改写后的系统提示词；不经过 AgentCore 推荐服务（例如它拒绝输入时可改用这里）。工具描述建议仍由 AgentCore 生成。",
+      "providerAllEvaluators": "全部评估器",
+      "providerTag": "生成这条建议的提供方与模型"
     }
   }
 }
