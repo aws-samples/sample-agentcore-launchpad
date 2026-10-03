@@ -14,6 +14,28 @@ def test_ordinary_creation_and_proposal_mapping_default_to_600_seconds():
     assert spec.timeout_seconds == proposal.timeout_seconds == mapped.timeout_seconds == 600
 
 
+
+def test_model_facing_guidance_names_the_schema_default():
+    """The architect protocol and skill must not steer proposals to a stale budget."""
+    import re
+    from pathlib import Path
+
+    from app.assistant import service
+
+    default = ProposalContent.model_fields["timeout_seconds"].default
+    skill = (Path(__file__).resolve().parents[1]
+             / "app/system_agents/skills/aws-agent-solution-architect")
+    texts = {
+        "protocol": service.PROTOCOL_PREAMBLE,
+        "SKILL.md": (skill / "SKILL.md").read_text(encoding="utf-8"),
+        "proposal-self-check.md": (
+            skill / "references/proposal-self-check.md"
+        ).read_text(encoding="utf-8"),
+    }
+    for name, text in texts.items():
+        named = {int(n) for n in re.findall(r"(?:[Uu]se|default) (\d+)(?: seconds)?\b", text)}
+        assert named == {default}, (name, named)
+
 @pytest.mark.parametrize("budget", [30, 300, 900, 1200])
 def test_explicit_budgets_survive_proposal_mapping(budget):
     proposal = ProposalContent(
