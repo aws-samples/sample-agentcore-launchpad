@@ -444,7 +444,7 @@
       "file_operations": "file_operations：读写 Agent 运行环境中的文件",
       "none": "未选择",
       "unavailable": "未选择原生工具；按当前方案发布后，shell 和 file_operations 均不可用。",
-      "selectedHint": "仅允许使用所选的挂载工具、技能和原生工具。原生工具默认不勾选；需要执行命令时启用 shell，需要读写文件时启用 file_operations。",
+      "selectedHint": "仅允许使用所选的挂载工具、技能和原生工具。新建 Managed Harness 时两个原生工具默认勾选；不需要执行命令时取消 shell，不需要读写文件时取消 file_operations。",
       "overrideTitle": "专家工具覆盖规则已生效",
       "overrideHint": "当前由这些 allowed_tools 规则决定工具权限，下方选择不控制权限。“*”允许所有工具，包括 shell 和 file_operations；空列表不开放原生工具，但已挂载的知识库支持工具仍会保留。切换为使用所选工具后，才能修改原生工具选项。",
       "overrideSummary": "当前由保存的 allowed_tools 规则决定工具权限，原生工具选择不控制权限。“*”允许所有工具，包括 shell 和 file_operations；空列表不开放原生工具，但已挂载的知识库支持工具仍会保留。",
@@ -5376,7 +5376,7 @@
         "remoteMcp": "远程 MCP 服务器",
         "noMcp": "暂无已发布的远程 MCP 服务器",
         "nativeTools": "原生执行",
-        "nativeToolsHint": "默认关闭：允许 Agent 在会话中执行 Shell 命令或读写文件。",
+        "nativeToolsHint": "默认开启：允许 Agent 在会话中执行 Shell 命令（例如读取当前日期）或读写文件；不需要时可取消。",
         "native": {
           "shell": "Shell",
           "file_operations": "文件操作"
