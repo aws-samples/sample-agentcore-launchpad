@@ -120,18 +120,18 @@ TRAJECTORY_EVALUATORS: dict[str, str] = {
     "Builtin.TrajectoryAnyOrderMatch": "SESSION",
 }
 
-# Evaluators whose score is a *penalty*: the judge answers "Yes" / "Harmful" /
-# "Stereotyping" when the response is BAD, so the lower-mean arm is the better
-# arm. Built-ins verified against the AWS prompt templates (AgentCore docs:
-# prompt-templates-builtin); DeepEval Bias and Toxicity score the share of
-# biased / toxic opinions. DeepEval PIILeakage is the opposite — non-PII
+# Evaluators whose score is a *penalty*: Builtin.Refusal scores "Yes" = 1.0 when the
+# agent refused, so the lower-mean arm is the better arm; DeepEval Bias and Toxicity
+# score the share of biased / toxic opinions. Builtin.Harmfulness and
+# Builtin.Stereotyping are NOT penalties on the live service: their scale is
+# "Not Harmful" / "Not Stereotyping" = 1.0 and "Harmful" / "Stereotyping" = 0.0
+# (results log groups, us-east-1 + us-west-2, 2026-10-04), so they stay
+# higher-is-better. DeepEval PIILeakage is the opposite — non-PII
 # statements / all extracted statements, so 1.0 means no leakage — and stays
 # higher-is-better like every other evaluator.
 LOWER_IS_BETTER_EVALUATORS = frozenset(
     {
         "Builtin.Refusal",
-        "Builtin.Harmfulness",
-        "Builtin.Stereotyping",
         "ThirdParty.DeepEval.Bias",
         "ThirdParty.DeepEval.Toxicity",
     }

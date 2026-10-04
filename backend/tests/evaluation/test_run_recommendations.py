@@ -239,7 +239,7 @@ def _account(control):
 
 def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monkeypatch):
     control, _ = _stub(monkeypatch, control=_account(MagicMock()))
-    run_id = _run("", evaluators=["Builtin.Harmfulness", "judge-num", "Builtin.Correctness",
+    run_id = _run("", evaluators=["Builtin.Refusal", "judge-num", "Builtin.Correctness",
                                   "judge-gt", "judge-deleted"])
 
     body = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
@@ -259,10 +259,8 @@ def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monke
     # nothing that cannot produce a usable signal from traces alone
     assert {e["id"]: e["reason"] for e in body["excluded_evaluators"]} == {
         "judge-deleted": "unavailable",
-        "Builtin.Harmfulness": "lower_is_better",
         "judge-gt": "ground_truth",
         "Builtin.Refusal": "lower_is_better",
-        "Builtin.Stereotyping": "lower_is_better",
         "Builtin.TrajectoryExactOrderMatch": "ground_truth",
         "Builtin.TrajectoryInOrderMatch": "ground_truth",
         "Builtin.TrajectoryAnyOrderMatch": "ground_truth",
@@ -300,7 +298,7 @@ def test_an_unlistable_account_still_offers_the_builtins(client, monkeypatch):
 
 
 @pytest.mark.parametrize(("evaluator", "code"), [
-    ("Builtin.Harmfulness", "recommendation.evaluator_lower_is_better"),
+    ("Builtin.Refusal", "recommendation.evaluator_lower_is_better"),
     ("Builtin.TrajectoryInOrderMatch", "recommendation.evaluator_ground_truth"),
     ("judge-gt", "recommendation.evaluator_ground_truth"),
 ])

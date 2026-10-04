@@ -253,7 +253,7 @@ const insightLabel = (t: (k: string) => string, id: string): string =>
     ? t(`evalPage.newRun.insightType.${INSIGHT_LABEL_KEYS[id]}`)
     : id;
 
-// Polarity-aware colour: a penalty evaluator (Refusal, Harmfulness, …) is good
+// Polarity-aware colour: a penalty evaluator (Refusal, DeepEval Toxicity, …) is good
 // when LOW, so its thresholds mirror.
 const meanColor = (mean: number | null, evaluatorId: string): string => {
   if (mean == null) return "var(--ink-3)";

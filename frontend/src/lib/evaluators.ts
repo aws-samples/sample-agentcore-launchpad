@@ -17,16 +17,15 @@ export function evaluatorLabel(t: TFunction, id: string): string {
   return id;
 }
 
-// Penalty evaluators: the judge scores "Yes"/"Harmful"/"Stereotyping" when the
-// response is BAD, so a lower mean is the better arm. DeepEval PIILeakage is NOT
+// Penalty evaluators: Refusal scores "Yes" = 1.0 when the agent refused, so a lower
+// mean is the better arm. Harmfulness / Stereotyping are not: the live scale is
+// "Not Harmful" / "Not Stereotyping" = 1.0. DeepEval PIILeakage is NOT
 // one: it scores non-PII / all statements, so 1.0 means no leakage. Mirrors
 // LOWER_IS_BETTER_EVALUATORS in backend/app/evaluation/agentcore_eval.py — the
 // backend annotates each A/B metric with `polarity`, and this list is only the
 // fallback for verdict artifacts stored before it did.
 const LOWER_IS_BETTER = new Set([
   "Builtin.Refusal",
-  "Builtin.Harmfulness",
-  "Builtin.Stereotyping",
   "ThirdParty.DeepEval.Bias",
   "ThirdParty.DeepEval.Toxicity",
 ]);
