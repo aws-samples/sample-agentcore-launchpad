@@ -127,6 +127,10 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
     s3 = up_kwargs["agentRuntimeArtifact"]["codeConfiguration"]["code"]["s3"]
     assert s3 == {"bucket": "bkt", "prefix": uploads[0][1]}
     assert up_kwargs["roleArn"] == "arn:role/exec"
+    # UpdateAgentRuntime detaches an omitted list — the candidate echoes the mounts
+    assert up_kwargs["filesystemConfigurations"] == [
+        {"sessionStorage": {"mountPath": "/mnt/workspace"}}
+    ]
 
     # the ledger Agent row is never mutated — production stays on v_current
     db3 = SessionLocal()

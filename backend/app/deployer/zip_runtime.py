@@ -26,6 +26,7 @@ from typing import Any
 from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer.environment import runtime_environment
+from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -549,6 +550,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # A2A runtimes must echo the protocol on update too —
                 # UpdateAgentRuntime resets an omitted protocolConfiguration
                 "protocol": spec.protocol,
+                # managed session storage — likewise reset when omitted on update
+                "filesystem_configurations": filesystem_configurations(spec) or None,
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)

@@ -16,6 +16,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.deployer.environment import runtime_environment
+from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -198,23 +199,6 @@ def _run_scan_gate(
         )
 
 
-def _filesystem_configurations(spec: AgentSpec) -> list[dict]:
-    """spec.filesystem → the filesystemConfigurations union list (AWS shapes)."""
-    fs = spec.filesystem
-    out: list[dict] = []
-    if fs.session_storage:
-        out.append({"sessionStorage": {"mountPath": fs.session_storage.mount_path}})
-    for mount in fs.s3_files:
-        out.append({"s3FilesAccessPoint": {
-            "accessPointArn": mount.access_point_arn, "mountPath": mount.mount_path,
-        }})
-    for mount in fs.efs:
-        out.append({"efsAccessPoint": {
-            "accessPointArn": mount.access_point_arn, "mountPath": mount.mount_path,
-        }})
-    return out
-
-
 def _vpc(spec: AgentSpec) -> dict | None:
     """networkModeConfig input — only when BYO mounts force VPC mode."""
     if not (spec.filesystem.byo and spec.network):
@@ -266,7 +250,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or workspace.resources.get("execution_role_arn", ""),
                 "environment": runtime_environment(spec, workspace.resources),
-                "filesystem_configurations": _filesystem_configurations(spec) or None,
+                "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": _vpc(spec),
             }
 

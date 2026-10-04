@@ -5449,6 +5449,7 @@
         "errDupPath": "Mount paths must be unique",
         "errVpc": "BYO mounts need at least one subnet and one security group",
         "fsSummary": "Session storage {{session}} · S3 Files {{s3}} · EFS {{efs}}",
+        "fsNoteSession": "Managed session storage keeps files under the mount path across stop/resume of the same session (up to 1 GB per session, 14-day idle expiry). Every re-publish creates a new version and resets it. S3 Files / EFS mounts are available on the Other Agent SDK method only.",
         "skillsHintSources": "Published Skills from the Registry; you can also upload a zip or import from a Git repository.",
         "skillUpload": "Upload .zip",
         "skillGit": "Import from Git",

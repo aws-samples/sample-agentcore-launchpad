@@ -45,6 +45,7 @@ def create_code_runtime(
     python_version: str | None = None,
     entrypoint: str | None = None,
     instrument: bool = True,
+    filesystem_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
@@ -64,6 +65,8 @@ def create_code_runtime(
     proto = _protocol_configuration(protocol)
     if proto:
         params["protocolConfiguration"] = proto
+    if filesystem_configurations:
+        params["filesystemConfigurations"] = filesystem_configurations
     return client.create_agent_runtime(**params)
 
 
@@ -147,12 +150,15 @@ def update_code_runtime(
     python_version: str | None = None,
     entrypoint: str | None = None,
     instrument: bool = True,
+    filesystem_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
 
     ``protocol`` must be passed for A2A agents on EVERY update — the service
-    resets an omitted protocolConfiguration back to HTTP (probed live)."""
+    resets an omitted protocolConfiguration back to HTTP (probed live). The same
+    holds for ``filesystem_configurations``: an omitted list detaches every mount
+    (probed live 2026-10-04), so a re-publish must echo it each time."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": _code_artifact(
@@ -166,6 +172,8 @@ def update_code_runtime(
     proto = _protocol_configuration(protocol)
     if proto:
         params["protocolConfiguration"] = proto
+    if filesystem_configurations:
+        params["filesystemConfigurations"] = filesystem_configurations
     return client.update_agent_runtime(**params)
 
 

@@ -7,6 +7,7 @@ import {
   BYOC_KINDS,
   BYOC_MODELS_MAX,
   BYOC_PYTHON_VERSIONS,
+  byoMountsAllowed,
   DEFAULT_SESSION_MOUNT,
   filesystemIssues,
   hasByoMounts,
@@ -349,7 +350,9 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
 export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" | "err"> & { touched: boolean }) {
   const { t } = useTranslation();
   const issues = filesystemIssues(form);
-  const byo = hasByoMounts(form);
+  // harness / Strands mount managed session storage only — BYO needs the container's VPC wiring
+  const byoAllowed = byoMountsAllowed(form.method);
+  const byo = byoAllowed && hasByoMounts(form);
   const show = (on: boolean, key: string) => (touched && on ? t(key) : undefined);
   const kinds = [
     { kind: "s3" as const, field: "s3Mounts" as const, label: "S3 Files", ph: "create.configure.fsS3ArnPlaceholder" },
@@ -358,7 +361,11 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
   const patchRow = (field: "s3Mounts" | "efsMounts", i: number, patch: Partial<MountRow>) =>
     set((prev) => ({ [field]: prev[field].map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   return (
-    <Card title={t("v2.agents.wizard.fsTitle")} sub={t(byo ? "create.configure.fsNoteByo" : "create.configure.fsNote")} testId="v2-agent-fs">
+    <Card
+      title={t("v2.agents.wizard.fsTitle")}
+      sub={t(byo ? "create.configure.fsNoteByo" : byoAllowed ? "create.configure.fsNote" : "v2.agents.wizard.fsNoteSession")}
+      testId="v2-agent-fs"
+    >
       <div className="v2-form">
         <div className="v2-form cols-2">
           <Field label={t("v2.agents.wizard.fsSession")}>
@@ -379,7 +386,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
             </Field>
           )}
         </div>
-        {kinds.map(({ kind, field, label, ph }) => (
+        {byoAllowed && kinds.map(({ kind, field, label, ph }) => (
           <Field key={kind} label={t("v2.agents.wizard.fsMounts", { kind: label })} hint={t("v2.agents.wizard.fsMountsHint", { max: MAX_MOUNTS_PER_KIND })}>
             {form[field].length > 0 && (
               <div className="v2-agents-rows">

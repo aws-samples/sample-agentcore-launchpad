@@ -1,6 +1,7 @@
 """Container runtime wrappers — filesystemConfigurations + VPC param shapes."""
 
-from app.deployer.container import _filesystem_configurations, _vpc
+from app.deployer.container import _vpc
+from app.deployer.filesystem import filesystem_configurations as _filesystem_configurations
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import runtime as rt
 

@@ -94,6 +94,10 @@ export const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
 export const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
 /** AgentCore allows at most two BYO mounts of each kind */
 export const MAX_MOUNTS_PER_KIND = 2;
+/** Methods whose spec carries `filesystem`: managed session storage on all three,
+ *  BYO mounts (S3 Files / EFS — they need VPC networking) on the container only. */
+export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime", "container"];
+export const byoMountsAllowed = (method: AgentMethod) => method === "container";
 
 export const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 export const skillNameFromPath = (path: string) =>
@@ -644,6 +648,9 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     ...(method === "container" && form.mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
       : {}),
+    ...(method === "harness" || method === "zip_runtime"
+      ? { filesystem: { session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null } }
+      : {}),
     ...(method === "container"
       ? {
           filesystem: {
@@ -701,7 +708,8 @@ export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpec
 
 /* ── validation ─────────────────────────────────────────────────────────── */
 
-/** Container filesystem problems, per input (all false/empty ⇒ valid). */
+/** Filesystem problems, per input (all false/empty ⇒ valid). BYO rows only count
+ *  where the method mounts them — rows a method switch left behind are not sent. */
 export interface FilesystemIssues {
   sessionMount: boolean;
   /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
@@ -711,13 +719,16 @@ export interface FilesystemIssues {
 }
 
 export function filesystemIssues(form: AgentForm): FilesystemIssues {
+  const byo = byoMountsAllowed(form.method);
+  const s3Mounts = byo ? form.s3Mounts : [];
+  const efsMounts = byo ? form.efsMounts : [];
   const paths = [
     ...(form.sessionFs ? [form.sessionMount] : []),
-    ...form.s3Mounts.map((m) => m.path),
-    ...form.efsMounts.map((m) => m.path),
+    ...s3Mounts.map((m) => m.path),
+    ...efsMounts.map((m) => m.path),
   ];
   const rows: FilesystemIssues["rows"] = {};
-  for (const [kind, list] of [["s3", form.s3Mounts], ["efs", form.efsMounts]] as const) {
+  for (const [kind, list] of [["s3", s3Mounts], ["efs", efsMounts]] as const) {
     list.forEach((m, i) => {
       const arn = m.arn.trim().length === 0;
       const path = !MOUNT_RE.test(m.path);
@@ -729,13 +740,13 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
     rows,
     duplicatePaths: new Set(paths).size !== paths.length,
     vpc:
-      hasByoMounts(form) &&
+      hasByoMounts({ s3Mounts, efsMounts }) &&
       (splitIds(form.vpcSubnets).length === 0 || splitIds(form.vpcSgs).length === 0),
   };
 }
 
 export const filesystemValid = (form: AgentForm) => {
-  if (form.method !== "container") return true;
+  if (!FILESYSTEM_METHODS.includes(form.method)) return true;
   const issues = filesystemIssues(form);
   return (
     !issues.sessionMount &&
