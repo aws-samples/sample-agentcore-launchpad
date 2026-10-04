@@ -7446,7 +7446,7 @@
       },
       "running": "Running on AWS ({{id}}), refreshing automatically…",
       "skippedTools": "Dropped because they never appear in the traces: {{tools}}",
-      "excludedSessions": "Left out {{n}} adversarial-test session(s) ({{scenarios}}): AgentCore Recommendations refuses traces that contain prompt-injection content. These scenarios are still evaluated.",
+      "excludedSessions": "Left out {{n}} red-team test session(s) ({{scenarios}}): AgentCore Recommendations refuses traces with prompt-injection or red-line-pushing content. These scenarios are still evaluated.",
       "explanation": "Explanation",
       "copy": "Copy prompt",
       "copyTools": "Copy tool descriptions",

@@ -7446,7 +7446,7 @@
       },
       "running": "正在 AWS 上运行（{{id}}），自动刷新中…",
       "skippedTools": "以下工具未出现在 trace 中，已剔除：{{tools}}",
-      "excludedSessions": "已排除 {{n}} 个对抗测试会话（{{scenarios}}）：AgentCore 推荐服务会拒绝含提示词注入内容的追踪。这些场景仍参与评估。",
+      "excludedSessions": "已排除 {{n}} 个红线测试会话（{{scenarios}}）：AgentCore 推荐服务会拒绝含提示词注入或越界诱导内容的追踪。这些场景仍参与评估。",
       "explanation": "说明",
       "copy": "复制提示词",
       "copyTools": "复制工具描述",

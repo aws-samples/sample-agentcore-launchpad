@@ -88,9 +88,10 @@ class GoldenTest(BaseModel):
     pass_criteria: Annotated[str, Field(max_length=1000)] = ""
     evaluator: Annotated[str, Field(max_length=200)] = ""
     source: Literal["customer_pain_point", "industry_assumption"] = "industry_assumption"
-    # The input deliberately carries prompt-injection / jailbreak content (embedded
-    # instructions, role overrides). It is still evaluated; AgentCore Recommendations
-    # rejects traces that contain such content, so AI recommendations leave it out.
+    # A red-team test: the input deliberately pushes the agent across a red line —
+    # embedded instructions / role overrides, use of insider or nonpublic information,
+    # pressure for prohibited advice. Still evaluated; AgentCore Recommendations rejects
+    # traces that contain such content, so AI recommendations leave it out.
     adversarial: bool = False
 
 
