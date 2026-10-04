@@ -526,6 +526,16 @@ function RecommendationResult({
           </span>
         )}
         {rec.skipped_tools.length > 0 && <Alert tone="warn">{t("v2.rec.skippedTools", { tools: rec.skipped_tools.join(", ") })}</Alert>}
+        {(rec.result.excluded_sessions?.length ?? 0) > 0 && (
+          <div data-testid="v2-rec-excluded-sessions">
+            <Alert>
+              {t("v2.rec.excludedSessions", {
+                n: rec.result.excluded_sessions?.length ?? 0,
+                scenarios: (rec.result.excluded_sessions ?? []).map((s) => s.scenario_id || s.session_id.slice(0, 8)).join(", "),
+              })}
+            </Alert>
+          </div>
+        )}
         {rec.error && <Alert tone={rec.status === "FAILED" ? "error" : "warn"}>{rec.error}</Alert>}
         {done && rec.kind === "system_prompt" && (
           <Field label={t("v2.experiments.promptDiff")} hint={rec.result.explanation} full>

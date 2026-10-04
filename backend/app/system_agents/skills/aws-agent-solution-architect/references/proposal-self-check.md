@@ -48,7 +48,10 @@ evaluate natural-language acceptance criteria.
 - [ ] `golden_tests` ≤ 40; each has `id` (unique, ≤ 64), `input` (1–2,000),
       `expected_response` (≤ 2,000), `expected_tools` (≤ 10), `forbidden_behavior` and
       `pass_criteria` (≤ 1,000 each), `evaluator` (≤ 200), `source` ∈
-      `customer_pain_point` | `industry_assumption`. No other members.
+      `customer_pain_point` | `industry_assumption`, optional `adversarial` (boolean).
+      No other members.
+- [ ] Every test whose input embeds prompt-injection / jailbreak content is marked
+      `adversarial: true` (otherwise the AI recommendation step fails for the run).
 - [ ] Every id referenced anywhere in `evaluation_plan` exists here.
 
 ## 4. `evaluation_plan` — routing (the rule most often broken)

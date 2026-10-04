@@ -6,6 +6,10 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 NATIVE_HARNESS_TOOLS = ("shell", "file_operations")
+# AgentCore built-in tool configs (ToolRef type "builtin") → the callable names the
+# model sees at runtime (live 2026-10-03: the "code-interpreter" config is called
+# ``code_interpreter``).
+BUILTIN_RUNTIME_TOOLS: dict[str, tuple[str, ...]] = {"code-interpreter": ("code_interpreter",)}
 # HarnessTool.name permits ASCII letters, digits, underscores and hyphens.
 # Leave one character for "@" within HarnessAllowedTool's 64-character limit.
 _DERIVED_GROUP_NAME = re.compile(r"[A-Za-z0-9_-]{1,63}")
@@ -25,6 +29,15 @@ def selected_native_tools(spec: Mapping[str, Any]) -> set[str]:
             pattern = tool if slash else "*"
         selected.update(name for name in NATIVE_HARNESS_TOOLS if fnmatchcase(name, pattern))
     return selected
+
+
+def selected_builtin_tool_names(content: Mapping[str, Any]) -> set[str]:
+    """Runtime callable names of a proposal's selected AgentCore built-in tools."""
+    return {
+        name
+        for tool in content.get("builtin_tools") or []
+        for name in BUILTIN_RUNTIME_TOOLS.get(str(tool), ())
+    }
 
 
 def selected_tool_patterns(

@@ -212,6 +212,11 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   lets it work with files there. Keep both unless the user declines them or a
   requirement forbids command or file access; send `[]` (or one of them) explicitly
   then. Disclose the command/file access in the readable proposal either way.
+- `builtin_tools`: optional list containing only `"code-interpreter"` (the AgentCore
+  Code Interpreter: an isolated Python sandbox; its runtime callable name is
+  `code_interpreter`). Propose it when the agent must calculate, reconcile or
+  tabulate figures (growth rates, unit or currency conversions, cross-source
+  comparisons); disclose it in the readable proposal. Default is empty.
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
@@ -223,7 +228,11 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
 - `summary`, `requirements_baseline[]`, `assumptions[]`, `manual_tasks[]`,
   `golden_tests[]` (objects: `id`, `input`, `expected_response`, `expected_tools[]`,
   `forbidden_behavior`, `pass_criteria`, `evaluator`, `source` ∈
-  `customer_pain_point | industry_assumption`), `evaluator_recommendations[]`
+  `customer_pain_point | industry_assumption`, `adversarial` — `true` when the input
+  deliberately carries prompt-injection or jailbreak content such as embedded
+  instructions or role overrides; it is still evaluated, but AI recommendations leave
+  that session out because AgentCore Recommendations refuses such traces),
+  `evaluator_recommendations[]`
 - optional `evaluation_plan`: a structured seed for the SEPARATE evaluation-assets
   review — `{{"scenarios": [...], "evaluators": [...], "recommendation_keys":
   {{"<index>": ["<key>"]}}, "blocked_golden_tests": [...]}}`. Every golden test is
@@ -373,7 +382,8 @@ def catalog_section(catalog: dict[str, Any]) -> str:
     lines = ["## Available resources in this workspace (reference by key)", ""]
     lines.append(
         "Native Harness tools: `shell`, `file_operations` (selected by default in "
-        "`native_tools`; not resource `tools` keys)."
+        "`native_tools`; not resource `tools` keys). AgentCore built-in tool: "
+        "`code-interpreter` (via `builtin_tools`; runtime callable `code_interpreter`)."
     )
     tools = [t for t in catalog.get("tools") or [] if t.get("attachable", True)]
     lines.append("Tools (`tools` keys):")

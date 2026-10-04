@@ -324,7 +324,7 @@ def code_rule_capability_conflict_errors(
     """
     conflicts = [
         f"{field}={proposal_content[field]!r}"
-        for field in ("knowledge_bases", "skills", "tools", "native_tools")
+        for field in ("knowledge_bases", "skills", "tools", "native_tools", "builtin_tools")
         if proposal_content.get(field)
     ]
     # Typed scenarios say which golden tests actually run (blocked tests do not).
@@ -490,9 +490,13 @@ def golden_test_snapshot(gt: dict[str, Any] | None) -> dict[str, Any] | None:
     """The reviewed golden-test facts kept with a Dataset item (never the transcript)."""
     if not isinstance(gt, dict):
         return None
-    return {k: gt.get(k) for k in ("id", "input", "expected_response", "expected_tools",
-                                   "forbidden_behavior", "pass_criteria", "evaluator", "source")
-            if gt.get(k) not in (None, "", [])}
+    snapshot = {k: gt.get(k) for k in ("id", "input", "expected_response", "expected_tools",
+                                       "forbidden_behavior", "pass_criteria", "evaluator",
+                                       "source")
+                if gt.get(k) not in (None, "", [])}
+    if gt.get("adversarial") is True:  # only when set: older snapshots stay byte-identical
+        snapshot["adversarial"] = True
+    return snapshot
 
 
 def dataset_item(

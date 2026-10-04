@@ -220,6 +220,8 @@ export function proposalContentFromDraft(
       ? base.evaluator_recommendations
       : [],
     ...(isFishbone(base.fishbone) ? { fishbone: base.fishbone } : {}),
+    // built-in tools are not editable in the draft; an edit must not drop them
+    ...(Array.isArray(base.builtin_tools) ? { builtin_tools: base.builtin_tools.map(String) } : {}),
     // a reviewed function narrowing travels with its still-selected Gateway; dropping
     // it silently would widen that Gateway to every declared function
     ...carriedToolFunctions(base.tool_functions, draft.tools),

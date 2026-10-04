@@ -825,6 +825,7 @@ def start_system_prompt_recommendation(
     log_group_arns: list[str] | None = None,
     service_names: list[str] | None = None,
     batch_evaluation_arn: str | None = None,
+    session_spans: list[dict[str, Any]] | None = None,
     evaluator_arn: str = _GSR_EVALUATOR_ARN,
 ) -> dict[str, Any]:
     return client.start_recommendation(
@@ -837,6 +838,7 @@ def start_system_prompt_recommendation(
                     log_group_arns=log_group_arns,
                     service_names=service_names,
                     batch_evaluation_arn=batch_evaluation_arn,
+                    session_spans=session_spans,
                 ),
                 "evaluationConfig": {
                     "evaluators": [{"evaluatorArn": evaluator_arn}]

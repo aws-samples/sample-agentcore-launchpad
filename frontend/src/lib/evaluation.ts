@@ -228,6 +228,8 @@ export interface RunRecommendation {
     provider_meta?: { evidence_sessions?: number; evidence_records?: number; latency_ms?: number };
     /** the provider job's last progress line while it runs */
     progress?: string;
+    /** adversarial-test sessions left out of an AgentCore prompt recommendation's traces */
+    excluded_sessions?: { session_id: string; scenario_id: string }[];
   };
   error: string | null;
   /** set once the recommended prompt was accepted into a new Harness version */
