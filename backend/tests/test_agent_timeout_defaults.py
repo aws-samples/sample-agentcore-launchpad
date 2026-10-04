@@ -33,8 +33,24 @@ def test_model_facing_guidance_names_the_schema_default():
         ).read_text(encoding="utf-8"),
     }
     for name, text in texts.items():
-        named = {int(n) for n in re.findall(r"(?:[Uu]se|default) (\d+)(?: seconds)?\b", text)}
+        named = {int(n) for n in re.findall(r"(?:[Uu]se|default) (\d+)(?= seconds| unless)", text)}
         assert named == {default}, (name, named)
+
+
+def test_model_facing_guidance_names_the_iteration_default():
+    from pathlib import Path
+
+    from app.assistant import service
+    from app.schemas.agent import AgentSpec
+
+    default = ProposalContent.model_fields["max_iterations"].default
+    assert default == AgentSpec.model_fields["max_iterations"].default == 100
+    skill = (Path(__file__).resolve().parents[1]
+             / "app/system_agents/skills/aws-agent-solution-architect")
+    assert f"default {default})" in service.PROTOCOL_PREAMBLE
+    assert f"Default `max_iterations` to {default}" in (skill / "SKILL.md").read_text("utf-8")
+    assert f"default {default};" in (
+        skill / "references/proposal-self-check.md").read_text("utf-8")
 
 @pytest.mark.parametrize("budget", [30, 300, 900, 1200])
 def test_explicit_budgets_survive_proposal_mapping(budget):

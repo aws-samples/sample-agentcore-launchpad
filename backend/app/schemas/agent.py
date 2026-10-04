@@ -421,7 +421,7 @@ class AgentSpec(BaseModel):
     studio_flow: dict[str, Any] | None = None
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     env: dict[str, str] = Field(default_factory=dict)
-    max_iterations: int = Field(default=10, ge=1, le=100)
+    max_iterations: int = Field(default=100, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
     # AgentCore Runtime persistent storage. Session storage mounts on the harness,
     # zip_runtime/studio and container methods; BYO mounts are container-only.

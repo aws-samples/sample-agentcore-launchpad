@@ -251,7 +251,7 @@ class ProposalContent(BaseModel):
     # Managed knowledge base ids present in the catalog.
     knowledge_bases: list[Key] = Field(default_factory=list, max_length=10)
     memory: MemoryMode = "disabled"
-    max_iterations: int = Field(default=10, ge=1, le=100)
+    max_iterations: int = Field(default=100, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
     # Solution content, shown for review and kept with the revision.
     summary: Annotated[str, Field(max_length=4000)] = ""

@@ -110,7 +110,7 @@ def test_partial_edit_helper_matches_backend_contract() -> None:
     assert 'const clear: ("max_tokens" | "reasoning_effort")[] = []' in helpers
     assert "MAX_TOKENS_CEILING = 131072" in helpers
     # the ordinary create defaults the shared form starts on = AgentSpec defaults
-    assert "DEFAULT_MAX_ITERATIONS = 10" in helpers
+    assert "DEFAULT_MAX_ITERATIONS = 100" in helpers
     defaults = _src(FRONTEND / "lib" / "agent-defaults.ts")
     assert "DEFAULT_TIMEOUT_SECONDS = 600" in defaults
     defaults_import = "import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from"
@@ -123,7 +123,7 @@ def test_partial_edit_helper_matches_backend_contract() -> None:
 
     assert MAX_TOKENS_CEILING == 131072
     fields = AgentSpec.model_fields
-    assert fields["max_iterations"].default == 10
+    assert fields["max_iterations"].default == 100
     assert fields["timeout_seconds"].default == 600
 
 
