@@ -233,8 +233,10 @@ def transient_invoke_error(exc: BaseException) -> bool:
         if exc.code == "harness.execution_timeout":
             return True
         detail = exc.detail if isinstance(exc.detail, dict) else {}
+        # stop_reason None: the stream closed with neither a stop event nor any text —
+        # the agent never ran (live 2026-10-04: no span at all for that session).
         return exc.code == "harness.incomplete_response" and detail.get("stop_reason") in {
-            "tool_result", "tool_use"}
+            "tool_result", "tool_use", None}
     if isinstance(exc, ClientError):
         error = exc.response.get("Error") or {}
         status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0

@@ -103,6 +103,9 @@ def test_transient_classification():
         "harness.incomplete_response", "x", {"stop_reason": "tool_result"}))
     assert not evaluation.transient_invoke_error(AppError(
         "harness.incomplete_response", "x", {"stop_reason": "end_turn"}))
+    # a stream that closed with neither a stop event nor text never ran the agent
+    assert evaluation.transient_invoke_error(AppError(
+        "harness.incomplete_response", "x", {"stop_reason": None}))
     assert not evaluation.transient_invoke_error(ValueError("bad"))
 
 
@@ -137,3 +140,10 @@ def test_an_ordinary_run_records_no_budget_stops(monkeypatch):
     row, _, _ = _execute(monkeypatch, [ok(), ok()])
 
     assert row.budget_stops is None
+
+
+def test_an_empty_stream_is_replayed(monkeypatch):
+    row, sessions, finished = _execute(monkeypatch, [ok(), Stream([]), ok()])
+
+    assert len(sessions) == 3 and row.session_ids == [sessions[0], sessions[2]]
+    assert finished == [row.id]
