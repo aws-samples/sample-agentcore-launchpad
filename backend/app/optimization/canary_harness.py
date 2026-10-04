@@ -314,7 +314,9 @@ def paired_scores_query(config_ids: list[str], session_ids: list[str]) -> str:
         " attributes.gen_ai.evaluation.score.value as score\n"
         f'| filter name = "gen_ai.evaluation.result" and onlineEvaluationConfigId in [{configs}]'
         f" and sid in [{sessions}] and ispresent(score)\n"
-        "| stats avg(score) as score by sid, evaluator\n"
+        # the aggregate needs its own name: reusing `score` is a MalformedQueryException
+        # ("Ephemeral field is already defined") on the live service
+        "| stats avg(score) as mean by sid, evaluator\n"
         "| limit 10000"
     )
 
@@ -325,7 +327,7 @@ def parse_paired_scores(rows: list[dict[str, str]]) -> dict[str, dict[str, float
     for row in rows:
         sid, evaluator = row.get("sid"), row.get("evaluator")
         try:
-            score = float(row.get("score") or "")
+            score = float(row.get("mean") or "")
         except ValueError:
             continue
         if sid and evaluator:

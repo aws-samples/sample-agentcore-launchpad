@@ -1,5 +1,6 @@
 """Paired replay: every question answered by both Harness versions, compared pair by pair."""
 
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,8 +61,8 @@ def test_the_scores_query_reads_both_arms_by_session():
     q = canary_harness.paired_scores_query(["oe-c", "oe-t"], ["c0", "t0"])
     assert 'onlineEvaluationConfigId in ["oe-c", "oe-t"]' in q and 'sid in ["c0", "t0"]' in q
     assert canary_harness.parse_paired_scores(
-        [{"sid": "c0", "evaluator": GSR, "score": "0.5"}, {"sid": "c0", "evaluator": HELP,
-                                                          "score": "x"}]) == {"c0": {GSR: 0.5}}
+        [{"sid": "c0", "evaluator": GSR, "mean": "0.5"}, {"sid": "c0", "evaluator": HELP,
+                                                          "mean": "x"}]) == {"c0": {GSR: 0.5}}
 
 
 def test_verdict_of_a_paired_round_compares_question_by_question(monkeypatch):
@@ -84,8 +85,8 @@ def test_verdict_of_a_paired_round_compares_question_by_question(monkeypatch):
         seen.extend(queries.values())
         rows = []
         for i in range(5):
-            rows += [{"sid": f"c{i}", "evaluator": GSR, "score": "0.4"},
-                     {"sid": f"t{i}", "evaluator": GSR, "score": "0.9"}]
+            rows += [{"sid": f"c{i}", "evaluator": GSR, "mean": "0.4"},
+                     {"sid": f"t{i}", "evaluator": GSR, "mean": "0.9"}]
         return {"q0": rows}
 
     monkeypatch.setattr("app.services.observability.run_insights_queries", insights)
@@ -135,8 +136,8 @@ def test_a_budget_stopped_side_keeps_its_pair_in_the_verdict(monkeypatch):
     def insights(queries, hours, **_kw):
         rows = []
         for i in range(4):
-            rows += [{"sid": f"c{i}", "evaluator": GSR, "score": "0.8"},
-                     {"sid": f"t{i}", "evaluator": GSR, "score": "0.0" if i == 3 else "0.8"}]
+            rows += [{"sid": f"c{i}", "evaluator": GSR, "mean": "0.8"},
+                     {"sid": f"t{i}", "evaluator": GSR, "mean": "0.0" if i == 3 else "0.8"}]
         return {"q0": rows}
 
     monkeypatch.setattr("app.services.observability.run_insights_queries", insights)
@@ -148,3 +149,12 @@ def test_a_budget_stopped_side_keeps_its_pair_in_the_verdict(monkeypatch):
     assert variant["pairs"] == 4 and variant["losses"] == 1 and variant["ties"] == 3
     stopped = [r for r in verdict["pairs"] if r["budget_stop"]]
     assert [(r["scenario_id"], r["error"]) for r in stopped] == [("S03", None)]
+
+
+def test_paired_scores_query_never_redefines_a_field():
+    """Logs Insights refuses an alias that names an existing ephemeral field
+    (live 2026-10-04: `stats avg(score) as score` failed the first paired verdict)."""
+    query = canary_harness.paired_scores_query(["oe-c", "oe-t"], ["s1", "s2"])
+    aliases = re.findall(r"\bas (\w+)", query)
+    assert len(aliases) == len(set(aliases)), aliases
+    assert "avg(score) as mean" in query
