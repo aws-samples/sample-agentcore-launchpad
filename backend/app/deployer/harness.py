@@ -17,7 +17,7 @@ from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
 from app.services import agent_iam, registry_console
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
@@ -52,8 +52,9 @@ def model_config(spec: AgentSpec) -> dict[str, Any]:
     """``HarnessBedrockModelConfig`` for one spec.
 
     ``maxTokens`` is the per-model-call output ceiling (not the aggregate
-    ``InvokeHarness.maxTokens`` and not ``maxIterations``); it is sent only when the
-    spec sets one, so every existing agent keeps its exact request. ``reasoning_effort``
+    ``InvokeHarness.maxTokens`` and not ``maxIterations``); it is sent when the spec
+    sets one, else ``DEFAULT_GPT_MAX_TOKENS`` for an OpenAI GPT model, else not at all
+    (the service default). ``reasoning_effort``
     rides ``additionalParams`` — the managed harness merges that document **verbatim
     into the raw Converse request kwargs** (it is not a Strands ``BedrockModel`` config
     block, so the snake_case ``additional_request_fields`` key is rejected by botocore
@@ -65,8 +66,11 @@ def model_config(spec: AgentSpec) -> dict[str, Any]:
     shape.
     """
     config: dict[str, Any] = {"modelId": spec.model_id, "apiFormat": _api_format(spec)}
-    if spec.max_tokens is not None:
-        config["maxTokens"] = spec.max_tokens
+    max_tokens = spec.max_tokens
+    if max_tokens is None and is_openai_model_id(spec.model_id):
+        max_tokens = DEFAULT_GPT_MAX_TOKENS
+    if max_tokens is not None:
+        config["maxTokens"] = max_tokens
     if spec.reasoning_effort is not None:
         config["additionalParams"] = {
             "additionalModelRequestFields": {"reasoning": {"effort": spec.reasoning_effort}}

@@ -39,6 +39,11 @@ ReasoningEffort = Literal["low", "medium", "high"]
 # ``bedrockModelConfig.maxTokens`` from below only; a too-large value surfaces as a
 # model-side validation error, so this cap is a sanity bound, not a model catalogue.
 MAX_TOKENS_CEILING = 131072
+# Per-call ceiling a Harness on an OpenAI GPT model gets when the spec sets none: the
+# service default is too small for their hidden reasoning (live 2026-10-04: a GPT-6
+# call reasoned for 95 s and stopped at max_tokens before writing any answer). Other
+# families keep the service default — Bedrock rejects a value above a model's limit.
+DEFAULT_GPT_MAX_TOKENS = 65536
 
 
 def is_openai_model_id(model_id: str) -> bool:

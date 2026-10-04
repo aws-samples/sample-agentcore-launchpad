@@ -205,6 +205,7 @@ def _migrate(bind) -> None:
             ("name", "ALTER TABLE eval_runs ADD COLUMN name VARCHAR(64)"),
             ("description", "ALTER TABLE eval_runs ADD COLUMN description TEXT"),
             ("log_source", "ALTER TABLE eval_runs ADD COLUMN log_source JSON"),
+            ("budget_stops", "ALTER TABLE eval_runs ADD COLUMN budget_stops JSON"),
         ):
             if column not in existing:
                 with bind.begin() as conn:

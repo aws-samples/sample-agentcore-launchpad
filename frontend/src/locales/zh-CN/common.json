@@ -716,7 +716,7 @@
         "model": "模型",
         "maxTokens": "单次模型调用最大输出 token",
         "maxTokensEmpty": "留空 = 提供方默认",
-        "maxTokensHint": "即 Harness 的 bedrockModelConfig.maxTokens——单次模型响应的上限。不是会话或花费上限；循环由下方的最大迭代次数与超时约束。",
+        "maxTokensHint": "即 Harness 的 bedrockModelConfig.maxTokens——单次模型响应的上限。不是会话或花费上限；循环由下方的最大迭代次数与超时约束。留空时，GPT 模型默认 65536，其他模型使用服务默认值。",
         "effort": "推理强度",
         "effortNone": "无（不发送）",
         "effortLevels": {
@@ -5362,7 +5362,7 @@
         "customModel": "自定义模型 ID…",
         "customModelId": "自定义模型 ID",
         "maxTokens": "单次调用最大输出 Token",
-        "maxTokensHint": "留空表示不设单次上限。",
+        "maxTokensHint": "留空时，GPT 模型默认 65536；其他模型使用服务默认值。",
         "effort": "推理强度",
         "effortUnsupported": "只有 Bedrock 原生 OpenAI 模型支持推理强度。",
         "tools": "工具",
@@ -5926,6 +5926,7 @@
     },
     "taskDetail": {
       "overview": "运行概要",
+      "budgetStops": "{{count}} 个场景耗尽了 Agent 的执行预算，按当时的轨迹计分：{{list}}",
       "sessions": "会话数",
       "queue": "排队",
       "queuePos": "第 {{n}} 位",

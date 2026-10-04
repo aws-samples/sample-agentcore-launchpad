@@ -716,7 +716,7 @@
         "model": "MODEL",
         "maxTokens": "MAX OUTPUT TOKENS PER MODEL CALL",
         "maxTokensEmpty": "empty = provider default",
-        "maxTokensHint": "Harness bedrockModelConfig.maxTokens — the ceiling of one model response. Not a session or spend cap; the loop is bounded by max iterations and timeout below.",
+        "maxTokensHint": "Harness bedrockModelConfig.maxTokens — the ceiling of one model response. Not a session or spend cap; the loop is bounded by max iterations and timeout below. Empty = 65536 for GPT models, the service default otherwise.",
         "effort": "REASONING EFFORT",
         "effortNone": "none (not sent)",
         "effortLevels": {
@@ -5362,7 +5362,7 @@
         "customModel": "Custom model ID…",
         "customModelId": "Custom model ID",
         "maxTokens": "Max output tokens per call",
-        "maxTokensHint": "Empty ⇒ no per-call ceiling.",
+        "maxTokensHint": "Empty ⇒ 65536 for GPT models, the service default otherwise.",
         "effort": "Reasoning effort",
         "effortUnsupported": "Only native Bedrock OpenAI models accept a reasoning effort.",
         "tools": "Tools",
@@ -5926,6 +5926,7 @@
     },
     "taskDetail": {
       "overview": "Overview",
+      "budgetStops": "{{count}} scenario(s) used up the agent's execution budget and are scored as they stand: {{list}}",
       "sessions": "Sessions",
       "queue": "Queue",
       "queuePos": "Position {{n}}",
