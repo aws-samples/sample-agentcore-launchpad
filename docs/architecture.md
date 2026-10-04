@@ -2576,7 +2576,10 @@ through the same backend routes and permission checks as the classic pages.
   so `GetABTest` reports per-variant results. Dataset replay into a Harness canary is
   **paired** instead (`canary_harness.PAIRED_MODE`): every question is sent to BOTH
   endpoints (InvokeHarness with `qualifier`, a fresh session per side, transient errors
-  retried once, a failed side recorded on the pair), so the gateway's random split never
+  retried once, a failed side recorded on the pair — a side that ended on the agent's own
+  budget, a timeout after its retry or an iteration / token limit, keeps its pair and is
+  scored as it stands, marked "budget stop" in the per-question table, while any other
+  failure leaves the pair out), so the gateway's random split never
   hands the two versions different question mixes and repeating a set is not needed. The
   verdict reads both sessions' scores from the two arms' online-evaluation results
   (100 % sampling on each endpoint, no variant filter) by session id, waits until 90 % of

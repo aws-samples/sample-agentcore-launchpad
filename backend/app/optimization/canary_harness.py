@@ -333,6 +333,20 @@ def parse_paired_scores(rows: list[dict[str, str]]) -> dict[str, dict[str, float
     return out
 
 
+def budget_stop_only(error: str | None) -> bool:
+    """A pair error (``"<arm>: <code>, …"``) made only of the agent's own budget stops —
+    a timeout after its replay or an iteration / token limit. That side answered as
+    far as its budget allowed: the pair stays in the verdict and its session is scored
+    as it stands, the same rule a dataset evaluation run applies
+    (``evaluation.service.BUDGET_STOP_CODES``)."""
+    from app.evaluation.service import BUDGET_STOP_CODES
+
+    if not error:
+        return False
+    return all(part.split(": ", 1)[-1].strip() in BUDGET_STOP_CODES
+               for part in error.split(", "))
+
+
 def paired_metrics(
     pairs: list[dict[str, Any]], scores: dict[str, dict[str, float]],
     *, polarity: Callable[[str], int],
@@ -387,7 +401,8 @@ def paired_metrics(
             "prompt": p.get("prompt"),
             "control": scores.get(p.get("control_session_id") or "", {}),
             "treatment": scores.get(p.get("treatment_session_id") or "", {}),
-            "error": p.get("error"),
+            "error": None if budget_stop_only(p.get("error")) else p.get("error"),
+            "budget_stop": p.get("error") if budget_stop_only(p.get("error")) else None,
         }
         for p in pairs
     ]

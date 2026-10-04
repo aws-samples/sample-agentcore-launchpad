@@ -161,7 +161,16 @@ export function CanaryDetail({ id }: { id: string }) {
       <Table
         testId="v2-canary-paired-rows"
         columns={[
-          { key: "s", title: t("v2.canary.paired.question"), render: (r: CanaryPairRow) => <span className="mono">{r.scenario_id ?? "—"}</span> },
+          {
+            key: "s",
+            title: t("v2.canary.paired.question"),
+            render: (r: CanaryPairRow) => (
+              <span className="mono" title={r.budget_stop ?? undefined}>
+                {r.scenario_id ?? "—"}
+                {r.budget_stop && <span className="v2-muted"> · {t("v2.canary.paired.budgetStop")}</span>}
+              </span>
+            ),
+          },
           { key: "q", title: t("v2.canary.paired.prompt"), render: (r: CanaryPairRow) => <span className="v2-muted">{(r.prompt ?? "").slice(0, 48)}</span> },
           ...evaluators.map((e) => ({
             key: e.id,

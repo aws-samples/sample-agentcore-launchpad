@@ -6346,6 +6346,7 @@
       "sourceExp": "Source experiment",
       "targets": "Targets",
       "paired": {
+        "budgetStop": "budget stop",
         "meanDiff": "Mean difference",
         "winLoss": "Better / worse / equal",
         "pValue": "p-value",
