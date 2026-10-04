@@ -269,7 +269,8 @@ def test_shared_invoke_entry_propagates_harness_failure(monkeypatch, mode):
     assert stream.closed == 1
 
 
-@pytest.mark.parametrize("reason", ["timeout_exceeded", "cancelled", "limit_turns"])
+# timeout_exceeded is replayed once first (see test_eval_transient_retry), not a single-call stop.
+@pytest.mark.parametrize("reason", ["max_iterations_exceeded", "cancelled", "limit_turns"])
 def test_failed_replay_never_waits_for_telemetry_or_starts_batch(monkeypatch, reason):
     stream = Stream([text("partial"), stop("end_turn"), stop(reason)])
     client = client_for(stream)

@@ -204,6 +204,8 @@ def _wait_for_fresh_telemetry(
 # "The server had an error while processing your request" failed a 10-scenario run;
 # the same prompt replayed cleanly 3/3).
 TRANSIENT_SCENARIO_RETRIES = 2
+# A timed-out attempt already spent the agent's whole budget, so it gets one replay only.
+TIMEOUT_SCENARIO_RETRIES = 1
 _TRANSIENT_CODES = frozenset({
     "runtimeClientError", "internalServerException", "InternalServerException",
     "throttlingException", "ThrottlingException", "serviceUnavailableException",
@@ -218,9 +220,14 @@ def transient_invoke_error(exc: BaseException) -> bool:
     those events), throttling, a 5xx, or a Harness loop that stopped right after a
     tool step without answering (``harness.incomplete_response`` with stop reason
     ``tool_result`` / ``tool_use`` — live 2026-10-04: 1 of 3 replays of a research
-    prompt, the other replays answered normally). Budget stops (``AppError``
-    timeout / limit) and every other error are final."""
+    prompt, the other replays answered normally), or a Harness execution timeout
+    (live 2026-10-04: a model call that never returned held a research scenario
+    silent until the 600 s budget ran out — retried at most
+    ``TIMEOUT_SCENARIO_RETRIES`` times). Iteration / token limits and every other
+    error are final."""
     if isinstance(exc, AppError):
+        if exc.code == "harness.execution_timeout":
+            return True
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         return exc.code == "harness.incomplete_response" and detail.get("stop_reason") in {
             "tool_result", "tool_use"}
@@ -342,7 +349,9 @@ def execute_run(
                                 sid = invoke(prompt, sid)["session_id"]
                         break
                     except Exception as exc:
-                        if retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc):
+                        timed_out = getattr(exc, "code", None) == "harness.execution_timeout"
+                        if (retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc)
+                                or (timed_out and retry >= TIMEOUT_SCENARIO_RETRIES)):
                             raise
                         _check_stop(run_id)
                         attempt["retried"] = str(retry + 1)
