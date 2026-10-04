@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
 from app.evaluation import agentcore_eval as ac
-from app.evaluation.models import EvalRecommendation, EvalRun
+from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore import policy as policy_api
@@ -433,11 +433,45 @@ def _batch_arn(run: EvalRun, workspace: WorkspaceContext) -> str:
     return str(arn)
 
 
-def run_spans(run: EvalRun, workspace: WorkspaceContext) -> list[dict[str, Any]]:
-    """The raw span documents of the run's sessions (the on-demand evaluation query)."""
+def adversarial_sessions(db: Session, run: EvalRun) -> list[dict[str, str]]:
+    """The run's sessions whose scenario is a reviewed adversarial golden test.
+
+    AgentCore Recommendations refuses traces that contain prompt-injection content
+    (``ValidationException`` … "flagged by our safety filters as a potential prompt
+    attack"), and a red-team scenario puts exactly that content in its trace. Sessions
+    pair with the local Dataset's scenarios by position (``execute_run``); when the
+    Dataset no longer has one scenario per session, nothing can be re-paired and
+    nothing is excluded.
+    """
+    from app.evaluation.scenarios import normalize_scenarios
+
+    sessions = list(run.session_ids or [])
+    if not run.dataset_id or not sessions:
+        return []
+    dataset = db.get(EvalDataset, run.dataset_id)
+    if dataset is None or (run.workspace_id and dataset.workspace_id != run.workspace_id):
+        return []
+    scenarios = normalize_scenarios(list(dataset.items or []))
+    if len(scenarios) != len(sessions):
+        return []
+    out: list[dict[str, str]] = []
+    for scenario, session_id in zip(scenarios, sessions, strict=True):
+        assets = (scenario.get("metadata") or {}).get("launchpad_assets") or {}
+        if (assets.get("golden_test") or {}).get("adversarial") is True:
+            out.append({"session_id": str(session_id),
+                        "scenario_id": str(scenario.get("scenario_id") or "")})
+    return out
+
+
+def run_spans(
+    run: EvalRun, workspace: WorkspaceContext, *, exclude: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """The raw span documents of the run's sessions (the on-demand evaluation query),
+    minus the ``exclude``d session ids."""
     from app.services.observability import q_session_spans, run_insights_queries
 
-    sessions = list(dict.fromkeys(run.session_ids or []))
+    skip = exclude or set()
+    sessions = [sid for sid in dict.fromkeys(run.session_ids or []) if sid not in skip]
     if not sessions:
         raise AppError(
             "recommendation.run_no_sessions",
@@ -552,9 +586,25 @@ def start(
     # never leaves one kind running and the other unstarted
     evaluator_id = evaluator or DEFAULT_EVALUATOR
     evaluator_arn = batch_arn = ""
+    excluded: list[dict[str, str]] = []
+    prompt_spans: list[dict[str, Any]] = []
     if "system_prompt" in kinds and not third_party:
         evaluator_arn = _evaluator_arn(db, evaluator_id, workspace)
-        batch_arn = _batch_arn(run, workspace)
+        excluded = adversarial_sessions(db, run)
+        if excluded and len(excluded) == len(set(run.session_ids or [])):
+            raise AppError(
+                "recommendation.only_adversarial_sessions",
+                "every session of this run is an adversarial test — AgentCore "
+                "Recommendations refuses prompt-injection traces; pick a run with "
+                "ordinary scenarios",
+                {"excluded": excluded}, status_code=409,
+            )
+        if excluded:
+            # the run's other sessions, inline: a batch reference cannot leave one out
+            prompt_spans = run_spans(run, workspace,
+                                     exclude={e["session_id"] for e in excluded})
+        else:
+            batch_arn = _batch_arn(run, workspace)
     spans: list[dict[str, Any]] = []
     skipped: list[str] = []
     if "tool_descriptions" in kinds:
@@ -584,7 +634,8 @@ def start(
             name = _job_name(run.id, kind)
             started = ac.start_system_prompt_recommendation(
                 data, name=name, system_prompt=prompt,
-                batch_evaluation_arn=batch_arn, evaluator_arn=evaluator_arn,
+                batch_evaluation_arn=batch_arn or None,
+                session_spans=prompt_spans or None, evaluator_arn=evaluator_arn,
             )
             rec_id = str(started["recommendationId"])
         else:
@@ -597,6 +648,8 @@ def start(
             evaluator=evaluator_id if kind == "system_prompt" else None,
             tools=clean_tools if kind == "tool_descriptions" else {},
             skipped_tools=skipped if kind == "tool_descriptions" else [],
+            result=({"excluded_sessions": excluded}
+                    if kind == "system_prompt" and excluded else {}),
         )
         db.add(row)
         db.commit()
@@ -723,7 +776,9 @@ def _apply(row: EvalRecommendation, detail: dict[str, Any]) -> None:
         payload = result.get("systemPromptRecommendationResult") or {}
         text = payload.get("recommendedSystemPrompt") or ""
         if status == "COMPLETED" and text:
-            row.result = {"recommended_prompt": text,
+            # which sessions were left out is part of the record, not AWS output
+            kept = {k: v for k, v in (row.result or {}).items() if k == "excluded_sessions"}
+            row.result = {**kept, "recommended_prompt": text,
                           "explanation": payload.get("explanation") or ""}
         elif status in ac.REC_TERMINAL:
             # a job AWS did not complete has no recommendation — never show one

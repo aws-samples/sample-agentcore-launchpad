@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.5.2
+version: 1.5.3
 ---
 
 # AWS Agent Solution Architect
@@ -276,6 +276,18 @@ review either way. When the agent must resolve relative dates ("last month", "�
 before searching or filtering, never to guess "today" from model memory or page
 dates. The runtime filter also keeps the selected MCP/Gateway/KB tools and Skill
 loading available.
+
+Propose the AgentCore Code Interpreter (`builtin_tools: ["code-interpreter"]`, runtime
+callable `code_interpreter`) when the agent must calculate, reconcile or tabulate
+figures — growth rates, unit or currency conversions, cross-source comparisons — and
+have the prompt say to compute with it rather than by hand. Disclose it for review.
+
+Mark a golden test `adversarial: true` when its input deliberately carries
+prompt-injection or jailbreak content (instructions embedded in a pasted page, role
+overrides, "ignore your rules"). Keep such tests: they are evaluated like any other.
+AgentCore Recommendations refuses traces containing that content, so Launchpad leaves
+those sessions out of AI prompt recommendations; an unmarked injection test makes the
+recommendation step fail for the whole run.
 An evaluation allowlist cannot permit an unselected native tool. Tool-name rules
 cannot constrain shell command contents, so keep business-write assertions separate.
 Never broaden access merely because a previous trace contains an unlisted tool.

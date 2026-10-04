@@ -88,6 +88,10 @@ class GoldenTest(BaseModel):
     pass_criteria: Annotated[str, Field(max_length=1000)] = ""
     evaluator: Annotated[str, Field(max_length=200)] = ""
     source: Literal["customer_pain_point", "industry_assumption"] = "industry_assumption"
+    # The input deliberately carries prompt-injection / jailbreak content (embedded
+    # instructions, role overrides). It is still evaluated; AgentCore Recommendations
+    # rejects traces that contain such content, so AI recommendations leave it out.
+    adversarial: bool = False
 
 
 class EvaluationPlanSeed(BaseModel):
@@ -239,6 +243,8 @@ class ProposalContent(BaseModel):
     native_tools: list[Literal["shell", "file_operations"]] = Field(
         default_factory=lambda: ["shell", "file_operations"], max_length=2,
     )
+    # AgentCore built-in tools mounted on the Harness (ToolRef type "builtin").
+    builtin_tools: list[Literal["code-interpreter"]] = Field(default_factory=list, max_length=1)
     # Catalog skill names (registry AGENT_SKILLS records), never S3 paths.
     skills: list[Key] = Field(default_factory=list, max_length=10)
     # Managed knowledge base ids present in the catalog.
@@ -284,7 +290,7 @@ def serialized_bytes(raw: Any) -> int:
 
 def _check_lists(content: ProposalContent) -> list[str]:
     errors: list[str] = []
-    for field in ("tools", "skills", "knowledge_bases", "native_tools"):
+    for field in ("tools", "skills", "knowledge_bases", "native_tools", "builtin_tools"):
         values = getattr(content, field)
         if len(values) != len(set(values)):
             errors.append(f"{field} must not repeat an entry")
@@ -603,6 +609,7 @@ def to_agent_spec(content: ProposalContent, catalog: dict[str, Any]) -> AgentSpe
             tools.append(ToolRef(type="gateway", name=entry["name"], config=config))
         else:
             tools.append(ToolRef(type="mcp", name=entry["name"], config={"url": entry["url"]}))
+    tools += [ToolRef(type="builtin", name=name) for name in content.builtin_tools]
     skills = [index["skills"][key]["path"] for key in content.skills]
     kbs = [
         KnowledgeBaseRef(
