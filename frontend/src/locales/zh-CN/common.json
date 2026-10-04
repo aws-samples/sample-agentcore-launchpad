@@ -6346,6 +6346,7 @@
       "sourceExp": "来源实验",
       "targets": "Target",
       "paired": {
+        "budgetStop": "预算终止",
         "meanDiff": "平均差",
         "winLoss": "更好 / 更差 / 持平",
         "pValue": "p 值",

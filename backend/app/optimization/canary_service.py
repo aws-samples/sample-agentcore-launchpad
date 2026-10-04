@@ -934,7 +934,7 @@ def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progr
     pairs = [p for a in current.get("traffic_attempts") or []
              if a.get("mode") == canary_harness.PAIRED_MODE for p in a.get("pairs") or []]
     complete = [p for p in pairs if p.get("control_session_id") and p.get("treatment_session_id")
-                and not p.get("error")]
+                and (not p.get("error") or canary_harness.budget_stop_only(p["error"]))]
     config_ids = [setup["champion"]["online_eval_id"], setup["challenger"]["online_eval_id"]]
     sessions = [p[k] for p in complete for k in ("control_session_id", "treatment_session_id")]
     first = min((a.get("completed_at") or _now()) for a in current["traffic_attempts"])

@@ -551,6 +551,9 @@ export interface CanaryPairRow {
   control: Record<string, number>;
   treatment: Record<string, number>;
   error?: string | null;
+  /** the side(s) that ended on the agent's own budget ("treatment: harness.execution_limit");
+   *  the pair still counts, scored as it stands */
+  budget_stop?: string | null;
 }
 
 export interface RuntimeCanaryInfo {

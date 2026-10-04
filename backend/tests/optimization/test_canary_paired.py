@@ -68,7 +68,7 @@ def test_verdict_of_a_paired_round_compares_question_by_question(monkeypatch):
     agent_id = _agent()
     canary_id = _canary(agent_id)
     pairs = _pairs(6)
-    pairs[5]["error"] = "control: harness.execution_timeout"
+    pairs[5]["error"] = "control: harness.incomplete_response"
     db = SessionLocal()
     row = db.get(RuntimeCanary, canary_id)
     row.artifacts = {**row.artifacts, "setup": {**_setup_artifact(canary_id), "ramp_stage": 1},
@@ -93,7 +93,7 @@ def test_verdict_of_a_paired_round_compares_question_by_question(monkeypatch):
     verdict = canary_svc.act_verdict(canary_id, lambda _m: None)
 
     assert verdict["mode"] == "paired" and verdict["pairs_sent"] == 6
-    assert verdict["pairs_complete"] == 5  # the timed-out pair is left out
+    assert verdict["pairs_complete"] == 5  # the failed pair is left out
     assert verdict["verdict"] == "treatment-wins" and verdict["significant"] is False
     variant = verdict["metrics"][0]["variants"][0]
     assert variant["pairs"] == 5 and variant["wins"] == 5
@@ -103,3 +103,48 @@ def test_verdict_of_a_paired_round_compares_question_by_question(monkeypatch):
     stored = db.get(RuntimeCanary, canary_id).artifacts["rounds"][0]["verdict"]
     db.close()
     assert stored["pairs"][0]["scenario_id"] == "S00"
+
+
+def test_budget_stop_only_reads_every_side_of_a_pair_error():
+    assert canary_harness.budget_stop_only("treatment: harness.execution_limit")
+    assert canary_harness.budget_stop_only(
+        "control: harness.execution_timeout, treatment: harness.execution_limit")
+    assert not canary_harness.budget_stop_only(
+        "control: harness.execution_limit, treatment: ThrottlingException")
+    assert not canary_harness.budget_stop_only(None)
+    assert not canary_harness.budget_stop_only("")
+
+
+def test_a_budget_stopped_side_keeps_its_pair_in_the_verdict(monkeypatch):
+    """A version that ran out of its own budget lost that question: its session is
+    scored as it stands, never dropped (that would hide a regression)."""
+    agent_id = _agent()
+    canary_id = _canary(agent_id)
+    pairs = _pairs(4)
+    pairs[3]["error"] = "treatment: harness.execution_limit"
+    db = SessionLocal()
+    row = db.get(RuntimeCanary, canary_id)
+    row.artifacts = {**row.artifacts, "setup": {**_setup_artifact(canary_id), "ramp_stage": 1},
+                     "rounds": [{"ramp_stage": 1, "weights": {}, "traffic_attempts": [
+                         {"mode": "paired", "pairs": pairs, "sent": 8, "failed": 1,
+                          "baseline_n": 0, "completed_at": "2026-10-04T05:00:00+00:00"}]}]}
+    db.commit()
+    db.close()
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: MagicMock())
+
+    def insights(queries, hours, **_kw):
+        rows = []
+        for i in range(4):
+            rows += [{"sid": f"c{i}", "evaluator": GSR, "score": "0.8"},
+                     {"sid": f"t{i}", "evaluator": GSR, "score": "0.0" if i == 3 else "0.8"}]
+        return {"q0": rows}
+
+    monkeypatch.setattr("app.services.observability.run_insights_queries", insights)
+
+    verdict = canary_svc.act_verdict(canary_id, lambda _m: None)
+
+    assert verdict["pairs_complete"] == 4
+    variant = verdict["metrics"][0]["variants"][0]
+    assert variant["pairs"] == 4 and variant["losses"] == 1 and variant["ties"] == 3
+    stopped = [r for r in verdict["pairs"] if r["budget_stop"]]
+    assert [(r["scenario_id"], r["error"]) for r in stopped] == [("S03", None)]
