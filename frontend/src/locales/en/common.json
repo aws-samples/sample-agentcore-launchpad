@@ -3366,7 +3366,8 @@
       "firstHint": "Untick to start at 50/50: the treatment is already production DEFAULT, so 90/10 caps no exposure and only starves the treatment of samples.",
       "half": "50/50 traffic + verdict (required)",
       "last": "1/99: decided after the 50/50 verdict"
-    }
+    },
+    "pairedReplay": "Dataset replay · paired: every question goes to both the current and the candidate version and is compared one by one"
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",
@@ -6342,7 +6343,18 @@
       "finish": "Finish",
       "pipeline": "Ramp flow",
       "sourceExp": "Source experiment",
-      "targets": "Targets"
+      "targets": "Targets",
+      "paired": {
+        "meanDiff": "Mean difference",
+        "winLoss": "Better / worse / equal",
+        "pValue": "p-value",
+        "questions": "Questions",
+        "calls": "Calls",
+        "summary": "{{complete}} of {{sent}} questions answered by both versions",
+        "perQuestion": "Per question ({{n}})",
+        "question": "Question",
+        "prompt": "Prompt"
+      }
     },
     "chat": {
       "desc": "Talk to any active agent over the same invoke chain as the public /v1 API — replies stream live over SSE.",

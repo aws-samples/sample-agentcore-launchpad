@@ -251,3 +251,144 @@ def ensure_log_group(logs: Any, name: str) -> None:
     except Exception as exc:
         if type(exc).__name__ != "ResourceAlreadyExistsException":
             raise
+
+
+# ─── paired replay ───────────────────────────────────────────────────────────
+# A Harness canary replays a dataset **paired**: every prompt goes to BOTH endpoints
+# (InvokeHarness with ``qualifier``, two fresh sessions), and the verdict compares
+# the two versions question by question. Gateway A/B assignment is random per
+# session, so a replayed set split 50/50 hands each version a different mix of
+# questions, and repeating the set only re-samples the same questions; pairing
+# removes the mix and makes each question one unit of evidence. The per-endpoint
+# online evaluations score both sessions (100 % sampling on the endpoint's own
+# service name — no variant filter), and the verdict reads those scores back by
+# session id.
+PAIRED_MODE = "paired"
+PAIRED_ALPHA = 0.05
+# exact sign-flip enumeration up to 2**16 sign patterns, seeded Monte Carlo beyond
+_EXACT_MAX = 16
+_MONTE_CARLO_SAMPLES = 20000
+# Logs Insights caps a query at 10 000 characters: session ids per query
+SCORE_QUERY_CHUNK = 60
+
+
+def paired_sign_flip_p(diffs: list[float]) -> float:
+    """Two-sided paired sign-flip (randomisation) test on the mean difference.
+
+    Under H0 each pair's difference is equally likely to have either sign; the
+    p-value is the share of sign patterns whose |sum| is at least the observed
+    |sum|. Zero differences carry no sign and are left out. Exact for up to
+    ``_EXACT_MAX`` non-zero pairs, a seeded Monte Carlo estimate beyond (stable
+    across calls)."""
+    import random
+
+    nonzero = [d for d in diffs if d != 0]
+    if not nonzero:
+        return 1.0
+    observed = abs(sum(nonzero)) - 1e-12
+    k = len(nonzero)
+    if k <= _EXACT_MAX:
+        hits = 0
+        for mask in range(1 << k):
+            total = sum(-d if mask >> i & 1 else d for i, d in enumerate(nonzero))
+            if abs(total) >= observed:
+                hits += 1
+        return hits / (1 << k)
+    rng = random.Random(7)
+    hits = sum(
+        1 for _ in range(_MONTE_CARLO_SAMPLES)
+        if abs(sum(d if rng.random() < 0.5 else -d for d in nonzero)) >= observed
+    )
+    return (hits + 1) / (_MONTE_CARLO_SAMPLES + 1)
+
+
+def paired_scores_query(config_ids: list[str], session_ids: list[str]) -> str:
+    """Per-session mean score per evaluator from the two arms' online-eval results."""
+    from app.evaluation.agentcore_eval import ONLINE_EVAL_RESULTS_PREFIX
+
+    configs = ", ".join(f'"{c}"' for c in config_ids)
+    sessions = ", ".join(f'"{s}"' for s in session_ids)
+    return (
+        f"SOURCE logGroups(namePrefix: ['{ONLINE_EVAL_RESULTS_PREFIX}'])\n"
+        "| fields attributes.session.id as sid, attributes.gen_ai.evaluation.name as evaluator,"
+        " attributes.gen_ai.evaluation.score.value as score\n"
+        f'| filter name = "gen_ai.evaluation.result" and onlineEvaluationConfigId in [{configs}]'
+        f" and sid in [{sessions}] and ispresent(score)\n"
+        "| stats avg(score) as score by sid, evaluator\n"
+        "| limit 10000"
+    )
+
+
+def parse_paired_scores(rows: list[dict[str, str]]) -> dict[str, dict[str, float]]:
+    """``{session_id: {evaluator: mean score}}`` from :func:`paired_scores_query` rows."""
+    out: dict[str, dict[str, float]] = {}
+    for row in rows:
+        sid, evaluator = row.get("sid"), row.get("evaluator")
+        try:
+            score = float(row.get("score") or "")
+        except ValueError:
+            continue
+        if sid and evaluator:
+            out.setdefault(sid, {})[evaluator] = score
+    return out
+
+
+def paired_metrics(
+    pairs: list[dict[str, Any]], scores: dict[str, dict[str, float]],
+    *, polarity: Callable[[str], int],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Per-evaluator paired comparison in the A/B metric shape, plus per-question rows.
+
+    Only pairs where BOTH sessions have a score for the evaluator count. Each
+    metric keeps the A/B shape the verdict and the UI read (``control`` /
+    ``variants[0]``) and adds the paired facts: ``pairs``, ``meanDiff`` (treatment
+    − control), ``wins`` / ``losses`` / ``ties`` from the treatment's side
+    (polarity-aware) and the sign-flip ``pValue``."""
+    evaluators = sorted({e for p in pairs for side in ("control", "treatment")
+                         for e in scores.get(p.get(f"{side}_session_id") or "", {})})
+    metrics: list[dict[str, Any]] = []
+    for evaluator in evaluators:
+        sign = polarity(evaluator)
+        both = []
+        for p in pairs:
+            c_scores = scores.get(p.get("control_session_id") or "", {})
+            t_scores = scores.get(p.get("treatment_session_id") or "", {})
+            if evaluator in c_scores and evaluator in t_scores:
+                both.append((c_scores[evaluator], t_scores[evaluator]))
+        if not both:
+            continue
+        n = len(both)
+        diffs = [t - c for c, t in both]
+        mean_c = sum(c for c, _ in both) / n
+        mean_t = sum(t for _, t in both) / n
+        oriented = [sign * d for d in diffs]
+        p_value = paired_sign_flip_p(diffs)
+        metrics.append({
+            "evaluatorId": evaluator,
+            "label": evaluator.rsplit("/", 1)[-1],
+            "polarity": sign,
+            "paired": True,
+            "control": {"name": "C", "mean": mean_c, "sampleSize": n},
+            "variants": [{
+                "name": "T1", "mean": mean_t, "sampleSize": n,
+                "pValue": round(p_value, 4),
+                "percentChange": round((mean_t - mean_c) / mean_c * 100, 2) if mean_c else None,
+                "isSignificant": p_value < PAIRED_ALPHA,
+                "pairs": n,
+                "meanDiff": round(mean_t - mean_c, 4),
+                "wins": sum(1 for d in oriented if d > 0),
+                "losses": sum(1 for d in oriented if d < 0),
+                "ties": sum(1 for d in oriented if d == 0),
+            }],
+        })
+    rows = [
+        {
+            "scenario_id": p.get("scenario_id"),
+            "prompt": p.get("prompt"),
+            "control": scores.get(p.get("control_session_id") or "", {}),
+            "treatment": scores.get(p.get("treatment_session_id") or "", {}),
+            "error": p.get("error"),
+        }
+        for p in pairs
+    ]
+    return metrics, rows

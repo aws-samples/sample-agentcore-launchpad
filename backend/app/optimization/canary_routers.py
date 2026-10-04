@@ -320,11 +320,13 @@ def runtime_canary_action(
         if dataset is None or dataset.workspace_id != ws.id:
             raise NotFoundError("dataset.not_found", "dataset not found")
         try:
-            prompts = service.resolve_traffic_prompts(dataset)
+            items = service.resolve_traffic_items(dataset)
         except ValueError as exc:
             raise AppError(
                 "canary.dataset_unsupported", str(exc), status_code=422
             ) from exc
+        prompts = [prompt for _label, prompt in items]
+        scenario_ids = [label for label, _prompt in items]
         dataset_info = {
             "dataset_id": dataset.id,
             "dataset_name": dataset.name,
@@ -339,7 +341,8 @@ def runtime_canary_action(
         fn = partial(canary_service.act_setup, canary_id)
     elif action == "traffic":
         fn = partial(
-            canary_service.act_traffic, canary_id, prompts, dataset_info
+            canary_service.act_traffic, canary_id, prompts, dataset_info,
+            scenario_ids=scenario_ids,
         )
     elif action == "verdict":
         fn = partial(canary_service.act_verdict, canary_id)

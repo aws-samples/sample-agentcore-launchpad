@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type RuntimeCanaryInfo } from "../../../lib/api";
+import { api, errorMessage, type CanaryPairRow, type RuntimeCanaryInfo } from "../../../lib/api";
 import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
@@ -127,6 +127,55 @@ export function CanaryDetail({ id }: { id: string }) {
     );
   };
 
+  const signed = (v: number | undefined) => (v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}`);
+  /** paired verdict: both versions answered the same questions — compare per question */
+  const pairedTable = (metrics: Metric[]) => (
+    <Table
+      testId="v2-canary-paired-metrics"
+      columns={[
+        { key: "m", title: t("v2.evaluators.colName"), render: (m: Metric) => m.label },
+        { key: "c", title: t("v2.canary.champion"), render: (m: Metric) => fmtScore(m.control.mean) },
+        { key: "v", title: t("v2.canary.candidate"), render: (m: Metric) => fmtScore(m.variants[0]?.mean ?? null) },
+        { key: "d", title: t("v2.canary.paired.meanDiff"), render: (m: Metric) => signed(m.variants[0]?.meanDiff) },
+        {
+          key: "w",
+          title: t("v2.canary.paired.winLoss"),
+          render: (m: Metric) => `${m.variants[0]?.wins ?? 0} / ${m.variants[0]?.losses ?? 0} / ${m.variants[0]?.ties ?? 0}`,
+        },
+        {
+          key: "p",
+          title: t("v2.canary.paired.pValue"),
+          render: (m: Metric) => (m.variants[0]?.pValue ?? null) === null ? "—" : String(m.variants[0]?.pValue),
+        },
+        { key: "n", title: t("v2.canary.paired.questions"), render: (m: Metric) => m.variants[0]?.pairs ?? 0 },
+      ]}
+      rows={metrics}
+      rowKey={(m) => m.label}
+      density="dense"
+    />
+  );
+  const pairRowsTable = (rows: CanaryPairRow[], metrics: Metric[]) => {
+    const evaluators = metrics.map((m) => ({ id: (m as Metric & { evaluatorId?: string }).evaluatorId ?? m.label, label: m.label }));
+    const cell = (scores: Record<string, number>, id: string) => (id in scores ? fmtScore(scores[id]) : "—");
+    return (
+      <Table
+        testId="v2-canary-paired-rows"
+        columns={[
+          { key: "s", title: t("v2.canary.paired.question"), render: (r: CanaryPairRow) => <span className="mono">{r.scenario_id ?? "—"}</span> },
+          { key: "q", title: t("v2.canary.paired.prompt"), render: (r: CanaryPairRow) => <span className="v2-muted">{(r.prompt ?? "").slice(0, 48)}</span> },
+          ...evaluators.map((e) => ({
+            key: e.id,
+            title: e.label.replace("Builtin.", ""),
+            render: (r: CanaryPairRow) => (r.error ? <span className="err">{r.error}</span> : `${cell(r.control, e.id)} → ${cell(r.treatment, e.id)}`),
+          })),
+        ]}
+        rows={rows}
+        rowKey={(r) => `${r.scenario_id}-${r.prompt}`}
+        density="dense"
+      />
+    );
+  };
+
   const metricsTable = (metrics: Metric[]) => (
     <Table
       columns={[
@@ -154,6 +203,7 @@ export function CanaryDetail({ id }: { id: string }) {
     const current = !!liveSetup && index === currentStage;
     const round = rounds.find((r) => r.ramp_stage === index);
     const attempts = round?.traffic_attempts ?? [];
+    const paired = attempts.some((x) => x.mode === "paired");
     const verdict = round?.verdict;
     const blocked =
       !!verdict && (verdict.verdict === "control-wins" || verdict.verdict === "insufficient-data" || verdict.verdict === "insufficient-n");
@@ -188,9 +238,23 @@ export function CanaryDetail({ id }: { id: string }) {
                 <span style={{ flex: `0 0 ${ramp.control}%` }} className="c" />
                 <span style={{ flex: 1 }} className="t" />
               </div>
-              <span className="v2-muted">{t("canaryPage.experimentalWeights", { control: ramp.control, treatment: ramp.treatment })}</span>
+              <span className="v2-muted">
+                {isHarness
+                  ? t("canaryPage.pairedReplay")
+                  : t("canaryPage.experimentalWeights", { control: ramp.control, treatment: ramp.treatment })}
+              </span>
             </div>
-            {attempts.length > 0 && (
+            {attempts.length > 0 && paired && (
+              <Descriptions
+                items={[
+                  { label: t("v2.canary.attempts"), value: attempts.length },
+                  { label: t("v2.canary.paired.questions"), value: attempts.reduce((sum, x) => sum + (x.pairs?.length ?? 0), 0) },
+                  { label: t("v2.canary.paired.calls"), value: attempts.reduce((sum, x) => sum + x.sent, 0) },
+                  { label: t("v2.experiments.failed"), value: attempts.reduce((sum, x) => sum + x.failed, 0) },
+                ]}
+              />
+            )}
+            {attempts.length > 0 && !paired && (
               <Descriptions
                 items={[
                   { label: t("v2.canary.attempts"), value: attempts.length },
@@ -204,10 +268,22 @@ export function CanaryDetail({ id }: { id: string }) {
               <>
                 <div className="v2-row">
                   <Tag tone={verdictTone(verdict.verdict)}>{verdict.verdict.toUpperCase()}</Tag>
-                  <span className="v2-muted">n={verdict.n ?? 0}</span>
+                  {verdict.mode === "paired" ? (
+                    <span className="v2-muted">
+                      {t("v2.canary.paired.summary", { complete: verdict.pairs_complete ?? 0, sent: verdict.pairs_sent ?? 0 })}
+                    </span>
+                  ) : (
+                    <span className="v2-muted">n={verdict.n ?? 0}</span>
+                  )}
                   {verdict.significant === false && <Tag tone="gray">{t("canaryPage.notSignificant")}</Tag>}
                 </div>
-                {verdict.metrics?.length > 0 && metricsTable(verdict.metrics)}
+                {verdict.metrics?.length > 0 && (verdict.mode === "paired" ? pairedTable(verdict.metrics) : metricsTable(verdict.metrics))}
+                {verdict.mode === "paired" && (verdict.pairs?.length ?? 0) > 0 && (
+                  <details data-testid="v2-canary-paired-details">
+                    <summary className="v2-link">{t("v2.canary.paired.perQuestion", { n: verdict.pairs?.length ?? 0 })}</summary>
+                    {pairRowsTable(verdict.pairs ?? [], verdict.metrics ?? [])}
+                  </details>
+                )}
               </>
             )}
             {current && canary.status === "running" && (
