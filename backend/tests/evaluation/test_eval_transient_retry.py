@@ -94,4 +94,16 @@ def test_transient_classification():
     assert not evaluation.transient_invoke_error(ClientError(
         {"Error": {"Code": "AccessDeniedException"}}, "Invoke"))
     assert not evaluation.transient_invoke_error(AppError("harness.execution_timeout", "x"))
+    # a loop cut short right after a tool step is replayed; an empty end_turn is not
+    assert evaluation.transient_invoke_error(AppError(
+        "harness.incomplete_response", "x", {"stop_reason": "tool_result"}))
+    assert not evaluation.transient_invoke_error(AppError(
+        "harness.incomplete_response", "x", {"stop_reason": "end_turn"}))
     assert not evaluation.transient_invoke_error(ValueError("bad"))
+
+
+def test_a_loop_cut_short_after_a_tool_step_is_replayed(monkeypatch):
+    cut = Stream([text("searching"), stop("tool_result")])
+    row, sessions, finished = _execute(monkeypatch, [ok(), cut, ok()])
+
+    assert len(sessions) == 3 and row.batch_eval_id == "batch-1" and finished == [row.id]
