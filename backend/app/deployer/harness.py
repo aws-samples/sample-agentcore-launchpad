@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from app.core.config import get_settings
+from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
@@ -286,6 +287,13 @@ def build_create_params(
     params["allowedTools"] = allowed
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
+    # managed session storage on the backing runtime (BYO mounts are container-only);
+    # omitted on create means none. Re-publish rebuilds this from GetHarness.
+    filesystem = filesystem_configurations(spec)
+    if filesystem:
+        params["environment"] = {
+            "agentCoreRuntimeEnvironment": {"filesystemConfigurations": filesystem}
+        }
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
         params["memory"] = {"agentCoreMemoryConfiguration": {"arn": memory_arn}}
     elif not (spec.memory.short_term or spec.memory.long_term):
@@ -641,6 +649,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             harness_id = row.resource_id
             update_params = hc.wrap_params_for_update(_params())
             update_params["harnessId"] = harness_id
+            update_params["environment"] = hc.environment_for_update(
+                hc.get_harness(client, harness_id),
+                filesystem_configurations(AgentSpec(**row.spec)),
+            )
             harness = agent_iam.retry_iam_propagation(
                 lambda: hc.update_harness(client, update_params), ctx.log
             )

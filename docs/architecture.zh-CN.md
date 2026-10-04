@@ -218,6 +218,36 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 该字段做分派**:在类别出现第二个成员之前,`app/deployer/container.py` 与
 `app/templates/claude_sdk_agent/` 保持无条件实现。
 
+### 文件系统（`AgentSpec.filesystem`）
+
+`AgentSpec.filesystem` 通过同一个 helper（`app/deployer/filesystem.py`）映射为 AgentCore
+`filesystemConfigurations`。默认值是**托管会话存储（Preview），挂载在 `/mnt/workspace`**。
+它按会话隔离，使用同一 `runtimeSessionId` 停止并恢复后数据仍在，每个会话最多 1 GB，
+闲置 14 天过期，每发布一个新版本都会重置。显式传 `session_storage: null` 即关闭。
+
+| 方式 | 会话存储 | 自带 S3 Files / EFS（+ VPC） | 发送位置 |
+|---|---|---|---|
+| `harness` | 支持 | 拒绝（422） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | 支持 | 拒绝（422） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | 支持 | 支持 | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+
+两个更新 API 在重新发布时的语义不同（2026-10-04 实测）：
+
+- **UpdateAgentRuntime 省略 `filesystemConfigurations` 会清空挂载**，和它重置
+  `protocolConfiguration` 的方式一样。因此 zip、container 和金丝雀候选版本每次更新都发送该列表；
+  “关闭会话存储”正是靠省略它来卸载。
+- **UpdateHarness 省略 `environment` 则保留原配置**，发送时整体替换列表（`[]` 卸载全部）。
+  Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），只替换
+  `sessionStorage` 条目，平台之外配置的网络/生命周期设置以及 EFS / S3 Files 挂载都会保留。
+  金丝雀回滚不带 `environment`，因此保留当前挂载。
+
+所有已存储的 spec 都是 `model_dump()` 写入的，本身就带着默认值。所以现有的 Harness 或 Strands
+Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户把它关掉。会话存储不需要 IAM 授权。
+VPC 模式下访问 `acr-storage-*` S3 桶的出网要求在这里不适用，因为 Harness 和 zip runtime
+都保持 `PUBLIC`。生成的 Agent 不会被告知挂载路径（container 模板同样没有）；Harness 通过
+原生 `shell` / `file_operations` 工具访问它。Harness / Strands Agent 的这一设置只有 V2 向导
+（`FilesystemCard`）可以编辑，经典控制台会原样回传已存储的值。
+
 ### BYOC —— 自带代码
 
 第四张卡片部署成员开发者自己编写的代码——已用 AgentCore SDK

@@ -285,6 +285,44 @@ no stored-spec migration. There is deliberately **no dispatch** on the field yet
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
 
+### File systems (`AgentSpec.filesystem`)
+
+`AgentSpec.filesystem` maps onto AgentCore `filesystemConfigurations` through one
+helper (`app/deployer/filesystem.py`). It defaults to **managed session storage
+(Preview) at `/mnt/workspace`**. That storage is per session, survives
+stop/resume with the same `runtimeSessionId`, holds up to 1 GB, expires after
+14 idle days and is reset by every new version. An explicit
+`session_storage: null` turns it off.
+
+| Method | Session storage | BYO S3 Files / EFS (+ VPC) | Where it is sent |
+|---|---|---|---|
+| `harness` | yes | refused (422) | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | yes | refused (422) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | yes | yes | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+
+The two update APIs behave differently on a re-publish (probed live 2026-10-04):
+
+- **UpdateAgentRuntime clears an omitted `filesystemConfigurations`**, the same
+  way it resets `protocolConfiguration`. The zip, container and canary-candidate
+  paths therefore send the list on every update; leaving it out is how
+  "session storage off" detaches the mount.
+- **UpdateHarness keeps an omitted `environment`** and replaces the list as a
+  whole when one is sent (`[]` detaches everything). The harness re-publish
+  reads `GetHarness` first (`harness.environment_for_update`). It swaps only the
+  `sessionStorage` entry and keeps any network/lifecycle settings and EFS /
+  S3 Files mounts made outside the platform. A canary rollback omits
+  `environment`, so it keeps the current mounts.
+
+Every stored spec already carries the default, because it is written with
+`model_dump()`. So an existing harness or Strands agent gains `/mnt/workspace`
+on its next re-publish unless the member turns it off. Session storage needs no
+IAM grant. Its VPC-mode egress to the `acr-storage-*` S3 buckets does not apply
+here, because harness and zip runtimes stay `PUBLIC`. The generated agents are
+not told about the mount (the container template is not either). A Harness
+reaches it through its native `shell` / `file_operations` tools. Only the V2
+wizard (`FilesystemCard`) edits the setting for harness / Strands agents; the
+classic console round-trips the stored value unchanged.
+
 ### BYOC — bring your own code
 
 The fourth card deploys code the member's developers wrote themselves — already

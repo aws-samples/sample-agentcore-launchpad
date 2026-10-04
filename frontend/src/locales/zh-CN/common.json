@@ -5449,6 +5449,7 @@
         "errDupPath": "挂载路径不能重复",
         "errVpc": "自带挂载需要至少一个子网和一个安全组",
         "fsSummary": "会话存储 {{session}} · S3 Files {{s3}} 个 · EFS {{efs}} 个",
+        "fsNoteSession": "托管会话存储让同一会话在停止和恢复之间保留挂载路径下的文件（每个会话最多 1 GB，闲置 14 天过期）。每次重新发布都会产生新版本并重置会话存储。S3 Files / EFS 挂载仅支持“其他 Agent SDK”方式。",
         "skillsHintSources": "注册中心中已发布的 Skill，也可以上传 zip 或从 Git 仓库导入。",
         "skillUpload": "上传 .zip",
         "skillGit": "从 Git 导入",

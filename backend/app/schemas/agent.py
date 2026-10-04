@@ -423,7 +423,8 @@ class AgentSpec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=10, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
-    # AgentCore Runtime persistent storage — consumed by the container method only
+    # AgentCore Runtime persistent storage. Session storage mounts on the harness,
+    # zip_runtime/studio and container methods; BYO mounts are container-only.
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
     # VPC networkModeConfig; mandatory whenever a BYO file system is mounted
     network: VpcNetwork | None = None
@@ -590,6 +591,14 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":
+        # Only the container method wires VPC networking; the harness and Strands
+        # zip runtimes mount managed session storage alone. Refused, not dropped,
+        # so a spec never shows a mount its runtime does not have.
+        if self.filesystem.byo and self.method != "container":
+            raise ValueError(
+                "BYO file systems (S3 Files / EFS) are supported by the container "
+                "method only; harness and Strands agents mount session storage"
+            )
         if self.filesystem.byo and self.network is None:
             raise ValueError(
                 "BYO file systems (S3 Files / EFS) require VPC network configuration"
