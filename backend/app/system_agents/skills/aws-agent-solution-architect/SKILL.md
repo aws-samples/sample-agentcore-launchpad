@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.5.5
+version: 1.5.6
 ---
 
 # AWS Agent Solution Architect
@@ -303,6 +303,10 @@ otherwise ordinary English prompts fail the recommendation step outright (live
 An evaluation allowlist cannot permit an unselected native tool. Tool-name rules
 cannot constrain shell command contents, so keep business-write assertions separate.
 Never broaden access merely because a previous trace contains an unlisted tool.
+
+Default `max_iterations` to 100 unless the user asks for a lower bound: multi-step
+search and calculation routinely needs dozens of tool steps (live, a 12-step cap
+failed a research evaluation).
 
 Use 600 seconds as the default agent execution budget unless the user explicitly
 chooses another value. A response-time objective is not automatically an execution

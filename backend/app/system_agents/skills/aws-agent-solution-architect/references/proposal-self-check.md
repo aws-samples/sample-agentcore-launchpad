@@ -37,7 +37,7 @@ evaluate natural-language acceptance criteria.
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.
 - [ ] `memory`: `disabled` | `workspace`.
-- [ ] `max_iterations` 1–100; `timeout_seconds` 10–3600, default 600 unless the user
+- [ ] `max_iterations` 1–100, default 100; `timeout_seconds` 10–3600, default 600 unless the user
       explicitly chooses a different execution budget. Do not turn a latency goal
       into an unreviewed hard cancellation limit.
 - [ ] `summary` ≤ 4,000 chars; `requirements_baseline`, `assumptions`, `manual_tasks`,

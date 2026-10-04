@@ -161,7 +161,7 @@ export function proposalDraftFrom(content: AssistantProposal["content"]): Propos
     skills: Array.isArray(content.skills) ? content.skills.map(String) : [],
     knowledge_bases: Array.isArray(content.knowledge_bases) ? content.knowledge_bases.map(String) : [],
     memory: content.memory === "workspace" ? "workspace" : "disabled",
-    max_iterations: Number(content.max_iterations ?? 10),
+    max_iterations: Number(content.max_iterations ?? 100),
     timeout_seconds: Number(content.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS),
   };
 }

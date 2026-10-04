@@ -222,7 +222,9 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
   existing shared AgentCore Memory with all of its configured strategies) — these
   are the only two choices the platform can enforce
-- `max_iterations` (1–100), `timeout_seconds` (10–3600, default 600 seconds).
+- `max_iterations` (1–100, default 100), `timeout_seconds` (10–3600, default 600 seconds).
+  Use 100 iterations unless the user explicitly asks for a lower bound: multi-step
+  research with search and calculation routinely needs dozens of tool steps.
   Use 600 unless the user explicitly requests another execution budget. This is the
   managed Harness agent-loop limit, not a latency objective or a socket timeout.
 - `summary`, `requirements_baseline[]`, `assumptions[]`, `manual_tasks[]`,

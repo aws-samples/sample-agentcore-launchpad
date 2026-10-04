@@ -22,7 +22,7 @@ export type EffortChoice = ReasoningEffort | typeof EFFORT_NONE;
 /** mirrors the backend `MAX_TOKENS_CEILING` (the server stays authoritative) */
 export const MAX_TOKENS_CEILING = 131072;
 /** `AgentSpec` loop defaults for an ordinary agent when the wizard creates one */
-export const DEFAULT_MAX_ITERATIONS = 10;
+export const DEFAULT_MAX_ITERATIONS = 100;
 export const DEFAULT_TIMEOUT_SECONDS = 300;
 
 /** The editor's view of the editable members — strings where the input is free text. */
