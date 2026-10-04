@@ -215,10 +215,15 @@ def transient_invoke_error(exc: BaseException) -> bool:
     """An upstream failure worth replaying the scenario: a mid-stream
     ``runtimeClientError`` / ``internalServerException`` (botocore's
     ``EventStreamError``, or the ``RuntimeError`` ``iter_harness_stream`` raises for
-    those events), throttling, or a 5xx. Budget stops (``AppError`` timeout / limit)
-    and every other error are final."""
+    those events), throttling, a 5xx, or a Harness loop that stopped right after a
+    tool step without answering (``harness.incomplete_response`` with stop reason
+    ``tool_result`` / ``tool_use`` — live 2026-10-04: 1 of 3 replays of a research
+    prompt, the other replays answered normally). Budget stops (``AppError``
+    timeout / limit) and every other error are final."""
     if isinstance(exc, AppError):
-        return False
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return exc.code == "harness.incomplete_response" and detail.get("stop_reason") in {
+            "tool_result", "tool_use"}
     if isinstance(exc, ClientError):
         error = exc.response.get("Error") or {}
         status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
