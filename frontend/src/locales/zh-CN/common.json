@@ -3366,7 +3366,8 @@
       "firstHint": "取消后直接从 50/50 开始：实验版本已是生产默认版本，90/10 并不限制影响范围，只会让实验组样本很少。",
       "half": "50/50 流量与判定（必经）",
       "last": "1/99：在 50/50 判定后再决定是否需要"
-    }
+    },
+    "pairedReplay": "数据集回放 · 成对：每道题同时发给当前版本和候选版本，逐题比较"
   },
   "obs": {
     "kicker": "// 遥测层",
@@ -6342,7 +6343,18 @@
       "finish": "完成",
       "pipeline": "放量流程",
       "sourceExp": "来源实验",
-      "targets": "Target"
+      "targets": "Target",
+      "paired": {
+        "meanDiff": "平均差",
+        "winLoss": "更好 / 更差 / 持平",
+        "pValue": "p 值",
+        "questions": "题数",
+        "calls": "调用次数",
+        "summary": "{{sent}} 道题中 {{complete}} 道两个版本都已作答",
+        "perQuestion": "逐题明细（{{n}}）",
+        "question": "题目",
+        "prompt": "问题"
+      }
     },
     "chat": {
       "desc": "与任意运行中的智能体对话，调用链与公开 /v1 API 完全一致，回复通过 SSE 实时流式返回。",

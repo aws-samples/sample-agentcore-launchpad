@@ -532,7 +532,25 @@ export interface RuntimeCanaryMetric {
     pValue?: number | null;
     percentChange?: number | null;
     isSignificant?: boolean;
+    /** paired replay (Harness canary): questions scored on both sides and the
+     *  per-question outcome from the candidate's side (polarity-aware) */
+    pairs?: number;
+    meanDiff?: number;
+    wins?: number;
+    losses?: number;
+    ties?: number;
   }[];
+  /** true when the comparison is paired question by question */
+  paired?: boolean;
+}
+
+/** One replayed question of a paired Harness canary verdict. */
+export interface CanaryPairRow {
+  scenario_id: string | null;
+  prompt: string | null;
+  control: Record<string, number>;
+  treatment: Record<string, number>;
+  error?: string | null;
 }
 
 export interface RuntimeCanaryInfo {
@@ -610,6 +628,10 @@ export interface RuntimeCanaryInfo {
         // diagnostic breakdown of the send (e.g. {"200": 47, "429": 3});
         // absent on attempts recorded before the concurrent send landed
         status_counts?: Record<string, number>;
+        /** "paired": a Harness canary sent every question to BOTH versions */
+        mode?: string;
+        pairs?: { scenario_id: string; control_session_id: string | null;
+                  treatment_session_id: string | null; error?: string }[];
       }[];
       verdict?: {
         verdict: string;
@@ -619,6 +641,10 @@ export interface RuntimeCanaryInfo {
         baseline_n?: number;
         reason?: string;
         metrics: RuntimeCanaryMetric[];
+        mode?: string;
+        pairs_sent?: number;
+        pairs_complete?: number;
+        pairs?: CanaryPairRow[];
       };
     }[];
     complete?: {
