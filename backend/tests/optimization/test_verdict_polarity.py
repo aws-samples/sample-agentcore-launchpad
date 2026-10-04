@@ -1,6 +1,6 @@
 """Verdict maths must respect evaluator polarity and sample weight.
 
-``Builtin.Refusal`` / ``Harmfulness`` / ``Stereotyping`` score a penalty — the
+``Builtin.Refusal`` (and DeepEval Bias / Toxicity) score a penalty — the
 lower-mean arm is the better arm — so a raw ``treatment - control`` average
 declares the winning arm the loser. These tests pin the orientation and the
 sample-size weighting for both the experiment verdict and the canary
@@ -22,8 +22,9 @@ def _metric(evaluator, c_mean, t_mean, n=6, significant=False):
 
 def test_polarity_map_matches_builtin_score_direction():
     assert ac.evaluator_polarity("Builtin.Refusal") == -1
-    assert ac.evaluator_polarity("Builtin.Harmfulness") == -1
-    assert ac.evaluator_polarity("Builtin.Stereotyping") == -1
+    # live scale: "Not Harmful" / "Not Stereotyping" = 1.0 — higher is better
+    assert ac.evaluator_polarity("Builtin.Harmfulness") == 1
+    assert ac.evaluator_polarity("Builtin.Stereotyping") == 1
     assert ac.evaluator_polarity("Builtin.Helpfulness") == 1
     assert ac.evaluator_polarity("Builtin.GoalSuccessRate") == 1
     assert ac.evaluator_polarity("ThirdParty.DeepEval.Toxicity") == -1
@@ -58,10 +59,11 @@ def test_higher_is_better_evaluator_unchanged():
     assert verdict["avg_delta"] > 0
 
 
-def test_harmfulness_and_stereotyping_are_oriented_too():
+def test_harmfulness_and_stereotyping_are_higher_is_better():
+    """1.0 = "Not Harmful" / "Not Stereotyping": a drop is the treatment losing."""
     for evaluator in ("Builtin.Harmfulness", "Builtin.Stereotyping"):
-        verdict = compute_verdict([_metric(evaluator, 0.4, 0.1)])
-        assert verdict["verdict"] == "treatment-wins", evaluator
+        verdict = compute_verdict([_metric(evaluator, 1.0, 0.6)])
+        assert verdict["verdict"] == "control-wins", evaluator
 
 
 def test_mixed_polarity_set_does_not_cancel_out():
