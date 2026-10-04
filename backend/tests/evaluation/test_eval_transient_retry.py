@@ -93,7 +93,8 @@ def test_transient_classification():
         {"Error": {"Code": "Other"}, "ResponseMetadata": {"HTTPStatusCode": 503}}, "Invoke"))
     assert not evaluation.transient_invoke_error(ClientError(
         {"Error": {"Code": "AccessDeniedException"}}, "Invoke"))
-    assert not evaluation.transient_invoke_error(AppError("harness.execution_timeout", "x"))
+    assert evaluation.transient_invoke_error(AppError("harness.execution_timeout", "x"))
+    assert not evaluation.transient_invoke_error(AppError("harness.execution_limit", "x"))
     # a loop cut short right after a tool step is replayed; an empty end_turn is not
     assert evaluation.transient_invoke_error(AppError(
         "harness.incomplete_response", "x", {"stop_reason": "tool_result"}))
@@ -107,3 +108,21 @@ def test_a_loop_cut_short_after_a_tool_step_is_replayed(monkeypatch):
     row, sessions, finished = _execute(monkeypatch, [ok(), cut, ok()])
 
     assert len(sessions) == 3 and row.batch_eval_id == "batch-1" and finished == [row.id]
+
+
+def test_a_timed_out_scenario_is_replayed_once(monkeypatch):
+    timeout = Stream([stop("timeout_exceeded")])
+    row, sessions, finished = _execute(monkeypatch, [ok(), timeout, ok()])
+
+    assert len(sessions) == 3 and sessions[1] != sessions[2]
+    assert row.batch_eval_id == "batch-1" and finished == [row.id]
+
+
+def test_a_scenario_that_times_out_twice_fails_the_run(monkeypatch):
+    streams = [ok()] + [Stream([stop("timeout_exceeded")])
+                        for _ in range(evaluation.TIMEOUT_SCENARIO_RETRIES + 1)]
+    row, sessions, finished = _execute(monkeypatch, streams)
+
+    assert len(sessions) == 1 + evaluation.TIMEOUT_SCENARIO_RETRIES + 1
+    assert row.status == "failed" and finished == []
+    assert "harness.execution_timeout" in row.error and "scenario_id=second" in row.error
