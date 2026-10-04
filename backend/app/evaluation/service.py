@@ -199,6 +199,35 @@ def _wait_for_fresh_telemetry(
     )
 
 
+# A scenario whose invocation hits an upstream hiccup is replayed this many more times,
+# each in a fresh session, before the run fails (live 2026-10-04: one transient
+# "The server had an error while processing your request" failed a 10-scenario run;
+# the same prompt replayed cleanly 3/3).
+TRANSIENT_SCENARIO_RETRIES = 2
+_TRANSIENT_CODES = frozenset({
+    "runtimeClientError", "internalServerException", "InternalServerException",
+    "throttlingException", "ThrottlingException", "serviceUnavailableException",
+    "ServiceUnavailableException",
+})
+
+
+def transient_invoke_error(exc: BaseException) -> bool:
+    """An upstream failure worth replaying the scenario: a mid-stream
+    ``runtimeClientError`` / ``internalServerException`` (botocore's
+    ``EventStreamError``, or the ``RuntimeError`` ``iter_harness_stream`` raises for
+    those events), throttling, or a 5xx. Budget stops (``AppError`` timeout / limit)
+    and every other error are final."""
+    if isinstance(exc, AppError):
+        return False
+    if isinstance(exc, ClientError):
+        error = exc.response.get("Error") or {}
+        status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
+        return error.get("Code") in _TRANSIENT_CODES or int(status) >= 500
+    if isinstance(exc, RuntimeError):
+        return str(exc).startswith(("runtime client error", "internal server error"))
+    return False
+
+
 def execute_run(
     run_id: str,
     *,
@@ -289,20 +318,29 @@ def execute_run(
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
                 sid: str | None = None
-                if simulation.is_simulated(scenario):
-                    sid = simulation.run_simulated_scenario(
-                        data,
-                        agent_arn=agent_arn,
-                        method=method,
-                        scenario=scenario,
-                        actor_model_id=actor_model_id or "",
-                        protocol=protocol,
-                        runtime_user_id=runtime_user_id,
-                    )
-                else:
-                    for prompt in scenario_prompts(scenario):
+                for retry in range(TRANSIENT_SCENARIO_RETRIES + 1):
+                    try:
+                        sid = None  # a replay starts the whole scenario in a fresh session
+                        if simulation.is_simulated(scenario):
+                            sid = simulation.run_simulated_scenario(
+                                data,
+                                agent_arn=agent_arn,
+                                method=method,
+                                scenario=scenario,
+                                actor_model_id=actor_model_id or "",
+                                protocol=protocol,
+                                runtime_user_id=runtime_user_id,
+                            )
+                        else:
+                            for prompt in scenario_prompts(scenario):
+                                _check_stop(run_id)
+                                sid = invoke(prompt, sid)["session_id"]
+                        break
+                    except Exception as exc:
+                        if retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc):
+                            raise
                         _check_stop(run_id)
-                        sid = invoke(prompt, sid)["session_id"]
+                        attempt["retried"] = str(retry + 1)
                 session_ids.append(sid)
                 watermark_sid = sid
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
@@ -362,7 +400,9 @@ def execute_run(
         parts.extend(f"{key}={value}" for key, value in attempt.items())
         _update(run_id, status="failed", error=" · ".join(parts)[:500])
     except Exception as exc:
-        _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+        parts = [f"{type(exc).__name__}: {exc}"[:400]]
+        parts.extend(f"{key}={value}" for key, value in attempt.items())
+        _update(run_id, status="failed", error=" · ".join(parts)[:500])
     finally:
         stop_flags.clear(run_id)
 
