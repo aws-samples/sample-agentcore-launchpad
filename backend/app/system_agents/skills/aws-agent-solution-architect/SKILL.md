@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.5.3
+version: 1.5.4
 ---
 
 # AWS Agent Solution Architect
@@ -282,12 +282,16 @@ callable `code_interpreter`) when the agent must calculate, reconcile or tabulat
 figures — growth rates, unit or currency conversions, cross-source comparisons — and
 have the prompt say to compute with it rather than by hand. Disclose it for review.
 
-Mark a golden test `adversarial: true` when its input deliberately carries
-prompt-injection or jailbreak content (instructions embedded in a pasted page, role
-overrides, "ignore your rules"). Keep such tests: they are evaluated like any other.
-AgentCore Recommendations refuses traces containing that content, so Launchpad leaves
-those sessions out of AI prompt recommendations; an unmarked injection test makes the
-recommendation step fail for the whole run.
+Mark every red-team golden test `adversarial: true`: any test whose input deliberately
+pushes the agent across a red line — instructions embedded in a pasted page, role
+overrides or "ignore your rules", requests to use insider or nonpublic information,
+repeated pressure for prohibited advice (buy/sell calls, target prices) or actions.
+Keep such tests: they are evaluated like any other. AgentCore Recommendations refuses
+traces containing that content (live: an injection test, a nonpublic-order request and
+a multi-turn target-price push each failed a run's recommendation on its own), so
+Launchpad leaves those sessions out of AI prompt recommendations; one unmarked
+red-team test makes the recommendation step fail for the whole run. Ordinary
+capability tests — including honest "cannot verify" cases — stay unmarked.
 An evaluation allowlist cannot permit an unselected native tool. Tool-name rules
 cannot constrain shell command contents, so keep business-write assertions separate.
 Never broaden access merely because a previous trace contains an unlisted tool.

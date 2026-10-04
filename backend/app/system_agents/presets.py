@@ -151,7 +151,7 @@ ARCHITECT = SystemPreset(
         "the public AWS Knowledge MCP server; loads its methodology from a versioned S3 "
         "skill bundle."
     ),
-    skill_version="1.5.3",
+    skill_version="1.5.4",
     system_prompt=ARCHITECT_SYSTEM_PROMPT,
     allowed_tools=("shell", "file_*", f"@{AWS_KNOWLEDGE_TOOL_NAME}"),
 )

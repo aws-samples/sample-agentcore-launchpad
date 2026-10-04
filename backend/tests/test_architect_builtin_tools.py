@@ -62,4 +62,5 @@ def test_guidance_names_the_builtin_and_the_adversarial_flag():
     assert "`adversarial: true`" in text
     assert "`builtin_tools`: optional list containing only `\"code-interpreter\"`" in (
         service.PROTOCOL_PREAMBLE)
-    assert "`adversarial` — `true`" in service.PROTOCOL_PREAMBLE
+    assert "`adversarial` — `true` for every\n  red-team test" in service.PROTOCOL_PREAMBLE
+    assert "nonpublic information" in text

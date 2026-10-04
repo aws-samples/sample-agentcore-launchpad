@@ -434,11 +434,12 @@ def _batch_arn(run: EvalRun, workspace: WorkspaceContext) -> str:
 
 
 def adversarial_sessions(db: Session, run: EvalRun) -> list[dict[str, str]]:
-    """The run's sessions whose scenario is a reviewed adversarial golden test.
+    """The run's sessions whose scenario is a reviewed red-team (``adversarial``) test.
 
-    AgentCore Recommendations refuses traces that contain prompt-injection content
+    AgentCore Recommendations refuses traces that contain red-team content
     (``ValidationException`` … "flagged by our safety filters as a potential prompt
-    attack"), and a red-team scenario puts exactly that content in its trace. Sessions
+    attack"): live, an injection test, a nonpublic-information request and a
+    multi-turn target-price push each failed a whole run on its own. Sessions
     pair with the local Dataset's scenarios by position (``execute_run``); when the
     Dataset no longer has one scenario per session, nothing can be re-paired and
     nothing is excluded.

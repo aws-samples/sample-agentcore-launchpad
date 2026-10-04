@@ -228,9 +228,10 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
 - `summary`, `requirements_baseline[]`, `assumptions[]`, `manual_tasks[]`,
   `golden_tests[]` (objects: `id`, `input`, `expected_response`, `expected_tools[]`,
   `forbidden_behavior`, `pass_criteria`, `evaluator`, `source` ∈
-  `customer_pain_point | industry_assumption`, `adversarial` — `true` when the input
-  deliberately carries prompt-injection or jailbreak content such as embedded
-  instructions or role overrides; it is still evaluated, but AI recommendations leave
+  `customer_pain_point | industry_assumption`, `adversarial` — `true` for every
+  red-team test whose input deliberately pushes the agent across a red line: embedded
+  instructions or role overrides, use of insider / nonpublic information, pressure for
+  prohibited advice or actions; it is still evaluated, but AI recommendations leave
   that session out because AgentCore Recommendations refuses such traces),
   `evaluator_recommendations[]`
 - optional `evaluation_plan`: a structured seed for the SEPARATE evaluation-assets

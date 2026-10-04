@@ -50,8 +50,9 @@ evaluate natural-language acceptance criteria.
       `pass_criteria` (≤ 1,000 each), `evaluator` (≤ 200), `source` ∈
       `customer_pain_point` | `industry_assumption`, optional `adversarial` (boolean).
       No other members.
-- [ ] Every test whose input embeds prompt-injection / jailbreak content is marked
-      `adversarial: true` (otherwise the AI recommendation step fails for the run).
+- [ ] Every red-team test is marked `adversarial: true`: embedded instructions or role
+      overrides, insider / nonpublic information, pressure for prohibited advice or
+      actions (an unmarked one makes the AI recommendation step fail for the run).
 - [ ] Every id referenced anywhere in `evaluation_plan` exists here.
 
 ## 4. `evaluation_plan` — routing (the rule most often broken)
