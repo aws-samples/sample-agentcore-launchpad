@@ -105,12 +105,22 @@ export interface EvaluationRunInfo {
   /** The AWS batch evaluation behind this run; absent for window-scoped runs that
    *  never started one. Required to pin RECOMMEND to this run's sessions. */
   batch_eval_id?: string | null;
+  /** dataset scenarios that ended on the agent's own budget (timeout after its
+   *  replay, iteration / token limit) and are scored as they stand. Absent on older backends. */
+  budget_stops?: EvaluationBudgetStop[];
   error: string | null;
   created_at?: string | null;
   /** operator-facing task name/description (console V2); null on unnamed runs */
   name?: string | null;
   description?: string | null;
   updated_at?: string | null;
+}
+
+export interface EvaluationBudgetStop {
+  scenario_id: string;
+  session_id: string;
+  code: string;
+  stop_reason: string;
 }
 
 type EvaluationRunDisplayStatus = EvaluationRunStatus | "completed_with_errors";

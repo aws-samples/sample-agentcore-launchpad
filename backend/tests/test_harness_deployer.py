@@ -39,7 +39,8 @@ def test_build_params_mantle_source_uses_responses_api_format():
     s = spec(model_source="mantle", model_id="openai.gpt-5.6-sol")
     params = build_create_params(s, ROLE_ARN, MEM_ARN)
     assert params["model"] == {
-        "bedrockModelConfig": {"modelId": "openai.gpt-5.6-sol", "apiFormat": "responses"}
+        "bedrockModelConfig": {"modelId": "openai.gpt-5.6-sol", "apiFormat": "responses",
+                               "maxTokens": 65536}  # the GPT reasoning default
     }
 
 
@@ -395,6 +396,20 @@ def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
     }
     with pytest.raises(ValueError):  # the knob never leaks onto a Claude request
         spec(reasoning_effort="high")
+
+
+def test_a_gpt_model_without_max_tokens_gets_the_reasoning_default():
+    """GPT reasoning burns hidden tokens: an unset ceiling becomes DEFAULT_GPT_MAX_TOKENS
+    for OpenAI models only; an explicit value always wins."""
+    from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS
+
+    gpt = build_create_params(spec(model_id="us.openai.gpt-6-sol"), ROLE_ARN, MEM_ARN)
+    assert gpt["model"]["bedrockModelConfig"]["maxTokens"] == DEFAULT_GPT_MAX_TOKENS == 65536
+    own = build_create_params(spec(model_id="global.openai.gpt-6-sol", max_tokens=4096),
+                              ROLE_ARN, MEM_ARN)
+    assert own["model"]["bedrockModelConfig"]["maxTokens"] == 4096
+    claude = build_create_params(spec(), ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
+    assert "maxTokens" not in claude
 
 
 def _converse_stream_kwargs(model: dict) -> dict:

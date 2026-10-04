@@ -75,11 +75,14 @@ def test_a_scenario_that_keeps_failing_fails_the_run_naming_it(monkeypatch):
     assert f"retried={evaluation.TRANSIENT_SCENARIO_RETRIES}" in row.error
 
 
-def test_a_budget_stop_is_not_retried(monkeypatch):
-    row, sessions, _ = _execute(monkeypatch, [ok(), Stream([text("p"), stop("max_tokens")])])
+def test_a_budget_stop_is_scored_as_it_stands_not_retried(monkeypatch):
+    row, sessions, finished = _execute(
+        monkeypatch, [ok(), Stream([text("p"), stop("max_tokens")])])
 
-    assert len(sessions) == 2 and row.status == "failed"
-    assert "harness.execution_limit" in row.error
+    assert len(sessions) == 2 and row.session_ids == sessions  # the stopped session is kept
+    assert row.batch_eval_id == "batch-1" and finished == [row.id] and row.error is None
+    assert row.budget_stops == [{"scenario_id": "second", "session_id": sessions[1],
+                                 "code": "harness.execution_limit", "stop_reason": "max_tokens"}]
 
 
 def test_transient_classification():
@@ -118,11 +121,19 @@ def test_a_timed_out_scenario_is_replayed_once(monkeypatch):
     assert row.batch_eval_id == "batch-1" and finished == [row.id]
 
 
-def test_a_scenario_that_times_out_twice_fails_the_run(monkeypatch):
+def test_a_scenario_that_times_out_again_is_scored_as_a_budget_stop(monkeypatch):
     streams = [ok()] + [Stream([stop("timeout_exceeded")])
                         for _ in range(evaluation.TIMEOUT_SCENARIO_RETRIES + 1)]
     row, sessions, finished = _execute(monkeypatch, streams)
 
     assert len(sessions) == 1 + evaluation.TIMEOUT_SCENARIO_RETRIES + 1
-    assert row.status == "failed" and finished == []
-    assert "harness.execution_timeout" in row.error and "scenario_id=second" in row.error
+    assert row.session_ids == [sessions[0], sessions[-1]]  # the last replay is scored
+    assert finished == [row.id]
+    assert [(b["scenario_id"], b["code"]) for b in row.budget_stops] == [
+        ("second", "harness.execution_timeout")]
+
+
+def test_an_ordinary_run_records_no_budget_stops(monkeypatch):
+    row, _, _ = _execute(monkeypatch, [ok(), ok()])
+
+    assert row.budget_stops is None

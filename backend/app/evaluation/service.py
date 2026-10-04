@@ -206,6 +206,10 @@ def _wait_for_fresh_telemetry(
 TRANSIENT_SCENARIO_RETRIES = 2
 # A timed-out attempt already spent the agent's whole budget, so it gets one replay only.
 TIMEOUT_SCENARIO_RETRIES = 1
+# The agent spent its own budget on the scenario (timeout after its replay, iteration /
+# token limit): that is the scenario's result — its session is scored as it stands and
+# recorded in ``EvalRun.budget_stops`` instead of failing the whole run.
+BUDGET_STOP_CODES = frozenset({"harness.execution_timeout", "harness.execution_limit"})
 _TRANSIENT_CODES = frozenset({
     "runtimeClientError", "internalServerException", "InternalServerException",
     "throttlingException", "ThrottlingException", "serviceUnavailableException",
@@ -324,6 +328,7 @@ def execute_run(
                     runtime_user_id=runtime_user_id,
                 )
 
+            budget_stops: list[dict[str, str]] = []
             _update(run_id, status="invoking")
             for scenario in scenarios:
                 _check_stop(run_id)
@@ -352,13 +357,25 @@ def execute_run(
                         timed_out = getattr(exc, "code", None) == "harness.execution_timeout"
                         if (retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc)
                                 or (timed_out and retry >= TIMEOUT_SCENARIO_RETRIES)):
-                            raise
+                            code = getattr(exc, "code", None)
+                            if code not in BUDGET_STOP_CODES or not attempt.get("session_id"):
+                                raise
+                            sid = attempt["session_id"]
+                            detail = getattr(exc, "detail", None)
+                            budget_stops.append({
+                                "scenario_id": attempt["scenario_id"], "session_id": sid,
+                                "code": code, "stop_reason": str(
+                                    (detail if isinstance(detail, dict) else {})
+                                    .get("stop_reason") or ""),
+                            })
+                            break
                         _check_stop(run_id)
                         attempt["retried"] = str(retry + 1)
                 session_ids.append(sid)
                 watermark_sid = sid
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
-                _update(run_id, session_ids=list(session_ids))
+                _update(run_id, session_ids=list(session_ids),
+                        budget_stops=list(budget_stops) or None)
             if session_metadata is None:
                 session_metadata = metadata_entries or None
             _check_stop(run_id)

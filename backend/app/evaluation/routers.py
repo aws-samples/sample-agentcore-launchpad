@@ -1226,6 +1226,8 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "batch_eval_id": run.batch_eval_id,
         "scores": run.scores,
         "insights": run.insights,
+        # dataset scenarios that ended on the agent's budget and are scored as they are
+        "budget_stops": run.budget_stops or [],
         "error": run.error,
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
