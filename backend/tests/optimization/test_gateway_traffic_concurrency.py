@@ -238,7 +238,7 @@ def test_replay_posts_use_the_longer_traffic_timeout(monkeypatch):
     svc.send_gateway_traffic("https://gw.example", "expv1", ["p1", "p2"], WS)
 
     assert seen == [svc.TRAFFIC_REQUEST_TIMEOUT_S] * 2
-    assert svc.TRAFFIC_REQUEST_TIMEOUT_S == 180.0
+    assert svc.TRAFFIC_REQUEST_TIMEOUT_S == 660.0
 
 
 def test_empty_prompt_list_short_circuits():
@@ -263,3 +263,12 @@ def test_every_replay_session_carries_the_runtime_user_id():
 
     _send(["a", "b"], poster, concurrency=1)
     assert seen == [svc.TRAFFIC_USER_ID, svc.TRAFFIC_USER_ID]
+
+
+def test_a_replay_waits_longer_than_the_default_agent_budget():
+    """A replay request must outlive the agent's own execution budget, or one slow
+    session fails the whole round (live: 180 s vs the 600 s default)."""
+    from app.schemas.agent import AgentSpec
+
+    budget = AgentSpec.model_fields["timeout_seconds"].default
+    assert svc.TRAFFIC_REQUEST_TIMEOUT_S > budget

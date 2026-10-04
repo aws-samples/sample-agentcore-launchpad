@@ -67,8 +67,9 @@ TRAFFIC_MAX_CONCURRENCY = 10
 # endpoint fallback kicks in. Raising it there and here are different decisions,
 # so this one is explicit. Well under the 15min AgentCore sync limit either way:
 # a prompt slower than this fails the stage rather than the sample (see the
-# exception contract below).
-TRAFFIC_REQUEST_TIMEOUT_S = 180.0
+# exception contract below). It covers the default agent execution budget (600 s)
+# plus a margin: at 180 s, slow research sessions failed whole canary rounds.
+TRAFFIC_REQUEST_TIMEOUT_S = 660.0
 # Runtime user id every experiment / canary replay session is attributed to.
 TRAFFIC_USER_ID = "launchpad-experiment-traffic"
 # Outcome for a prompt that was never sent because an earlier one failed
