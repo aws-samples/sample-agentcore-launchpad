@@ -15,7 +15,7 @@ import {
   useToast,
   ViewHead,
 } from "../components";
-import { AttachmentHint, MessageAttachments, PendingAttachments } from "../components/chat/Attachments";
+import { AttachmentHint, MessageAttachments, PendingAttachments } from "../components/chat/AttachmentViews";
 import type { PendingAttachment } from "../components/chat/attachments";
 import {
   attachmentMediaType,
