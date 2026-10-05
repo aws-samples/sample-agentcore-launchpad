@@ -30,9 +30,11 @@ from app.core.config import get_settings
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
 from app.services import agent_iam, byoc_uploads
+from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.requirements_txt import (
@@ -367,7 +369,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         spec = AgentSpec(**row.spec)
         cfg = _config(spec)
         role_arn = ctx.scratch["execution_role_arn"]
-        environment = runtime_environment(spec, ctx.workspace.resources)
+        environment = runtime_environment(spec, ctx.workspace.resources, agent_id=row.id)
         # The per-agent execution role scopes bedrock:InvokeModel to exactly
         # spec.allowed_model_ids (agent_iam.allowed_model_resources) — hand the
         # permitted ids to the user code: MODEL_ID is the primary (= model_id),
@@ -375,6 +377,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # values win for both.
         environment.setdefault("MODEL_ID", spec.model_id)
         environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+        resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
+        authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
         def _kwargs() -> dict:
             if cfg.artifact_kind == "code_zip":
@@ -390,11 +394,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     # user zips don't necessarily vendor the ADOT distro; an
                     # absent opentelemetry-instrument launcher fails at start
                     "instrument": False,
+                    # echoed on every update; omitted (None) = IAM/SigV4
+                    "authorizer_configuration": authorizer,
                 }
             return {
                 "container_uri": _container_uri(ctx, row, cfg),
                 "role_arn": role_arn,
                 "environment": environment,
+                "authorizer_configuration": authorizer,
             }
 
         create_fn = (
@@ -416,7 +423,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
-                f"new version {row.version}"
+                f"new version {row.version} · inbound auth {resolved_auth.mode}"
             )
         elif row.resource_id:
             runtime_id = row.resource_id
@@ -433,15 +440,29 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
             db.commit()
-            ctx.log(f"CreateAgentRuntime accepted · runtimeId {runtime_id}")
+            ctx.log(
+                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"inbound auth {resolved_auth.mode}"
+            )
 
         ready = rt.wait_runtime_ready(
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        # The inbound-auth snapshot lands only once the runtime is READY on the
+        # version that carries it: a Create/Update that is accepted and then
+        # fails leaves the ledger on the mode the live runtime still serves.
+        # A resumed job (create already accepted, or an update re-issued)
+        # reaches this line too, so the snapshot is never skipped.
+        inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
         db.commit()
-        return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
+        # as_user return-URL allow-list on the runtime's auto-created workload
+        # identity, reconciled on every deploy (create and redeploy)
+        detail = f"READY · {ready['agentRuntimeArn']}"
+        if not register_return_url_stage(client, spec, runtime_id, ctx.log):
+            detail += f" · {RETURN_URL_WARNING}"
+        return StageResult(detail=detail)
     finally:
         db.close()
 

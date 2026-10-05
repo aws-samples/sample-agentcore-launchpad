@@ -60,6 +60,16 @@ backend). Key facts an agent must know before touching them:
 - Frontend unit: `npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`
   over `frontend/dist` — **a rebuild is required for any frontend change**.
 - Both bind loopback; CloudFront (or any fronting proxy) terminates TLS.
+- **`LAUNCHPAD_PUBLIC_BASE_URL` must name the public origin** the browser
+  uses (`https://<public-host>`: scheme + host, no path, no trailing slash).
+  It feeds the as_user (3LO) OAuth return URL `{public_base_url}/auth/return`,
+  which AgentCore Identity redirects the user's browser to after IdP consent
+  and which the deployer allow-lists on each as_user agent's workload
+  identity. Unset, it falls back to the dev default `http://localhost:5173`
+  and the backend logs a startup warning (`run_mode=prod but the as_user (3LO)
+  OAuth return URL is http://localhost:5173/auth/return`). Behind a
+  path-rewriting proxy set `LAUNCHPAD_OAUTH_RETURN_URL` (the full return-page
+  URL) instead. See "Setting the public base URL" below.
 
 ```bash
 # start/stop/status
@@ -68,6 +78,25 @@ systemctl is-active launchpad-backend launchpad-frontend
 sudo journalctl -u launchpad-backend --since "2 min ago" -q   # read after EVERY restart:
                                                               # ledger schema drift = startup RuntimeError here
 ```
+
+### Setting the public base URL
+
+Add one `Environment=` line to the backend unit through a drop-in (the unit
+file itself stays untouched; this is the line to add):
+
+```bash
+sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+printf '[Service]\nEnvironment=LAUNCHPAD_PUBLIC_BASE_URL=https://<public-host>\n' \
+  | sudo tee /etc/systemd/system/launchpad-backend.service.d/public-base-url.conf
+sudo systemctl daemon-reload && sudo systemctl restart launchpad-backend
+systemctl show launchpad-backend -p Environment | tr ' ' '\n' | grep PUBLIC_BASE_URL
+sudo journalctl -u launchpad-backend --since "2 min ago" -q | grep -c "OAuth return URL"   # want 0
+```
+
+The return URL is baked into each as_user agent at deploy time (runtime env
+`LAUNCHPAD_OAUTH_RETURN_URL` + the workload-identity allow-list), so after
+setting or changing it, **re-publish every agent that has an as_user tool**.
+The frontend unit needs nothing.
 
 ### Update recipe (verified sequence)
 

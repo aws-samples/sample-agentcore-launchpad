@@ -4,28 +4,29 @@ import { useTranslation } from "react-i18next";
 
 import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
-import type { ChatAttachmentMetadata } from "../../../lib/api";
 import { Alert, Spin, Tag } from "../../ui";
+import { AuthCard } from "./AuthCard";
+import { type ChatMessage, retryPromptFor } from "./messages";
 
-export interface ChatMessage {
-  kind: "user" | "agent" | "tool" | "memory" | "error";
-  text: string;
-  name?: string;
-  streaming?: boolean;
-  attachments?: ChatAttachmentMetadata[];
-}
+export type { ChatMessage } from "./messages";
 
-/** The conversation: user / agent bubbles, tool calls, memory writes and errors. */
+/** The conversation: user / agent bubbles, tool calls, consent cards, memory
+ *  writes and errors. */
 export function Thread({
   messages,
   userLabel,
   agentLabel,
   restoring,
+  onRetry,
+  retryDisabled = false,
 }: {
   messages: ChatMessage[];
   userLabel: string;
   agentLabel: string;
   restoring: boolean;
+  /** re-send a prompt (an auth card's retry) */
+  onRetry?: (prompt: string) => void;
+  retryDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
@@ -72,6 +73,14 @@ export function Thread({
             <span className="mono">{msg.name}</span>
             <Tag tone="green">{t("v2.chat.toolCalled")}</Tag>
           </div>
+        ) : msg.kind === "auth" && msg.auth ? (
+          <AuthCard
+            key={i}
+            ask={msg.auth}
+            retryPrompt={retryPromptFor(messages, i)}
+            retryDisabled={retryDisabled || !onRetry}
+            onRetry={(prompt) => onRetry?.(prompt)}
+          />
         ) : msg.kind === "memory" ? (
           <div key={i} className="v2-chat-memline">
             <Database size={13} aria-hidden="true" />

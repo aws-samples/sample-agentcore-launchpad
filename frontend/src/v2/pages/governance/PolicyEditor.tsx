@@ -1,5 +1,5 @@
 import { Check, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -18,6 +18,7 @@ import {
   governanceError,
   isGatewayReady,
   POLICY_NAME_RE,
+  toolPolicyPrefill,
 } from "../../../lib/governance";
 import { useV2Toast } from "../../hooks";
 import {
@@ -40,8 +41,19 @@ type ConfirmAction = "save" | "promote" | "rollback";
 const MODELS: GovernanceAuthorizationModel[] = ["allowlist", "preserve_traffic", "custom"];
 const GENERATION_POLL_MS = 3000;
 
-/** Cedar policy editor: new LOG_ONLY policy (no `policy`) or review / save / promote / rollback. */
-export function PolicyEditor({ gatewayId, policyId }: { gatewayId: string; policyId: string | null }) {
+/**
+ * Cedar policy editor: new LOG_ONLY policy (no `policy`) or review / save / promote / rollback.
+ * `target` (a new policy only) prefills a tool-level allowlist for that gateway target's actions.
+ */
+export function PolicyEditor({
+  gatewayId,
+  policyId,
+  target = null,
+}: {
+  gatewayId: string;
+  policyId: string | null;
+  target?: string | null;
+}) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
@@ -66,6 +78,7 @@ export function PolicyEditor({ gatewayId, policyId }: { gatewayId: string; polic
   const [overrideReason, setOverrideReason] = useState("");
   const [sharedAcknowledged, setSharedAcknowledged] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const prefilled = useRef(false);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -81,6 +94,15 @@ export function PolicyEditor({ gatewayId, policyId }: { gatewayId: string; polic
       return;
     }
     setGateway(gatewayResult.value);
+    if (target && !policyId && !prefilled.current) {
+      // once per mount: a reload must not undo the operator's edits
+      prefilled.current = true;
+      const prefill = toolPolicyPrefill(gatewayResult.value, target);
+      setName(prefill.name);
+      setModel("allowlist");
+      setSelectedActions(prefill.actions);
+      if (prefill.actions.length) setStatement(buildAllowlistStatement(gatewayResult.value, prefill.actions));
+    }
     if (policiesResult.status === "fulfilled") {
       setPolicyData(policiesResult.value);
       const selected = policiesResult.value.policies.find((policy) => policy.id === policyId);
@@ -96,7 +118,7 @@ export function PolicyEditor({ gatewayId, policyId }: { gatewayId: string; polic
     }
     if (evidenceResult.status === "fulfilled") setEvidence(evidenceResult.value);
     setRefreshing(false);
-  }, [gatewayId, policyId, t]);
+  }, [gatewayId, policyId, target, t]);
 
   useEffect(() => {
     void load();
@@ -299,6 +321,13 @@ export function PolicyEditor({ gatewayId, policyId }: { gatewayId: string; polic
 
       {error && <Alert tone="error">{error}</Alert>}
       {!gateway.managed && <Alert tone="warn">{t("governance.policyEditor.unmanaged")}</Alert>}
+      {target && !existingPolicy && (
+        <Alert>
+          <span data-testid="v2-governance-tool-prefill">
+            {t(selectedActions.length ? "v2.governance.pe.toolPrefill" : "v2.governance.pe.toolPrefillNone", { target })}
+          </span>
+        </Alert>
+      )}
       {existingPolicy?.enforcement_mode === "ACTIVE" && <Alert tone="warn">{t("governance.policyEditor.activeCreatesCandidate")}</Alert>}
       {operation?.status === "partial" && <Alert tone="error">{t("governance.policyEditor.partialState")}</Alert>}
       <OperationAlert operation={operation} />

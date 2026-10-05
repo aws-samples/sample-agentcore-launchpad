@@ -35,6 +35,8 @@ AGENT_PERMISSIONS = (
     "agents.delete",
     "agents.convert",
     "eval.run",
+    "identity.manage",
+    "identity.grant",
     "memory.manage",
 )
 

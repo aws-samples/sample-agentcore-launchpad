@@ -11,6 +11,7 @@ from typing import Any, get_args
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
@@ -32,7 +33,16 @@ from app.schemas.agent import (
     InvokeResponse,
     RuntimeImportRequest,
 )
-from app.services import agent_iam, agent_names, byoc_uploads, memory_ownership
+from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
+from app.services import (
+    agent_iam,
+    agent_identity,
+    agent_names,
+    byoc_uploads,
+    identity_providers,
+    memory_ownership,
+)
+from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore import harness as harness_api
 from app.services.agentcore.client import control_client
@@ -82,6 +92,11 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "canary_capability": canary_capability(agent),
         "invoke_capability": invoke_capability(agent),
         "attachment_capability": attachment_capability(agent),
+        # Inbound auth of the LIVE runtime (deploy-time snapshot; discovered
+        # imports project their scanned authorizer_type). NULL snapshot on a
+        # launchpad row = deployed before the feature, i.e. IAM.
+        "inbound_auth_mode": inbound_auth_service.display_mode(agent),
+        "inbound_auth_config": agent.inbound_auth_config,
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -146,6 +161,19 @@ def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
     return True
 
 
+def _validate_tool_auth(spec: AgentSpec, ws: WorkspaceScope) -> None:
+    """Every tool auth block names a live Connection of the declared kind.
+
+    Only reaches AWS when some tool carries auth, so an ordinary deploy's
+    request path is unchanged."""
+    if any(tool.auth is not None for tool in spec.tools):
+        identity_providers.validate_tool_auth(control_client(ws.context), spec)
+    if spec.inbound_auth is not None:
+        # A spec-pinned JWT config gets the same save-time discovery probe as
+        # the workspace default, so a bad URL fails the request, not the deploy.
+        inbound_auth_service.validate_inbound_auth(spec.inbound_auth)
+
+
 @router.post("/agents", status_code=202)
 def create_agent(
     spec: AgentSpec,
@@ -173,6 +201,7 @@ def create_agent(
     existing = agent_names.live_holder(db, ws.id, spec.name)
     if existing:
         raise agent_names.name_exists_error(spec.name, existing.id)
+    _validate_tool_auth(spec, ws)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
     memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
@@ -402,6 +431,22 @@ def get_agent_versions(
     return list_agent_versions(control_client(ws.context), agent)
 
 
+@router.get("/agents/{agent_id}/identity")
+def get_agent_identity(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Read-only identity view: workload identity, inbound mode, and every
+    downstream with its acting mode and Connection (see docs/identity.md §5)."""
+    agent = _agent_in(db, ws, agent_id)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    return agent_identity.agent_identity(
+        control_client(ws.context), agent, ws.context.resources or {}
+    )
+
+
 @router.post("/agents/{agent_id}/redeploy", status_code=202)
 def redeploy_agent(
     agent_id: str,
@@ -424,25 +469,15 @@ def redeploy_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
-    return republish_agent(db, agent, spec)
+    return republish_agent(db, agent, spec, ws)
 
 
-def republish_agent(db: Session, agent: Agent, spec: AgentSpec) -> dict[str, Any]:
+def republish_agent(
+    db: Session, agent: Agent, spec: AgentSpec, ws: WorkspaceScope
+) -> dict[str, Any]:
     """The redeploy guards + an update-mode deploy job for an edited spec — shared
     by the redeploy route and accepting an AI recommendation (a new Harness version)."""
-    system_agents.refuse_system_mutation(agent, "redeploy")
-    if agent.method == DISCOVERED_METHOD:
-        raise AppError(
-            "agent.redeploy_external",
-            "discovered runtimes are externally owned and cannot be re-published",
-            status_code=400,
-        )
-    if agent.status == "deploying":
-        raise AppError(
-            "agent.deploy_in_progress",
-            "a deployment is already in progress for this agent",
-            status_code=409,
-        )
+    _refuse_redeploy(agent)
     if spec.name != agent.name or spec.method != agent.method:
         raise AppError(
             "agent.redeploy_immutable",
@@ -468,6 +503,39 @@ def republish_agent(db: Session, agent: Agent, spec: AgentSpec) -> dict[str, Any
                 status_code=400,
             )
 
+    return _start_redeploy(db, ws, agent, spec)
+
+
+def _redeployable(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
+    """The agent row a re-publish may update in place, or the refusal."""
+    agent = _agent_in(db, ws, agent_id)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    _refuse_redeploy(agent)
+    return agent
+
+
+def _refuse_redeploy(agent: Agent) -> None:
+    """Refuse a re-publish of a system preset, a discovered runtime or a busy agent."""
+    system_agents.refuse_system_mutation(agent, "redeploy")
+    if agent.method == DISCOVERED_METHOD:
+        raise AppError(
+            "agent.redeploy_external",
+            "discovered runtimes are externally owned and cannot be re-published",
+            status_code=400,
+        )
+    if agent.status == "deploying":
+        raise AppError(
+            "agent.deploy_in_progress",
+            "a deployment is already in progress for this agent",
+            status_code=409,
+        )
+
+
+def _start_redeploy(
+    db: Session, ws: WorkspaceScope, agent: Agent, spec: AgentSpec
+) -> dict[str, Any]:
+    _validate_tool_auth(spec, ws)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
     # refused before the stored spec changes, so a refusal leaves the agent as is
     memory_ownership.require_spec_memory(
@@ -481,6 +549,57 @@ def republish_agent(db: Session, agent: Agent, spec: AgentSpec) -> dict[str, Any
     deployment, job = create_deployment(db, agent, mode="update")
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
+
+
+class InboundAuthSwitch(BaseModel):
+    """``inbound_auth: null`` drops the pin, so the agent inherits the workspace default.
+
+    The key is required and unknown keys are refused: every accepted body starts a
+    full redeploy, so a mistyped one (``{}``, or the config sent at the top level)
+    must fail with a 422, not quietly re-publish the agent unpinned.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    inbound_auth: InboundAuth | None
+
+
+@router.post("/agents/{agent_id}/inbound-auth", status_code=202)
+def switch_inbound_auth(
+    agent_id: str,
+    body: InboundAuthSwitch,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Switch the agent's inbound auth IN PLACE: pin (or unpin) ``inbound_auth``
+    on the stored spec and re-publish it — UpdateAgentRuntime on the same
+    runtime, a new version, the DEFAULT endpoint rolls. Every other spec field
+    is re-published unchanged, so this is the wizard's re-publish minus the form.
+    """
+    agent = _redeployable(db, ws, agent_id)
+    stored = agent.spec or {}
+    if body.inbound_auth is not None and body.inbound_auth.mode == "jwt" and (
+        agent.method not in JWT_CAPABLE_METHODS or stored.get("protocol") == "a2a"
+    ):
+        raise AppError(
+            "agent.inbound_auth_unsupported",
+            "only HTTP Runtime agents (zip / studio / container / byoc) can carry a "
+            "JWT authorizer",
+            {"method": agent.method},
+            status_code=422,
+        )
+    try:
+        spec = AgentSpec(**{**stored, "inbound_auth": body.inbound_auth})
+    except ValidationError as exc:
+        raise AppError(
+            "agent.inbound_auth_invalid",
+            "the stored spec cannot be re-published with this inbound auth",
+            {"errors": exc.errors(
+                include_url=False, include_context=False, include_input=False
+            )},
+            status_code=422,
+        ) from exc
+    return _start_redeploy(db, ws, agent, spec)
 
 
 @router.post("/agents/{agent_id}/convert", status_code=202)

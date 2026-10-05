@@ -1,6 +1,7 @@
 """FastAPI application factory."""
 
 import logging
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +41,7 @@ from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
 from app.routers.execution import router as execution_router
 from app.routers.governance import router as governance_router
+from app.routers.identity import router as identity_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
@@ -102,9 +104,37 @@ def _assert_production_is_authenticated(settings) -> None:
         )
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _warn_local_return_url(settings) -> bool:
+    """Warn (once per boot) when a prod console still derives the as_user 3LO
+    return URL from the dev default ``http://localhost:5173``.
+
+    AgentCore Identity redirects the user's BROWSER there after IdP consent,
+    and the deployer allow-lists it on every as_user agent's workload identity
+    — on a real deployment that page does not exist for the user. Not fatal:
+    a console without as_user tools never uses it. Returns whether it warned.
+    """
+    if settings.run_mode != "prod":
+        return False
+    return_url = settings.resolved_oauth_return_url()
+    if (urlsplit(return_url).hostname or "").lower() not in _LOCAL_HOSTS:
+        return False
+    logging.getLogger("launchpad").warning(
+        "run_mode=prod but the as_user (3LO) OAuth return URL is %s — set "
+        "LAUNCHPAD_PUBLIC_BASE_URL to the console's public origin (e.g. "
+        "https://console.example.com) or LAUNCHPAD_OAUTH_RETURN_URL, then redeploy "
+        "agents with as_user tools; see docs/agent-runbook-prod.md",
+        return_url,
+    )
+    return True
+
+
 def create_app(resume_jobs: bool = False) -> FastAPI:
     settings = get_settings()
     _assert_production_is_authenticated(settings)
+    _warn_local_return_url(settings)
     app = FastAPI(
         title=f"{settings.app_name} API",
         version=settings.version,
@@ -146,6 +176,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(agents_router)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)
+    app.include_router(identity_router)  # Connections + Connection-bound gateway targets
     app.include_router(registry_router)
     app.include_router(system_agents_router)
     app.include_router(assistant_router)  # architect assistant (SE-039)

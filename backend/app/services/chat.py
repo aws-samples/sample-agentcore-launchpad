@@ -14,6 +14,7 @@ from typing import Any
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, envelope
 from app.models.ledger import Agent
+from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
@@ -36,11 +37,18 @@ def chat_stream(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
+    bearer_token: str | None = None,
+    console_user: bool = True,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
 
     Never raises mid-stream; errors surface as an `error` event. ``workspace``
     defaults to the agent's own — see ``invoke._agent_workspace``.
+    ``bearer_token`` is the caller's JWT for a JWT-inbound agent (console Chat
+    passes the signed-in user's token; absent, the invoke layer falls back to
+    the workspace M2M token or fails with a named error).
+    ``console_user=False`` (public /v1) refuses as_user consent asks by name —
+    see ``invoke._record_auth_sessions``.
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -52,6 +60,13 @@ def chat_stream(
     meta = {"session_id": session_id, "agent": agent.name, "mode": mode}
     if attachments:
         meta["attachments"] = attachments.metadata
+    if inbound_auth_service.is_jwt_mode(agent):
+        # Which bearer this turn presents to the JWT authorizer, so the
+        # console can say who the runtime saw (the "invoke as me" toggle).
+        meta["inbound"] = {
+            "mode": "jwt",
+            "caller": "user_jwt" if bearer_token else "m2m",
+        }
     yield {
         "event": "meta",
         "data": meta,
@@ -77,6 +92,10 @@ def chat_stream(
                 invoke_kwargs["gateway_access_token"] = gateway_access_token
             if attachments:
                 invoke_kwargs["attachments"] = attachments
+            if bearer_token:
+                invoke_kwargs["bearer_token"] = bearer_token
+            if not console_user:
+                invoke_kwargs["console_user"] = False
             yield from invoke_agent_events(
                 agent,
                 prompt,

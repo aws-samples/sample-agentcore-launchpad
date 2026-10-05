@@ -20,6 +20,8 @@ from app.harness_tool_access import (
 )
 from app.models.ledger import Agent
 from app.optimization import canary_harness, canary_service
+from app.services import inbound_auth as inbound_auth_service
+from app.services import oauth_sessions
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
@@ -32,6 +34,7 @@ from app.services.runtime_discovery import (
 )
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
+from app.templates.identity_support import as_user_connections_stored
 
 logger = logging.getLogger(__name__)
 BUFFERED_CHUNK_CHARS = 60
@@ -58,6 +61,103 @@ def _runtime_user_id(
 ) -> str | None:
     """See ``gateway_support.runtime_user_id`` — omitted unless the spec needs it."""
     return gateway_support.runtime_user_id(agent.spec, runtime_user_id or actor_id)
+
+
+def _pending_force_reauth(agent: Agent, user_id: str | None) -> list[str]:
+    """as_user Connections whose revocation is still in force for this user on
+    this agent, limited to the spec's own as_user tools. Read per invoke — the
+    spec gate keeps it free for every agent without an as_user tool."""
+    if not user_id:
+        return []
+    connections = as_user_connections_stored(agent.spec)
+    if not connections:
+        return []
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return oauth_sessions.pending_revocations(
+            db,
+            agent.workspace_id,
+            user_id=user_id,
+            agent_id=agent.id,
+            providers=connections,
+        )
+    finally:
+        db.close()
+
+
+def _record_auth_sessions(
+    agent: Agent,
+    user_id: str | None,
+    asks: list[dict[str, Any]],
+    *,
+    caller_kind: str = oauth_sessions.CALLER_IAM,
+    console_user: bool = True,
+) -> list[dict[str, Any]]:
+    """Persist each forwarded 3LO ask against the user it was asked of, and
+    strip the session uri from what goes out to the caller.
+
+    The binding leg (CompleteResourceTokenAuth) needs BOTH the session uri and
+    the user id; the user id stays server-side (see services/oauth_sessions.py).
+    The browser receives the session uri anyway — the IdP redirect carries it to
+    the return page — so only the pairing is worth keeping out of the event.
+
+    An ask raised over the workspace M2M token is refused outright (nothing is
+    recorded and no consent URL goes out): its consent would bind to the one
+    machine subject every M2M caller shares — see
+    ``oauth_sessions.AS_USER_REQUIRES_USER_JWT``.
+
+    ``console_user=False`` (the public /v1 API) refuses every ask the same way:
+    the consent is completed by the console's return page for the console user
+    the ask was recorded against, and a /v1 caller is an API key whose
+    ``actor_id`` names nobody who can sign in — so its session could never
+    complete (``oauth_sessions.AS_USER_REQUIRES_CONSOLE``). The vault user a
+    /v1 turn presents is its scoped actor (``<agent>__<actor_id>``), never a
+    console username, so a consent given in Chat does not carry over either:
+    as_user tools are a Chat-console feature, and /v1 says so by name instead
+    of handing out a consent URL that dead-ends.
+    """
+    if not asks:
+        return asks
+    if not console_user:
+        first = asks[0]
+        raise oauth_sessions.as_user_requires_console(
+            provider=str(first.get("provider") or ""),
+            tool=str(first.get("tool") or ""),
+            agent_id=agent.id,
+        )
+    if caller_kind == oauth_sessions.CALLER_M2M:
+        first = asks[0]
+        raise oauth_sessions.as_user_requires_user_jwt(
+            provider=str(first.get("provider") or ""),
+            tool=str(first.get("tool") or ""),
+            agent_id=agent.id,
+        )
+    from app.core.db import SessionLocal
+
+    out: list[dict[str, Any]] = []
+    db = SessionLocal()
+    try:
+        for ask in asks:
+            session_uri = str(ask.get("session_uri") or "")
+            if session_uri and user_id:
+                oauth_sessions.record_pending(
+                    db,
+                    agent.workspace_id,
+                    session_uri=session_uri,
+                    provider=str(ask.get("provider") or ""),
+                    user_id=user_id,
+                    agent_id=agent.id,
+                    tool=str(ask.get("tool") or ""),
+                    scopes=ask.get("scopes") or (),
+                    caller_kind=caller_kind,
+                )
+            public = {k: v for k, v in ask.items() if k != "session_uri"}
+            out.append({**public, "agent_id": agent.id})
+    finally:
+        db.close()
+    return out
 
 
 def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
@@ -282,6 +382,76 @@ def _invoke_harness_via_canary(
         return via_control()
 
 
+def _bearer_token_for(
+    agent: Agent,
+    workspace: WorkspaceContext,
+    caller_bearer_token: str | None,
+) -> tuple[str, str]:
+    """The bearer a JWT-mode agent's invoke sends, and which caller it names.
+
+    Console Chat with "invoke as me" passes the signed-in user's Cognito JWT
+    (``policy_identity.gateway_user_token``) → ``user_jwt``; every other caller
+    (Chat with the toggle off, public /v1, evaluation runs) sends the workspace
+    M2M client_credentials token → ``m2m``. ``m2m_bearer_token`` raises a named
+    error when that client is not configured — deliberately no SigV4 fallback,
+    which the JWT-mode runtime would just 403. The kind is what the as_user
+    consent completion needs: under a JWT authorizer the token vault keys the
+    user on the inbound JWT, so leg 4 must present a JWT of the same subject —
+    which is why an as_user ask on an ``m2m`` call is refused, never recorded.
+    """
+    caller = oauth_sessions.CALLER_USER_JWT if caller_bearer_token else oauth_sessions.CALLER_M2M
+    # both tokens come from the workspace pool: an agent on another IdP is
+    # refused by name here rather than by a bare authorizer 403
+    inbound_auth_service.require_platform_reachable(agent, workspace, caller)
+    if caller_bearer_token:
+        return caller_bearer_token, caller
+    return inbound_auth_service.m2m_bearer_token(workspace), caller
+
+
+def _bearer_kwargs(
+    agent: Agent,
+    actor_id: str,
+    runtime_user_id: str | None,
+    gateway_access_token: str | None,
+    attachments: PreparedAttachments | None,
+) -> tuple[dict[str, Any], str | None]:
+    """The optional payload fields of a bearer invoke, plus the ledger user the
+    as_user bookkeeping keys on (the Launchpad user, as on the SigV4 path —
+    only the vault's view of the user moves to the JWT subject)."""
+    ledger_user = _runtime_user_id(agent, actor_id, runtime_user_id)
+    kwargs: dict[str, Any] = {}
+    if gateway_access_token:
+        kwargs["gateway_access_token"] = gateway_access_token
+    if attachments and attachments.native:
+        kwargs["attachments"] = attachments.native
+    force_reauth = _pending_force_reauth(agent, ledger_user)
+    if force_reauth:
+        kwargs["force_reauth_providers"] = force_reauth
+    return kwargs, ledger_user
+
+
+def _bearer_auth_error(exc: rt.RuntimeBearerAuthError, agent: Agent) -> AppError:
+    """Translate an authorizer rejection into a hint the console can act on."""
+    config = (agent.inbound_auth_config or {}).get("jwt") or {}
+    return AppError(
+        "agent.inbound_auth_rejected",
+        f"the runtime's JWT authorizer rejected the call (HTTP {exc.status_code}) "
+        "— the token's client_id/aud/scope/claims must satisfy the deployed "
+        "authorizer",
+        {
+            "status_code": exc.status_code,
+            "allowed_clients": config.get("allowed_clients") or [],
+            "allowed_audience": config.get("allowed_audience") or [],
+            "allowed_scopes": config.get("allowed_scopes") or [],
+            "custom_claims": [
+                claim.get("name") for claim in config.get("custom_claims") or []
+            ],
+            "detail": exc.detail,
+        },
+        status_code=403,
+    )
+
+
 def invoke_agent_text(
     agent: Agent,
     prompt: str,
@@ -291,12 +461,44 @@ def invoke_agent_text(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
+    bearer_token: str | None = None,
+    console_user: bool = True,
 ) -> dict[str, Any]:
+    """One synchronous turn. ``console_user=False`` marks a caller with no
+    signed-in console user (public /v1): an as_user consent ask is then refused
+    by name instead of recorded (see ``_record_auth_sessions``)."""
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
     if attachments:
         prompt = attachments.prompt(prompt)
+    # A JWT-mode runtime accepts Bearer only — SigV4 InvokeAgentRuntime 403s.
+    # The bearer path bypasses canary gateway routing (the canary gateway signs
+    # SigV4 toward the runtime), so canaries and JWT inbound are mutually
+    # exclusive.
+    if inbound_auth_service.is_jwt_mode(agent):
+        token, caller_kind = _bearer_token_for(agent, workspace, bearer_token)
+        kwargs, ledger_user = _bearer_kwargs(
+            agent, actor_id, runtime_user_id, gateway_access_token, attachments,
+        )
+        try:
+            result = rt.invoke_runtime_text_bearer(
+                workspace.region,
+                agent.arn,
+                token,
+                prompt,
+                session_id=session_id,
+                actor_id=actor_id,
+                **kwargs,
+            )
+        except rt.RuntimeBearerAuthError as exc:
+            raise _bearer_auth_error(exc, agent) from exc
+        if result.get("auth_required"):
+            result["auth_required"] = _record_auth_sessions(
+                agent, ledger_user, result["auth_required"], caller_kind=caller_kind,
+                console_user=console_user,
+            )
+        return result
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
     if agent.method == "harness" or is_discovered_harness(agent):
@@ -348,18 +550,27 @@ def invoke_agent_text(
                 runtime_user_id,
                 gateway_access_token,
             )
+        resolved_user = _runtime_user_id(agent, actor_id, runtime_user_id)
         kwargs: dict[str, Any] = {
             "session_id": session_id,
             "actor_id": actor_id,
-            "runtime_user_id": _runtime_user_id(agent, actor_id, runtime_user_id),
+            "runtime_user_id": resolved_user,
         }
         if gateway_access_token:
             kwargs["gateway_access_token"] = gateway_access_token
         if attachments and attachments.native:
             kwargs["attachments"] = attachments.native
-        return rt.invoke_runtime_text(
+        force_reauth = _pending_force_reauth(agent, resolved_user)
+        if force_reauth:
+            kwargs["force_reauth_providers"] = force_reauth
+        result = rt.invoke_runtime_text(
             data_client(workspace), agent.arn, prompt, **kwargs
         )
+        if result.get("auth_required"):
+            result["auth_required"] = _record_auth_sessions(
+                agent, resolved_user, result["auth_required"], console_user=console_user,
+            )
+        return result
     raise AppError(
         "agent.method_not_available",
         f"no invoke path for method '{agent.method}'",
@@ -417,6 +628,8 @@ def invoke_agent_events(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
+    bearer_token: str | None = None,
+    console_user: bool = True,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -425,19 +638,53 @@ def invoke_agent_events(
     parsed incrementally. A zip runtime deployed before its template streamed
     still answers a JSON ``{"result": ...}`` body, which the same parser turns
     into one delta — so the switch is safe for existing agents.
+    ``console_user`` as on ``invoke_agent_text``.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
+    if inbound_auth_service.is_jwt_mode(agent):
+        # Streaming parity with SigV4: the HTTPS response feeds the same body
+        # parser, so tool/delta/auth_required arrive exactly as they do over
+        # invoke_agent_runtime.
+        token, caller_kind = _bearer_token_for(agent, workspace, bearer_token)
+        if attachments:
+            prompt = attachments.prompt(prompt)
+        kwargs, ledger_user = _bearer_kwargs(
+            agent, actor_id, runtime_user_id, gateway_access_token, attachments,
+        )
+        try:
+            for event in rt.stream_runtime_events_bearer(
+                workspace.region,
+                agent.arn,
+                token,
+                prompt,
+                session_id=session_id,
+                actor_id=actor_id,
+                **kwargs,
+            ):
+                if event.get("event") == "auth_required":
+                    event = {
+                        "event": "auth_required",
+                        "data": _record_auth_sessions(
+                            agent, ledger_user, [event["data"]], caller_kind=caller_kind,
+                            console_user=console_user,
+                        )[0],
+                    }
+                yield event
+        except rt.RuntimeBearerAuthError as exc:
+            raise _bearer_auth_error(exc, agent) from exc
+        return
     streams_natively = (
         agent.method in NATIVE_STREAM_METHODS
         and (agent.spec or {}).get("protocol", "http") != "a2a"
     )
     if streams_natively and canary_service.active_canary_route(agent.id) is None:
+        resolved_user = _runtime_user_id(agent, actor_id, runtime_user_id)
         kwargs: dict[str, Any] = {
             "session_id": session_id,
             "actor_id": actor_id,
-            "runtime_user_id": _runtime_user_id(agent, actor_id, runtime_user_id),
+            "runtime_user_id": resolved_user,
         }
         if gateway_access_token:
             kwargs["gateway_access_token"] = gateway_access_token
@@ -445,12 +692,25 @@ def invoke_agent_events(
             prompt = attachments.prompt(prompt)
             if attachments.native:
                 kwargs["attachments"] = attachments.native
-        yield from rt.stream_runtime_events(
+        force_reauth = _pending_force_reauth(agent, resolved_user)
+        if force_reauth:
+            kwargs["force_reauth_providers"] = force_reauth
+        for event in rt.stream_runtime_events(
             data_client(workspace), agent.arn, prompt, **kwargs
-        )
+        ):
+            if event.get("event") == "auth_required":
+                event = {
+                    "event": "auth_required",
+                    "data": _record_auth_sessions(
+                        agent, resolved_user, [event["data"]], console_user=console_user,
+                    )[0],
+                }
+            yield event
         return
 
-    extra = {"attachments": attachments} if attachments else {}
+    extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
+    if not console_user:
+        extra["console_user"] = False
     result = invoke_agent_text(
         agent,
         prompt,
@@ -461,6 +721,8 @@ def invoke_agent_events(
         workspace=workspace,
         **extra,
     )
+    for ask in result.get("auth_required") or []:
+        yield {"event": "auth_required", "data": ask}
     text = result["text"]
     for index in range(0, len(text), BUFFERED_CHUNK_CHARS):
         yield {

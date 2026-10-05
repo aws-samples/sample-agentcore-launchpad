@@ -65,6 +65,15 @@ def a2a_demo(
             raise AppError("registry.a2a_demo_unsupported",
                            "the demo drives runtime agents with a {prompt} contract",
                            status_code=400)
+        if agent.inbound_auth_mode == "jwt":
+            # The demo signs InvokeAgentRuntime with SigV4 (it needs the raw
+            # body's a2a_trace, which the bearer path's normalized events drop),
+            # and a JWT authorizer refuses SigV4 with a bare 403.
+            raise AppError("registry.a2a_demo_jwt_unsupported",
+                           "this agent accepts JWT bearer tokens only, and the A2A "
+                           "demo calls it with SigV4 — use an IAM-inbound front-desk "
+                           "agent, or chat with this one in the Chat console",
+                           status_code=409)
         arn = agent.arn
     finally:
         db.close()

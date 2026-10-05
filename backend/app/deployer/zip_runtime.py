@@ -28,9 +28,11 @@ from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platfor
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
+from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.requirements_txt import RESOLVE_FIX_HINTS, summarize_resolver_failure
@@ -40,9 +42,12 @@ from app.templates.strands_agent import base_requirements, render_main_py
 
 
 def sanitize_runtime_name(name: str) -> str:
-    """Runtime names must be alphanumeric/underscore; suffix keeps them unique."""
-    base = re.sub(r"[^A-Za-z0-9_]", "_", name).strip("_")[:40] or "agent"
-    return f"{base}_{uuid.uuid4().hex[:6]}"
+    """Runtime names must be alphanumeric/underscore; suffix keeps them unique.
+
+    The base is shared with the execution role's workload-identity scope
+    (``agent_iam.own_workload_identity_arn``), which pins the 6-hex suffix
+    length — change both together."""
+    return f"{agent_iam.runtime_name_base(name)}_{uuid.uuid4().hex[:6]}"
 
 
 # The deploy target: AgentCore Runtime zips run ARM64 on Python 3.13. The
@@ -535,10 +540,15 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
+        # Resolve inbound auth ONCE per deploy (spec > workspace default > IAM)
+        # and snapshot the choice onto the row below — consumers (Chat, /v1,
+        # the console badge) read the snapshot, never re-resolve.
+        resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
+        authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = runtime_environment(spec, resources)
+            environment = runtime_environment(spec, resources, agent_id=row.id)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or resources.get("artifacts_bucket", ""),
@@ -550,6 +560,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # A2A runtimes must echo the protocol on update too —
                 # UpdateAgentRuntime resets an omitted protocolConfiguration
                 "protocol": spec.protocol,
+                # Same contract as protocol: echoed on every update. None (IAM)
+                # omits the field, which resets a JWT runtime back to SigV4 —
+                # that IS the JWT→IAM transition.
+                "authorizer_configuration": authorizer,
                 # managed session storage — likewise reset when omitted on update
                 "filesystem_configurations": filesystem_configurations(spec) or None,
             }
@@ -564,7 +578,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
-                f"new version {row.version}"
+                f"new version {row.version} · inbound auth {resolved_auth.mode}"
             )
         elif row.resource_id:
             runtime_id = row.resource_id
@@ -581,18 +595,32 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
             db.commit()
-            ctx.log(f"CreateAgentRuntime accepted · runtimeId {runtime_id}")
+            ctx.log(
+                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"inbound auth {resolved_auth.mode}"
+            )
 
         ready = rt.wait_runtime_ready(
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        # The inbound-auth snapshot lands only once the runtime is READY on the
+        # version that carries it: a Create/Update that is accepted and then
+        # fails leaves the ledger on the mode the live runtime still serves.
+        # A resumed job (create already accepted, or an update re-issued)
+        # reaches this line too, so the snapshot is never skipped.
+        inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
         from app.deployer.input_contract import stamp_input_contract
 
         stamp_input_contract(ctx, db, row)
         db.commit()
-        return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
+        # as_user return-URL allow-list on the runtime's auto-created workload
+        # identity, reconciled on every deploy (create and redeploy)
+        detail = f"READY · {ready['agentRuntimeArn']}"
+        if not register_return_url_stage(client, AgentSpec(**row.spec), runtime_id, ctx.log):
+            detail += f" · {RETURN_URL_WARNING}"
+        return StageResult(detail=detail)
     finally:
         db.close()
 

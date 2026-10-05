@@ -9,9 +9,13 @@ import json
 import logging
 import re
 import time
+import urllib.parse
 import uuid
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import Any
+
+import httpx
 
 from app.core.errors import AppError
 from app.services.agentcore.harness import new_session_id
@@ -20,6 +24,40 @@ logger = logging.getLogger("launchpad.agentcore.runtime")
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED"}
 SSE_READ_CHUNK_BYTES = 32
+
+# Bearer (JWT) invocation of the Runtime data plane. boto3 cannot send a
+# bearer token, so JWT-mode runtimes are invoked over plain HTTPS (devguide
+# "Authenticate and authorize with Inbound Auth and Outbound Auth", read
+# 2026-09-19): POST https://bedrock-agentcore.{region}.amazonaws.com
+# /runtimes/{urlencoded runtime ARN}/invocations?qualifier=... with
+# Authorization: Bearer and the session-id header below.
+BEARER_SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
+BEARER_READ_TIMEOUT_S = 900.0
+
+
+class RuntimeBearerAuthError(RuntimeError):
+    """The Runtime's JWT authorizer rejected the request (401/403).
+
+    Distinct from a generic runtime error so the invoke layer can answer with
+    a token/client/claim hint instead of a bare 502."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class RuntimeBearerHttpError(RuntimeError):
+    """A bearer invoke answered a non-200 status other than 401/403.
+
+    Typed so a retry policy can tell an upstream 5xx / 429 (transient) from a
+    4xx (final) without parsing the message; the message keeps the historical
+    ``bearer invoke returned HTTP <status>`` text."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 
 def _protocol_configuration(protocol: str | None) -> dict[str, Any] | None:
@@ -45,13 +83,16 @@ def create_code_runtime(
     python_version: str | None = None,
     entrypoint: str | None = None,
     instrument: bool = True,
+    authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
     ``python_version``/``entrypoint`` default to the platform artifact contract
     (PYTHON_3_13, main.py); BYOC passes the user's choices through and disables
-    the ADOT launcher (user zips don't necessarily vendor the distro)."""
+    the ADOT launcher (user zips don't necessarily vendor the distro).
+    ``authorizer_configuration`` is the inbound JWT authorizer
+    ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted)."""
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": _code_artifact(
@@ -65,6 +106,8 @@ def create_code_runtime(
     proto = _protocol_configuration(protocol)
     if proto:
         params["protocolConfiguration"] = proto
+    if authorizer_configuration:
+        params["authorizerConfiguration"] = authorizer_configuration
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
     return client.create_agent_runtime(**params)
@@ -94,6 +137,7 @@ def create_container_runtime(
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
     lifecycle: dict[str, int] | None = None,
+    authorizer_configuration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from an ECR image (Claude SDK container path).
 
@@ -113,6 +157,8 @@ def create_container_runtime(
         params["filesystemConfigurations"] = filesystem_configurations
     if lifecycle:
         params["lifecycleConfiguration"] = dict(lifecycle)
+    if authorizer_configuration:
+        params["authorizerConfiguration"] = authorizer_configuration
     return client.create_agent_runtime(**params)
 
 
@@ -150,6 +196,7 @@ def update_code_runtime(
     python_version: str | None = None,
     entrypoint: str | None = None,
     instrument: bool = True,
+    authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
@@ -158,7 +205,11 @@ def update_code_runtime(
     ``protocol`` must be passed for A2A agents on EVERY update — the service
     resets an omitted protocolConfiguration back to HTTP (probed live). The same
     holds for ``filesystem_configurations``: an omitted list detaches every mount
-    (probed live 2026-10-04), so a re-publish must echo it each time."""
+    (probed live 2026-10-04), so a re-publish must echo it each time. The
+    authorizer rides the same call: every update passes the RESOLVED inbound
+    auth — echoing the JWT config keeps (or sets) it, omitting it switches the
+    runtime back to IAM/SigV4, which is also how JWT→IAM transitions are
+    performed (CloudFormation marks authorizer updates "No interruption")."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": _code_artifact(
@@ -172,6 +223,8 @@ def update_code_runtime(
     proto = _protocol_configuration(protocol)
     if proto:
         params["protocolConfiguration"] = proto
+    if authorizer_configuration:
+        params["authorizerConfiguration"] = authorizer_configuration
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
     return client.update_agent_runtime(**params)
@@ -187,9 +240,12 @@ def update_container_runtime(
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
     lifecycle: dict[str, int] | None = None,
+    authorizer_configuration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new container image — new version, same ARN.
-    NB: a version bump resets managed session storage (documented UI note)."""
+    NB: a version bump resets managed session storage (documented UI note).
+    Authorizer semantics as ``update_code_runtime``: echo to keep, omit to
+    return the runtime to IAM/SigV4."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},
@@ -202,6 +258,8 @@ def update_container_runtime(
         params["filesystemConfigurations"] = filesystem_configurations
     if lifecycle:
         params["lifecycleConfiguration"] = dict(lifecycle)
+    if authorizer_configuration:
+        params["authorizerConfiguration"] = authorizer_configuration
     return client.update_agent_runtime(**params)
 
 
@@ -436,6 +494,29 @@ def _repr_event(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _safe_auth_url(value: Any) -> str | None:
+    """An auth_required ``url`` fit to render as a link, else None.
+
+    The runtime's stream is agent-authored (BYOC code, a prompt-injected tool),
+    so a ``javascript:`` / ``data:`` / plain-http URL here would reach the
+    console's consent card. Only an absolute https URL with a host survives;
+    anything else is dropped (the card then has no link) and logged by scheme
+    only — the URL itself carries the consent session's state.
+    """
+    url = str(value or "").strip()
+    if not url:
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        parts = None
+    if parts is not None and parts.scheme.lower() == "https" and parts.hostname:
+        return url
+    scheme = (parts.scheme if parts is not None else "") or "<none>"
+    logger.warning("dropped a non-https auth_required url (scheme %r)", scheme[:16])
+    return None
+
+
 def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     """Normalize one runtime payload to Chat's tool/delta/complete contract
     (lenient ``str()`` coercion of text fields, shared by Chat, the public API
@@ -461,7 +542,7 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
         yield {"event": "attachments", "data": {"contract": "v1"}}
     kind = payload.get("event")
     if isinstance(kind, str) and (
-        kind in {"delta", "heartbeat", "tool", "complete", "error"}
+        kind in {"delta", "heartbeat", "tool", "auth_required", "complete", "error"}
         or (kind == "attachments" and payload.get("contract") == "v1")
     ):
         if kind == "attachments":
@@ -476,6 +557,25 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
             yield {
                 "event": "tool",
                 "data": {"name": str(payload.get("name", "")), "id": payload.get("id")},
+            }
+        elif kind == "auth_required":
+            # Outbound as_user (USER_FEDERATION 3LO): the tool's Connection holds
+            # no token for this user yet. `url` is the IdP authorization URL the
+            # user must open; `session_uri` is the consent session the platform
+            # completes (CompleteResourceTokenAuth) once the user returns — the
+            # invoke layer records it and strips it before the caller sees the
+            # event (services/oauth_sessions.py). Never logged. The url comes
+            # out of agent code, so only an https URL is passed through (see
+            # ``_safe_auth_url``) — the console renders it as a link.
+            yield {
+                "event": "auth_required",
+                "data": {
+                    "provider": str(payload.get("provider", "")),
+                    "tool": str(payload.get("tool", "")),
+                    "url": _safe_auth_url(payload.get("url")),
+                    "scopes": [str(s) for s in payload.get("scopes") or []],
+                    "session_uri": str(payload.get("session_uri", "")),
+                },
             }
         elif kind == "complete":
             yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
@@ -621,19 +721,14 @@ def _runtime_invoke_params(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    force_reauth_providers: list[str] | None = None,
 ) -> dict[str, Any]:
-    payload = {"prompt": prompt, "actor_id": actor_id}
-    if attachments:
-        payload["attachments"] = attachments
-    if gateway_access_token:
-        # The InvokeAgentRuntime payload is marked sensitive in the service
-        # model. Generated Launchpad runtimes consume this value in memory only
-        # and never log or persist it.
-        payload["gateway_access_token"] = gateway_access_token
     params: dict[str, Any] = {
         "agentRuntimeArn": runtime_arn,
         "runtimeSessionId": session_id,
-        "payload": json.dumps(payload).encode("utf-8"),
+        "payload": _invoke_payload(
+            prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
+        ),
     }
     if qualifier:
         params["qualifier"] = qualifier
@@ -647,6 +742,29 @@ def _runtime_invoke_params(
     return params
 
 
+def _invoke_payload(
+    prompt: str,
+    actor_id: str,
+    gateway_access_token: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
+    force_reauth_providers: list[str] | None = None,
+) -> bytes:
+    """The request body both transports (SigV4 and bearer) send."""
+    payload: dict[str, Any] = {"prompt": prompt, "actor_id": actor_id}
+    if attachments:
+        payload["attachments"] = attachments
+    if force_reauth_providers:
+        # as_user revocation: the generated identity block sends
+        # forceAuthentication=true for exactly these Connections this turn.
+        payload["force_reauth_providers"] = list(force_reauth_providers)
+    if gateway_access_token:
+        # The InvokeAgentRuntime payload is marked sensitive in the service
+        # model. Generated Launchpad runtimes consume this value in memory only
+        # and never log or persist it.
+        payload["gateway_access_token"] = gateway_access_token
+    return json.dumps(payload).encode("utf-8")
+
+
 def stream_runtime_events(
     client: Any,
     runtime_arn: str,
@@ -657,6 +775,7 @@ def stream_runtime_events(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    force_reauth_providers: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
@@ -670,6 +789,7 @@ def stream_runtime_events(
             runtime_user_id,
             gateway_access_token,
             attachments,
+            force_reauth_providers,
         )
     )
     body = response["response"]
@@ -723,26 +843,172 @@ def invoke_runtime_text(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    force_reauth_providers: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Synchronous InvokeAgentRuntime, joining native streaming responses."""
+    """Synchronous InvokeAgentRuntime, joining native streaming responses.
+
+    as_user consent asks (``auth_required`` events) are collected onto
+    ``result["auth_required"]`` — a non-streaming caller still needs the
+    authorization URL to relay to the user.
+    """
     session_id = session_id or new_session_id()
-    extra = {"attachments": attachments} if attachments else {}
-    parts = [
-        event["data"]["text"]
-        for event in stream_runtime_events(
-            client,
-            runtime_arn,
-            prompt,
-            session_id=session_id,
-            actor_id=actor_id,
-            qualifier=qualifier,
-            runtime_user_id=runtime_user_id,
-            gateway_access_token=gateway_access_token,
-            **extra,
-        )
-        if event["event"] == "delta"
-    ]
-    return {"text": "".join(parts), "session_id": session_id}
+    extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
+    if force_reauth_providers:
+        extra["force_reauth_providers"] = force_reauth_providers
+    parts: list[str] = []
+    auth_required: list[dict[str, Any]] = []
+    for event in stream_runtime_events(
+        client,
+        runtime_arn,
+        prompt,
+        session_id=session_id,
+        actor_id=actor_id,
+        qualifier=qualifier,
+        runtime_user_id=runtime_user_id,
+        gateway_access_token=gateway_access_token,
+        **extra,
+    ):
+        if event["event"] == "delta":
+            parts.append(event["data"]["text"])
+        elif event["event"] == "auth_required":
+            auth_required.append(event["data"])
+    result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
+    if auth_required:
+        result["auth_required"] = auth_required
+    return result
+
+
+def bearer_invoke_url(region: str, runtime_arn: str, qualifier: str = "DEFAULT") -> str:
+    """The Runtime data-plane HTTPS invocation URL for one runtime ARN."""
+    escaped = urllib.parse.quote(runtime_arn, safe="")
+    return (
+        f"https://bedrock-agentcore.{region}.amazonaws.com"
+        f"/runtimes/{escaped}/invocations?qualifier={qualifier}"
+    )
+
+
+@contextmanager
+def _default_bearer_response(url: str, headers: dict[str, str], body: bytes):
+    with httpx.Client(timeout=httpx.Timeout(10.0, read=BEARER_READ_TIMEOUT_S)) as client:
+        with client.stream("POST", url, headers=headers, content=body) as response:
+            yield response
+
+
+class _HttpxBody:
+    """Adapts a streamed httpx response to the botocore body ``_runtime_body_events``
+    reads (``iter_lines(chunk_size=)`` / ``read()``), so both transports share
+    one parser."""
+
+    def __init__(self, response: Any):
+        self._response = response
+
+    def iter_lines(self, chunk_size: int | None = None) -> Iterator[str]:
+        return self._response.iter_lines()
+
+    def read(self) -> bytes:
+        return self._response.read()
+
+
+def stream_runtime_events_bearer(
+    region: str,
+    runtime_arn: str,
+    bearer_token: str,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "default",
+    qualifier: str | None = None,
+    gateway_access_token: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
+    force_reauth_providers: list[str] | None = None,
+    http_response: Any = None,
+) -> Iterator[dict[str, Any]]:
+    """Bearer-token InvokeAgentRuntime over the data-plane HTTPS endpoint.
+
+    Same body the SigV4 path sends and the same normalized events out
+    (``_runtime_body_events``), so everything downstream of the transport is
+    shared. No runtimeUserId: under a JWT authorizer the Runtime derives the
+    user identity from the validated token itself (iss + sub, devguide
+    "Get workload access token"). ``http_response`` injects a stub response
+    context manager for tests.
+    """
+    session_id = session_id or new_session_id()
+    url = bearer_invoke_url(region, runtime_arn, qualifier or "DEFAULT")
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Content-Type": "application/json",
+        BEARER_SESSION_HEADER: session_id,
+    }
+    body = _invoke_payload(
+        prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
+    )
+    opener = http_response or _default_bearer_response
+    with opener(url, headers, body) as response:
+        status = int(getattr(response, "status_code", 0))
+        if status in (401, 403):
+            detail = _read_error_body(response)
+            raise RuntimeBearerAuthError(
+                status,
+                f"the Runtime's JWT authorizer rejected the request (HTTP {status})"
+                + (f": {detail}" if detail else ""),
+            )
+        if status != 200:
+            detail = _read_error_body(response)
+            raise RuntimeBearerHttpError(
+                status,
+                f"bearer invoke returned HTTP {status}"
+                + (f": {detail}" if detail else ""),
+            )
+        content_type = str(
+            (getattr(response, "headers", None) or {}).get("content-type") or ""
+        ).lower()
+        yield from _runtime_body_events(_HttpxBody(response), content_type, bool(attachments))
+
+
+def _read_error_body(response: Any, limit: int = 500) -> str:
+    try:
+        raw = response.read()
+    except Exception:  # noqa: BLE001 — the status code is the real signal
+        return ""
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+    return text.strip()[:limit]
+
+
+def invoke_runtime_text_bearer(
+    region: str,
+    runtime_arn: str,
+    bearer_token: str,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "default",
+    qualifier: str | None = None,
+    http_response: Any = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Synchronous bearer invoke (SigV4 twin: ``invoke_runtime_text``); ``extra``
+    carries the same optional payload fields (attachments, force-reauth,
+    gateway token)."""
+    session_id = session_id or new_session_id()
+    parts: list[str] = []
+    auth_required: list[dict[str, Any]] = []
+    for event in stream_runtime_events_bearer(
+        region,
+        runtime_arn,
+        bearer_token,
+        prompt,
+        session_id=session_id,
+        actor_id=actor_id,
+        qualifier=qualifier,
+        http_response=http_response,
+        **extra,
+    ):
+        if event["event"] == "delta":
+            parts.append(event["data"]["text"])
+        elif event["event"] == "auth_required":
+            auth_required.append(event["data"])
+    result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
+    if auth_required:
+        result["auth_required"] = auth_required
+    return result
 
 
 def stop_runtime_session(

@@ -102,17 +102,22 @@ def v1_invoke(
     )
     extra = {"attachments": prepared} if prepared else {}
     started = time.monotonic()
+    # No signed-in console user behind an API key: an as_user tool's consent
+    # could never complete, so the invoke layer answers such an ask with 409
+    # identity.as_user_requires_console instead of a dead-end consent URL.
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
         actor_id=scoped_actor(agent.id, req.actor_id),
+        console_user=False,
         **extra,
     )
-    return {
+    body = {
         "agent": agent.name,
         "text": result["text"],
         "session_id": result["session_id"],
         "latency_ms": int((time.monotonic() - started) * 1000),
     }
+    return body
 
 
 @router.post("/agents/{agent_id}/invoke-stream", summary="Invoke an agent (SSE stream)")
@@ -131,8 +136,11 @@ def v1_invoke_stream(
     mem_actor = scoped_actor(agent.id, req.actor_id)
 
     def generate():
+        # console_user=False: an as_user consent ask ends the stream with an
+        # `error` event (identity.as_user_requires_console) — see v1_invoke
         for event in chat_stream(
-            agent, req.prompt, session_id=req.session_id, actor_id=mem_actor, **extra,
+            agent, req.prompt, session_id=req.session_id, actor_id=mem_actor,
+            console_user=False, **extra,
         ):
             yield sse_encode(event)
 

@@ -113,3 +113,14 @@ English: [troubleshooting.md](troubleshooting.md)
   `policyEngineConfiguration.arn`。治理页面会把它显示为 `引擎已删除` 并保留失效
   ARN(而不是显示"未挂载"),策略类变更返回 `governance.policy_engine_deleted`,
   同时提供创建并挂载表单——确认时会新建引擎并覆盖该失效引用。
+
+## 身份
+
+- **对话、`/v1`、调用或评估返回 `agent.inbound_issuer_mismatch`（409）。**
+  该智能体的 JWT 授权器信任的不是工作区 Cognito 用户池，而平台的所有调用都携带
+  工作区 Cognito 令牌。这是限制而非故障：请用该 IdP 签发的令牌从外部调用
+  （`samples/inbound-jwt/`），或在智能体页面切换为 Cognito 预设或 IAM。错误详情
+  会列出两个签发者（[identity.md §8.1](identity.md#81-inbound-auth-iam-sigv4-vs-jwt-bearer)）。
+- **创建 obo 目标时出现签发者警告。** 连接的 IdP 不是网关的入站签发者。只有该
+  IdP 信任网关签发者的令牌作为主体令牌时，交换才会成功；请在 IdP 侧配置该信任，
+  或选择同一签发者的连接（[identity.md §8.3](identity.md#83-obo-on-behalf-of-token-exchange)）。

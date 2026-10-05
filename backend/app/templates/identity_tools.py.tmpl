@@ -1,0 +1,469 @@
+# <launchpad-identity-outbound:p2>
+# Tool-level outbound auth via AgentCore Identity, for tools whose spec carries
+# an `auth` block ({connection, kind, mode, scopes, audience, api_key placement})
+# plus open `rest` tools (which have no other way into the runtime).
+#
+# FAIL-SOFT BY CONSTRUCTION, same contract as the Gateway block: module scope
+# holds only baked literals, os.environ.get() reads and function definitions;
+# every import that can fail is function-local. A tool whose token exchange
+# fails answers with an error string — the agent still answers.
+#
+# Token paths, each a synchronous single call:
+#   as_agent: workload identity token → GetResourceOauth2Token("M2M")  → bearer
+#   as_agent: workload identity token → GetResourceApiKey              → api key
+#   as_user:  workload identity token → GetResourceOauth2Token("USER_FEDERATION")
+#     → bearer, but NON-BLOCKING: when the vault holds no token for (workload,
+#     user) the response carries an authorization URL + session uri instead.
+#     The tool queues an auth notice (drained by the entrypoint into an
+#     `auth_required` stream event) and answers the model with a structured
+#     auth-required result — it never polls or blocks the turn. The platform
+#     binds the token after consent (CompleteResourceTokenAuth, the 4th leg).
+# The workload identity token is the one the Runtime injects into the request
+# (`WorkloadAccessToken` → BedrockAgentCoreContext); the platform sends
+# runtimeUserId whenever a tool carries auth, so it is present. The
+# LAUNCHPAD_WORKLOAD_NAME fallback mirrors the Gateway block.
+
+# Baked at generation time: [{"name", "type", "url", "description", "method",
+# "body", "headers", "connection", "kind", "mode", "scopes", "audience",
+# "key_in", "key_name"}] — no secrets, only the Connection NAME the vault
+# resolves.
+IDENTITY_AUTH_TOOLS = __LAUNCHPAD_IDENTITY_TOOLS__
+
+IDENTITY_WORKLOAD_NAME = os.environ.get("LAUNCHPAD_WORKLOAD_NAME", "")
+# as_user: where AgentCore Identity redirects the browser after IdP consent
+# (allow-listed on the workload identity by the deployer), and the agent id
+# the round-tripped customState names. Empty return URL ⇒ a vaulted token still
+# works, but a fresh consent ends at the provider callback page.
+IDENTITY_RETURN_URL = os.environ.get("LAUNCHPAD_OAUTH_RETURN_URL", "")
+IDENTITY_AGENT_ID = os.environ.get("LAUNCHPAD_AGENT_ID", "")
+
+# Auth notices queued by as_user tools during the current turn; the entrypoint
+# drains them into `auth_required` events between stream events.
+_IDENTITY_AUTH_NOTICES: list = []
+
+# Turn-scoped state set by identity_tools at the top of every turn (a Runtime
+# microVM serves one session): the session id feeds the customState; the
+# force_reauth set carries the platform's revocations — Connections whose next
+# exchange must send forceAuthentication=true.
+_IDENTITY_SESSION = {"id": "", "force_reauth": frozenset()}
+
+# Sentinel: the user must authorize at the IdP before this tool can run.
+IDENTITY_AUTH_REQUIRED = "__identity_auth_required__"
+
+
+def identity_drain_auth_notices() -> list:
+    notices = list(_IDENTITY_AUTH_NOTICES)
+    _IDENTITY_AUTH_NOTICES.clear()
+    return notices
+
+
+def _id_log(message: str) -> None:
+    print(f"[launchpad-identity] {message}", flush=True)
+
+
+def _id_host_only(url: str) -> str:
+    """Loggable form of an authorization URL: scheme + host only, never the
+    query string (it carries client and state parameters)."""
+    try:
+        import urllib.parse
+
+        parsed = urllib.parse.urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return "<unparseable-url>"
+
+
+def _id_client():
+    from bedrock_agentcore.services.identity import IdentityClient
+
+    return IdentityClient(os.environ.get("AWS_REGION", "us-west-2"))
+
+
+def identity_workload_token() -> str | None:
+    """Workload identity token: Runtime-injected first, self-minted fallback."""
+    try:
+        injected = BedrockAgentCoreContext.get_workload_access_token()
+    except Exception as exc:
+        injected = None
+        _id_log(f"workload token context unavailable: {type(exc).__name__}: {exc}")
+    if injected:
+        return injected
+    if not IDENTITY_WORKLOAD_NAME:
+        _id_log(
+            "workload identity token: NOT injected and LAUNCHPAD_WORKLOAD_NAME is "
+            "unset — outbound-auth tools have no credential this request"
+        )
+        return None
+    try:
+        return _id_client().get_workload_access_token(IDENTITY_WORKLOAD_NAME)[
+            "workloadAccessToken"
+        ]
+    except Exception as exc:
+        _id_log(
+            f"GetWorkloadAccessToken({IDENTITY_WORKLOAD_NAME}) failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+
+
+def resource_oauth2_token(auth: dict) -> str | None:
+    """M2M access token from the tool's OAuth2 Connection, or None."""
+    workload = identity_workload_token()
+    if not workload:
+        return None
+    kwargs = {
+        "workloadIdentityToken": workload,
+        "resourceCredentialProviderName": auth["connection"],
+        "scopes": list(auth.get("scopes") or []),
+        "oauth2Flow": "M2M",
+    }
+    if auth.get("audience"):
+        kwargs["audiences"] = [auth["audience"]]
+    try:
+        response = _id_client().dp_client.get_resource_oauth2_token(**kwargs)
+    except Exception as exc:
+        _id_log(
+            f"GetResourceOauth2Token({auth['connection']}) failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+    token = response.get("accessToken")
+    if not token:
+        _id_log(f"GetResourceOauth2Token({auth['connection']}) returned no accessToken")
+    return token or None
+
+
+def user_oauth2_token(auth: dict) -> tuple[str | None, dict | None]:
+    """as_user: the invoking user's 3LO token, NON-BLOCKING.
+
+    ``(token, None)`` when the vault holds one for (this workload, this user);
+    ``(None, notice)`` when the user must authorize first — the notice is queued
+    for the entrypoint; ``(None, None)`` on failure.
+    """
+    workload = identity_workload_token()
+    if not workload:
+        return None, None
+    kwargs = {
+        "workloadIdentityToken": workload,
+        "resourceCredentialProviderName": auth["connection"],
+        "scopes": list(auth.get("scopes") or []),
+        "oauth2Flow": "USER_FEDERATION",
+    }
+    if auth.get("audience"):
+        kwargs["audiences"] = [auth["audience"]]
+    if auth["connection"] in _IDENTITY_SESSION["force_reauth"]:
+        kwargs["forceAuthentication"] = True
+    if IDENTITY_RETURN_URL:
+        import json as _json
+
+        kwargs["resourceOauth2ReturnUrl"] = IDENTITY_RETURN_URL
+        # round-trips through the IdP `state` to the Launchpad return page:
+        # enough to tell the user which chat to go back to
+        kwargs["customState"] = _json.dumps(
+            {
+                "agent_id": IDENTITY_AGENT_ID,
+                "tool": auth.get("name", ""),
+                "session_id": _IDENTITY_SESSION["id"],
+            }
+        )
+    try:
+        response = _id_client().dp_client.get_resource_oauth2_token(**kwargs)
+    except Exception as exc:
+        _id_log(
+            f"GetResourceOauth2Token(USER_FEDERATION, {auth['connection']}) failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None, None
+    token = response.get("accessToken")
+    if token:
+        return token, None
+    url = response.get("authorizationUrl")
+    if not url:
+        _id_log(
+            f"GetResourceOauth2Token(USER_FEDERATION, {auth['connection']}) returned "
+            "neither accessToken nor authorizationUrl"
+        )
+        return None, None
+    _id_log(
+        f"user authorization required for connection {auth['connection']} "
+        f"(idp {_id_host_only(url)})"
+    )
+    notice = {
+        "provider": auth["connection"],
+        "tool": auth.get("name", ""),
+        "url": url,
+        "scopes": list(auth.get("scopes") or []),
+        # One-time capability naming THIS consent session: the vault only binds
+        # the token after the platform calls CompleteResourceTokenAuth(userId,
+        # sessionUri) once the user is back (measured 2026-09-20). The invoke
+        # layer records and strips it; it is never a credential.
+        "session_uri": response.get("sessionUri") or "",
+    }
+    _IDENTITY_AUTH_NOTICES.append(notice)
+    return None, notice
+
+
+def resource_api_key(auth: dict) -> str | None:
+    workload = identity_workload_token()
+    if not workload:
+        return None
+    try:
+        response = _id_client().dp_client.get_resource_api_key(
+            workloadIdentityToken=workload,
+            resourceCredentialProviderName=auth["connection"],
+        )
+    except Exception as exc:
+        _id_log(
+            f"GetResourceApiKey({auth['connection']}) failed: {type(exc).__name__}: {exc}"
+        )
+        return None
+    return response.get("apiKey") or None
+
+
+def identity_credential(auth: dict) -> tuple[dict, dict] | str | None:
+    """(extra headers, extra query params) for one tool's auth; None on failure;
+    IDENTITY_AUTH_REQUIRED when an as_user tool needs consent first (the notice
+    is already queued).
+
+    An open tool (no Connection) gets empty extras. OAuth2 is always
+    `Authorization: Bearer`. An API key follows the spec's placement: the default
+    (header named Authorization) also renders as Bearer; any other header carries
+    the bare key, as does a query parameter.
+    """
+    if not auth.get("connection"):
+        return {}, {}
+    if auth.get("kind") == "oauth2" and auth.get("mode") == "as_user":
+        token, notice = user_oauth2_token(auth)
+        if token:
+            return {"Authorization": f"Bearer {token}"}, {}
+        return IDENTITY_AUTH_REQUIRED if notice else None
+    if auth.get("kind") == "oauth2":
+        token = resource_oauth2_token(auth)
+        return ({"Authorization": f"Bearer {token}"}, {}) if token else None
+    key = resource_api_key(auth)
+    if not key:
+        return None
+    where, name = auth.get("key_in") or "header", auth.get("key_name") or "Authorization"
+    if where == "query":
+        return {}, {name: key}
+    if name.lower() == "authorization":
+        return {name: f"Bearer {key}"}, {}
+    return {name: key}, {}
+
+
+def _id_no_redirect_opener():
+    """A urllib opener that never follows a redirect.
+
+    urllib's default redirect handler re-sends every header — the credential
+    included — to whatever host the Location names, so a compromised or
+    hostile API could harvest the bearer / API key with one 302. Refusing the
+    hop surfaces the 3xx as an HTTPError the tool reports instead."""
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    return urllib.request.build_opener(_NoRedirect)
+
+
+def _rest_call(spec: dict, path: str, body: str) -> str:
+    import json as _json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    credential = identity_credential(spec)
+    if credential == IDENTITY_AUTH_REQUIRED:
+        # the URL itself travels in the auth_required stream event, never
+        # through the model
+        return _json.dumps(
+            {
+                "auth_required": True,
+                "connection": spec["connection"],
+                "message": (
+                    "The user has not authorized this connection yet. An "
+                    "authorization card has been shown in the user's chat: ask "
+                    "them to open it, finish signing in, then retry the request. "
+                    "Do not call this tool again in this turn."
+                ),
+            }
+        )
+    if credential is None:
+        return f"error: could not obtain credentials from connection {spec['connection']}"
+    headers, params = credential
+    url = spec["url"].rstrip("/") + (f"/{path.lstrip('/')}" if path else "")
+    if params:
+        joiner = "&" if urllib.parse.urlparse(url).query else "?"
+        url = url + joiner + urllib.parse.urlencode(params)
+    method = (spec.get("method") or "GET").upper()
+    payload = (body or spec.get("body") or "").strip()
+    data = payload.encode("utf-8") if payload and method != "GET" else None
+    request_headers = {"Accept": "application/json, text/event-stream"}
+    request_headers.update(spec.get("headers") or {})
+    # the credential wins over a same-named static header
+    request_headers.update(headers)
+    if data is not None:
+        request_headers.setdefault("Content-Type", "application/json")
+    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+    try:
+        with _id_no_redirect_opener().open(request, timeout=30) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            # the redirect target is named by host only (its query may carry
+            # state); the credential never left for it
+            location = str(exc.headers.get("Location") or "")
+            target = _id_host_only(location) if "://" in location else "a relative path"
+            _id_log(f"{spec['name']} {method} {spec['url']} refused a {exc.code} redirect")
+            return (
+                f"error: the API answered HTTP {exc.code} (redirect to {target}); "
+                "redirects are not followed, so the request and its credentials "
+                "were not re-sent — configure the tool with the final URL"
+            )
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:2000]
+        except Exception:
+            detail = ""
+        _id_log(f"{spec['name']} {method} {spec['url']} failed: HTTP {exc.code}")
+        return f"error: {type(exc).__name__}: {exc} {detail}".strip()
+    except Exception as exc:
+        detail = ""
+        if hasattr(exc, "read"):
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:2000]
+            except Exception:
+                detail = ""
+        # the URL is logged without the query string (an API key may ride there)
+        _id_log(f"{spec['name']} {method} {spec['url']} failed: {type(exc).__name__}")
+        return f"error: {type(exc).__name__}: {exc} {detail}".strip()
+    try:  # pretty-print JSON so the model reads structure, not a byte blob
+        text = _json.dumps(_json.loads(text), ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+    return f"HTTP {status}\n{text[:20000]}"
+
+
+def _make_rest_tool(spec: dict):
+    from strands import tool as _tool
+
+    def _call(path: str = "", body: str = "") -> str:
+        return _rest_call(spec, path, body)
+
+    _call.__name__ = spec["name"].replace("-", "_")
+    _call.__doc__ = spec.get("description") or (
+        f"Call the {spec['name']} REST API at {spec['url']} "
+        "(authenticated by the platform). Optional `path` is appended to the "
+        "URL; optional `body` is sent as the request body."
+    )
+    return _tool(_call)
+
+
+def _id_same_origin_mcp_factory(url: str):
+    """An MCP httpx client factory that follows same-origin redirects only.
+
+    MCP's default client follows every redirect and re-sends its client-level
+    headers (an API-key header included) to whatever host the Location names.
+    Many servers answer `/mcp` with a 307 to `/mcp/`, so redirects stay on —
+    but a hop to another scheme/host/port fails before the request is sent."""
+    import httpx
+
+    def _origin(u) -> tuple:
+        return (u.scheme, u.host, u.port)
+
+    origin = _origin(httpx.URL(url))
+
+    async def _guard(request) -> None:
+        if _origin(request.url) != origin:
+            raise httpx.RequestError(
+                f"refusing a cross-origin redirect to {request.url.host}", request=request
+            )
+
+    def _factory(headers=None, timeout=None, auth=None):
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            headers=headers,
+            timeout=timeout if timeout is not None else httpx.Timeout(30, read=300),
+            auth=auth,
+            event_hooks={"request": [_guard]},
+        )
+
+    return _factory
+
+
+def _identity_mcp_client(spec: dict):
+    credential = identity_credential(spec)
+    if credential == IDENTITY_AUTH_REQUIRED:
+        # the notice is queued; this server's tools are absent this turn and
+        # appear on the retry after the user consents
+        _id_log(f"mcp tool {spec['name']} awaiting user authorization")
+        return None
+    if credential is None:
+        return None
+    headers, params = credential
+    url = spec["url"]
+    if params:
+        import urllib.parse
+
+        joiner = "&" if urllib.parse.urlparse(url).query else "?"
+        url = url + joiner + urllib.parse.urlencode(params)
+    try:
+        from mcp.client.streamable_http import streamablehttp_client
+        from strands.tools.mcp import MCPClient
+
+        factory = _id_same_origin_mcp_factory(url)
+        return MCPClient(
+            lambda: streamablehttp_client(url, headers=headers, httpx_client_factory=factory)
+        )
+    except Exception as exc:
+        _id_log(f"MCP client construction failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _identity_mcp_stop(client) -> None:
+    try:
+        client.stop(None, None, None)
+    except Exception as exc:
+        _id_log(f"mcp session teardown failed (ignored): {type(exc).__name__}: {exc}")
+
+
+def identity_tools(stack, session_id: str = "", force_reauth=()) -> list:
+    """Tools for the spec's auth-carrying rest/mcp entries. Never raises.
+
+    MCP sessions stay open for the whole turn; teardown is registered on
+    ``stack`` with the same guarded-callback pattern as the Gateway block.
+    """
+    _IDENTITY_SESSION["id"] = str(session_id or "")
+    _IDENTITY_SESSION["force_reauth"] = frozenset(str(c) for c in (force_reauth or ()))
+    _IDENTITY_AUTH_NOTICES.clear()
+    tools: list = []
+    for spec in IDENTITY_AUTH_TOOLS:
+        try:
+            if spec["type"] == "rest":
+                tools.append(_make_rest_tool(spec))
+                continue
+            client = _identity_mcp_client(spec)
+            if client is None:
+                _id_log(f"mcp tool {spec['name']} unavailable — continuing without it")
+                continue
+            try:
+                client.start()
+            except Exception as exc:
+                _id_log(f"mcp session start failed: {type(exc).__name__}: {exc}")
+                _identity_mcp_stop(client)
+                continue
+            stack.callback(_identity_mcp_stop, client)
+            tools.extend(list(client.list_tools_sync()))
+        except Exception as exc:
+            _id_log(f"tool {spec.get('name')} failed to load: {type(exc).__name__}: {exc}")
+    if tools:
+        _id_log(
+            "outbound-auth tools loaded: "
+            f"{[getattr(t, 'tool_name', getattr(t, '__name__', '?')) for t in tools]}"
+        )
+    return tools
+
+
+# </launchpad-identity-outbound:p2>

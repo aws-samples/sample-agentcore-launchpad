@@ -10,7 +10,10 @@ import {
   skillNameFromPath,
   toolkitToolNames,
 } from "../../../lib/agent-spec";
+import type { InboundAuth } from "../../../lib/api";
+import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
 import { Alert, Card, Descriptions } from "../../ui";
+import { ReachabilityWarning } from "./InboundAuthFields";
 import type { WizardCatalogs, WizardUi } from "./wizardKit";
 
 /** The review step: what will be deployed, per method (read-only). */
@@ -19,12 +22,18 @@ export function WizardReview({
   cat,
   ui,
   shortTermOff = false,
+  workspaceDefault = null,
+  cognitoIssuer = null,
 }: {
   form: AgentForm;
   cat: WizardCatalogs;
   ui: WizardUi;
   /** re-publish of an agent deployed without short-term memory (kept off on save) */
   shortTermOff?: boolean;
+  /** the workspace inbound default an unpinned agent inherits */
+  workspaceDefault?: InboundAuth | null;
+  /** the workspace pool's issuer — what platform invokes present */
+  cognitoIssuer?: string | null;
 }) {
   const { t } = useTranslation();
   const none = t("v2.agents.wizard.none");
@@ -167,9 +176,30 @@ export function WizardReview({
     }
   }
 
+  const inboundShown = inboundCapable(method, form.protocol) && !!form.inbound;
+  const deployedJwt = inboundShown ? wizardDeployedJwt(form.inbound, form.inboundJwt, workspaceDefault) : null;
+  // The last screen before 部署: say now that the console will be refused, not at the first Chat.
+  const mismatch = deployedJwt ? issuerMismatch(deployedJwt.discovery_url, cognitoIssuer) : null;
+  if (inboundShown) {
+    items = [
+      ...items,
+      {
+        label: t("inboundAuth.title"),
+        value:
+          form.inbound === "jwt" && deployedJwt
+            ? mono(`JWT · ${jwtSummary(deployedJwt)}`)
+            : t(`inboundAuth.choice.${form.inbound}`),
+      },
+      ...(deployedJwt
+        ? [{ label: t("inboundAuth.discoveryUrl"), value: mono(deployedJwt.discovery_url || none) }]
+        : []),
+    ];
+  }
+
   return (
     <Card title={t("v2.agents.wizard.reviewTitle")} sub={t(`v2.agents.wizard.reviewSubBy.${method}`)} testId="v2-agent-review">
       <Descriptions items={items} />
+      {mismatch && <ReachabilityWarning mismatch={mismatch} testId="v2-agent-review-issuer-warning" />}
       {method !== "byoc" && (
         <>
           <h3 className="v2-sub-title">{t("v2.agents.wizard.systemPrompt")}</h3>

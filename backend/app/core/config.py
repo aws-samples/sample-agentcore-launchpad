@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{DATA_DIR / 'launchpad.db'}"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
+    # Where a browser reaches this console (scheme + host [+ port], no path).
+    # Feeds the as_user (3LO) OAuth return URL below; the dev default matches
+    # the vite dev server the CORS default already trusts.
+    public_base_url: str = "http://localhost:5173"
+    # The exact page AgentCore Identity redirects to after IdP consent. Empty =
+    # derived as {public_base_url}/auth/return; set explicitly only behind a
+    # path-rewriting proxy. Deployers inject it as LAUNCHPAD_OAUTH_RETURN_URL
+    # and allow-list it on the agent's workload identity (deployer/return_url.py).
+    oauth_return_url: str = ""
+
+    def resolved_oauth_return_url(self) -> str:
+        return self.oauth_return_url or f"{self.public_base_url.rstrip('/')}/auth/return"
+
     # `start.py` already exports LAUNCHPAD_RUN_MODE for its children; this field
     # is what finally consumes it. The security posture keys off this single
     # value instead of each control guessing at production-ness on its own:

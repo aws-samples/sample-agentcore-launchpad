@@ -90,6 +90,20 @@ export function buildAllowlistStatement(gateway: GovernanceGatewayDetail, action
 );`;
 }
 
+/**
+ * A tool-level starting point for one gateway target (the Connections → gateway
+ * targets deep link): its exact actions and a policy name AWS accepts. Targets
+ * with no tool schema yield no actions — the editor then leaves the allowlist empty.
+ */
+export function toolPolicyPrefill(gateway: GovernanceGatewayDetail, targetName: string): { name: string; actions: string[] } {
+  const slug = targetName.replace(/[^A-Za-z0-9_]/g, "_");
+  const name = `allow_${slug}`.slice(0, 48);
+  return {
+    name: POLICY_NAME_RE.test(name) ? name : "launchpad_policy",
+    actions: gateway.actions.filter((action) => action.target_name === targetName).map((action) => action.name),
+  };
+}
+
 /** Broad baseline `permit` for every action on the Gateway (avoids default-deny disruption). */
 export function buildPreserveTrafficStatement(gateway: GovernanceGatewayDetail): string {
   return `permit(

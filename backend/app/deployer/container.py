@@ -21,6 +21,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam, ecr
+from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -236,6 +237,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
+        resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
+        authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
         def _kwargs() -> dict:
             registry, repo, tag = _image_ref(workspace, row)
@@ -252,6 +255,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "environment": runtime_environment(spec, workspace.resources),
                 "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": _vpc(spec),
+                # Echoed on every update; omitting (None = IAM) resets a JWT
+                # runtime back to SigV4 — that IS the JWT→IAM transition.
+                "authorizer_configuration": authorizer,
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
@@ -264,7 +270,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
-                f"new version {row.version}"
+                f"new version {row.version} · inbound auth {resolved_auth.mode}"
             )
         elif row.resource_id:
             runtime_id = row.resource_id
@@ -281,12 +287,21 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
             db.commit()
-            ctx.log(f"CreateAgentRuntime accepted · runtimeId {runtime_id}")
+            ctx.log(
+                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"inbound auth {resolved_auth.mode}"
+            )
 
         ready = rt.wait_runtime_ready(
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        # The inbound-auth snapshot lands only once the runtime is READY on the
+        # version that carries it: a Create/Update that is accepted and then
+        # fails leaves the ledger on the mode the live runtime still serves.
+        # A resumed job (create already accepted, or an update re-issued)
+        # reaches this line too, so the snapshot is never skipped.
+        inbound_auth_service.record_deployed_auth(row, resolved_auth)
         from app.deployer.input_contract import stamp_input_contract
 
         stamp_input_contract(ctx, db, row)

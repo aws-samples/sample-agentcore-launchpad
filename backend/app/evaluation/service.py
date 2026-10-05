@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from botocore.exceptions import ClientError
 
 from app.core.config import get_settings
@@ -227,8 +228,12 @@ def transient_invoke_error(exc: BaseException) -> bool:
     prompt, the other replays answered normally), or a Harness execution timeout
     (live 2026-10-04: a model call that never returned held a research scenario
     silent until the 600 s budget ran out — retried at most
-    ``TIMEOUT_SCENARIO_RETRIES`` times). Iteration / token limits and every other
-    error are final."""
+    ``TIMEOUT_SCENARIO_RETRIES`` times). A JWT-inbound agent's bearer invoke
+    counts the same way: an HTTP 5xx / 429 answer (``RuntimeBearerHttpError``)
+    or a transport failure (``httpx.TransportError``: connect / read timeout,
+    dropped connection) is transient, while an authorizer rejection
+    (``RuntimeBearerAuthError``, 401/403) and any other 4xx are final.
+    Iteration / token limits and every other error are final."""
     if isinstance(exc, AppError):
         if exc.code == "harness.execution_timeout":
             return True
@@ -241,6 +246,12 @@ def transient_invoke_error(exc: BaseException) -> bool:
         error = exc.response.get("Error") or {}
         status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
         return error.get("Code") in _TRANSIENT_CODES or int(status) >= 500
+    if isinstance(exc, rt.RuntimeBearerAuthError):
+        return False
+    if isinstance(exc, rt.RuntimeBearerHttpError):
+        return exc.status_code >= 500 or exc.status_code == 429
+    if isinstance(exc, httpx.TransportError):
+        return True
     if isinstance(exc, RuntimeError):
         return str(exc).startswith(("runtime client error", "internal server error"))
     return False
@@ -268,6 +279,7 @@ def execute_run(
     runtime_user_id: str | None = None,
     online_config_arn: str | None = None,
     agent_id: str | None = None,
+    inbound_jwt: bool = False,
 ) -> None:
     """Drive one evaluation run to completion (runs on a run-queue worker).
 
@@ -322,6 +334,16 @@ def execute_run(
                     )
                 if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
+                if inbound_jwt:  # JWT authorizer: Bearer, never SigV4
+                    from app.services import inbound_auth as inbound_auth_service
+
+                    return rt.invoke_runtime_text_bearer(
+                        workspace.region,
+                        agent_arn,
+                        inbound_auth_service.m2m_bearer_token(workspace),
+                        prompt,
+                        session_id=sid,
+                    )
                 return rt.invoke_runtime_text(
                     data,
                     agent_arn,
@@ -341,6 +363,10 @@ def execute_run(
                     try:
                         sid = None  # a replay starts the whole scenario in a fresh session
                         if simulation.is_simulated(scenario):
+                            sim_kwargs: dict[str, Any] = {}
+                            if inbound_jwt:
+                                # JWT runtimes: persona turns Bearer-invoke like replay turns
+                                sim_kwargs["invoke_text"] = invoke
                             sid = simulation.run_simulated_scenario(
                                 data,
                                 agent_arn=agent_arn,
@@ -349,6 +375,7 @@ def execute_run(
                                 actor_model_id=actor_model_id or "",
                                 protocol=protocol,
                                 runtime_user_id=runtime_user_id,
+                                **sim_kwargs,
                             )
                         else:
                             for prompt in scenario_prompts(scenario):
@@ -764,6 +791,12 @@ def submit_run(
         log_groups = list(log_source["log_group_names"])
         log_group = log_groups[0]
     else:
+        if dataset_items and agent.inbound_auth_mode == "jwt":
+            # replay turns Bearer-invoke with the workspace M2M token; an agent on
+            # another IdP refuses it, so say so before a run row is created
+            from app.services import inbound_auth as inbound_auth_service
+
+            inbound_auth_service.require_platform_reachable(agent, workspace, "m2m")
         service_name, log_group = resolve_telemetry(agent, workspace)
         log_groups = ["aws/spans", log_group]
     # Window runs have no dataset; encode the scope in dataset_name so the
@@ -799,6 +832,9 @@ def submit_run(
         # Gateway-tool agents need a runtimeUserId or the Runtime injects no
         # workload token and the eval run measures a tool-less agent.
         agent_runtime_user = gateway_support.runtime_user_id(agent.spec) if agent else None
+        # JWT-inbound runtimes reject SigV4 — the run Bearer-invokes with the
+        # workspace M2M token (fails with a named error if unconfigured).
+        agent_inbound_jwt = bool(agent) and agent.inbound_auth_mode == "jwt"
     finally:
         db.close()
 
@@ -829,6 +865,7 @@ def submit_run(
             runtime_user_id=agent_runtime_user,
             online_config_arn=online_config_arn,
             agent_id=agent_ledger_id,
+            inbound_jwt=agent_inbound_jwt,
         ),
     )
     _update(run_id, queue_position=position)

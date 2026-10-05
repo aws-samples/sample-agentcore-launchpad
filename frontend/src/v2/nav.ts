@@ -6,7 +6,9 @@ import {
   FlaskConical,
   Gauge,
   House,
+  KeyRound,
   Layers,
+  Link2,
   LibraryBig,
   ListChecks,
   MessagesSquare,
@@ -78,6 +80,7 @@ export const V2_NAV: V2NavGroup[] = [
       { to: "/v2/observability", labelKey: "nav.observability", icon: Gauge, v2: true },
       { to: "/v2/memory", labelKey: "nav.memory", icon: Layers, v2: true },
       { to: "/v2/governance", labelKey: "nav.governance", icon: ShieldCheck, v2: true },
+      { to: "/v2/my-connections", labelKey: "nav.myConnections", icon: Link2, v2: true },
     ],
   },
   {
@@ -107,6 +110,7 @@ export const V2_NAV: V2NavGroup[] = [
     items: [
       { to: "/v2/users", labelKey: "nav.users", icon: Users, v2: true, admin: true },
       { to: "/v2/workspaces", labelKey: "nav.workspaces", icon: Workflow, v2: true, admin: true },
+      { to: "/v2/connections", labelKey: "nav.connections", icon: KeyRound, v2: true, admin: true },
       { to: "/v2/announcements", labelKey: "nav.announcements", icon: ScrollText, v2: true, admin: true },
       { to: "/v2/video-management", labelKey: "videoManage.title", icon: Settings, v2: true, admin: true },
     ],

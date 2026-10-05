@@ -13,6 +13,12 @@
 .v2 .v2-agents-row.a2a { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto; }
 .v2 .v2-agents-row.mount { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; }
 .v2 .v2-agents-row.env { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; }
+.v2 .v2-agents-auth { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--v2-line); border-radius: 6px; }
+.v2 .v2-agents-row.auth-head { grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1.4fr) auto; }
+.v2 .v2-agents-row.auth-body { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) auto; }
+.v2 .v2-agents-row.auth-key { grid-template-columns: 110px minmax(0, 1fr); }
+.v2 .v2-agents-auth-err { margin: 0; font-size: 12px; color: var(--v2-danger); }
+.v2 .v2-agents-actions { display: flex; gap: 8px; margin-top: 8px; }
 .v2 .v2-agents-err { display: block; margin-top: 4px; font-size: 12px; color: var(--v2-danger); }
 .v2 .v2-agents-errrows { margin: 6px 0 0; padding-left: 16px; font-size: 12px; }
 
@@ -44,5 +50,6 @@
 .v2 .v2-agents-contract .v2-pre { white-space: pre-wrap; }
 
 @media (max-width: 720px) {
-  .v2 .v2-agents-row.a2a, .v2 .v2-agents-row.mount, .v2 .v2-agents-row.env { grid-template-columns: 1fr; }
+  .v2 .v2-agents-row.a2a, .v2 .v2-agents-row.mount, .v2 .v2-agents-row.env,
+  .v2 .v2-agents-row.auth-head, .v2 .v2-agents-row.auth-body { grid-template-columns: 1fr; }
 }

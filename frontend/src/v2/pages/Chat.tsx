@@ -20,16 +20,27 @@ import {
   type ChatRequest,
   type ChatSessionInfo,
   type ChatTraceInfo,
+  type AuthRequiredEvent,
   errorMessage,
   localizedMessage,
 } from "../../lib/api";
-import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../../lib/chat";
+import {
+  agentMemoryState,
+  type AsUserChoice,
+  asUserChecked,
+  asUserField,
+  chatEligible,
+  isHarnessAgent,
+  sseEvents,
+} from "../../lib/chat";
+import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
 import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
+import { appendDelta } from "./chat/messages";
 import { type ChatMessage, Thread } from "./chat/Thread";
 
 const MEMORY_TAG = {
@@ -63,6 +74,11 @@ export function V2Chat() {
   const resolvedRef = useRef(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // JWT-inbound agents: null = auto (as_user omitted: the member's pool JWT when
+  // signed in, else the workspace M2M token); a toggle pins it explicitly.
+  const [asUser, setAsUser] = useState<AsUserChoice>(null);
+  /** who the Runtime authenticated on the last JWT turn (meta.inbound.caller) */
+  const [caller, setCaller] = useState<"user_jwt" | "m2m" | null>(null);
   const [input, setInput] = useState("");
   const [draft, setDraft] = useState<{ files: PendingAttachment[]; error: string | null }>({
     files: [],
@@ -152,7 +168,15 @@ export function V2Chat() {
               ? { kind: "agent", text: r.text }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
-                : { kind: "error", text: r.text },
+                : r.role === "auth"
+                  ? // the URL is single-use and never persisted: a restored card retries
+                    {
+                      kind: "auth",
+                      text: r.text,
+                      name: r.name ?? "",
+                      auth: restoredAuthAsk(r, agentId),
+                    }
+                  : { kind: "error", text: r.text },
         ),
       );
       setSessionId(sid);
@@ -180,29 +204,36 @@ export function V2Chat() {
 
   const agent = agents.find((a) => a.id === agentId);
   const memoryState = agentMemoryState(agent);
+  const jwtAgent = agent?.inbound_auth_mode === "jwt";
   const capability = agent?.attachment_capability;
   const attachmentsEnabled = Boolean(
     capability && (capability.images || capability.text || capability.pdf !== "unsupported"),
   );
 
-  const send = async () => {
-    const prompt = input.trim();
-    if ((!prompt && !pendingFiles.length) || !agentId || busy || restoring || sendInFlight.current) return;
-    if (pendingFiles.length) {
-      const invalid = validateAttachments(pendingFiles.map((f) => f.file), capability);
+  // `retryPrompt`: an auth card's retry re-sends that turn's text, never the
+  // composer's draft or its pending files.
+  const send = async (retryPrompt?: string) => {
+    const retrying = retryPrompt !== undefined;
+    const prompt = (retrying ? retryPrompt : input).trim();
+    const files = retrying ? [] : pendingFiles;
+    if ((!prompt && !files.length) || !agentId || busy || restoring || sendInFlight.current) return;
+    if (files.length) {
+      const invalid = validateAttachments(files.map((f) => f.file), capability);
       if (invalid) {
         setAttachmentError(t(`chatPage.attachments.${invalid.key}`, { ...invalid }));
         return;
       }
     }
     sendInFlight.current = true;
-    setInput("");
-    setAttachmentError(null);
+    if (!retrying) {
+      setInput("");
+      setAttachmentError(null);
+    }
     setBusy(true);
     const userMessage: ChatMessage = {
       kind: "user",
       text: prompt,
-      attachments: capability ? pendingFiles.map((f) => attachmentMetadata(f, capability)) : undefined,
+      attachments: capability && files.length ? files.map((f) => attachmentMetadata(f, capability)) : undefined,
     };
     setMessages((m) => [...m, userMessage]);
     let failed = false;
@@ -210,8 +241,10 @@ export function V2Chat() {
     let activeSessionId = sessionId;
     try {
       const request: ChatRequest = { prompt, session_id: sessionId };
-      if (pendingFiles.length) {
-        request.attachments = await Promise.all(pendingFiles.map(encodeAttachment)).catch(() => {
+      const asUserValue = asUserField(jwtAgent, asUser);
+      if (asUserValue !== undefined) request.as_user = asUserValue;
+      if (files.length) {
+        request.attachments = await Promise.all(files.map(encodeAttachment)).catch(() => {
           throw new Error(t("chatPage.attachments.readFailed"));
         });
       }
@@ -228,6 +261,7 @@ export function V2Chat() {
             // keep the session in the URL so a reload restores this conversation
             setParams({ agent: agentId, session: payload.session_id }, { replace: true });
           }
+          setCaller(payload.inbound?.caller ?? null);
           if (payload.attachments) {
             setMessages((m) =>
               m.map((msg) => (msg === userMessage ? { ...msg, attachments: payload.attachments } : msg)),
@@ -236,24 +270,27 @@ export function V2Chat() {
         } else if (event === "tool") {
           setMessages((m) => [...m, { kind: "tool", text: payload.name ?? "tool", name: payload.name }]);
           agentOpen = false;
+        } else if (event === "auth_required") {
+          const ask: Partial<AuthRequiredEvent> = payload;
+          setMessages((m) => [
+            ...m,
+            {
+              kind: "auth",
+              text: ask.provider ?? "",
+              name: ask.tool,
+              auth: liveAuthAsk(ask, agentId),
+            },
+          ]);
+          // the answer keeps streaming into the same bubble around the card
         } else if (event === "delta") {
           const open = agentOpen;
-          setMessages((m) => {
-            const next = [...m];
-            const last = next[next.length - 1];
-            if (open && last?.kind === "agent") {
-              next[next.length - 1] = { ...last, text: last.text + (payload.text ?? "") };
-            } else {
-              next.push({ kind: "agent", text: payload.text ?? "", streaming: true });
-            }
-            return next;
-          });
+          setMessages((m) => appendDelta(m, payload.text ?? "", open));
           agentOpen = true;
         } else if (event === "error") {
           failed = true;
           const message = localizedMessage(payload.code ?? "", payload.message ?? t("chatPage.sendFailed"));
           setMessages((m) => [...m, { kind: "error", text: message }]);
-          if (pendingFiles.length) setAttachmentError(message);
+          if (files.length) setAttachmentError(message);
         } else if (event === "done") {
           completed = true;
           // Only an agent whose spec turns memory on persists the turn; the
@@ -262,14 +299,14 @@ export function V2Chat() {
         }
       }
       if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
-      if (completed && !failed) resetAttachments();
+      if (completed && !failed && !retrying) resetAttachments();
     } catch (err) {
       failed = true;
       const message = errorMessage(err);
       setMessages((m) => [...m, { kind: "error", text: message }]);
-      if (pendingFiles.length) setAttachmentError(message);
+      if (files.length) setAttachmentError(message);
     } finally {
-      if (failed) setInput(prompt);
+      if (failed && !retrying) setInput(prompt);
       setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
       sendInFlight.current = false;
       setBusy(false);
@@ -286,6 +323,7 @@ export function V2Chat() {
     resetAttachments();
     setSessionId(null);
     setMessages([]);
+    setCaller(null);
     setMemory(null);
     setTrace(null);
     setParams(aid ? { agent: aid } : {}, { replace: true });
@@ -421,10 +459,27 @@ export function V2Chat() {
                       {t(MEMORY_TAG[memoryState])}
                     </Tag>
                   </span>
+                  {jwtAgent && <Tag tone="orange">{t("inboundAuth.mode.jwt")}</Tag>}
                   <Link className="v2-chat-extlink" to={`/v2/agents?view=detail&id=${encodeURIComponent(agent.id)}`}>
                     {t("v2.chat.agentDetail")}
                   </Link>
                 </div>
+              )}
+              {jwtAgent && (
+                <label className="v2-check v2-chat-asuser" title={t("v2.chat.asUserHint")} data-testid="chat-as-user">
+                  <input
+                    type="checkbox"
+                    checked={asUserChecked(asUser, authRequired && !!username)}
+                    disabled={busy}
+                    onChange={(e) => setAsUser(e.target.checked)}
+                  />
+                  {t("v2.chat.asUser")}
+                  {caller && (
+                    <Tag tone={caller === "user_jwt" ? "green" : "gray"} testId="chat-caller">
+                      {t(`v2.chat.caller.${caller}`)}
+                    </Tag>
+                  )}
+                </label>
               )}
               {!agentsLoad.error && agentsLoad.data && agents.length === 0 && (
                 <div className="v2-chat-rail-empty">
@@ -513,6 +568,8 @@ export function V2Chat() {
               userLabel={userLabel}
               agentLabel={agent?.name ?? "Agent"}
               restoring={restoring}
+              onRetry={(prompt) => void send(prompt)}
+              retryDisabled={busy || restoring}
             />
             <Composer
               value={input}

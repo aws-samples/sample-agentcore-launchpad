@@ -56,3 +56,23 @@ export function agentMemoryState(agent: AgentInfo | undefined): AgentMemoryState
 export function chatEligible(agents: AgentInfo[]): AgentInfo[] {
   return agents.filter((a) => a.status === "active" && a.invoke_capability.eligible);
 }
+
+/**
+ * "Invoke as me" on a JWT-inbound agent. `null` = auto: the field is omitted
+ * and the backend presents the member's pool JWT when there is one, else the
+ * workspace M2M token. Only an explicit toggle sends `as_user` — an explicit
+ * `true` without a pool sign-in is refused (409 `chat.as_user_unavailable`)
+ * rather than silently becoming the machine identity.
+ */
+export type AsUserChoice = boolean | null;
+
+/** The `as_user` request field for a choice (undefined ⇒ omitted, auto). */
+export function asUserField(jwtAgent: boolean, choice: AsUserChoice): boolean | undefined {
+  return jwtAgent && choice !== null ? choice : undefined;
+}
+
+/** What the checkbox shows: the explicit choice, else what auto resolves to
+ *  (the member's own JWT exactly when signed in through the pool). */
+export function asUserChecked(choice: AsUserChoice, signedIn: boolean): boolean {
+  return choice ?? signedIn;
+}

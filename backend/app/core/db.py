@@ -46,6 +46,10 @@ WORKSPACE_SCOPED_TABLES = (
     "assistant_evaluation_plans",
     "evaluation_asset_operations",
     "eval_pipelines",
+    "identity_providers",
+    "user_token_revocations",
+    "oauth_pending_sessions",
+    "user_grants",
 )
 
 
@@ -258,12 +262,113 @@ def _migrate(bind) -> None:
             if column not in existing:
                 with bind.begin() as conn:
                     conn.execute(text(ddl))
+    _migrate_inbound_auth_columns(bind)
+    _migrate_identity_provider_columns(bind)
+    _migrate_oauth_session_columns(bind)
     _migrate_assistant_columns(bind)
     _migrate_workspace_columns(bind)
     _migrate_system_key_index(bind)
     _migrate_system_skill_records_columns(bind)
     _migrate_system_skill_records_index(bind)
+    _migrate_identity_indexes(bind)
     _migrate_managed_memories_index(bind)
+
+
+def _migrate_inbound_auth_columns(bind) -> None:
+    """Identity columns the earlier identity fork added (workspace policy blob,
+    per-agent inbound-auth snapshot). A ledger upgraded by that fork already has
+    them — each ALTER is guarded — and a ledger that never ran it gets them here.
+    All NULL on upgrade: NULL mode reads back as IAM."""
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "workspaces": {
+            "settings": "ALTER TABLE workspaces ADD COLUMN settings JSON",
+        },
+        "agents": {
+            "inbound_auth_mode": "ALTER TABLE agents ADD COLUMN inbound_auth_mode VARCHAR(8)",
+            "inbound_auth_config": "ALTER TABLE agents ADD COLUMN inbound_auth_config JSON",
+        },
+    }
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    for table, columns in additions.items():
+        if table not in live_tables:
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for column, ddl in columns.items():
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
+
+
+def _migrate_identity_provider_columns(bind) -> None:
+    """P1 Connection columns on the `identity_providers` table the earlier
+    identity fork created (its rows keep NULL: display-only fields)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "identity_providers" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("identity_providers")}
+    additions = {
+        "client_id": "ALTER TABLE identity_providers ADD COLUMN client_id VARCHAR(256)",
+        "scopes": "ALTER TABLE identity_providers ADD COLUMN scopes JSON",
+        "template": "ALTER TABLE identity_providers ADD COLUMN template VARCHAR(32)",
+        "description": "ALTER TABLE identity_providers ADD COLUMN description VARCHAR(200)",
+    }
+    for column, ddl in additions.items():
+        if column not in existing:
+            with bind.begin() as conn:
+                conn.execute(text(ddl))
+
+
+def _migrate_oauth_session_columns(bind) -> None:
+    """P3 caller kind on in-flight 3LO sessions. Upgraded rows read "iam": every
+    session recorded before inbound JWT was asked over SigV4."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "oauth_pending_sessions" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("oauth_pending_sessions")}
+    if "caller_kind" not in existing:
+        with bind.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE oauth_pending_sessions "
+                "ADD COLUMN caller_kind VARCHAR(16) DEFAULT 'iam' NOT NULL"
+            ))
+
+
+def _migrate_identity_indexes(bind) -> None:
+    """The unique indexes of the identity tables. `create_all` builds them
+    with a fresh table; this restores them on a table that predates them. Runs
+    after `_migrate_workspace_columns` because each spans `workspace_id`."""
+    from sqlalchemy import inspect, text
+
+    indexes = {
+        "identity_providers": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_ws_kind_name "
+            "ON identity_providers (workspace_id, kind, name)"
+        ),
+        "user_token_revocations": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_token_revocations_ws_provider_user "
+            "ON user_token_revocations (workspace_id, provider, user_id)"
+        ),
+        "oauth_pending_sessions": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_pending_sessions_session_uri "
+            "ON oauth_pending_sessions (workspace_id, session_uri)"
+        ),
+        "user_grants": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_grants_ws_user_provider_agent "
+            "ON user_grants (workspace_id, user_id, provider, agent_id)"
+        ),
+    }
+    live_tables = set(inspect(bind).get_table_names())
+    for table, ddl in indexes.items():
+        if table in live_tables:
+            with bind.begin() as conn:
+                conn.execute(text(ddl))
 
 
 def _migrate_system_skill_records_columns(bind) -> None:
@@ -458,6 +563,16 @@ def _migrate_workspace_columns(bind) -> None:
             "ALTER TABLE evaluation_asset_operations ADD COLUMN workspace_id VARCHAR(32)"
         ),
         "eval_pipelines": "ALTER TABLE eval_pipelines ADD COLUMN workspace_id VARCHAR(32)",
+        "identity_providers": (
+            "ALTER TABLE identity_providers ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "user_token_revocations": (
+            "ALTER TABLE user_token_revocations ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "oauth_pending_sessions": (
+            "ALTER TABLE oauth_pending_sessions ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "user_grants": "ALTER TABLE user_grants ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

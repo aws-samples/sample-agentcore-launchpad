@@ -272,19 +272,26 @@ def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
 
 
 def _uses_gateway(spec: AgentSpec) -> bool:
-    """Whether anything in the spec needs an AgentCore workload token.
+    """Whether anything in the spec needs the FAMILY-WIDE workload-token grant.
 
     A remote MCP tool whose config declares ``auth: "none"`` is a public,
     unauthenticated server (e.g. the AWS Knowledge MCP): no token, no vault secret,
-    so no identity grant. Every other MCP ref keeps the historical grant — an
-    existing agent's outbound auth must not change under it.
+    so no identity grant. A tool carrying its own ``ToolRef.auth`` block is
+    excluded too — it gets the narrow per-Connection statements from
+    ``_tool_auth_statements`` instead of widening this one. Every other MCP ref
+    keeps the historical grant — an existing agent's outbound auth must not
+    change under it.
     """
     if spec.knowledge_bases:
         return True  # harness KBs ride the shared KB gateway
     for tool in spec.tools:
         if tool.type == "gateway":
             return True
-        if tool.type == "mcp" and (tool.config or {}).get("auth") != "none":
+        if (
+            tool.type == "mcp"
+            and tool.auth is None
+            and (tool.config or {}).get("auth") != "none"
+        ):
             return True
     return False
 
@@ -306,6 +313,91 @@ def _gateway_ids(spec: AgentSpec) -> list[str]:
         if tool.type == "gateway" and (tool.config or {}).get("gateway_id")
     }
     return sorted(gateway_id for gateway_id in ids if _GATEWAY_ID_RE.fullmatch(gateway_id))
+
+
+def runtime_name_base(agent_name: str) -> str:
+    """The deterministic part of an agent's Runtime name.
+
+    ``deployer.zip_runtime.sanitize_runtime_name`` appends ``_<6 hex>`` to this
+    for uniqueness; it lives here because the workload-identity scope below
+    must agree with it exactly. The agent name is immutable after create (the
+    re-publish route refuses a rename), so the base never drifts from the
+    runtime that already exists.
+    """
+    return re.sub(r"[^A-Za-z0-9_]", "_", agent_name).strip("_")[:40] or "agent"
+
+
+def own_workload_identity_arn(spec: AgentSpec, ctx: RoleContext) -> str:
+    """The agent's OWN auto-created workload identity, as an IAM resource.
+
+    The Runtime names that identity after the runtime id — ``<runtimeName>-
+    <10-char suffix>`` (deployer/return_url.py, live-verified 2026-09-19;
+    evidence docs/identity-e2e-evidence-p2.md / -p3.md) — and the runtime name
+    is ``<base>_<6 hex>``. Neither random part is known at provision time,
+    so the single-character ``?`` wildcard pins the 6-hex segment exactly: the
+    pattern matches this agent's runtimes, not another agent whose name merely
+    starts with the same characters (``a`` vs ``a_b``).
+    """
+    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    return (
+        f"{base}:workload-identity-directory/default/workload-identity/"
+        f"{runtime_name_base(spec.name)}_??????-*"
+    )
+
+
+def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """Per-Connection grants for tools carrying ``ToolRef.auth``.
+
+    Follows the devguide-exact shape of ``_preset_kb_oauth_statements``: the
+    token action on the token vault + the workload-identity directory + the exact
+    provider ARNs, and ``GetSecretValue`` on the vault's fixed secret prefix for
+    exactly those Connection names — never the family-wide
+    ``bedrock-agentcore-identity!*``. An agent with no ``auth`` tools gets nothing
+    from here (grant only when used).
+    """
+    wanted = {(tool.auth.connection, tool.auth.kind) for tool in spec.tools if tool.auth}
+    if not wanted:
+        return []
+    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    secret_base = (
+        f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}:secret:"
+        "bedrock-agentcore-identity!default"
+    )
+    oauth2 = sorted({name for name, kind in wanted if kind == "oauth2"})
+    api_key = sorted({name for name, kind in wanted if kind == "api_key"})
+    # The workload identity is auto-created by the Runtime and named after the
+    # runtime id, unknown at provision time — scoped to this agent's own name
+    # pattern (``own_workload_identity_arn``), never the whole directory.
+    identity_resources = [
+        f"{base}:token-vault/default",
+        f"{base}:workload-identity-directory/default",
+        own_workload_identity_arn(spec, ctx),
+    ]
+    statements: list[dict[str, Any]] = []
+    if oauth2:
+        statements.append({
+            "Sid": "ToolAuthOauth2Token",
+            "Effect": "Allow",
+            "Action": "bedrock-agentcore:GetResourceOauth2Token",
+            "Resource": identity_resources
+            + [f"{base}:token-vault/default/oauth2credentialprovider/{n}" for n in oauth2],
+        })
+    if api_key:
+        statements.append({
+            "Sid": "ToolAuthApiKey",
+            "Effect": "Allow",
+            "Action": "bedrock-agentcore:GetResourceApiKey",
+            "Resource": identity_resources
+            + [f"{base}:token-vault/default/apikeycredentialprovider/{n}" for n in api_key],
+        })
+    statements.append({
+        "Sid": "ToolAuthVaultSecrets",
+        "Effect": "Allow",
+        "Action": ["secretsmanager:GetSecretValue"],
+        "Resource": [f"{secret_base}/oauth2/{n}-*" for n in oauth2]
+        + [f"{secret_base}/apikey/{n}-*" for n in api_key],
+    })
+    return statements
 
 
 def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
@@ -357,13 +449,22 @@ def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[
     ]
 
 
-def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = False) -> dict:
+def policy_document(
+    spec: AgentSpec,
+    ctx: RoleContext,
+    *,
+    system_preset: bool = False,
+    inbound_jwt: bool = False,
+) -> dict:
     """The capability policy for one agent.
 
     Statements appear only when the spec calls for them. Sids match the shared CDK
     role so the two can be diffed. ``system_preset`` selects the narrow, devguide-
     exact OAuth grants for a preset's KB gateway instead of the generic identity
     family (see `_preset_kb_oauth_statements`); ordinary agents are unchanged.
+    ``inbound_jwt`` is the RESOLVED inbound mode (spec > workspace default): a
+    JWT-mode runtime exchanges the caller's bearer for a workload token via
+    ``GetWorkloadAccessTokenForJWT``, so its role must allow that call.
     """
     statements: list[dict[str, Any]] = []
 
@@ -440,6 +541,9 @@ def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = 
         })
 
     # ---- identity / workload tokens ----
+    # Tool-level outbound auth: exact per-Connection grants, additive to (and
+    # independent of) the family-wide gateway grant below.
+    statements.extend(_tool_auth_statements(spec, ctx))
     if system_preset and spec.knowledge_bases:
         statements.extend(_preset_kb_oauth_statements(spec, ctx))
     elif _uses_gateway(spec):
@@ -482,6 +586,32 @@ def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = 
             "Resource": [
                 f"arn:aws:bedrock-agentcore:*:{ctx.account_id}:gateway/{gateway_id}"
                 for gateway_id in gateway_ids
+            ],
+        })
+
+    # ---- inbound JWT ----
+    # A JWT-mode runtime exchanges the validated inbound bearer for a workload
+    # access token (GetWorkloadAccessTokenForJWT) on the runtime's own workload
+    # identity — needed by agents whose role predates the Identity service-
+    # linked role, and by the P2 OBO path. Skipped when the family-wide gateway
+    # grant above already carries the action; scoped to the directory plus the
+    # runtime's OWN identity (its name embeds the runtime id, unknown at
+    # provision time — ``own_workload_identity_arn``), matching the devguide's
+    # GetAgentAccessToken policy shape.
+    if inbound_jwt and not any(
+        s.get("Sid") == "AgentCoreWorkloadIdentity" for s in statements
+    ):
+        base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+        statements.append({
+            "Sid": "InboundJwtWorkloadToken",
+            "Effect": "Allow",
+            "Action": [
+                "bedrock-agentcore:GetWorkloadAccessToken",
+                "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+            ],
+            "Resource": [
+                f"{base}:workload-identity-directory/default",
+                own_workload_identity_arn(spec, ctx),
             ],
         })
 
@@ -766,11 +896,34 @@ def ensure_role(
         RoleName=name,
         PolicyName=capability_policy_name(agent.name),
         PolicyDocument=json.dumps(
-            policy_document(spec, ctx, system_preset=bool(getattr(agent, "system_key", None)))
+            policy_document(
+                spec,
+                ctx,
+                system_preset=bool(getattr(agent, "system_key", None)),
+                inbound_jwt=_resolves_to_jwt(agent),
+            )
         ),
     )
     _sync_fs_policy(iam, name, agent, spec, log)
     return role_arn
+
+
+def _resolves_to_jwt(agent: Agent) -> bool:
+    """Whether this agent's CURRENT deploy resolves to inbound JWT.
+
+    The provision stage runs before the deploy stage writes the snapshot, so
+    this resolves afresh (spec > workspace default) through the service helper.
+    Late import: services.inbound_auth imports the ledger models, and a top-
+    level import from here would cycle through services.workspace.
+    """
+    from app.core.db import SessionLocal
+    from app.services import inbound_auth as inbound_auth_service
+
+    db = SessionLocal()
+    try:
+        return inbound_auth_service.resolve_for_agent(agent, db).mode == "jwt"
+    finally:
+        db.close()
 
 
 def _sync_fs_policy(

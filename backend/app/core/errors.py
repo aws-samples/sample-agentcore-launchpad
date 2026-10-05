@@ -60,20 +60,64 @@ async def http_error_handler(_: Request, exc: StarletteHTTPException) -> JSONRes
     )
 
 
+# Field names whose value is a credential. A validation error located under one
+# of these also loses its ``ctx`` (a custom validator's message may quote the
+# value); ``input`` is never echoed at all (see validation_error_handler).
+_SENSITIVE_FIELD_PARTS = (
+    "secret",
+    "password",
+    "passwd",
+    "token",
+    "apikey",
+    "api_key",
+    "private_key",
+    "privatekey",
+    "authorization",
+    "credential",
+    "session_uri",
+)
+
+
+def is_sensitive_field(name: Any) -> bool:
+    """``client_secret``, ``apiKey``, ``refresh_token``, ``Authorization``, … —
+    case-insensitive, matched on the normalized field name."""
+    if not isinstance(name, str):
+        return False
+    lowered = name.lower().replace("-", "_")
+    compact = lowered.replace("_", "")
+    return any(part in lowered or part in compact for part in _SENSITIVE_FIELD_PARTS)
+
+
+def _redacted_validation_error(
+    error: dict[str, Any], *, attachment_request: bool = False
+) -> dict[str, Any]:
+    """One Pydantic error row without the rejected input.
+
+    Pydantic echoes ``input``: for a missing field that is the WHOLE request
+    body (so a create-Connection 422 would carry its ``client_secret``), for a
+    too-long field the value itself, and for an attachment megabytes of file
+    data. The console never reads ``input`` — only ``loc``/``msg``/``ctx`` — so
+    it is dropped for every error. ``ctx`` stays (the console shows its numeric
+    limits) unless the error is located under a sensitive field or an
+    attachment.
+    """
+    loc = tuple(error.get("loc", ()))
+    dropped = {"input"}
+    if (
+        any(is_sensitive_field(part) for part in loc)
+        or "attachments" in loc
+        or (attachment_request and loc[0:1] == ("body",))
+    ):
+        dropped.add("ctx")
+    return {k: v for k, v in error.items() if k not in dropped}
+
+
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    errors = []
-    for error in exc.errors():
-        # Pydantic normally echoes the rejected input. A malformed attachment
-        # must not echo megabytes of user file data into the response/transcript.
-        value = error.get("input")
-        if (
-            request.scope.get("launchpad.attachment_request")
-            and error.get("loc", ())[0:1] == ("body",)
-        ) or "attachments" in error.get("loc", ()) or (
-            isinstance(value, dict) and "attachments" in value
-        ):
-            error = {k: v for k, v in error.items() if k not in {"input", "ctx"}}
-        errors.append(error)
+    attachment_request = bool(request.scope.get("launchpad.attachment_request"))
+    errors = [
+        _redacted_validation_error(error, attachment_request=attachment_request)
+        for error in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
         content=envelope(
