@@ -2362,7 +2362,10 @@
     "dataset.kind_unsupported": "Simulated-persona datasets cannot receive observed trajectories.",
     "pipeline.running": "This pipeline is already running.",
     "pipeline.not_found": "Pipeline not found.",
-    "agent.converted_locked": "A converted agent's system prompt and model are part of its exported code and can't change on redeploy."
+    "agent.converted_locked": "A converted agent's system prompt and model are part of its exported code and can't change on redeploy.",
+    "memory.not_managed": "This memory is not managed by the workspace — it can be listed but not opened, edited or deleted. An administrator can adopt it.",
+    "agent.memory_not_managed": "The selected memory is not managed by this workspace. Pick one from the Memory resources list, or ask an administrator to adopt it.",
+    "agent.memory_not_active": "The selected memory is not ACTIVE yet — wait for it to finish creating, then retry."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -3995,7 +3998,15 @@
       "saveBodyAgents": "Agents on this memory ({{count}}): {{names}}.",
       "updated": "Memory {{id}} updated.",
       "updateFailed": "Update failed: {{msg}}",
-      "note": "The platform default memory is created by the bootstrap and cannot be deleted here. Agents pick a memory at create/re-publish time; existing agents keep writing to their current memory."
+      "note": "The platform default memory is created by the bootstrap and cannot be deleted here. Agents pick a memory at create/re-publish time; existing agents keep writing to their current memory.",
+      "external": "NOT MANAGED",
+      "externalHint": "Detected in this account but not managed by the workspace: it cannot be opened, edited, deleted or pinned by an agent. An administrator can adopt it.",
+      "adopt": "ADOPT",
+      "adoptTitle": "Adopt memory",
+      "adoptBody": "Bring {{id}} under this workspace's management? Members with the memory.manage permission will then be able to pin it to agents, edit it and delete it — deleting erases every event and record.",
+      "adopted": "{{id}} is now managed by this workspace.",
+      "adoptFailed": "Adopt failed: {{msg}}",
+      "noPermission": "Your account lacks the memory.manage permission."
     },
     "overview": {
       "actorsTile": "ACTORS",
@@ -4112,7 +4123,7 @@
     "deleted": "{{username}} was deleted.",
     "permissionsUpdated": "Permissions updated for {{username}}.",
     "permissionsAll": "ALL (ADMIN)",
-    "permissionsHint": "Agent Management capability — click to toggle. Members hold all four by default.",
+    "permissionsHint": "Agent Management capability — click to toggle. Members hold every one by default.",
     "workspacesAll": "ALL (ADMIN)",
     "workspacesHint": "Workspace access — click to grant or revoke. Administrators reach every workspace by role.",
     "workspacesUpdated": "Workspace access updated for {{username}}.",
@@ -4123,7 +4134,8 @@
       "import": "IMPORT",
       "delete": "DELETE",
       "convert": "CONVERT",
-      "run": "EVAL RUN"
+      "run": "EVAL RUN",
+      "manage": "MEMORY"
     },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",
@@ -6518,7 +6530,15 @@
         "nsKeys": "Namespace variables",
         "nsKey": "Key",
         "nsValues": "Allowed values",
-        "nsRegex": "Regex pattern"
+        "nsRegex": "Regex pattern",
+        "external": "Not managed",
+        "externalHint": "Detected in this account but not managed by the workspace: it cannot be opened, edited, deleted or pinned by an agent. An administrator can adopt it.",
+        "adopt": "Adopt",
+        "adoptTitle": "Adopt memory",
+        "adoptBody": "Bring {{id}} under this workspace's management? Members with the memory.manage permission will then be able to pin it to agents, edit it and delete it — deleting erases every event and record.",
+        "adopted": "{{id}} is now managed by this workspace.",
+        "adoptFailed": "Adopt failed: {{msg}}",
+        "noPermission": "Your account lacks the memory.manage permission."
       }
     },
     "observability": {
@@ -7279,7 +7299,8 @@
         "import": "Import",
         "delete": "Delete",
         "convert": "Convert",
-        "run": "Eval run"
+        "run": "Eval run",
+        "manage": "Memory"
       }
     },
     "workspaces": {

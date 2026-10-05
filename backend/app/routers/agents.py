@@ -32,7 +32,7 @@ from app.schemas.agent import (
     InvokeResponse,
     RuntimeImportRequest,
 )
-from app.services import agent_iam, agent_names, byoc_uploads
+from app.services import agent_iam, agent_names, byoc_uploads, memory_ownership
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore import harness as harness_api
 from app.services.agentcore.client import control_client
@@ -48,7 +48,7 @@ from app.services.runtime_discovery import (
     scan_harnesses,
     scan_runtimes,
 )
-from app.services.workspace import WorkspaceContext
+from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
 from app.system_agents.presets import is_reserved_name
 
@@ -173,6 +173,9 @@ def create_agent(
     existing = agent_names.live_holder(db, ws.id, spec.name)
     if existing:
         raise agent_names.name_exists_error(spec.name, existing.id)
+    # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
+    # the deploy job re-checks before any stage, this answers before any row
+    memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
     agent = Agent(
         workspace_id=ws.id,
         name=spec.name,
@@ -465,6 +468,11 @@ def republish_agent(db: Session, agent: Agent, spec: AgentSpec) -> dict[str, Any
                 status_code=400,
             )
 
+    # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
+    # refused before the stored spec changes, so a refusal leaves the agent as is
+    memory_ownership.require_spec_memory(
+        db, context_for_workspace(agent.workspace_id), spec.model_dump()
+    )
     agent.spec = spec.model_dump()
     agent.status = "deploying"
     agent.error = None
@@ -548,6 +556,8 @@ def convert_agent(
         )
     except hc.ConversionError as exc:
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
+    # the twin inherits the source's memory pin — same ownership rule (issue #55)
+    memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
 
     agent = Agent(
         workspace_id=ws.id, name=spec.name, method=spec.method, status="deploying",

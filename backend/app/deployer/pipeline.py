@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, Deployment, Job
-from app.services import workspace_bootstrap
+from app.services import memory_ownership, workspace_bootstrap
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 STAGE_ORDER = ["generate", "package", "provision", "deploy", "register"]
@@ -211,6 +211,11 @@ def execute_deploy_job(job_id: str, *, resume: bool | None = None) -> None:
             job_id=job_id,
             workspace=context_for_workspace(job.workspace_id),
         )
+        # A spec that pins its own memory deploys only onto a memory this
+        # workspace manages and that is ACTIVE (issue #55) — checked here, before
+        # any stage grants or binds it, so every path into a job (create,
+        # re-publish, convert, recommendation accept, startup resume) is covered.
+        memory_ownership.require_spec_memory(db, ctx.workspace, agent.spec)
         if agent.system_key:
             # Every system-preset job — fresh or resumed, whatever stages already
             # succeeded or were skipped — proves its release pin and the complete

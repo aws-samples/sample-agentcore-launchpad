@@ -430,7 +430,8 @@ export function SkillsKbCard({
 /** Long-term memory + the per-agent memory pin (+ the harness loop bounds). */
 export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & { loop: boolean; note?: string }) {
   const { t } = useTranslation();
-  const options = cat.memories.filter((m) => m.id && !m.is_default);
+  // only memories this workspace manages may be pinned (the API refuses others)
+  const options = cat.memories.filter((m) => m.id && !m.is_default && m.managed);
   return (
     <Card title={t(loop ? "v2.agents.wizard.memory" : "v2.agents.wizard.memoryOnly")}>
       <div className="v2-form cols-2">
@@ -452,9 +453,15 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
                 label: `${m.name ?? m.id ?? ""}${m.status !== "ACTIVE" ? ` (${m.status ?? "?"})` : ""}`,
                 disabled: m.status !== "ACTIVE",
               })),
-              /* a pin the list no longer carries stays selectable */
-              ...(form.memoryId && !cat.memories.some((m) => m.id === form.memoryId)
-                ? [{ value: form.memoryId, label: form.memoryId }]
+              /* a pin the list no longer carries stays selectable; an unmanaged
+                 one says so (re-publishing it is refused until re-pointed or adopted) */
+              ...(form.memoryId && !options.some((m) => m.id === form.memoryId)
+                ? [{
+                    value: form.memoryId,
+                    label: cat.memories.some((m) => m.id === form.memoryId && !m.managed)
+                      ? `${form.memoryId} (${t("v2.memory.res.external")})`
+                      : form.memoryId,
+                  }]
                 : []),
             ]}
           />

@@ -32,6 +32,10 @@ PROBES = [
     ("agents.delete", "DELETE", "/api/agents/no-such-agent", None, 404),
     ("agents.convert", "POST", "/api/agents/no-such-agent/convert", None, 404),
     ("eval.run", "POST", "/api/eval/runs", {}, 422),
+    ("memory.manage", "POST", "/api/memory/resources", {}, 422),
+    ("memory.manage", "PUT", "/api/memory/resources/no-such-memory", {}, 422),
+    # ownership is checked before any AWS call: an unmanaged id answers 404
+    ("memory.manage", "DELETE", "/api/memory/resources/no-such-memory", None, 404),
 ]
 
 
