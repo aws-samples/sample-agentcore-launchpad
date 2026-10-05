@@ -257,6 +257,25 @@ export interface RunRecommendation {
   updated_at: string | null;
 }
 
+/** The cards a run shows by default: per kind the newest recommendation, plus any one
+ *  that was accepted (it is what got published). Everything else — a superseded
+ *  attempt, typically one AWS refused — is `earlier`, collapsed unless asked for.
+ *  `recs` is newest-first, as the API lists it. */
+export function splitRecommendations(recs: RunRecommendation[]): {
+  current: RunRecommendation[];
+  earlier: RunRecommendation[];
+} {
+  const seen = new Set<string>();
+  const current: RunRecommendation[] = [];
+  const earlier: RunRecommendation[] = [];
+  for (const rec of recs) {
+    if (!seen.has(rec.kind) || rec.accepted) current.push(rec);
+    else earlier.push(rec);
+    seen.add(rec.kind);
+  }
+  return { current, earlier };
+}
+
 export interface ExperimentReadiness {
   agent_id: string;
   lookback_hours: number;

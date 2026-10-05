@@ -7421,6 +7421,8 @@
       "updatedBy": "Last saved by"
     },
     "rec": {
+      "showEarlier": "Earlier recommendations ({{count}})",
+      "hideEarlier": "Hide earlier recommendations",
       "title": "Recommendations",
       "sub": "AgentCore Recommendations read this run's traces",
       "new": "New recommendation",
