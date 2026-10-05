@@ -1101,7 +1101,10 @@ return an empty `end_turn`) must not poison every later turn. Before that, the s
 **replays a turn itself** once (`TURN_TRANSIENT_RETRIES`) when the Harness stream fails
 transiently — cut short after a tool step or with nothing at all, a mid-stream
 `runtimeClientError` / `internalServerException`, throttling, a 5xx (the evaluation
-classifier `transient_invoke_error`; an execution timeout is never replayed): the failed
+classifier `transient_invoke_error`), or when a model call stops at `max_tokens`
+(`harness.execution_limit` with that stop reason — live 2026-10-05 a proposal call stopped
+there 40 s in, far short of its 65 536-token budget, and the manual retry answered); an
+execution timeout or an iteration limit is never replayed: the failed
 attempt's partial text and tool rows are discarded, any inline submission it made is
 forgotten, the replay runs in a fresh session reserved on the ledger by a hidden
 `role = session` row before its data-plane call (the first session stays on the user

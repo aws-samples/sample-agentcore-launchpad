@@ -1822,8 +1822,15 @@ def _submissions(
 
 
 def _replayable_turn_error(exc: BaseException) -> bool:
+    """Transient upstream failures, plus a model call cut off at ``max_tokens``: live
+    2026-10-05 a proposal call stopped there 40 s in, far short of the 65 536-token
+    budget (the manual retry wrote the 11 k-token proposal in 3 min). Timeouts and
+    iteration limits are never replayed."""
     from app.evaluation.service import transient_invoke_error
 
+    if getattr(exc, "code", None) == "harness.execution_limit":
+        detail = getattr(exc, "detail", None)
+        return isinstance(detail, dict) and detail.get("stop_reason") == "max_tokens"
     return (transient_invoke_error(exc)
             and getattr(exc, "code", None) != "harness.execution_timeout")
 
