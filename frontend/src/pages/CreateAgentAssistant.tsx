@@ -612,6 +612,14 @@ export function CreateAgentAssistant() {
             );
             return copy;
           });
+        } else if (evt.event === "retry") {
+          // the server replays the turn in a fresh session after a transient upstream
+          // failure: drop what the failed attempt streamed (text and tool cards)
+          setMessages((m) => {
+            let k = m.length - 1;
+            while (k >= 0 && m[k].role !== "user") k--;
+            return [...m.slice(0, k + 1), { role: "assistant", text: "", streaming: true }];
+          });
         } else if (evt.event === "tool_input") {
           // fills the arguments of the most recent tool card still waiting for them
           const input = String(data.input ?? "");

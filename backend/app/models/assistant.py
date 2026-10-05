@@ -91,7 +91,8 @@ class AssistantMessage(Base):
         ForeignKey("assistant_conversations.id"), index=True
     )
     turn: Mapped[int] = mapped_column(default=0)
-    role: Mapped[str] = mapped_column(String(16))  # user | assistant | tool | error
+    # user | assistant | tool | error | session (hidden: reserves a turn replay's session)
+    role: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     # Display username of the member who sent a ``user`` row — a shared conversation
