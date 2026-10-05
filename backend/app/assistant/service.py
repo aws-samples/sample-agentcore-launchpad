@@ -61,7 +61,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
@@ -114,6 +114,19 @@ PROPOSAL_REJECTED_NAME = "proposal_rejected"
 # an edited message): the turn stays in the ledger and the thread, but is never
 # replayed to the model again — a poisoned exchange must not follow the retry.
 TURN_RETRIED_NAME = "turn_retried"
+# A transient upstream failure mid-turn (a Harness stream cut short after a tool step or
+# with nothing at all, a mid-stream runtimeClientError / internalServerException,
+# throttling, a 5xx — ``evaluation.service.transient_invoke_error``) replays the whole
+# turn this many times in a fresh Harness session before the member sees an error
+# (live 2026-10-04: about one architect turn in five on prod and dev). One replay keeps
+# two attempts inside ``TURN_CLAIM_TTL_S``; an execution timeout is never replayed —
+# the member already waited the preset's whole budget.
+TURN_TRANSIENT_RETRIES = 1
+# How long a replay waits for the consumer to record its fresh session on the ledger.
+RETRY_RECORD_WAIT_S = 30.0
+# Ledger-only row reserving a replay's Harness session (``sessions.is_assistant_session``
+# reads every row's session id): never shown in the transcript, never replayed.
+SESSION_ROLE = "session"
 REJECTION_NOTE_MAX_CHARS = 2400
 
 
@@ -1022,6 +1035,7 @@ def conversation_detail(
                 "at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in _messages(db, row.id)
+            if m.role != SESSION_ROLE
         ],
         "proposals": [proposal_out(db, p) for p in _proposals(db, row.id)],
     }
@@ -1807,6 +1821,13 @@ def _submissions(
     )
 
 
+def _replayable_turn_error(exc: BaseException) -> bool:
+    from app.evaluation.service import transient_invoke_error
+
+    return (transient_invoke_error(exc)
+            and getattr(exc, "code", None) != "harness.execution_timeout")
+
+
 def run_turn(
     db: Session,
     conversation: AssistantConversation,
@@ -1825,7 +1846,10 @@ def run_turn(
     and any proposal land together in one locked transaction once the stream
     completed. A stream that errors, or is closed by the client before completion,
     persists the partial answer with an ``error`` row (no proposal) and releases the
-    claim; nothing is retried automatically.
+    claim. A transient upstream failure is first replayed ``TURN_TRANSIENT_RETRIES``
+    times in a fresh Harness session: the failed attempt's partial text and tool rows
+    are discarded, any inline submission it made is forgotten, and a ``retry`` event
+    tells the client to clear what it streamed.
     """
     run = run or TurnRun()
     agent = _require_available(db, row)
@@ -1896,47 +1920,77 @@ def run_turn(
             # (the consumer's session), which a rollback below has already expired
             harness_arn = agent.arn
 
+            # the current attempt's Harness session (a replay starts a fresh one)
+            attempt_session = [session_id]
+
             def produce() -> None:
-                try:
-                    request = messages
-                    client = data_client(workspace)
-                    while True:
-                        handoff: list[dict[str, Any]] | None = None
-                        for produced in hc.invoke_harness_events(
-                            client, harness_arn, request,
-                            session_id=session_id, actor_id=actor,
-                            on_stream=run.attach_upstream, **invoke_extra,
-                        ):
-                            if produced["event"] == "handoff":
-                                handoff = produced["data"]["calls"]
+                attempt = 0
+                while True:
+                    try:
+                        attempt_once()
+                        events.put(("end", None))
+                        return
+                    except BaseException as exc:  # surfaced to the consumer below
+                        if (attempt < TURN_TRANSIENT_RETRIES and not run.cancelled
+                                and _replayable_turn_error(exc)):
+                            attempt += 1
+                            attempt_session[0] = hc.new_session_id()
+                            if submissions is not None:
+                                submissions.reset()
+                            logger.warning("assistant: turn %s replayed after %s",
+                                           turn, _short(exc))
+                            # the new session is on the ledger before its data-plane call
+                            # (like the first one): wait for the consumer to record it
+                            recorded = threading.Event()
+                            events.put(("retry", {"attempt": attempt, "reason": _short(exc),
+                                                  "session_id": attempt_session[0],
+                                                  "recorded": recorded}))
+                            deadline = time.monotonic() + RETRY_RECORD_WAIT_S
+                            while not recorded.wait(HEARTBEAT_S):
+                                if run.cancelled or time.monotonic() > deadline:
+                                    break
+                            if recorded.is_set() and not run.cancelled:
                                 continue
-                            if (produced["event"] == "tool_input"
-                                    and produced["data"].get("name") == submission.TOOL_NAME):
-                                continue  # summarized from the complete input below
-                            events.put(("event", produced))
-                            if run.cancelled:
-                                break
-                        if handoff is None or run.cancelled or submissions is None:
+                        events.put(("error", exc))
+                        return
+
+            def attempt_once() -> None:
+                request = messages
+                client = data_client(workspace)
+                while True:
+                    handoff: list[dict[str, Any]] | None = None
+                    for produced in hc.invoke_harness_events(
+                        client, harness_arn, request,
+                        session_id=attempt_session[0], actor_id=actor,
+                        on_stream=run.attach_upstream, **invoke_extra,
+                    ):
+                        if produced["event"] == "handoff":
+                            handoff = produced["data"]["calls"]
+                            continue
+                        if (produced["event"] == "tool_input"
+                                and produced["data"].get("name") == submission.TOOL_NAME):
+                            continue  # summarized from the complete input below
+                        events.put(("event", produced))
+                        if run.cancelled:
                             break
-                        # the inline handoff: Launchpad's own verdict, answered on the
-                        # SAME session so the Harness resumes the paused execution
-                        results = []
-                        for call in handoff:
-                            events.put(("event", {"event": "tool_input", "data": {
-                                "name": call["name"], "id": call["id"],
-                                "input": submission.input_summary(call["input"])}}))
-                            verdict = (submissions.handle(call["input"])
-                                       if call["name"] == submission.TOOL_NAME
-                                       else {"status": "rejected",
-                                             "errors": [f"unknown tool {call['name']}"]})
-                            results.append({"toolResult": {
-                                "toolUseId": call["id"], "status": "success",
-                                "content": [{"text": json.dumps(verdict, ensure_ascii=False)}],
-                            }})
-                        request = [{"role": "user", "content": results}]
-                    events.put(("end", None))
-                except BaseException as exc:  # surfaced to the consumer below
-                    events.put(("error", exc))
+                    if handoff is None or run.cancelled or submissions is None:
+                        break
+                    # the inline handoff: Launchpad's own verdict, answered on the
+                    # SAME session so the Harness resumes the paused execution
+                    results = []
+                    for call in handoff:
+                        events.put(("event", {"event": "tool_input", "data": {
+                            "name": call["name"], "id": call["id"],
+                            "input": submission.input_summary(call["input"])}}))
+                        verdict = (submissions.handle(call["input"])
+                                   if call["name"] == submission.TOOL_NAME
+                                   else {"status": "rejected",
+                                         "errors": [f"unknown tool {call['name']}"]})
+                        results.append({"toolResult": {
+                            "toolUseId": call["id"], "status": "success",
+                            "content": [{"text": json.dumps(verdict, ensure_ascii=False)}],
+                        }})
+                    request = [{"role": "user", "content": results}]
 
             # no data-plane call without CURRENT ownership
             _lock_conversation(db, conversation_id)
@@ -1959,6 +2013,31 @@ def run_turn(
                     break
                 if kind == "error":
                     raise event
+                if kind == "retry":
+                    # the replay starts over: drop what the failed attempt streamed and its
+                    # tool rows; the user row keeps the first (already invoked) session and
+                    # a hidden SESSION_ROLE row reserves the new one before its call
+                    parts.clear()
+                    tool_rows.clear()
+                    session_id = event["session_id"]
+                    _lock_conversation(db, conversation_id)
+                    if not _holds_claim(db, conversation_id, turn, token):
+                        db.rollback()
+                        raise _ClaimLost()
+                    db.execute(delete(AssistantMessage).where(
+                        AssistantMessage.conversation_id == conversation_id,
+                        AssistantMessage.turn == turn, AssistantMessage.role == "tool"))
+                    db.add(AssistantMessage(
+                        workspace_id=conversation.workspace_id, conversation_id=conversation_id,
+                        turn=turn, role=SESSION_ROLE, name="turn_replay",
+                        text=f"replay {event['attempt']} after {event['reason']}"[:4000],
+                        runtime_session_id=session_id,
+                    ))
+                    db.commit()
+                    event["recorded"].set()
+                    yield {"event": "retry", "data": {"attempt": event["attempt"],
+                                                      "reason": event["reason"]}}
+                    continue
                 if run.cancelled:
                     break  # the owner cancelled: handled as interrupted below
                 if event["event"] == "tool":

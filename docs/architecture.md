@@ -1097,7 +1097,17 @@ explicit "no reply" marker. The member may **edit & retry** the latest failed tu
 (`retry_of_turn`, accepted only for the latest turn and only when it failed): that
 exchange stays in the ledger and the thread, marked with a `turn_retried` error row,
 but is never replayed again — a message that keeps the model from answering (it can
-return an empty `end_turn`) must not poison every later turn. One **final** budget (`MAX_REPLAY_CHARS` = 160k
+return an empty `end_turn`) must not poison every later turn. Before that, the server
+**replays a turn itself** once (`TURN_TRANSIENT_RETRIES`) when the Harness stream fails
+transiently — cut short after a tool step or with nothing at all, a mid-stream
+`runtimeClientError` / `internalServerException`, throttling, a 5xx (the evaluation
+classifier `transient_invoke_error`; an execution timeout is never replayed): the failed
+attempt's partial text and tool rows are discarded, any inline submission it made is
+forgotten, the replay runs in a fresh session reserved on the ledger by a hidden
+`role = session` row before its data-plane call (the first session stays on the user
+row, so both remain private), and an SSE `retry` event tells the console to clear what it
+streamed (live 2026-10-04: about one architect turn in five failed this way and a manual
+retry always worked). One **final** budget (`MAX_REPLAY_CHARS` = 160k
 characters, ≤ 12 turns) covers preamble + catalog + replayed turns + the current
 message: the newest turns that fit are kept, the number of omitted older turns is
 disclosed in the preamble and in the `meta` event, and the current message is never
