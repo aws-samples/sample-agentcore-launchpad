@@ -111,6 +111,11 @@ export function WizardReview({
       { label: t("v2.agents.kbTitle"), value: list(kbNames) },
       memory,
     ];
+    // harness / Strands: managed session storage is their only mount
+    const sessionFs = {
+      label: t("v2.agents.wizard.fsSession"),
+      value: form.sessionFs ? mono(form.sessionMount) : none,
+    };
     if (method === "harness") {
       items = [
         ...head,
@@ -125,6 +130,7 @@ export function WizardReview({
           ]),
         },
         ...common,
+        sessionFs,
         {
           label: t("v2.agents.wizard.loop"),
           value: t("v2.agents.wizard.loopValue", { iterations: form.maxIterations, seconds: form.timeoutSeconds }),
@@ -145,6 +151,7 @@ export function WizardReview({
           ? [{ label: t("v2.agents.wizard.a2aSkills"), value: list(form.a2aSkills.filter((s) => s.name.trim()).map((s) => s.name.trim())) }]
           : [{ label: t("v2.agents.wizard.toolkits"), value: list(form.toolkits) }]),
         ...common,
+        sessionFs,
       ];
     } else {
       items = [

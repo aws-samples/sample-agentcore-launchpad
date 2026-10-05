@@ -550,7 +550,28 @@ export interface RuntimeCanaryMetric {
     pValue?: number | null;
     percentChange?: number | null;
     isSignificant?: boolean;
+    /** paired replay (Harness canary): questions scored on both sides and the
+     *  per-question outcome from the candidate's side (polarity-aware) */
+    pairs?: number;
+    meanDiff?: number;
+    wins?: number;
+    losses?: number;
+    ties?: number;
   }[];
+  /** true when the comparison is paired question by question */
+  paired?: boolean;
+}
+
+/** One replayed question of a paired Harness canary verdict. */
+export interface CanaryPairRow {
+  scenario_id: string | null;
+  prompt: string | null;
+  control: Record<string, number>;
+  treatment: Record<string, number>;
+  error?: string | null;
+  /** the side(s) that ended on the agent's own budget ("treatment: harness.execution_limit");
+   *  the pair still counts, scored as it stands */
+  budget_stop?: string | null;
 }
 
 export interface RuntimeCanaryInfo {
@@ -628,6 +649,10 @@ export interface RuntimeCanaryInfo {
         // diagnostic breakdown of the send (e.g. {"200": 47, "429": 3});
         // absent on attempts recorded before the concurrent send landed
         status_counts?: Record<string, number>;
+        /** "paired": a Harness canary sent every question to BOTH versions */
+        mode?: string;
+        pairs?: { scenario_id: string; control_session_id: string | null;
+                  treatment_session_id: string | null; error?: string }[];
       }[];
       verdict?: {
         verdict: string;
@@ -637,6 +662,10 @@ export interface RuntimeCanaryInfo {
         baseline_n?: number;
         reason?: string;
         metrics: RuntimeCanaryMetric[];
+        mode?: string;
+        pairs_sent?: number;
+        pairs_complete?: number;
+        pairs?: CanaryPairRow[];
       };
     }[];
     complete?: {
@@ -1250,6 +1279,8 @@ export interface AssistantEvalPlanRepair {
 export interface AssistantTurnRequest {
   prompt: string;
   evaluation_plan_repair?: AssistantEvalPlanRepair;
+  /** retry the latest FAILED turn: kept in the thread, no longer replayed to the model */
+  retry_of_turn?: number;
 }
 
 /** `GET …/conversations/{id}/footprint` — what CLEAR would remove and what blocks it. */
@@ -2067,6 +2098,10 @@ export interface MemoryResourceRow {
   is_default: boolean;
   /** live agents whose spec pins this memory (default users excluded) */
   agents: { id: string; name: string }[];
+  /** the workspace manages it (bootstrap, console-created or adopted). Anything
+   *  else in the account is detected, not managed: no detail/edit/delete, and no
+   *  agent may pin it — an administrator can adopt it. */
+  managed: boolean;
 }
 
 export interface MemoryResourceList {
@@ -2107,6 +2142,8 @@ export interface MemoryResourceDetail {
   is_default: boolean;
   strategies: MemoryResourceStrategy[];
   namespace_keys: MemoryResourceNamespaceKey[];
+  /** always true — the per-id routes answer 404 `memory.not_managed` otherwise */
+  managed: boolean;
 }
 
 /** `PUT /api/memory/resources/{id}` — both optional, at least one required.
@@ -2849,7 +2886,8 @@ export type AgentPermission =
   | "agents.convert"
   | "eval.run"
   | "identity.manage"
-  | "identity.grant";
+  | "identity.grant"
+  | "memory.manage";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
@@ -2859,6 +2897,7 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "eval.run",
   "identity.manage",
   "identity.grant",
+  "memory.manage",
 ];
 
 export interface AuthStatus {
@@ -4242,6 +4281,9 @@ export const api = {
       system_prompt?: string;
       evaluator?: string;
       tools?: { name: string; description: string }[];
+      /** the system-prompt generator: the AgentCore job (default) or a 3rd-party provider */
+      provider?: string;
+      model_id?: string;
     },
   ) =>
     request<{ recommendations: RunRecommendation[] }>(
@@ -4251,10 +4293,12 @@ export const api = {
   /** `POST …/recommendations/{recId}/accept` (202) — re-publishes the run's Harness
    *  with the recommended system prompt (a NEW Harness version, DEFAULT follows it).
    *  Needs `agents.deploy`; accepted once (409 afterwards). */
-  acceptRunRecommendation: (runId: string, recId: string) =>
+  /** `systemPrompt` = the operator-reviewed text to publish (the recommendation as
+   *  generated when omitted). */
+  acceptRunRecommendation: (runId: string, recId: string, systemPrompt?: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string; recommendation: RunRecommendation }>(
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/accept`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(systemPrompt === undefined ? {} : { system_prompt: systemPrompt }) },
     ),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
@@ -5063,6 +5107,13 @@ export const api = {
     request<{ deleted: boolean; id: string }>(
       `/api/memory/resources/${encodeURIComponent(memoryId)}`,
       { method: "DELETE" },
+    ),
+  /** `POST /api/memory/resources/{id}/adopt` — administrator only: brings an
+   *  existing account memory under this workspace's management. */
+  memoryResourceAdopt: (memoryId: string) =>
+    request<MemoryResourceDetail>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}/adopt`,
+      { method: "POST" },
     ),
   // NOTE: `GET /api/memory/extraction-jobs` exists on the backend but is not
   // surfaced in the console — the AWS list only ever returns FAILED jobs

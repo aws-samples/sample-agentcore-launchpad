@@ -207,6 +207,34 @@ class SystemSkillRecord(Base):
     )
 
 
+class ManagedMemory(Base):
+    """An AgentCore Memory this workspace manages (issue #55).
+
+    The workspace's AWS account can hold memories the platform never created
+    (another team's, another tool's), and the account boundary is not the
+    workspace boundary: a memory is *managed* only when its id is the
+    workspace's bootstrap memory (resource map) or a row here names it. Rows are
+    written only by the server — when the console creates a memory, or when an
+    administrator explicitly adopts an existing one — never from a client
+    payload. Only a managed memory can be pinned by an agent spec, read back
+    for an agent, or edited / deleted through ``/api/memory/resources``.
+    AWS keeps the resource itself; the ledger holds the id and who brought it in.
+    """
+
+    __tablename__ = "managed_memories"
+    __table_args__ = (
+        Index("uq_managed_memories_workspace_memory", "workspace_id", "memory_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    memory_id: Mapped[str] = mapped_column(String(128), index=True)
+    # created (console CreateMemory) | adopted (administrator adopted an existing one)
+    origin: Mapped[str] = mapped_column(String(16), default="created")
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class User(Base):
     """A console account created by self-service registration (or by an admin).
 

@@ -37,6 +37,7 @@ AGENT_PERMISSIONS = (
     "eval.run",
     "identity.manage",
     "identity.grant",
+    "memory.manage",
 )
 
 # --- password hashing -------------------------------------------------------

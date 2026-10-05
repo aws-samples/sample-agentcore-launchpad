@@ -446,7 +446,7 @@
       "file_operations": "file_operations — read and write files in the agent runtime",
       "none": "None selected",
       "unavailable": "None selected — publishing this configuration leaves shell and file_operations unavailable.",
-      "selectedHint": "Only selected attachments, Skills and native tools are allowed. Native tools start unselected. Enable shell only when command execution is required, and file_operations only when file access is required.",
+      "selectedHint": "Only selected attachments, Skills and native tools are allowed. A new Managed Harness starts with both native tools ticked. Untick shell when command execution is not needed, and file_operations when file access is not needed.",
       "overrideTitle": "Expert tool override is active",
       "overrideHint": "These allowed_tools patterns control access instead of the selections below. \"*\" allows all tools, including shell and file_operations; an empty list exposes no native tools, while mounted knowledge-base support is retained. Native checkboxes are disabled until you switch to selected tools.",
       "overrideSummary": "These saved allowed_tools patterns control access instead of native selections. \"*\" allows all tools, including shell and file_operations; an empty list exposes no native tools, while mounted knowledge-base support is retained.",
@@ -718,7 +718,7 @@
         "model": "MODEL",
         "maxTokens": "MAX OUTPUT TOKENS PER MODEL CALL",
         "maxTokensEmpty": "empty = provider default",
-        "maxTokensHint": "Harness bedrockModelConfig.maxTokens — the ceiling of one model response. Not a session or spend cap; the loop is bounded by max iterations and timeout below.",
+        "maxTokensHint": "Harness bedrockModelConfig.maxTokens — the ceiling of one model response. Not a session or spend cap; the loop is bounded by max iterations and timeout below. Empty = 65536 for GPT models, the service default otherwise.",
         "effort": "REASONING EFFORT",
         "effortNone": "none (not sent)",
         "effortLevels": {
@@ -2404,7 +2404,10 @@
     "identity.m2m_unavailable": "This workspace has no Cognito machine client, so the platform cannot mint a token for this JWT agent. Run the workspace bootstrap, or call the Runtime with your own bearer token.",
     "identity.m2m_token_failed": "Could not mint a machine token from the workspace Cognito client.",
     "identity.discovery_unreachable": "The OIDC discovery document could not be fetched. Check the discovery URL and that the IdP is reachable over HTTPS.",
-    "identity.discovery_invalid": "The URL did not return an OIDC discovery document (no jwks_uri), so no token signature could be validated."
+    "identity.discovery_invalid": "The URL did not return an OIDC discovery document (no jwks_uri), so no token signature could be validated.",
+    "memory.not_managed": "This memory is not managed by the workspace — it can be listed but not opened, edited or deleted. An administrator can adopt it.",
+    "agent.memory_not_managed": "The selected memory is not managed by this workspace. Pick one from the Memory resources list, or ask an administrator to adopt it.",
+    "agent.memory_not_active": "The selected memory is not ACTIVE yet — wait for it to finish creating, then retry."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -3408,7 +3411,8 @@
       "firstHint": "Untick to start at 50/50: the treatment is already production DEFAULT, so 90/10 caps no exposure and only starves the treatment of samples.",
       "half": "50/50 traffic + verdict (required)",
       "last": "1/99: decided after the 50/50 verdict"
-    }
+    },
+    "pairedReplay": "Dataset replay · paired: every question goes to both the current and the candidate version and is compared one by one"
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",
@@ -4036,7 +4040,15 @@
       "saveBodyAgents": "Agents on this memory ({{count}}): {{names}}.",
       "updated": "Memory {{id}} updated.",
       "updateFailed": "Update failed: {{msg}}",
-      "note": "The platform default memory is created by the bootstrap and cannot be deleted here. Agents pick a memory at create/re-publish time; existing agents keep writing to their current memory."
+      "note": "The platform default memory is created by the bootstrap and cannot be deleted here. Agents pick a memory at create/re-publish time; existing agents keep writing to their current memory.",
+      "external": "NOT MANAGED",
+      "externalHint": "Detected in this account but not managed by the workspace: it cannot be opened, edited, deleted or pinned by an agent. An administrator can adopt it.",
+      "adopt": "ADOPT",
+      "adoptTitle": "Adopt memory",
+      "adoptBody": "Bring {{id}} under this workspace's management? Members with the memory.manage permission will then be able to pin it to agents, edit it and delete it — deleting erases every event and record.",
+      "adopted": "{{id}} is now managed by this workspace.",
+      "adoptFailed": "Adopt failed: {{msg}}",
+      "noPermission": "Your account lacks the memory.manage permission."
     },
     "overview": {
       "actorsTile": "ACTORS",
@@ -4153,20 +4165,21 @@
     "deleted": "{{username}} was deleted.",
     "permissionsUpdated": "Permissions updated for {{username}}.",
     "permissionsAll": "ALL (ADMIN)",
-    "permissionsHint": "Agent Management capability — click to toggle. Members hold all of them by default.",
+    "permissionsHint": "Agent Management capability — click to toggle. Members hold every one by default.",
     "workspacesAll": "ALL (ADMIN)",
     "workspacesHint": "Workspace access — click to grant or revoke. Administrators reach every workspace by role.",
     "workspacesUpdated": "Workspace access updated for {{username}}.",
     "approveTitle": "Approve account",
     "approveBody": "Approve {{username}} and grant these workspaces. The account's validity window starts now.",
     "perm": {
-      "deploy": "DEPLOY",
-      "import": "IMPORT",
-      "delete": "DELETE",
-      "convert": "CONVERT",
-      "run": "EVAL RUN",
-      "manage": "IDENTITY",
-      "grant": "IDENTITY GRANT"
+      "agents_deploy": "DEPLOY",
+      "agents_import": "IMPORT",
+      "agents_delete": "DELETE",
+      "agents_convert": "CONVERT",
+      "eval_run": "EVAL RUN",
+      "identity_manage": "IDENTITY",
+      "memory_manage": "MEMORY",
+      "identity_grant": "IDENTITY GRANT"
     },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",
@@ -4551,7 +4564,10 @@
     "memoryNoShared": "this workspace has no shared memory — only “disabled” is possible",
     "kbGatewayMissing": "no ready KB gateway here — mounting a KB is manual work",
     "bindingsAuth": "auth:",
-    "bindingsDigest": "content"
+    "bindingsDigest": "content",
+    "editRetry": "Edit & retry",
+    "retryNote": "Retrying turn {{turn}}: its failed exchange stays in the thread but is no longer sent to the assistant. You can edit the message above first.",
+    "turnRetried": "This turn was retried and is no longer sent to the assistant."
   },
   "assistantEval": {
     "title": "EVALUATION ASSETS",
@@ -4740,7 +4756,7 @@
       "queued": "queue position {{n}}",
       "openRuns": "open in Evaluation",
       "historyTitle": "RUNS OF THIS AGENT ON THIS DATASET ({{n}}, newest first)",
-      "meanScore": "mean {{mean}} over {{n}} evaluator(s)",
+      "meanScore": "normalized mean {{mean}} over {{n}} evaluator(s)",
       "oneAtATime": "A run of this agent on this Dataset is still active — wait for it to finish (or stop it on the Evaluation page) before starting another.",
       "tooManyEvaluators": "{{n}} evaluators are ready but one batch evaluation applies at most {{max}} — open New Run and deselect the ones that overlap (the run is otherwise identical).",
       "remove": "Remove this failed run from the history",
@@ -4795,7 +4811,7 @@
     "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS.",
     "recommend": {
       "title": "Generate AI-recommended improvements",
-      "body": "AgentCore Recommendations reads the traces of the run you pick (the newest clean run by default) and proposes a revised system prompt (and tool descriptions) aimed at the evaluator you pick. Review the diff; accepting it re-publishes the Harness with that prompt, and AWS creates a new Harness version (DEFAULT follows it).",
+      "body": "An AI recommendation reads the traces of the run you pick (the newest clean run by default — any of this agent's runs, on any dataset) and proposes a revised system prompt (and tool descriptions): AgentCore Recommendations aimed at the evaluator you pick by default, or GEPA-lite. Review the diff; you can still edit the prompt when accepting, and Launchpad re-publishes the Harness with the final text, so AWS creates a new Harness version (DEFAULT follows it).",
       "source": "Traces from",
       "version": "Harness now on v{{v}}",
       "publishing": "Publishing the new Harness version of “{{name}}”… Step 4 lists it once the deploy finishes.",
@@ -5402,7 +5418,7 @@
         "customModel": "Custom model ID…",
         "customModelId": "Custom model ID",
         "maxTokens": "Max output tokens per call",
-        "maxTokensHint": "Empty ⇒ no per-call ceiling.",
+        "maxTokensHint": "Empty ⇒ 65536 for GPT models, the service default otherwise.",
         "effort": "Reasoning effort",
         "effortUnsupported": "Only native Bedrock OpenAI models accept a reasoning effort.",
         "tools": "Tools",
@@ -5417,7 +5433,7 @@
         "remoteMcp": "Remote MCP servers",
         "noMcp": "No approved remote MCP servers",
         "nativeTools": "Native execution",
-        "nativeToolsHint": "Off by default: lets the agent run shell commands or read and write files in its session.",
+        "nativeToolsHint": "On by default: lets the agent run shell commands (for example, to read the current date) or read and write files in its session; untick what it does not need.",
         "native": {
           "shell": "Shell",
           "file_operations": "File operations"
@@ -5490,6 +5506,7 @@
         "errDupPath": "Mount paths must be unique",
         "errVpc": "BYO mounts need at least one subnet and one security group",
         "fsSummary": "Session storage {{session}} · S3 Files {{s3}} · EFS {{efs}}",
+        "fsNoteSession": "Managed session storage keeps files under the mount path across stop/resume of the same session (up to 1 GB per session, 14-day idle expiry). Every re-publish creates a new version and resets it. S3 Files / EFS mounts are available on the Other Agent SDK method only.",
         "skillsHintSources": "Published Skills from the Registry; you can also upload a zip or import from a Git repository.",
         "skillUpload": "Upload .zip",
         "skillGit": "Import from Git",
@@ -5706,7 +5723,16 @@
       "recordsSub": "Input is required; expected output is the ground truth some evaluators need.",
       "addRow": "Add record",
       "inputPlaceholder": "User input",
-      "expectedPlaceholder": "Expected output (optional)"
+      "expectedPlaceholder": "Expected output (optional)",
+      "copySelected": "Copy selected to a new dataset ({{count}})",
+      "copyPickHint": "Tick the records to copy below first.",
+      "pickAll": "Select all",
+      "pickRow": "Select record {{n}}",
+      "copyTitle": "Copy {{count}} records to a new dataset",
+      "copyHint": "Copies the selected records as stored — every turn's input and reference answer, the assertions and the expected tool trajectory; the source dataset is unchanged.",
+      "copyConfirm": "Create dataset",
+      "copyDescription": "{{count}} records copied from “{{name}}”.",
+      "copied": "Created dataset “{{name}}” ({{count}} records)."
     },
     "pipelines": {
       "colName": "Task name / description",
@@ -6002,6 +6028,7 @@
     },
     "taskDetail": {
       "overview": "Overview",
+      "budgetStops": "{{count}} scenario(s) used up the agent's execution budget and are scored as they stand: {{list}}",
       "sessions": "Sessions",
       "queue": "Queue",
       "queuePos": "Position {{n}}",
@@ -6419,7 +6446,19 @@
       "finish": "Finish",
       "pipeline": "Ramp flow",
       "sourceExp": "Source experiment",
-      "targets": "Targets"
+      "targets": "Targets",
+      "paired": {
+        "budgetStop": "budget stop",
+        "meanDiff": "Mean difference",
+        "winLoss": "Better / worse / equal",
+        "pValue": "p-value",
+        "questions": "Questions",
+        "calls": "Calls",
+        "summary": "{{complete}} of {{sent}} questions answered by both versions",
+        "perQuestion": "Per question ({{n}})",
+        "question": "Question",
+        "prompt": "Prompt"
+      }
     },
     "chat": {
       "desc": "Talk to any active agent over the same invoke chain as the public /v1 API — replies stream live over SSE.",
@@ -6603,7 +6642,15 @@
         "nsKeys": "Namespace variables",
         "nsKey": "Key",
         "nsValues": "Allowed values",
-        "nsRegex": "Regex pattern"
+        "nsRegex": "Regex pattern",
+        "external": "Not managed",
+        "externalHint": "Detected in this account but not managed by the workspace: it cannot be opened, edited, deleted or pinned by an agent. An administrator can adopt it.",
+        "adopt": "Adopt",
+        "adoptTitle": "Adopt memory",
+        "adoptBody": "Bring {{id}} under this workspace's management? Members with the memory.manage permission will then be able to pin it to agents, edit it and delete it — deleting erases every event and record.",
+        "adopted": "{{id}} is now managed by this workspace.",
+        "adoptFailed": "Adopt failed: {{msg}}",
+        "noPermission": "Your account lacks the memory.manage permission."
       }
     },
     "observability": {
@@ -7362,13 +7409,14 @@
         "demoteBody": "Revoke {{username}}'s administrator rights? As a member the account keeps only its agent permissions and granted workspaces."
       },
       "perm": {
-        "deploy": "Deploy",
-        "import": "Import",
-        "delete": "Delete",
-        "convert": "Convert",
-        "run": "Eval run",
-        "manage": "Manage identity",
-        "grant": "Grant own access"
+        "agents_deploy": "Deploy",
+        "agents_import": "Import",
+        "agents_delete": "Delete",
+        "agents_convert": "Convert",
+        "eval_run": "Eval run",
+        "identity_manage": "Manage identity",
+        "memory_manage": "Memory",
+        "identity_grant": "Grant own access"
       }
     },
     "workspaces": {
@@ -7510,6 +7558,8 @@
       "updatedBy": "Last saved by"
     },
     "rec": {
+      "showEarlier": "Earlier recommendations ({{count}})",
+      "hideEarlier": "Hide earlier recommendations",
       "title": "Recommendations",
       "sub": "AgentCore Recommendations read this run's traces",
       "new": "New recommendation",
@@ -7549,6 +7599,7 @@
       },
       "running": "Running on AWS ({{id}}), refreshing automatically…",
       "skippedTools": "Dropped because they never appear in the traces: {{tools}}",
+      "excludedSessions": "Left out {{n}} red-team test session(s) ({{scenarios}}): AgentCore Recommendations refuses traces with prompt-injection or red-line-pushing content. These scenarios are still evaluated.",
       "explanation": "Explanation",
       "copy": "Copy prompt",
       "copyTools": "Copy tool descriptions",
@@ -7587,9 +7638,19 @@
         "toolsNotApplied": "Tool-description recommendations are not written into a Harness version: a Gateway tool's description belongs to its Gateway target.",
         "startedToast": "Accepted — publishing a new Harness version.",
         "confirmTitle": "Accept this recommendation?",
-        "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback."
+        "confirmBody": "Launchpad re-publishes the Harness with the recommended system prompt. AWS creates a new, immutable Harness version and the DEFAULT endpoint (production) switches to it; earlier versions stay available for the canary in step 4 and for rollback.",
+        "buttonEdited": "Publish the edited prompt",
+        "reviewHint": "Review it before publishing: an AI recommendation can loosen a red line (for example turning a ban into \"allowed after the user confirms\"). Edit it below — what you publish is this text.",
+        "reviewLabel": "System prompt to publish",
+        "editedNote": "Edited: the acceptance is recorded as edited by you.",
+        "resetEdit": "Reset to the recommendation",
+        "acceptedEdited": "The prompt was edited before publishing."
       },
-      "toolDiff": "Tool description"
+      "toolDiff": "Tool description",
+      "modelRequired": "Enter the custom model ID.",
+      "providerNote": "GEPA-lite runs one Bedrock reflection over this run's evaluator scores, judge explanations and session transcripts and proposes a revised system prompt directly — without the AgentCore recommendation service (use it, for example, when that service refuses the input). Tool-description recommendations still come from AgentCore.",
+      "providerAllEvaluators": "all evaluators",
+      "providerTag": "The provider and model that produced this recommendation"
     },
     "connections": {
       "title": "Connections",

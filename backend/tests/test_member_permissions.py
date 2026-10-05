@@ -40,6 +40,10 @@ PROBES = [
     ("identity.grant", "POST", "/api/identity/oauth/complete", {}, 422),
     # a Connection name outside the pattern fails path validation
     ("identity.grant", "DELETE", "/api/identity/grants/not%20a%20name", None, 422),
+    ("memory.manage", "POST", "/api/memory/resources", {}, 422),
+    ("memory.manage", "PUT", "/api/memory/resources/no-such-memory", {}, 422),
+    # ownership is checked before any AWS call: an unmanaged id answers 404
+    ("memory.manage", "DELETE", "/api/memory/resources/no-such-memory", None, 404),
 ]
 
 

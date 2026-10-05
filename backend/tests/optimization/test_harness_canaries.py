@@ -436,7 +436,9 @@ def test_early_complete_is_only_a_harness_50_50_win_or_tie(client, monkeypatch, 
     assert runs == []
 
 
-def test_traffic_posts_the_invoke_harness_body_under_the_ab_filter(monkeypatch):
+def test_traffic_sends_every_prompt_to_both_endpoints(monkeypatch):
+    """A Harness canary replays PAIRED: each prompt goes to the control AND the
+    treatment endpoint (no gateway A/B split), one fresh session per side."""
     agent_id = _agent()
     canary_id = _canary(agent_id)
     db = SessionLocal()
@@ -444,25 +446,35 @@ def test_traffic_posts_the_invoke_harness_body_under_the_ab_filter(monkeypatch):
     row.artifacts = {**row.artifacts, "setup": _setup_artifact(canary_id)}
     db.commit()
     db.close()
-    data = MagicMock()
-    data.get_ab_test.return_value = {}
-    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
-    seen: dict = {}
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: MagicMock())
+    monkeypatch.setattr(exp_svc, "send_gateway_traffic",
+                        lambda *a, **k: pytest.fail("a Harness replay never uses the gateway"))
+    calls: list[dict] = []
 
-    def send(url, target, prompts, workspace, **kw):
-        seen.update(url=url, target=target, **kw)
-        return {"session_ids": ["s"], "sent": 1, "failed": 0}
+    def invoke(_client, arn, prompt, session_id=None, actor_id="default", **kw):
+        calls.append({"arn": arn, "prompt": prompt, "sid": session_id, "actor": actor_id, **kw})
+        return {"text": "ok", "session_id": session_id}
 
-    monkeypatch.setattr(exp_svc, "send_gateway_traffic", send)
+    monkeypatch.setattr(canary_svc.hc, "invoke_harness_text", invoke)
 
-    canary_svc.act_traffic(canary_id, ["hello"], {"dataset_id": "d"}, lambda _m: None)
+    attempt = canary_svc.act_traffic(canary_id, ["hello", "world"], {"dataset_id": "d"},
+                                     lambda _m: None, scenario_ids=["S01", "S02"])
 
-    assert seen["target"] == "canctl"
-    # the trailing slash is what the A/B gatewayFilter /<target>/* intercepts
-    assert seen["path_suffix"] == "/"
-    body = seen["body_for"]("hello", "sid")
-    assert body["messages"] == [{"role": "user", "content": [{"text": "hello"}]}]
-    assert body["actorId"].startswith(agent_id)
+    assert attempt["mode"] == "paired" and attempt["sent"] == 4 and attempt["failed"] == 0
+    qualifiers = sorted((c["prompt"], c["qualifier"]) for c in calls)
+    stable, treatment = (canary_harness.control_endpoint(canary_id),
+                         canary_harness.treatment_endpoint(canary_id))
+    assert qualifiers == sorted([("hello", stable), ("hello", treatment),
+                                 ("world", stable), ("world", treatment)])
+    assert all(c["arn"] == HARNESS_ARN and c["actor"].startswith(agent_id) for c in calls)
+    assert len({c["sid"] for c in calls}) == 4
+    pair = attempt["pairs"][0]
+    assert pair["scenario_id"] == "S01"
+    assert pair["control_session_id"] != pair["treatment_session_id"]
+    db = SessionLocal()
+    stored = db.get(RuntimeCanary, canary_id).artifacts["rounds"][0]["traffic_attempts"][0]
+    db.close()
+    assert stored["mode"] == "paired" and len(stored["pairs"]) == 2
 
 
 def test_rollback_republishes_the_control_version(monkeypatch):

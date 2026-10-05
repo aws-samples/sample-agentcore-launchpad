@@ -199,6 +199,53 @@ def _wait_for_fresh_telemetry(
     )
 
 
+# A scenario whose invocation hits an upstream hiccup is replayed this many more times,
+# each in a fresh session, before the run fails (live 2026-10-04: one transient
+# "The server had an error while processing your request" failed a 10-scenario run;
+# the same prompt replayed cleanly 3/3).
+TRANSIENT_SCENARIO_RETRIES = 2
+# A timed-out attempt already spent the agent's whole budget, so it gets one replay only.
+TIMEOUT_SCENARIO_RETRIES = 1
+# The agent spent its own budget on the scenario (timeout after its replay, iteration /
+# token limit): that is the scenario's result — its session is scored as it stands and
+# recorded in ``EvalRun.budget_stops`` instead of failing the whole run.
+BUDGET_STOP_CODES = frozenset({"harness.execution_timeout", "harness.execution_limit"})
+_TRANSIENT_CODES = frozenset({
+    "runtimeClientError", "internalServerException", "InternalServerException",
+    "throttlingException", "ThrottlingException", "serviceUnavailableException",
+    "ServiceUnavailableException",
+})
+
+
+def transient_invoke_error(exc: BaseException) -> bool:
+    """An upstream failure worth replaying the scenario: a mid-stream
+    ``runtimeClientError`` / ``internalServerException`` (botocore's
+    ``EventStreamError``, or the ``RuntimeError`` ``iter_harness_stream`` raises for
+    those events), throttling, a 5xx, or a Harness loop that stopped right after a
+    tool step without answering (``harness.incomplete_response`` with stop reason
+    ``tool_result`` / ``tool_use`` — live 2026-10-04: 1 of 3 replays of a research
+    prompt, the other replays answered normally), or a Harness execution timeout
+    (live 2026-10-04: a model call that never returned held a research scenario
+    silent until the 600 s budget ran out — retried at most
+    ``TIMEOUT_SCENARIO_RETRIES`` times). Iteration / token limits and every other
+    error are final."""
+    if isinstance(exc, AppError):
+        if exc.code == "harness.execution_timeout":
+            return True
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        # stop_reason None: the stream closed with neither a stop event nor any text —
+        # the agent never ran (live 2026-10-04: no span at all for that session).
+        return exc.code == "harness.incomplete_response" and detail.get("stop_reason") in {
+            "tool_result", "tool_use", None}
+    if isinstance(exc, ClientError):
+        error = exc.response.get("Error") or {}
+        status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
+        return error.get("Code") in _TRANSIENT_CODES or int(status) >= 500
+    if isinstance(exc, RuntimeError):
+        return str(exc).startswith(("runtime client error", "internal server error"))
+    return False
+
+
 def execute_run(
     run_id: str,
     *,
@@ -294,35 +341,59 @@ def execute_run(
                     runtime_user_id=runtime_user_id,
                 )
 
+            budget_stops: list[dict[str, str]] = []
             _update(run_id, status="invoking")
             for scenario in scenarios:
                 _check_stop(run_id)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
                 sid: str | None = None
-                if simulation.is_simulated(scenario):
-                    sim_kwargs: dict[str, Any] = {}
-                    if inbound_jwt:
-                        # JWT runtimes: persona turns Bearer-invoke like replay turns
-                        sim_kwargs["invoke_text"] = invoke
-                    sid = simulation.run_simulated_scenario(
-                        data,
-                        agent_arn=agent_arn,
-                        method=method,
-                        scenario=scenario,
-                        actor_model_id=actor_model_id or "",
-                        protocol=protocol,
-                        runtime_user_id=runtime_user_id,
-                        **sim_kwargs,
-                    )
-                else:
-                    for prompt in scenario_prompts(scenario):
+                for retry in range(TRANSIENT_SCENARIO_RETRIES + 1):
+                    try:
+                        sid = None  # a replay starts the whole scenario in a fresh session
+                        if simulation.is_simulated(scenario):
+                            sim_kwargs: dict[str, Any] = {}
+                            if inbound_jwt:
+                                # JWT runtimes: persona turns Bearer-invoke like replay turns
+                                sim_kwargs["invoke_text"] = invoke
+                            sid = simulation.run_simulated_scenario(
+                                data,
+                                agent_arn=agent_arn,
+                                method=method,
+                                scenario=scenario,
+                                actor_model_id=actor_model_id or "",
+                                protocol=protocol,
+                                runtime_user_id=runtime_user_id,
+                                **sim_kwargs,
+                            )
+                        else:
+                            for prompt in scenario_prompts(scenario):
+                                _check_stop(run_id)
+                                sid = invoke(prompt, sid)["session_id"]
+                        break
+                    except Exception as exc:
+                        timed_out = getattr(exc, "code", None) == "harness.execution_timeout"
+                        if (retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc)
+                                or (timed_out and retry >= TIMEOUT_SCENARIO_RETRIES)):
+                            code = getattr(exc, "code", None)
+                            if code not in BUDGET_STOP_CODES or not attempt.get("session_id"):
+                                raise
+                            sid = attempt["session_id"]
+                            detail = getattr(exc, "detail", None)
+                            budget_stops.append({
+                                "scenario_id": attempt["scenario_id"], "session_id": sid,
+                                "code": code, "stop_reason": str(
+                                    (detail if isinstance(detail, dict) else {})
+                                    .get("stop_reason") or ""),
+                            })
+                            break
                         _check_stop(run_id)
-                        sid = invoke(prompt, sid)["session_id"]
+                        attempt["retried"] = str(retry + 1)
                 session_ids.append(sid)
                 watermark_sid = sid
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
-                _update(run_id, session_ids=list(session_ids))
+                _update(run_id, session_ids=list(session_ids),
+                        budget_stops=list(budget_stops) or None)
             if session_metadata is None:
                 session_metadata = metadata_entries or None
             _check_stop(run_id)
@@ -378,7 +449,9 @@ def execute_run(
         parts.extend(f"{key}={value}" for key, value in attempt.items())
         _update(run_id, status="failed", error=" · ".join(parts)[:500])
     except Exception as exc:
-        _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+        parts = [f"{type(exc).__name__}: {exc}"[:400]]
+        parts.extend(f"{key}={value}" for key, value in attempt.items())
+        _update(run_id, status="failed", error=" · ".join(parts)[:500])
     finally:
         stop_flags.clear(run_id)
 
@@ -440,7 +513,8 @@ def _finish_from_result(
         parsed = (
             {"insights": ac.parse_insights(result)}
             if mode == "insights"
-            else {"scores": ac.parse_eval_scores(result)}
+            else {"scores": ac.parse_eval_scores(
+                result, records_reader=_records_reader(workspace, result))}
         )
         _update(run_id, status="stopped", error=reason[:500], **parsed)
         return
@@ -469,8 +543,18 @@ def _finish_from_result(
         _update(run_id, status="completed", insights=ac.parse_insights(result),
                 error=error)
     else:
-        _update(run_id, status="completed", scores=ac.parse_eval_scores(result),
-                error=error)
+        scores = ac.parse_eval_scores(
+            result, records_reader=_records_reader(workspace, result))
+        _update(run_id, status="completed", scores=scores, error=error)
+
+
+def _records_reader(workspace: WorkspaceContext | None, result: dict[str, Any]) -> Any:
+    """Lazy reader of a finished batch's results-stream records, for the
+    evaluators AWS summarises without an average (``parse_eval_scores``)."""
+    location = ac.results_stream(result)
+    if workspace is None or location is None:
+        return None
+    return lambda: ac.read_result_records(workspace.client("logs"), *location)
 
 
 def reconcile_run(

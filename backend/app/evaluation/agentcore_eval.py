@@ -120,18 +120,18 @@ TRAJECTORY_EVALUATORS: dict[str, str] = {
     "Builtin.TrajectoryAnyOrderMatch": "SESSION",
 }
 
-# Evaluators whose score is a *penalty*: the judge answers "Yes" / "Harmful" /
-# "Stereotyping" when the response is BAD, so the lower-mean arm is the better
-# arm. Built-ins verified against the AWS prompt templates (AgentCore docs:
-# prompt-templates-builtin); DeepEval Bias and Toxicity score the share of
-# biased / toxic opinions. DeepEval PIILeakage is the opposite — non-PII
+# Evaluators whose score is a *penalty*: Builtin.Refusal scores "Yes" = 1.0 when the
+# agent refused, so the lower-mean arm is the better arm; DeepEval Bias and Toxicity
+# score the share of biased / toxic opinions. Builtin.Harmfulness and
+# Builtin.Stereotyping are NOT penalties on the live service: their scale is
+# "Not Harmful" / "Not Stereotyping" = 1.0 and "Harmful" / "Stereotyping" = 0.0
+# (results log groups, us-east-1 + us-west-2, 2026-10-04), so they stay
+# higher-is-better. DeepEval PIILeakage is the opposite — non-PII
 # statements / all extracted statements, so 1.0 means no leakage — and stays
 # higher-is-better like every other evaluator.
 LOWER_IS_BETTER_EVALUATORS = frozenset(
     {
         "Builtin.Refusal",
-        "Builtin.Harmfulness",
-        "Builtin.Stereotyping",
         "ThirdParty.DeepEval.Bias",
         "ThirdParty.DeepEval.Toxicity",
     }
@@ -428,15 +428,62 @@ def normalize_result_record(attrs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_eval_scores(result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Pull per-evaluator average scores from a get_batch_evaluation result."""
-    out: list[dict[str, Any]] = []
+def _record_evaluator_id(attrs: dict[str, Any]) -> str | None:
+    """The evaluator id a results-stream record belongs to: the tail of its
+    evaluator ARN (``…:evaluator/<id>``), else its bare ``gen_ai.evaluation.name``."""
+    arn = attrs.get("aws.bedrock_agentcore.evaluator.arn")
+    if isinstance(arn, str) and "/" in arn:
+        return arn.rsplit("/", 1)[-1]
+    name = attrs.get("gen_ai.evaluation.name")
+    return str(name) if name else None
+
+
+def parse_eval_scores(
+    result: dict[str, Any], *, records_reader: Any = None
+) -> list[dict[str, Any]]:
+    """Per-evaluator average scores of a get_batch_evaluation result, each with
+    the number of judgements it averages (``count`` = ``totalEvaluated``, when
+    AWS reports it) so a cross-evaluator mean can weight them like the run's
+    per-result view does.
+
+    AWS leaves ``statistics`` empty for a code-based evaluator (live 2026-10-05:
+    18 sessions evaluated, 0 failed, no ``averageScore``), which used to drop it
+    from the run's scores. ``records_reader`` — called only then, best-effort —
+    returns the batch's own results-stream records, and that evaluator's mean is
+    computed from its scored records instead."""
+    out: list[dict[str, Any] | None] = []
+    missing: dict[int, str] = {}
     er = result.get("evaluationResults", {})
     for s in er.get("evaluatorSummaries", []):
-        avg = s.get("statistics", {}).get("averageScore")
+        evaluator_id = s.get("evaluatorId")
+        avg = (s.get("statistics") or {}).get("averageScore")
+        count = s.get("totalEvaluated")
         if avg is not None:
-            out.append({"evaluatorId": s.get("evaluatorId"), "score": avg})
-    return out
+            entry: dict[str, Any] = {"evaluatorId": evaluator_id, "score": avg}
+            if isinstance(count, int) and count > 0:
+                entry["count"] = count
+            out.append(entry)
+        elif evaluator_id and isinstance(count, int) and count > 0:
+            missing[len(out)] = str(evaluator_id)
+            out.append(None)
+    if missing and records_reader is not None:
+        try:
+            records = records_reader() or []
+        except Exception:  # an unreadable stream leaves those evaluators out, as before
+            records = []
+        values: dict[str, list[float]] = {}
+        for attrs in records:
+            score = _score_value(attrs.get("gen_ai.evaluation.score.value"))
+            evaluator_id = _record_evaluator_id(attrs)
+            if score is not None and evaluator_id:
+                values.setdefault(evaluator_id, []).append(score)
+        for index, evaluator_id in missing.items():
+            scored = values.get(evaluator_id)
+            if scored:
+                out[index] = {"evaluatorId": evaluator_id,
+                              "score": round(sum(scored) / len(scored), 2),
+                              "count": len(scored)}
+    return [entry for entry in out if entry is not None]
 
 
 def poll_batch_evaluation(
@@ -825,6 +872,7 @@ def start_system_prompt_recommendation(
     log_group_arns: list[str] | None = None,
     service_names: list[str] | None = None,
     batch_evaluation_arn: str | None = None,
+    session_spans: list[dict[str, Any]] | None = None,
     evaluator_arn: str = _GSR_EVALUATOR_ARN,
 ) -> dict[str, Any]:
     return client.start_recommendation(
@@ -837,6 +885,7 @@ def start_system_prompt_recommendation(
                     log_group_arns=log_group_arns,
                     service_names=service_names,
                     batch_evaluation_arn=batch_evaluation_arn,
+                    session_spans=session_spans,
                 ),
                 "evaluationConfig": {
                     "evaluators": [{"evaluatorArn": evaluator_arn}]

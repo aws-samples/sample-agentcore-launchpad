@@ -60,6 +60,7 @@ export function ProposalView({
   const golden = Array.isArray(c.golden_tests) ? c.golden_tests : [];
   const b = proposal.bindings;
   const nativeChoices = list(c.native_tools);
+  const builtinChoices = list(c.builtin_tools);
   const toolsOverride = b?.allowed_tools;
   // what the deploy will actually expose per Gateway: the reviewed bindings' config.tools
   // (a narrowing or the record's declared callables), else the record's own target scope
@@ -118,6 +119,12 @@ export function ProposalView({
               ? nativeChoices.map((tool) => t(`create.nativeTools.${tool}`, { defaultValue: tool })).join(" · ")
               : t(selectedToolPolicy && toolsOverride == null ? "create.nativeTools.unavailable" : "create.nativeTools.none"),
           },
+          ...(builtinChoices.length
+            ? [{
+                label: t("v2.agents.wizard.builtinTools"),
+                value: builtinChoices.map((tool) => t(`v2.agents.wizard.builtin.${tool}`, { defaultValue: tool })).join(" · "),
+              }]
+            : []),
           { label: t("assistantPage.field.skills"), value: tags(list(c.skills), "v2-assistant-proposal-skills") },
           { label: t("assistantPage.field.kbs"), value: tags(list(c.knowledge_bases), "v2-assistant-proposal-kbs") },
           {

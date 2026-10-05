@@ -46,6 +46,29 @@ def wrap_params_for_update(params: dict[str, Any]) -> dict[str, Any]:
     return update
 
 
+# HarnessAgentCoreRuntimeEnvironmentRequest members — GetHarness also echoes the
+# read-only backing-runtime identifiers (agentRuntimeArn/Name/Id), which Update refuses.
+_ENVIRONMENT_REQUEST_FIELDS = ("lifecycleConfiguration", "networkConfiguration")
+
+
+def environment_for_update(
+    live: Mapping[str, Any], session_storage: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """UpdateHarness ``environment`` that sets the platform-owned session storage and
+    keeps everything else the live harness carries.
+
+    UpdateHarness replaces ``filesystemConfigurations`` wholesale (``[]`` detaches
+    every mount; an omitted ``environment`` keeps the old one — probed live), so the
+    live list is read back and only its ``sessionStorage`` entry is swapped: EFS /
+    S3 Files mounts and network/lifecycle settings made outside the platform (an
+    imported harness) survive a re-publish."""
+    env = (live.get("environment") or {}).get("agentCoreRuntimeEnvironment") or {}
+    request = {k: env[k] for k in _ENVIRONMENT_REQUEST_FIELDS if env.get(k)}
+    kept = [fs for fs in env.get("filesystemConfigurations") or [] if "sessionStorage" not in fs]
+    request["filesystemConfigurations"] = [*session_storage, *kept]
+    return {"agentCoreRuntimeEnvironment": request}
+
+
 def get_harness(
     client: Any, harness_id: str, version: str | None = None
 ) -> dict[str, Any]:

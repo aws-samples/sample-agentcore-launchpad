@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../../../auth/auth-context";
 import { Markdown } from "../../../components";
 import type { AssistantCatalog, AssistantConversationDetail } from "../../../lib/api";
-import { type AssistantLiveMessage, stripProposalBlock } from "../../../lib/assistant";
+import { type AssistantLiveMessage, retryableTurn, stripProposalBlock, TURN_RETRIED_NAME } from "../../../lib/assistant";
 import { Alert, Button, Descriptions, LinkButton, Tag } from "../../ui";
 import { SECTION_IDS } from "./common";
 
@@ -13,6 +13,7 @@ export const COMPOSER_ID = "v2-assistant-input";
 /** The streaming transcript, the composer and the workspace catalog summary. */
 export function DiscussionCard({
   conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog, threadRef,
+  retryOf, onRetry,
 }: {
   conversation: AssistantConversationDetail;
   messages: AssistantLiveMessage[];
@@ -23,6 +24,10 @@ export function DiscussionCard({
   onSend: () => void;
   onRefreshCatalog: () => void;
   threadRef: RefObject<HTMLDivElement>;
+  /** the failed turn the composer will retry (null = an ordinary new turn) */
+  retryOf: number | null;
+  /** start (turn, prompt) or cancel (null) an edit-and-retry */
+  onRetry: (target: { turn: number; prompt: string } | null) => void;
 }) {
   const { t } = useTranslation();
   const { username } = useAuth();
@@ -31,6 +36,13 @@ export function DiscussionCard({
     author && author !== username ? author : t("assistantPage.you");
   const marker = t("assistantPage.proposalInText");
   const sendDisabled = busy || preparing || !input.trim() || conversation.turn_in_progress !== null;
+  const retryable = busy ? null : retryableTurn(messages);
+  let lastErrorIndex = -1;
+  if (retryable) {
+    messages.forEach((m, i) => {
+      if (m.role === "error" && m.turn === retryable.turn && m.name !== "proposal_rejected") lastErrorIndex = i;
+    });
+  }
   return (
     <section id={SECTION_IDS.discussion} className="v2-card" data-testid="v2-assistant-discussion">
       <div className="v2-card-body">
@@ -72,9 +84,20 @@ export function DiscussionCard({
                   </span>
                 )}
               </div>
+            ) : msg.name === TURN_RETRIED_NAME ? (
+              <div key={i} className="v2-muted" style={{ fontSize: 12.5 }} data-testid="v2-assistant-turn-retried">
+                {t("assistantPage.turnRetried")}
+              </div>
             ) : (
               <div key={i} data-testid="v2-assistant-turn-error">
-                <Alert tone="error">
+                <Alert
+                  tone="error"
+                  action={i === lastErrorIndex && retryable && retryOf === null ? (
+                    <button type="button" className="v2-link" onClick={() => onRetry(retryable)} data-testid="v2-assistant-retry">
+                      {t("assistantPage.editRetry")}
+                    </button>
+                  ) : undefined}
+                >
                   {msg.name === "proposal_rejected" ? (
                     <>
                       {t("assistantPage.rejectedNote")}
@@ -110,6 +133,16 @@ export function DiscussionCard({
             disabled={busy}
             data-testid="v2-assistant-input"
           />
+          {retryOf !== null && (
+            <div style={{ marginTop: 8 }} data-testid="v2-assistant-retry-note">
+              <Alert
+                tone="warn"
+                action={<button type="button" className="v2-link" onClick={() => onRetry(null)}>{t("v2.common.cancel")}</button>}
+              >
+                {t("assistantPage.retryNote", { turn: retryOf })}
+              </Alert>
+            </div>
+          )}
           <div className="bar">
             <span className="v2-muted">{t("assistantPage.discussionNote")}</span>
             <Button kind="primary" disabled={sendDisabled} onClick={onSend} testId="v2-assistant-send">

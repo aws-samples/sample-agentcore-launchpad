@@ -60,6 +60,8 @@ def _pre_p2_database(tmp_path):
             "uq_user_grants_ws_user_provider_agent",
         ):
             conn.execute(sa.text(f"DROP INDEX {index}"))
+        # and the memory-ownership index (issue #55)
+        conn.execute(sa.text("DROP INDEX uq_managed_memories_workspace_memory"))
         for table in WORKSPACE_SCOPED_TABLES:
             conn.execute(sa.text(f"DROP INDEX ix_{table}_workspace_id"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))

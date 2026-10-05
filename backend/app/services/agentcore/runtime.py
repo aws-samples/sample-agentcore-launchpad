@@ -71,6 +71,7 @@ def create_code_runtime(
     entrypoint: str | None = None,
     instrument: bool = True,
     authorizer_configuration: dict[str, Any] | None = None,
+    filesystem_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
@@ -94,6 +95,8 @@ def create_code_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if filesystem_configurations:
+        params["filesystemConfigurations"] = filesystem_configurations
     return client.create_agent_runtime(**params)
 
 
@@ -181,12 +184,15 @@ def update_code_runtime(
     entrypoint: str | None = None,
     instrument: bool = True,
     authorizer_configuration: dict[str, Any] | None = None,
+    filesystem_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
 
     ``protocol`` must be passed for A2A agents on EVERY update — the service
-    resets an omitted protocolConfiguration back to HTTP (probed live). The
+    resets an omitted protocolConfiguration back to HTTP (probed live). The same
+    holds for ``filesystem_configurations``: an omitted list detaches every mount
+    (probed live 2026-10-04), so a re-publish must echo it each time. The
     authorizer rides the same call: every update passes the RESOLVED inbound
     auth — echoing the JWT config keeps (or sets) it, omitting it switches the
     runtime back to IAM/SigV4, which is also how JWT→IAM transitions are
@@ -206,6 +212,8 @@ def update_code_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if filesystem_configurations:
+        params["filesystemConfigurations"] = filesystem_configurations
     return client.update_agent_runtime(**params)
 
 

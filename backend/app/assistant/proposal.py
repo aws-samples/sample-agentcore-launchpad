@@ -88,6 +88,11 @@ class GoldenTest(BaseModel):
     pass_criteria: Annotated[str, Field(max_length=1000)] = ""
     evaluator: Annotated[str, Field(max_length=200)] = ""
     source: Literal["customer_pain_point", "industry_assumption"] = "industry_assumption"
+    # A red-team test: the input deliberately pushes the agent across a red line —
+    # embedded instructions / role overrides, use of insider or nonpublic information,
+    # pressure for prohibited advice. Still evaluated; AgentCore Recommendations rejects
+    # traces that contain such content, so AI recommendations leave it out.
+    adversarial: bool = False
 
 
 class EvaluationPlanSeed(BaseModel):
@@ -234,17 +239,20 @@ class ProposalContent(BaseModel):
     # from the stored content when absent (hash stability, like ``evaluation_plan``).
     tool_functions: dict[Key, Annotated[list[ToolName], Field(min_length=1, max_length=50)]] \
         | None = Field(default=None, max_length=20)
-    # Explicit opt-in to native command/filesystem tools; these are not attachments.
+    # Native command/filesystem tools (not attachments): a proposal starts with both,
+    # like the Create Agent wizard; an explicit list (including []) is kept as given.
     native_tools: list[Literal["shell", "file_operations"]] = Field(
-        default_factory=list, max_length=2,
+        default_factory=lambda: ["shell", "file_operations"], max_length=2,
     )
+    # AgentCore built-in tools mounted on the Harness (ToolRef type "builtin").
+    builtin_tools: list[Literal["code-interpreter"]] = Field(default_factory=list, max_length=1)
     # Catalog skill names (registry AGENT_SKILLS records), never S3 paths.
     skills: list[Key] = Field(default_factory=list, max_length=10)
     # Managed knowledge base ids present in the catalog.
     knowledge_bases: list[Key] = Field(default_factory=list, max_length=10)
     memory: MemoryMode = "disabled"
-    max_iterations: int = Field(default=10, ge=1, le=100)
-    timeout_seconds: int = Field(default=180, ge=10, le=3600)
+    max_iterations: int = Field(default=100, ge=1, le=100)
+    timeout_seconds: int = Field(default=600, ge=10, le=3600)
     # Solution content, shown for review and kept with the revision.
     summary: Annotated[str, Field(max_length=4000)] = ""
     requirements_baseline: list[Line] = Field(default_factory=list, max_length=40)
@@ -283,7 +291,7 @@ def serialized_bytes(raw: Any) -> int:
 
 def _check_lists(content: ProposalContent) -> list[str]:
     errors: list[str] = []
-    for field in ("tools", "skills", "knowledge_bases", "native_tools"):
+    for field in ("tools", "skills", "knowledge_bases", "native_tools", "builtin_tools"):
         values = getattr(content, field)
         if len(values) != len(set(values)):
             errors.append(f"{field} must not repeat an entry")
@@ -602,6 +610,7 @@ def to_agent_spec(content: ProposalContent, catalog: dict[str, Any]) -> AgentSpe
             tools.append(ToolRef(type="gateway", name=entry["name"], config=config))
         else:
             tools.append(ToolRef(type="mcp", name=entry["name"], config={"url": entry["url"]}))
+    tools += [ToolRef(type="builtin", name=name) for name in content.builtin_tools]
     skills = [index["skills"][key]["path"] for key in content.skills]
     kbs = [
         KnowledgeBaseRef(

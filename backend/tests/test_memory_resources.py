@@ -21,7 +21,7 @@ from botocore.exceptions import ClientError
 
 import app.services.memory_admin as ma
 from app.core.db import SessionLocal
-from app.models.ledger import Agent
+from app.models.ledger import Agent, ManagedMemory
 
 from .conftest import set_default_resources
 
@@ -105,6 +105,15 @@ def wire(monkeypatch, control=None):
     control = control or StubControl()
     monkeypatch.setattr(ma, "control_client", lambda _ws=None: control)
     return control
+
+
+def manage(memory_id: str) -> None:
+    """Mark ``memory_id`` as managed by the default workspace (as a console create
+    or an adopt would) — per-id routes answer 404 for any other non-default id."""
+    db = SessionLocal()
+    db.add(ManagedMemory(workspace_id="default", memory_id=memory_id, origin="created"))
+    db.commit()
+    db.close()
 
 
 def make_agent(name="mem-pinned-agent", memory_id=None) -> str:
@@ -387,6 +396,7 @@ def test_update_unknown_memory_maps_to_the_not_found_envelope(
             )
 
     wire(monkeypatch, Missing())
+    manage("ghost-000000")  # managed, but deleted on AWS out of band
     res = client.put("/api/memory/resources/ghost-000000", json={"description": "x"})
     assert res.status_code == 404
     assert res.json()["code"] == "aws.not_found"
@@ -398,6 +408,7 @@ def test_update_is_not_blocked_by_referencing_agents_or_the_default(
     """Unlike delete, edit has no 409 guard: a new description or expiry cannot
     break the agents on the memory (the console names them in its confirm)."""
     control = wire(monkeypatch)
+    manage("team_notes-XYZ789")
     make_agent(memory_id="team_notes-XYZ789")
     control.memory["memory"]["id"] = "team_notes-XYZ789"
     res = client.put(
@@ -437,6 +448,7 @@ def test_delete_refuses_the_platform_default(client, configured, monkeypatch):
 
 def test_delete_refuses_a_memory_a_live_agent_pins(client, configured, monkeypatch):
     control = wire(monkeypatch)
+    manage("team_notes-XYZ789")
     make_agent(memory_id="team_notes-XYZ789")
     res = client.delete("/api/memory/resources/team_notes-XYZ789")
     assert res.status_code == 409
@@ -446,6 +458,7 @@ def test_delete_refuses_a_memory_a_live_agent_pins(client, configured, monkeypat
 
 def test_delete_removes_an_unreferenced_memory(client, configured, monkeypatch):
     control = wire(monkeypatch)
+    manage("team_notes-XYZ789")
     res = client.delete("/api/memory/resources/team_notes-XYZ789")
     assert res.status_code == 200
     assert res.json() == {"deleted": True, "id": "team_notes-XYZ789"}

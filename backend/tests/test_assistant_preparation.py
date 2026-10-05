@@ -199,7 +199,7 @@ def test_mcp_selection_is_authoritative_and_deploys_only_selected_attachments(
     with SessionLocal() as db:
         agent = db.get(Agent, approved.json()["agent"]["id"])
         assert [tool["name"] for tool in agent.spec["tools"]] == ["deepwiki"]
-        assert agent.spec["native_tools"] == []
+        assert agent.spec["native_tools"] == ["shell", "file_operations"]  # proposal default
     # Approval locks the mounted resources even while the deployment is queued.
     cleared = _save(client, cid, tools=[])
     assert cleared.status_code == 409, cleared.text
@@ -522,6 +522,7 @@ def test_adding_mcp_invalidates_zero_call_seed_without_rewriting_rules(
     cid = _open(client)
     rule = {"id": "zero", "type": "tool_count", "max": 0}
     raw = {**VALID_PROPOSAL, "tools": [], "skills": [], "knowledge_bases": [],
+           "native_tools": [],  # a zero-call rule needs no tool at all, native ones included
            "evaluation_plan": {"evaluators": [{
                "kind": "code", "key": "zero", "name": "zero_calls", "level": "SESSION",
                "title": "No tool calls",

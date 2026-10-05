@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from app.deployer.environment import runtime_environment
+from app.deployer.filesystem import filesystem_configurations
 from app.deployer.zip_runtime import (
     _generate_code,
     _method_requirements,
@@ -192,6 +193,8 @@ def mint_candidate_version(
         role_arn=role_arn,
         environment=environment,
         protocol=edited_spec.protocol,
+        # an omitted list detaches the mounts — the candidate keeps production's
+        filesystem_configurations=filesystem_configurations(edited_spec) or None,
     )
     v_candidate = str(resp["agentRuntimeVersion"])
     log(f"UpdateAgentRuntime published candidate version {v_candidate}")

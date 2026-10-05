@@ -1226,6 +1226,8 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "batch_eval_id": run.batch_eval_id,
         "scores": run.scores,
         "insights": run.insights,
+        # dataset scenarios that ended on the agent's budget and are scored as they are
+        "budget_stops": run.budget_stops or [],
         "error": run.error,
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
@@ -1511,6 +1513,16 @@ class RecommendationCreate(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=recommendations.SYSTEM_PROMPT_MAX)
     evaluator: str | None = Field(default=None, max_length=256)
     tools: list[RecommendationTool] | None = Field(default=None, max_length=100)
+    # who generates the system-prompt recommendation: the AgentCore job (default) or a
+    # registered 3rd-party provider reflecting on this run (tool descriptions stay AWS)
+    provider: Literal["agentcore", "gepa_lite"] | None = None
+    model_id: str | None = Field(default=None, max_length=200)
+
+
+class RecommendationAccept(BaseModel):
+    # the reviewed prompt to publish — the recommendation as generated when omitted;
+    # an operator edit (e.g. removing a loosened boundary) is recorded as such
+    system_prompt: str | None = Field(default=None, max_length=recommendations.SYSTEM_PROMPT_MAX)
 
 
 def _run_in(db: Session, ws: WorkspaceScope, run_id: str) -> EvalRun:
@@ -1564,6 +1576,8 @@ def create_run_recommendations(
         system_prompt=req.system_prompt,
         evaluator=req.evaluator,
         tools={t.name: t.description for t in req.tools or []},
+        provider=req.provider,
+        model_id=req.model_id,
     )
     return {"recommendations": [recommendations.out(r) for r in rows]}
 
@@ -1573,6 +1587,7 @@ def accept_run_recommendation(
     run_id: str,
     rec_id: str,
     request: Request,
+    req: RecommendationAccept | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -1585,6 +1600,14 @@ def accept_run_recommendation(
 
     run = _run_in(db, ws, run_id)
     row, agent, prompt = recommendations.acceptance_target(db, run, rec_id)
+    edited = False
+    if req is not None and req.system_prompt is not None:
+        reviewed = req.system_prompt.strip()
+        if not reviewed:
+            raise AppError("recommendation.accept_prompt_empty",
+                           "the reviewed prompt is empty", status_code=422)
+        edited = reviewed != prompt
+        prompt = reviewed
     previous_version = agent.version
     current = AgentSpec(**(agent.spec or {}))
     # the recommendation revised the LIVE prompt, which already carries the
@@ -1600,6 +1623,7 @@ def accept_run_recommendation(
         previous_version=previous_version,
         job_id=result["job_id"],
         deployment_id=result["deployment_id"],
+        edited=edited,
     )
     return {**result, "recommendation": recommendations.out(row)}
 

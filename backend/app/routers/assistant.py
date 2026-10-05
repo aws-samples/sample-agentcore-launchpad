@@ -181,6 +181,9 @@ class EvaluationPlanRepair(BaseModel):
 class TurnRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=service.MAX_PROMPT_CHARS)
     evaluation_plan_repair: EvaluationPlanRepair | None = None
+    # retry the latest FAILED turn (usually with an edited message): that exchange is
+    # kept in the thread but no longer replayed to the model
+    retry_of_turn: int | None = Field(default=None, ge=1)
 
 
 class ProposalEdit(BaseModel):
@@ -295,6 +298,8 @@ def turn(
     service._require_available(db, ws.row)
     service.require_turn_capacity(conversation)
     service.check_prompt(conversation, req.prompt)
+    if req.retry_of_turn is not None:
+        service.check_retry(db, conversation, req.retry_of_turn)
     prompt = req.prompt
     if req.evaluation_plan_repair is not None:
         prompt = evaluation_repair.repair_prompt(
@@ -313,7 +318,8 @@ def turn(
                 session, ws.id, principal, conversation_id
             )
             run.inner = service.run_turn(
-                session, conversation, workspace_row, workspace, identity, prompt, run=run
+                session, conversation, workspace_row, workspace, identity, prompt, run=run,
+                retry_of=req.retry_of_turn,
             )
             for event in run.inner:
                 yield sse_encode(event)

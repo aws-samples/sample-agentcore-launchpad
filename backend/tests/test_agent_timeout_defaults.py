@@ -7,12 +7,50 @@ from app.schemas.agent import AgentSpec
 from app.system_agents.presets import ARCHITECT
 
 
-def test_ordinary_creation_and_proposal_mapping_default_to_180_seconds():
+def test_ordinary_creation_and_proposal_mapping_default_to_600_seconds():
     spec = AgentSpec(name="ordinary-agent", method="harness", system_prompt="Be helpful.")
     proposal = ProposalContent(name="ordinary-agent", system_prompt="Be helpful.")
     mapped = to_agent_spec(proposal, {"tools": [], "skills": [], "knowledge_bases": []})
-    assert spec.timeout_seconds == proposal.timeout_seconds == mapped.timeout_seconds == 180
+    assert spec.timeout_seconds == proposal.timeout_seconds == mapped.timeout_seconds == 600
 
+
+
+def test_model_facing_guidance_names_the_schema_default():
+    """The architect protocol and skill must not steer proposals to a stale budget."""
+    import re
+    from pathlib import Path
+
+    from app.assistant import service
+
+    default = ProposalContent.model_fields["timeout_seconds"].default
+    skill = (Path(__file__).resolve().parents[1]
+             / "app/system_agents/skills/aws-agent-solution-architect")
+    texts = {
+        "protocol": service.PROTOCOL_PREAMBLE,
+        "SKILL.md": (skill / "SKILL.md").read_text(encoding="utf-8"),
+        "proposal-self-check.md": (
+            skill / "references/proposal-self-check.md"
+        ).read_text(encoding="utf-8"),
+    }
+    for name, text in texts.items():
+        named = {int(n) for n in re.findall(r"(?:[Uu]se|default) (\d+)(?= seconds| unless)", text)}
+        assert named == {default}, (name, named)
+
+
+def test_model_facing_guidance_names_the_iteration_default():
+    from pathlib import Path
+
+    from app.assistant import service
+    from app.schemas.agent import AgentSpec
+
+    default = ProposalContent.model_fields["max_iterations"].default
+    assert default == AgentSpec.model_fields["max_iterations"].default == 100
+    skill = (Path(__file__).resolve().parents[1]
+             / "app/system_agents/skills/aws-agent-solution-architect")
+    assert f"default {default})" in service.PROTOCOL_PREAMBLE
+    assert f"Default `max_iterations` to {default}" in (skill / "SKILL.md").read_text("utf-8")
+    assert f"default {default};" in (
+        skill / "references/proposal-self-check.md").read_text("utf-8")
 
 @pytest.mark.parametrize("budget", [30, 300, 900, 1200])
 def test_explicit_budgets_survive_proposal_mapping(budget):

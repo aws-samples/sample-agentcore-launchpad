@@ -160,7 +160,7 @@ export function UserDetail({ username }: { username: string }) {
                     void actions.patch(user, { permissions: { [key]: !granted } }, "usersPage.permissionsUpdated")
                   }
                 >
-                  {t(`v2.users.perm.${key.split(".")[1]}`)}
+                  {t(`v2.users.perm.${key.replace(".", "_")}`)}
                   <small className="mono">{key}</small>
                 </GrantChip>
               );

@@ -34,7 +34,7 @@ export function fmtNumber(value: number | null | undefined): string {
 
 /**
  * A 0..1 evaluator score oriented so that higher is always better (penalty
- * evaluators such as Harmfulness score HIGH when the response is bad).
+ * evaluators such as Refusal score HIGH when the agent refused).
  */
 export function normalizedScore(score: number, evaluatorId: string): number {
   return evaluatorPolarity(evaluatorId) < 0 ? 1 - score : score;

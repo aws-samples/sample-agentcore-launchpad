@@ -84,6 +84,7 @@ def test_named_write_bans_and_positive_call_rules_remain_valid(capabilities, rul
 @pytest.mark.parametrize("explicit_empty", [True, False])
 def test_truly_tool_free_proposals_accept_zero_call_rules(rule, explicit_empty):
     source = _source(rule, {})
+    source["native_tools"] = []  # tool-free means opting out of the default native tools too
     if not explicit_empty:
         for field in ("tools", "skills", "knowledge_bases"):
             source.pop(field)
@@ -105,6 +106,7 @@ def test_explicit_expected_tool_use_conflicts_even_without_catalog_capabilities(
 
 def test_blocked_golden_tools_do_not_forbid_a_tool_free_scenario():
     source = _source(ZERO_CALL_RULES[0], {})
+    source["native_tools"] = []
     source["golden_tests"].append({
         "id": "future-search", "input": "Search the report", "expected_tools": ["Retrieve"],
     })

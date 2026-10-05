@@ -34,7 +34,14 @@ from app.schemas.agent import (
     RuntimeImportRequest,
 )
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
-from app.services import agent_iam, agent_identity, agent_names, byoc_uploads, identity_providers
+from app.services import (
+    agent_iam,
+    agent_identity,
+    agent_names,
+    byoc_uploads,
+    identity_providers,
+    memory_ownership,
+)
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore import harness as harness_api
@@ -51,7 +58,7 @@ from app.services.runtime_discovery import (
     scan_harnesses,
     scan_runtimes,
 )
-from app.services.workspace import WorkspaceContext
+from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
 from app.system_agents.presets import is_reserved_name
 
@@ -195,6 +202,9 @@ def create_agent(
     if existing:
         raise agent_names.name_exists_error(spec.name, existing.id)
     _validate_tool_auth(spec, ws)
+    # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
+    # the deploy job re-checks before any stage, this answers before any row
+    memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
     agent = Agent(
         workspace_id=ws.id,
         name=spec.name,
@@ -526,6 +536,11 @@ def _start_redeploy(
     db: Session, ws: WorkspaceScope, agent: Agent, spec: AgentSpec
 ) -> dict[str, Any]:
     _validate_tool_auth(spec, ws)
+    # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
+    # refused before the stored spec changes, so a refusal leaves the agent as is
+    memory_ownership.require_spec_memory(
+        db, context_for_workspace(agent.workspace_id), spec.model_dump()
+    )
     agent.spec = spec.model_dump()
     agent.status = "deploying"
     agent.error = None
@@ -658,6 +673,8 @@ def convert_agent(
         )
     except hc.ConversionError as exc:
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
+    # the twin inherits the source's memory pin — same ownership rule (issue #55)
+    memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
 
     agent = Agent(
         workspace_id=ws.id, name=spec.name, method=spec.method, status="deploying",

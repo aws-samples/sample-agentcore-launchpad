@@ -110,20 +110,21 @@ def test_partial_edit_helper_matches_backend_contract() -> None:
     assert 'const clear: ("max_tokens" | "reasoning_effort")[] = []' in helpers
     assert "MAX_TOKENS_CEILING = 131072" in helpers
     # the ordinary create defaults the shared form starts on = AgentSpec defaults
-    assert "DEFAULT_MAX_ITERATIONS = 10" in helpers
+    assert "DEFAULT_MAX_ITERATIONS = 100" in helpers
     defaults = _src(FRONTEND / "lib" / "agent-defaults.ts")
-    assert "DEFAULT_TIMEOUT_SECONDS = 180" in defaults
-    assert 'import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";' in _src(WIZARD)
+    assert "DEFAULT_TIMEOUT_SECONDS = 600" in defaults
+    defaults_import = "import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from"
+    assert f'{defaults_import} "../lib/agent-defaults";' in _src(WIZARD)
     # the assistant's proposal → spec mapping (shared by both consoles) lives in lib/
-    assert 'import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";' in _src(
+    assert f'{defaults_import} "./agent-defaults";' in _src(
         FRONTEND / "lib" / "assistant.ts"
     )
     from app.schemas.agent import MAX_TOKENS_CEILING, AgentSpec
 
     assert MAX_TOKENS_CEILING == 131072
     fields = AgentSpec.model_fields
-    assert fields["max_iterations"].default == 10
-    assert fields["timeout_seconds"].default == 180
+    assert fields["max_iterations"].default == 100
+    assert fields["timeout_seconds"].default == 600
 
 
 def test_shared_form_carries_the_harness_knobs_for_ordinary_edits() -> None:

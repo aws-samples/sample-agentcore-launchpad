@@ -71,6 +71,8 @@ export function AssistantDetail({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantLiveMessage[]>([]);
   const [input, setInput] = useState("");
+  // edit-and-retry: the failed turn the next send replaces in the model replay
+  const [retryOf, setRetryOf] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [approving, setApproving] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -267,6 +269,14 @@ export function AssistantDetail({
             copy.push({ role: "tool", text: "", name: String(data.name ?? "") });
             copy.push(last?.role === "assistant" && last.streaming ? last : { role: "assistant", text: "", streaming: true });
             return copy;
+          });
+        } else if (evt.event === "retry") {
+          // the server replays the turn in a fresh session after a transient upstream
+          // failure: drop what the failed attempt streamed (text and tool cards)
+          setMessages((m) => {
+            let k = m.length - 1;
+            while (k >= 0 && m[k].role !== "user") k--;
+            return [...m.slice(0, k + 1), { role: "assistant", text: "", streaming: true }];
           });
         } else if (evt.event === "tool_input") {
           // fills the arguments of the most recent tool card still waiting for them
@@ -511,9 +521,21 @@ export function AssistantDetail({
           onInput={setInput}
           busy={busy}
           preparing={preparing}
-          onSend={() => void send({ prompt: input })}
+          onSend={() => {
+            const retry = retryOf;
+            setRetryOf(null);
+            void send(retry === null ? { prompt: input } : { prompt: input, retry_of_turn: retry });
+          }}
           onRefreshCatalog={() => void refreshCatalog()}
           threadRef={threadRef}
+          retryOf={retryOf}
+          onRetry={(target) => {
+            setRetryOf(target?.turn ?? null);
+            if (target) {
+              setInput(target.prompt);
+              document.getElementById(COMPOSER_ID)?.focus();
+            }
+          }}
         />
 
         {/* resource preparation precedes the proposal it feeds: discuss → prepare → review */}

@@ -650,7 +650,8 @@ def test_private_session_id_is_reserved_on_the_ledger_before_the_data_plane_call
     cid = _open(client)
     harness.fail_after = 0  # even a turn that never streams a reply has reserved its id
     events = _turn(client, cid, "p")
-    assert seen == [True] and events[-1][0] == "error"
+    # the transient failure is replayed once in a fresh session — reserved the same way
+    assert seen == [True] * (1 + service.TURN_TRANSIENT_RETRIES) and events[-1][0] == "error"
     assert sessions_mod.is_assistant_session(events[0][1]["session_id"])
     assert _latest(client, cid)["turn_in_progress"] is None  # claim released after failure
 
@@ -959,7 +960,8 @@ def test_replay_pairs_by_turn_bounds_the_final_request_and_discloses_omissions(
     assert call["messages"][1]["content"][0]["text"] == "Q1?"
     last = call["messages"][-1]["content"][0]["text"]
     assert "second" in last and "no assistant reply was produced" in last and last.endswith("third")
-    assert len({c["runtimeSessionId"] for c in harness.calls}) == 3
+    # three turns, the failed one replayed in its own fresh session
+    assert len({c["runtimeSessionId"] for c in harness.calls}) == 3 + service.TURN_TRANSIENT_RETRIES
     # the FINAL request stays bounded across repeated large failed turns
     big = "x" * 90_000
     for _ in range(4):
@@ -974,6 +976,52 @@ def test_replay_pairs_by_turn_bounds_the_final_request_and_discloses_omissions(
     assert "earlier turn(s) of this conversation were omitted" in (
         harness.calls[-1]["messages"][0]["content"][0]["text"])
     assert harness.calls[-1]["messages"][-1]["content"][0]["text"].endswith(big)  # never cut
+
+
+def test_a_retried_failed_turn_is_kept_but_never_replayed_again(client, ready, harness):
+    cid = _open(client)
+    harness.reply("Q1?")
+    _turn(client, cid, "first")
+    harness.fail_after = 0  # turn 2 fails (the poisoned message)
+    assert _turn(client, cid, "poisoned wording")[-1][0] == "error"
+    harness.fail_after = None
+    harness.reply("Fixed.")
+
+    res = client.post(f"{BASE}/conversations/{cid}/turns",
+                      json={"prompt": "reworded", "retry_of_turn": 2})
+
+    assert res.status_code == 200, res.text
+    assert _sse(res)[-1][0] == "done"
+    sent = " ".join(m["content"][0]["text"] for m in harness.calls[-1]["messages"])
+    assert "poisoned wording" not in sent and sent.endswith("reworded")
+    # later turns keep it out of the replay, and the thread still shows it
+    harness.reply("Q3?")
+    _turn(client, cid, "next")
+    sent = " ".join(m["content"][0]["text"] for m in harness.calls[-1]["messages"])
+    assert "poisoned wording" not in sent and "reworded" in sent
+    rows = _latest(client, cid)["messages"]
+    assert any(m["text"] == "poisoned wording" for m in rows)
+    assert any(m["role"] == "error" and m["name"] == service.TURN_RETRIED_NAME and m["turn"] == 2
+               for m in rows)
+
+
+def test_only_the_latest_failed_turn_can_be_retried(client, ready, harness):
+    cid = _open(client)
+    harness.reply("Q1?")
+    _turn(client, cid, "first")
+    ok = client.post(f"{BASE}/conversations/{cid}/turns",
+                     json={"prompt": "x", "retry_of_turn": 1})
+    assert ok.status_code == 409 and ok.json()["code"] == "assistant.retry_not_allowed"
+    harness.fail_after = 0
+    _turn(client, cid, "second")
+    harness.fail_after = None
+    harness.reply("Q3?")
+    _turn(client, cid, "third")
+    stale = client.post(f"{BASE}/conversations/{cid}/turns",
+                        json={"prompt": "x", "retry_of_turn": 2})
+    assert stale.status_code == 409
+    calls = len(harness.calls)
+    assert len(harness.calls) == calls  # refused before any data-plane call
 
 
 def test_oversized_current_message_is_refused_never_truncated(client, ready, harness):
@@ -2194,3 +2242,64 @@ def test_tool_functions_are_checked_against_the_catalog(functions, catalog_tools
 def test_absent_tool_functions_are_not_stored_so_old_revision_hashes_hold():
     content, _d, errors = contract.validate(VALID_PROPOSAL, _catalog())
     assert errors == [] and "tool_functions" not in contract.content_dump(content)
+
+
+def test_a_transient_failure_is_replayed_in_a_fresh_session(client, ready, harness):
+    """Live 2026-10-04: about one architect turn in five ended "without a complete text
+    response" or on a mid-stream runtimeClientError, and a manual retry always worked.
+    The turn now replays itself once: the failed attempt's partial reply and tool rows
+    are discarded and the client is told to clear what it streamed."""
+    cid = _open(client)
+    tool_start = {"toolUse": {"name": "skills", "toolUseId": "t-0"}}
+    failing = [{"contentBlockStart": {"start": tool_start}},
+               {"contentBlockDelta": {"delta": {"text": "half a rep"}}},
+               {"runtimeClientError": {"message": "Read timed out"}}]
+    harness.reply("The full answer.", tools=("file_operations",))
+    harness.queued = [failing]
+    events = _turn(client, cid, "q")
+
+    kinds = [k for k, _ in events]
+    assert "retry" in kinds and kinds[-1] == "done"
+    retry = dict(events)["retry"]
+    assert retry["attempt"] == 1 and "Read timed out" in retry["reason"]
+    first, second = (c["runtimeSessionId"] for c in harness.calls)
+    assert first != second
+    detail = _latest(client, cid)
+    turn = [m for m in detail["messages"] if m["turn"] == 1]
+    assert [m["role"] for m in turn] == ["user", "tool", "assistant"]
+    assert [m["name"] for m in turn if m["role"] == "tool"] == ["file_operations"]
+    assert turn[-1]["text"] == "The full answer."
+    # both sessions stay reserved: the failed one on the user row, the replay's on a
+    # hidden ledger row written before its data-plane call
+    assert sessions_mod.is_assistant_session(first) and sessions_mod.is_assistant_session(second)
+    assert detail["turn_in_progress"] is None
+
+
+def test_a_max_tokens_stop_is_replayed_but_an_iteration_limit_is_not(client, ready, harness):
+    """Live 2026-10-05: a proposal call stopped at ``max_tokens`` 40 s in, far short of
+    its budget; the manual retry answered. Replay it once; iteration limits stay final."""
+    cid = _open(client)
+    harness.reply("The full proposal.")
+    harness.queued = [[{"contentBlockDelta": {"delta": {"text": "half"}}},
+                       {"messageStop": {"stopReason": "max_tokens"}}]]
+    events = _turn(client, cid, "q")
+    kinds = [k for k, _ in events]
+    assert "retry" in kinds and kinds[-1] == "done" and len(harness.calls) == 2
+    assert _latest(client, cid)["messages"][-1]["text"] == "The full proposal."
+
+    harness.calls.clear()
+    harness.queued = []
+    harness.script = [{"messageStop": {"stopReason": "max_iterations"}}]
+    events = _turn(client, cid, "q2")
+    assert "retry" not in [k for k, _ in events] and events[-1][0] == "error"
+    assert len(harness.calls) == 1
+
+
+def test_an_execution_timeout_is_not_replayed(client, ready, harness):
+    cid = _open(client)
+    harness.script = [{"contentBlockDelta": {"delta": {"text": "partial"}}},
+                      {"messageStop": {"stopReason": "timeout_exceeded"}}]
+    events = _turn(client, cid, "q")
+
+    assert "retry" not in [k for k, _ in events] and events[-1][0] == "error"
+    assert len(harness.calls) == 1

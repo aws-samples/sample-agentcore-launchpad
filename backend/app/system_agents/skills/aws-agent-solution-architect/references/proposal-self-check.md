@@ -37,7 +37,7 @@ evaluate natural-language acceptance criteria.
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.
 - [ ] `memory`: `disabled` | `workspace`.
-- [ ] `max_iterations` 1–100; `timeout_seconds` 10–3600, default 180 unless the user
+- [ ] `max_iterations` 1–100, default 100; `timeout_seconds` 10–3600, default 600 unless the user
       explicitly chooses a different execution budget. Do not turn a latency goal
       into an unreviewed hard cancellation limit.
 - [ ] `summary` ≤ 4,000 chars; `requirements_baseline`, `assumptions`, `manual_tasks`,
@@ -48,7 +48,11 @@ evaluate natural-language acceptance criteria.
 - [ ] `golden_tests` ≤ 40; each has `id` (unique, ≤ 64), `input` (1–2,000),
       `expected_response` (≤ 2,000), `expected_tools` (≤ 10), `forbidden_behavior` and
       `pass_criteria` (≤ 1,000 each), `evaluator` (≤ 200), `source` ∈
-      `customer_pain_point` | `industry_assumption`. No other members.
+      `customer_pain_point` | `industry_assumption`, optional `adversarial` (boolean).
+      No other members.
+- [ ] Every red-team test is marked `adversarial: true`: embedded instructions or role
+      overrides, insider / nonpublic information, pressure for prohibited advice or
+      actions (an unmarked one makes the AI recommendation step fail for the run).
 - [ ] Every id referenced anywhere in `evaluation_plan` exists here.
 
 ## 4. `evaluation_plan` — routing (the rule most often broken)
@@ -147,8 +151,8 @@ as a whole — after the member has already read and approved the design.
     runtime catalog, never `mcp:` / `gateway:` attachment selectors. A positive
     allowlist includes mounted `skills` and KB retrieval support names. Missing
     catalogs remain unresolved; do not guess names or copy arbitrary observed calls.
-    Native Harness `shell` / `file_operations` must first be selected in `native_tools`
-    and disclosed for review; they are off by default. Evaluation rules cannot grant
+    Native Harness `shell` / `file_operations` must be selected in `native_tools`
+    (both by default) and disclosed for review. Evaluation rules cannot grant
     runtime access. Tool names cannot enforce read-only shell commands.
   - Required `tool_count min > 0` and nonempty `tool_sequence` names must also
     belong to the selected runtime catalog. After MCP preparation changes, review

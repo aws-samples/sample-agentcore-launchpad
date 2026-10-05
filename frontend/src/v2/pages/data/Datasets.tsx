@@ -17,6 +17,7 @@ import {
   FilterSelect,
   FlowHeader,
   LinkButton,
+  Modal,
   Pager,
   SearchInput,
   Spin,
@@ -229,11 +230,40 @@ export function DatasetsTab() {
 export function DatasetDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const toast = useV2Toast();
   const [, setParams] = useSearchParams();
   const { data, loading, error } = useLoad(() => api.v2Datasets(), "datasets");
   const ds = data?.datasets.find((d) => d.id === id) ?? null;
   const rows = useMemo(() => toRows(ds), [ds]);
   const paged = usePaged(rows, 20);
+  // 复制到新数据集: the picked rows' FULL stored items (assertions, every turn, the
+  // expected trajectory) — what the row editor cannot re-type
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [copyName, setCopyName] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
+  const toggle = (i: number) =>
+    setPicked((prev) => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
+  const copy = async () => {
+    if (!ds || !copyName?.trim()) return;
+    setCopying(true);
+    try {
+      const items = [...picked].sort((a, b) => a - b).map((i) => {
+        const item = structuredClone(rows[i].original ?? {}) as Record<string, unknown>;
+        const meta = (item.metadata && typeof item.metadata === "object" ? item.metadata : {}) as Record<string, unknown>;
+        item.metadata = { ...meta, copied_from: { dataset_id: ds.id, dataset_name: ds.name, row: i + 1 } };
+        return item;
+      });
+      const created = await api.v2CreateDataset({ name: copyName.trim(), description: t("v2.datasets.copyDescription", { name: ds.name, count: items.length }), locale: ds.locale, items });
+      toast("success", t("v2.datasets.copied", { name: created.name, count: items.length }));
+      setCopyName(null);
+      setPicked(new Set());
+      setParams({ tab: "datasets", view: "dataset", id: created.id });
+    } catch (err) {
+      toast("error", errorMessage(err));
+    } finally {
+      setCopying(false);
+    }
+  };
   if (loading) return <Spin />;
   if (error) return <Alert tone="error">{error}</Alert>;
   if (!ds) return <Alert tone="error">{t("v2.datasets.notFound")}</Alert>;
@@ -246,6 +276,14 @@ export function DatasetDetail({ id }: { id: string }) {
           <>
             <Button disabled={ds.kind === "simulated"} onClick={() => navigate(`/v2/eval/tasks?view=new&dataset=${ds.id}`)}>
               {t("v2.datasets.useInTask")}
+            </Button>
+            <Button
+              disabled={ds.kind === "simulated" || picked.size === 0}
+              title={picked.size === 0 ? t("v2.datasets.copyPickHint") : undefined}
+              onClick={() => setCopyName(`${ds.name}-subset`.slice(0, 64))}
+              testId="v2-dataset-copy"
+            >
+              {t("v2.datasets.copySelected", { count: picked.size })}
             </Button>
             <Button kind="primary" disabled={ds.kind === "simulated"} onClick={() => setParams({ tab: "datasets", view: "dataset-edit", id })}>
               {t("v2.common.edit")}
@@ -270,6 +308,30 @@ export function DatasetDetail({ id }: { id: string }) {
       <Card title={t("v2.datasets.records")} sub={t("v2.datasets.items", { count: ds.item_count })}>
         <Table
           columns={[
+            {
+              key: "pick",
+              title: (
+                <input
+                  type="checkbox"
+                  aria-label={t("v2.datasets.pickAll")}
+                  checked={rows.length > 0 && picked.size === rows.length}
+                  disabled={ds.kind === "simulated"}
+                  onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())}
+                  data-testid="v2-dataset-pick-all"
+                />
+              ),
+              width: 36,
+              render: (r: Row) => (
+                <input
+                  type="checkbox"
+                  aria-label={t("v2.datasets.pickRow", { n: rows.indexOf(r) + 1 })}
+                  checked={picked.has(rows.indexOf(r))}
+                  disabled={ds.kind === "simulated"}
+                  onChange={() => toggle(rows.indexOf(r))}
+                  data-testid="v2-dataset-pick"
+                />
+              ),
+            },
             { key: "n", title: "#", width: 48, render: (r: Row) => rows.indexOf(r) + 1 },
             { key: "input", title: "Input", render: (r: Row) => <span className="clip" title={r.input}>{r.input}</span> },
             {
@@ -288,6 +350,27 @@ export function DatasetDetail({ id }: { id: string }) {
         />
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
       </Card>
+      <Modal
+        open={copyName !== null}
+        title={t("v2.datasets.copyTitle", { count: picked.size })}
+        onClose={() => setCopyName(null)}
+        testId="v2-dataset-copy-dialog"
+        footer={
+          <>
+            <Button onClick={() => setCopyName(null)}>{t("v2.common.cancel")}</Button>
+            <Button kind="primary" disabled={copying || !copyName?.trim()} onClick={() => void copy()} testId="v2-dataset-copy-confirm">
+              {t("v2.datasets.copyConfirm")}
+            </Button>
+          </>
+        }
+      >
+        <div className="v2-form">
+          <Alert>{t("v2.datasets.copyHint")}</Alert>
+          <Field label={t("v2.datasets.colName")} required>
+            <input className="v2-input" value={copyName ?? ""} maxLength={64} onChange={(e) => setCopyName(e.target.value)} data-testid="v2-dataset-copy-name" />
+          </Field>
+        </div>
+      </Modal>
     </>
   );
 }

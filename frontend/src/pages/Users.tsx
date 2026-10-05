@@ -329,7 +329,7 @@ export function Users() {
                             )
                           }
                         >
-                          {t(`usersPage.perm.${key.split(".")[1]}`)}
+                          {t(`usersPage.perm.${key.replace(".", "_")}`)}
                         </button>
                       );
                     })}

@@ -13,10 +13,11 @@ import re
 from typing import Any
 
 from app.core.config import get_settings
+from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
 from app.services import agent_iam, registry_console
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
@@ -51,8 +52,9 @@ def model_config(spec: AgentSpec) -> dict[str, Any]:
     """``HarnessBedrockModelConfig`` for one spec.
 
     ``maxTokens`` is the per-model-call output ceiling (not the aggregate
-    ``InvokeHarness.maxTokens`` and not ``maxIterations``); it is sent only when the
-    spec sets one, so every existing agent keeps its exact request. ``reasoning_effort``
+    ``InvokeHarness.maxTokens`` and not ``maxIterations``); it is sent when the spec
+    sets one, else ``DEFAULT_GPT_MAX_TOKENS`` for an OpenAI GPT model, else not at all
+    (the service default). ``reasoning_effort``
     rides ``additionalParams`` — the managed harness merges that document **verbatim
     into the raw Converse request kwargs** (it is not a Strands ``BedrockModel`` config
     block, so the snake_case ``additional_request_fields`` key is rejected by botocore
@@ -64,8 +66,11 @@ def model_config(spec: AgentSpec) -> dict[str, Any]:
     shape.
     """
     config: dict[str, Any] = {"modelId": spec.model_id, "apiFormat": _api_format(spec)}
-    if spec.max_tokens is not None:
-        config["maxTokens"] = spec.max_tokens
+    max_tokens = spec.max_tokens
+    if max_tokens is None and is_openai_model_id(spec.model_id):
+        max_tokens = DEFAULT_GPT_MAX_TOKENS
+    if max_tokens is not None:
+        config["maxTokens"] = max_tokens
     if spec.reasoning_effort is not None:
         config["additionalParams"] = {
             "additionalModelRequestFields": {"reasoning": {"effort": spec.reasoning_effort}}
@@ -286,6 +291,13 @@ def build_create_params(
     params["allowedTools"] = allowed
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
+    # managed session storage on the backing runtime (BYO mounts are container-only);
+    # omitted on create means none. Re-publish rebuilds this from GetHarness.
+    filesystem = filesystem_configurations(spec)
+    if filesystem:
+        params["environment"] = {
+            "agentCoreRuntimeEnvironment": {"filesystemConfigurations": filesystem}
+        }
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
         params["memory"] = {"agentCoreMemoryConfiguration": {"arn": memory_arn}}
     elif not (spec.memory.short_term or spec.memory.long_term):
@@ -641,6 +653,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             harness_id = row.resource_id
             update_params = hc.wrap_params_for_update(_params())
             update_params["harnessId"] = harness_id
+            update_params["environment"] = hc.environment_for_update(
+                hc.get_harness(client, harness_id),
+                filesystem_configurations(AgentSpec(**row.spec)),
+            )
             harness = agent_iam.retry_iam_propagation(
                 lambda: hc.update_harness(client, update_params), ctx.log
             )

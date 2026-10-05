@@ -2,7 +2,7 @@ import { Database, MessagesSquare, Wrench } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { MessageAttachments } from "../../../components/chat/Attachments";
+import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";

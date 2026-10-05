@@ -446,7 +446,7 @@
       "file_operations": "file_operations：读写 Agent 运行环境中的文件",
       "none": "未选择",
       "unavailable": "未选择原生工具；按当前方案发布后，shell 和 file_operations 均不可用。",
-      "selectedHint": "仅允许使用所选的挂载工具、技能和原生工具。原生工具默认不勾选；需要执行命令时启用 shell，需要读写文件时启用 file_operations。",
+      "selectedHint": "仅允许使用所选的挂载工具、技能和原生工具。新建 Managed Harness 时两个原生工具默认勾选；不需要执行命令时取消 shell，不需要读写文件时取消 file_operations。",
       "overrideTitle": "专家工具覆盖规则已生效",
       "overrideHint": "当前由这些 allowed_tools 规则决定工具权限，下方选择不控制权限。“*”允许所有工具，包括 shell 和 file_operations；空列表不开放原生工具，但已挂载的知识库支持工具仍会保留。切换为使用所选工具后，才能修改原生工具选项。",
       "overrideSummary": "当前由保存的 allowed_tools 规则决定工具权限，原生工具选择不控制权限。“*”允许所有工具，包括 shell 和 file_operations；空列表不开放原生工具，但已挂载的知识库支持工具仍会保留。",
@@ -718,7 +718,7 @@
         "model": "模型",
         "maxTokens": "单次模型调用最大输出 token",
         "maxTokensEmpty": "留空 = 提供方默认",
-        "maxTokensHint": "即 Harness 的 bedrockModelConfig.maxTokens——单次模型响应的上限。不是会话或花费上限；循环由下方的最大迭代次数与超时约束。",
+        "maxTokensHint": "即 Harness 的 bedrockModelConfig.maxTokens——单次模型响应的上限。不是会话或花费上限；循环由下方的最大迭代次数与超时约束。留空时，GPT 模型默认 65536，其他模型使用服务默认值。",
         "effort": "推理强度",
         "effortNone": "无（不发送）",
         "effortLevels": {
@@ -2404,7 +2404,10 @@
     "identity.m2m_unavailable": "该工作区没有 Cognito 机器客户端，平台无法为此 JWT 智能体签发令牌。请运行工作区引导，或使用你自己的 Bearer 令牌调用 Runtime。",
     "identity.m2m_token_failed": "无法从工作区 Cognito 客户端获取机器令牌。",
     "identity.discovery_unreachable": "无法获取 OIDC 发现文档。请检查发现 URL，并确认 IdP 可通过 HTTPS 访问。",
-    "identity.discovery_invalid": "该 URL 返回的不是 OIDC 发现文档（缺少 jwks_uri），因此无法校验任何令牌签名。"
+    "identity.discovery_invalid": "该 URL 返回的不是 OIDC 发现文档（缺少 jwks_uri），因此无法校验任何令牌签名。",
+    "memory.not_managed": "该记忆资源不由本工作区管理——只能在列表中看到，无法打开、编辑或删除。管理员可以将其纳管。",
+    "agent.memory_not_managed": "所选记忆资源不由本工作区管理。请从记忆资源列表中选择，或请管理员将其纳管。",
+    "agent.memory_not_active": "所选记忆资源尚未处于 ACTIVE 状态——请等待创建完成后重试。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -3408,7 +3411,8 @@
       "firstHint": "取消后直接从 50/50 开始：实验版本已是生产默认版本，90/10 并不限制影响范围，只会让实验组样本很少。",
       "half": "50/50 流量与判定（必经）",
       "last": "1/99：在 50/50 判定后再决定是否需要"
-    }
+    },
+    "pairedReplay": "数据集回放 · 成对：每道题同时发给当前版本和候选版本，逐题比较"
   },
   "obs": {
     "kicker": "// 遥测层",
@@ -4036,7 +4040,15 @@
       "saveBodyAgents": "使用该记忆的 Agent（{{count}} 个）：{{names}}。",
       "updated": "记忆 {{id}} 已更新。",
       "updateFailed": "更新失败：{{msg}}",
-      "note": "平台默认记忆由引导脚本创建，无法在此删除。Agent 在创建/重新发布时选择记忆；已有 Agent 仍写入其当前记忆。"
+      "note": "平台默认记忆由引导脚本创建，无法在此删除。Agent 在创建/重新发布时选择记忆；已有 Agent 仍写入其当前记忆。",
+      "external": "未纳管",
+      "externalHint": "在本账号中检测到，但不由本工作区管理：无法打开、编辑、删除，也不能被智能体选用。管理员可以将其纳管。",
+      "adopt": "纳管",
+      "adoptTitle": "纳管记忆资源",
+      "adoptBody": "将 {{id}} 纳入本工作区管理？之后拥有 memory.manage 权限的成员可以将其绑定到智能体、编辑和删除——删除会清除全部事件和记录。",
+      "adopted": "{{id}} 已由本工作区管理。",
+      "adoptFailed": "纳管失败：{{msg}}",
+      "noPermission": "你的账号缺少 memory.manage 权限。"
     },
     "overview": {
       "actorsTile": "参与者",
@@ -4153,20 +4165,21 @@
     "deleted": "已删除 {{username}}。",
     "permissionsUpdated": "已更新 {{username}} 的权限。",
     "permissionsAll": "全部（管理员）",
-    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部能力。",
+    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部各项。",
     "workspacesAll": "全部（管理员）",
     "workspacesHint": "工作区访问权限——点击授予或收回。管理员按角色可访问所有工作区。",
     "workspacesUpdated": "已更新 {{username}} 的工作区访问权限。",
     "approveTitle": "通过账户申请",
     "approveBody": "通过 {{username}} 的申请，并授予下列工作区。账户有效期从此刻开始计算。",
     "perm": {
-      "deploy": "部署",
-      "import": "导入",
-      "delete": "删除",
-      "convert": "转换",
-      "run": "评估运行",
-      "manage": "身份",
-      "grant": "身份授权"
+      "agents_deploy": "部署",
+      "agents_import": "导入",
+      "agents_delete": "删除",
+      "agents_convert": "转换",
+      "eval_run": "评估运行",
+      "identity_manage": "身份",
+      "memory_manage": "记忆资源",
+      "identity_grant": "身份授权"
     },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",
@@ -4551,7 +4564,10 @@
     "memoryNoShared": "本 Workspace 没有共享记忆 — 只能选择“已禁用”",
     "kbGatewayMissing": "此处没有就绪的知识库 Gateway — 挂载知识库需手动完成",
     "bindingsAuth": "认证：",
-    "bindingsDigest": "内容"
+    "bindingsDigest": "内容",
+    "editRetry": "编辑后重试",
+    "retryNote": "将重试第 {{turn}} 轮：这一轮的失败交流保留在记录里，但不会再发送给助手。可以先修改上面的消息。",
+    "turnRetried": "这一轮已重试，不会再发送给助手。"
   },
   "assistantEval": {
     "title": "评估资产",
@@ -4740,7 +4756,7 @@
       "queued": "队列位置 {{n}}",
       "openRuns": "在评估页打开",
       "historyTitle": "该 Agent 在此 Dataset 上的运行（共 {{n}} 次，最新在前）",
-      "meanScore": "{{n}} 个评估器均分 {{mean}}",
+      "meanScore": "{{n}} 个评估器归一化均分 {{mean}}",
       "oneAtATime": "该 Agent 在此 Dataset 上仍有一次运行未结束——请等它完成（或在评估页停止），再启动新的运行。",
       "tooManyEvaluators": "已就绪 {{n}} 个评估器，但一次批量评估最多应用 {{max}} 个——请打开「新建运行」取消勾选重叠的评估器（其余参数完全相同）。",
       "remove": "从历史中移除这条失败的运行",
@@ -4795,7 +4811,7 @@
     "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。",
     "recommend": {
       "title": "生成 AI 推荐的优化建议",
-      "body": "AgentCore Recommendations 读取所选运行（默认最新一次无错误完成的运行）的追踪，围绕你选择的评估器给出改写后的系统提示词（以及工具描述）。先查看差异；接受后，Launchpad 用该提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
+      "body": "AI 推荐读取所选运行（默认最新一次无错误完成的运行；可以是这个 Agent 在任意数据集上的运行）的追踪，给出改写后的系统提示词（以及工具描述）：默认由 AgentCore Recommendations 围绕你选择的评估器生成，也可改用 GEPA-lite。先查看差异；接受时可以再修改，Launchpad 用最终的提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
       "source": "追踪来源",
       "version": "Harness 当前为 v{{v}}",
       "publishing": "正在发布“{{name}}”的新 Harness 版本……部署完成后，第 4 步会列出该版本。",
@@ -5402,7 +5418,7 @@
         "customModel": "自定义模型 ID…",
         "customModelId": "自定义模型 ID",
         "maxTokens": "单次调用最大输出 Token",
-        "maxTokensHint": "留空表示不设单次上限。",
+        "maxTokensHint": "留空时，GPT 模型默认 65536；其他模型使用服务默认值。",
         "effort": "推理强度",
         "effortUnsupported": "只有 Bedrock 原生 OpenAI 模型支持推理强度。",
         "tools": "工具",
@@ -5417,7 +5433,7 @@
         "remoteMcp": "远程 MCP 服务器",
         "noMcp": "暂无已发布的远程 MCP 服务器",
         "nativeTools": "原生执行",
-        "nativeToolsHint": "默认关闭：允许 Agent 在会话中执行 Shell 命令或读写文件。",
+        "nativeToolsHint": "默认开启：允许 Agent 在会话中执行 Shell 命令（例如读取当前日期）或读写文件；不需要时可取消。",
         "native": {
           "shell": "Shell",
           "file_operations": "文件操作"
@@ -5490,6 +5506,7 @@
         "errDupPath": "挂载路径不能重复",
         "errVpc": "自带挂载需要至少一个子网和一个安全组",
         "fsSummary": "会话存储 {{session}} · S3 Files {{s3}} 个 · EFS {{efs}} 个",
+        "fsNoteSession": "托管会话存储让同一会话在停止和恢复之间保留挂载路径下的文件（每个会话最多 1 GB，闲置 14 天过期）。每次重新发布都会产生新版本并重置会话存储。S3 Files / EFS 挂载仅支持“其他 Agent SDK”方式。",
         "skillsHintSources": "注册中心中已发布的 Skill，也可以上传 zip 或从 Git 仓库导入。",
         "skillUpload": "上传 .zip",
         "skillGit": "从 Git 导入",
@@ -5706,7 +5723,16 @@
       "recordsSub": "输入必填；预期输出即部分评估器所需的标准答案。",
       "addRow": "添加记录",
       "inputPlaceholder": "用户输入",
-      "expectedPlaceholder": "预期输出（选填）"
+      "expectedPlaceholder": "预期输出（选填）",
+      "copySelected": "复制所选到新数据集（{{count}}）",
+      "copyPickHint": "先在下方勾选要复制的记录。",
+      "pickAll": "全选",
+      "pickRow": "选择第 {{n}} 条",
+      "copyTitle": "复制 {{count}} 条记录到新数据集",
+      "copyHint": "原样复制所选记录的全部内容：每一轮输入与参考回答、断言和期望工具轨迹；原数据集不变。",
+      "copyConfirm": "创建数据集",
+      "copyDescription": "从“{{name}}”复制的 {{count}} 条记录。",
+      "copied": "已创建数据集“{{name}}”（{{count}} 条）。"
     },
     "pipelines": {
       "colName": "任务名称 / 描述",
@@ -6002,6 +6028,7 @@
     },
     "taskDetail": {
       "overview": "运行概要",
+      "budgetStops": "{{count}} 个场景耗尽了 Agent 的执行预算，按当时的轨迹计分：{{list}}",
       "sessions": "会话数",
       "queue": "排队",
       "queuePos": "第 {{n}} 位",
@@ -6419,7 +6446,19 @@
       "finish": "完成",
       "pipeline": "放量流程",
       "sourceExp": "来源实验",
-      "targets": "Target"
+      "targets": "Target",
+      "paired": {
+        "budgetStop": "预算终止",
+        "meanDiff": "平均差",
+        "winLoss": "更好 / 更差 / 持平",
+        "pValue": "p 值",
+        "questions": "题数",
+        "calls": "调用次数",
+        "summary": "{{sent}} 道题中 {{complete}} 道两个版本都已作答",
+        "perQuestion": "逐题明细（{{n}}）",
+        "question": "题目",
+        "prompt": "问题"
+      }
     },
     "chat": {
       "desc": "与任意运行中的智能体对话，调用链与公开 /v1 API 完全一致，回复通过 SSE 实时流式返回。",
@@ -6603,7 +6642,15 @@
         "nsKeys": "命名空间变量",
         "nsKey": "键",
         "nsValues": "允许值",
-        "nsRegex": "正则模式"
+        "nsRegex": "正则模式",
+        "external": "未纳管",
+        "externalHint": "在本账号中检测到，但不由本工作区管理：无法打开、编辑、删除，也不能被智能体选用。管理员可以将其纳管。",
+        "adopt": "纳管",
+        "adoptTitle": "纳管记忆资源",
+        "adoptBody": "将 {{id}} 纳入本工作区管理？之后拥有 memory.manage 权限的成员可以将其绑定到智能体、编辑和删除——删除会清除全部事件和记录。",
+        "adopted": "{{id}} 已由本工作区管理。",
+        "adoptFailed": "纳管失败：{{msg}}",
+        "noPermission": "你的账号缺少 memory.manage 权限。"
       }
     },
     "observability": {
@@ -7362,13 +7409,14 @@
         "demoteBody": "确定撤销 {{username}} 的管理员权限？成为成员后，账户仅保留其 Agent 权限和已授予的工作区。"
       },
       "perm": {
-        "deploy": "部署",
-        "import": "导入",
-        "delete": "删除",
-        "convert": "转换",
-        "run": "评估运行",
-        "manage": "管理身份",
-        "grant": "授权本人访问"
+        "agents_deploy": "部署",
+        "agents_import": "导入",
+        "agents_delete": "删除",
+        "agents_convert": "转换",
+        "eval_run": "评估运行",
+        "identity_manage": "管理身份",
+        "memory_manage": "记忆资源",
+        "identity_grant": "授权本人访问"
       }
     },
     "workspaces": {
@@ -7510,6 +7558,8 @@
       "updatedBy": "最近保存人"
     },
     "rec": {
+      "showEarlier": "更早的建议（{{count}}）",
+      "hideEarlier": "收起更早的建议",
       "title": "优化建议",
       "sub": "AgentCore Recommendations 读取本任务的 trace",
       "new": "新建优化建议",
@@ -7549,6 +7599,7 @@
       },
       "running": "正在 AWS 上运行（{{id}}），自动刷新中…",
       "skippedTools": "以下工具未出现在 trace 中，已剔除：{{tools}}",
+      "excludedSessions": "已排除 {{n}} 个红线测试会话（{{scenarios}}）：AgentCore 推荐服务会拒绝含提示词注入或越界诱导内容的追踪。这些场景仍参与评估。",
       "explanation": "说明",
       "copy": "复制提示词",
       "copyTools": "复制工具描述",
@@ -7587,9 +7638,19 @@
         "toolsNotApplied": "工具描述建议不会写入 Harness 版本：Gateway 工具的描述属于其 Gateway 目标。",
         "startedToast": "已接受——正在发布新的 Harness 版本。",
         "confirmTitle": "接受这条建议？",
-        "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。"
+        "confirmBody": "Launchpad 会用推荐的系统提示词重新发布 Harness。AWS 将生成一个新的、不可变的 Harness 版本，DEFAULT 端点（生产）随之切换；之前的版本仍保留，可用于第 4 步的金丝雀实验和回滚。",
+        "buttonEdited": "发布修改后的提示词",
+        "reviewHint": "发布前逐条核对：AI 建议可能放松红线（例如把限制改成“用户确认后即可”）。可直接在下方修改，发布的就是这里的文本。",
+        "reviewLabel": "将要发布的系统提示词",
+        "editedNote": "已修改：发布后会记录为“人工修改后接受”。",
+        "resetEdit": "恢复为 AI 建议原文",
+        "acceptedEdited": "发布前经过人工修改。"
       },
-      "toolDiff": "工具描述"
+      "toolDiff": "工具描述",
+      "modelRequired": "请输入自定义模型 ID。",
+      "providerNote": "GEPA-lite 用一次 Bedrock 反思，读取这次运行的全部评估器分数与评审说明以及会话记录，直接给出改写后的系统提示词；不经过 AgentCore 推荐服务（例如它拒绝输入时可改用这里）。工具描述建议仍由 AgentCore 生成。",
+      "providerAllEvaluators": "全部评估器",
+      "providerTag": "生成这条建议的提供方与模型"
     },
     "connections": {
       "title": "连接",

@@ -18,6 +18,7 @@ import {
   defaultModelForMethod,
   emptyAgentForm,
   entrypointAfterUpload,
+  FILESYSTEM_METHODS,
   filesystemIssues,
   formFromStoredSpec,
   gatewaySelectionsValid,
@@ -254,7 +255,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       if (timeout === null || Number.isNaN(timeout) || timeout < 10 || timeout > 3600)
         out.timeout = t("create.system.settings.errors.timeout");
     }
-    if (method === "container") {
+    if (FILESYSTEM_METHODS.includes(method)) {
       const fs = filesystemIssues(form);
       if (fs.sessionMount || Object.keys(fs.rows).length || fs.duplicatePaths || fs.vpc) out.fs = "fs";
     }
@@ -407,6 +408,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           {modelCard({ knobs: true })}
           <HarnessToolsCard {...section} />
           {skillsKb(t("create.configure.kbNote"))}
+          <FilesystemCard form={form} set={set} touched={touched} />
           <MemoryCard {...section} loop />
         </>
       )}
@@ -435,6 +437,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           )}
           {inboundCard}
           {skillsKb(t("create.configure.kbNoteDirect"))}
+          <FilesystemCard form={form} set={set} touched={touched} />
           <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
         </>
       )}

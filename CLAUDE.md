@@ -106,7 +106,9 @@ under `.trellis/spec/launchpad/`.
   namespace is keyed only on `{actorId}`, so the platform folds the agent id into the
   actor (`scoped_actor(agent_id, human)` → `<agent>__<human>`) to partition both
   short-term events and long-term facts per agent. The ledger still stores the bare
-  human actor for display.
+  human actor for display. A spec may pin its own `memory.memory_id` only if the
+  workspace *manages* it (bootstrap memory or a `managed_memories` row —
+  `services/memory_ownership.py`): the AWS account is not the workspace boundary.
 
 - **System-managed presets are server-owned.** `Agent.system_key` (never settable via
   `AgentSpec`) marks a platform preset (`backend/app/system_agents/`); the ordinary

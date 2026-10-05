@@ -61,7 +61,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
@@ -110,6 +110,23 @@ HEARTBEAT_S = 1.0
 # ``name`` of the transcript row that records Launchpad's rejection of a model-emitted
 # proposal block; ``compose_messages`` replays it to the model on the next turn.
 PROPOSAL_REJECTED_NAME = "proposal_rejected"
+# An ``error`` row with this name marks a failed turn the member retried (usually with
+# an edited message): the turn stays in the ledger and the thread, but is never
+# replayed to the model again — a poisoned exchange must not follow the retry.
+TURN_RETRIED_NAME = "turn_retried"
+# A transient upstream failure mid-turn (a Harness stream cut short after a tool step or
+# with nothing at all, a mid-stream runtimeClientError / internalServerException,
+# throttling, a 5xx — ``evaluation.service.transient_invoke_error``) replays the whole
+# turn this many times in a fresh Harness session before the member sees an error
+# (live 2026-10-04: about one architect turn in five on prod and dev). One replay keeps
+# two attempts inside ``TURN_CLAIM_TTL_S``; an execution timeout is never replayed —
+# the member already waited the preset's whole budget.
+TURN_TRANSIENT_RETRIES = 1
+# How long a replay waits for the consumer to record its fresh session on the ledger.
+RETRY_RECORD_WAIT_S = 30.0
+# Ledger-only row reserving a replay's Harness session (``sessions.is_assistant_session``
+# reads every row's session id): never shown in the transcript, never replayed.
+SESSION_ROLE = "session"
 REJECTION_NOTE_MAX_CHARS = 2400
 
 
@@ -202,23 +219,36 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   lookups of a server that also writes): this is enforced as the Harness's runtime
   tool filter, so it is the least-privilege control, not an evaluation rule. When a
   key's callable names are unavailable, do not guess — ask for a catalog refresh.
-- `native_tools`: optional list containing only `"shell"` and/or `"file_operations"`.
-  Default is empty: Launchpad does not expose these native tools unless explicitly
-  selected and reviewed. Do not add shell just to calculate a number or read a date.
-  Propose a native tool only when the user explicitly requests that capability and
-  explain its command/file access in the readable proposal.
+- `native_tools`: list containing only `"shell"` and/or `"file_operations"`. Default
+  is both (the Create Agent wizard ticks both for a new Managed Harness): shell lets
+  the agent read the current date/time and compute in its sandbox, file_operations
+  lets it work with files there. Keep both unless the user declines them or a
+  requirement forbids command or file access; send `[]` (or one of them) explicitly
+  then. Disclose the command/file access in the readable proposal either way.
+- `builtin_tools`: optional list containing only `"code-interpreter"` (the AgentCore
+  Code Interpreter: an isolated Python sandbox; its runtime callable name is
+  `code_interpreter`). Propose it when the agent must calculate, reconcile or
+  tabulate figures (growth rates, unit or currency conversions, cross-source
+  comparisons); disclose it in the readable proposal. Default is empty.
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
   existing shared AgentCore Memory with all of its configured strategies) — these
   are the only two choices the platform can enforce
-- `max_iterations` (1–100), `timeout_seconds` (10–3600, default 180 seconds).
-  Use 180 unless the user explicitly requests another execution budget. This is the
+- `max_iterations` (1–100, default 100), `timeout_seconds` (10–3600, default 600 seconds).
+  Use 100 iterations unless the user explicitly asks for a lower bound: multi-step
+  research with search and calculation routinely needs dozens of tool steps.
+  Use 600 unless the user explicitly requests another execution budget. This is the
   managed Harness agent-loop limit, not a latency objective or a socket timeout.
 - `summary`, `requirements_baseline[]`, `assumptions[]`, `manual_tasks[]`,
   `golden_tests[]` (objects: `id`, `input`, `expected_response`, `expected_tools[]`,
   `forbidden_behavior`, `pass_criteria`, `evaluator`, `source` ∈
-  `customer_pain_point | industry_assumption`), `evaluator_recommendations[]`
+  `customer_pain_point | industry_assumption`, `adversarial` — `true` for every
+  red-team test whose input deliberately pushes the agent across a red line: embedded
+  instructions or role overrides, use of insider / nonpublic information, pressure for
+  prohibited advice or actions; it is still evaluated, but AI recommendations leave
+  that session out because AgentCore Recommendations refuses such traces),
+  `evaluator_recommendations[]`
 - optional `evaluation_plan`: a structured seed for the SEPARATE evaluation-assets
   review — `{{"scenarios": [...], "evaluators": [...], "recommendation_keys":
   {{"<index>": ["<key>"]}}, "blocked_golden_tests": [...]}}`. Every golden test is
@@ -333,8 +363,9 @@ refusal assertions when the Agent needs Skill loading or KB retrieval. Specify t
 prohibited business action instead.
 Although AWS Harness provides native `shell` and `file_operations`, Launchpad sends
 an explicit runtime allowedTools filter derived from the selected attachments,
-Skill loading and `native_tools`. Empty native_tools means neither native tool is
-exposed. Evaluation allowlists must not allow native tools absent from that selection.
+Skill loading and `native_tools` (both by default). An empty native_tools list means
+neither native tool is exposed. Evaluation allowlists must not allow native tools
+absent from that selection.
 A tool-name rule cannot distinguish a read-only shell command from a write. Loading
 a Skill's main instructions is included; using additional files or scripts may need
 an explicitly reviewed native file/command capability. Never add a tool merely
@@ -366,8 +397,9 @@ Hard rules of this environment:
 def catalog_section(catalog: dict[str, Any]) -> str:
     lines = ["## Available resources in this workspace (reference by key)", ""]
     lines.append(
-        "Optional native Harness tools: `shell`, `file_operations` (disabled unless "
-        "explicitly selected in `native_tools`; not resource `tools` keys)."
+        "Native Harness tools: `shell`, `file_operations` (selected by default in "
+        "`native_tools`; not resource `tools` keys). AgentCore built-in tool: "
+        "`code-interpreter` (via `builtin_tools`; runtime callable `code_interpreter`)."
     )
     tools = [t for t in catalog.get("tools") or [] if t.get("attachable", True)]
     lines.append("Tools (`tools` keys):")
@@ -1003,6 +1035,7 @@ def conversation_detail(
                 "at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in _messages(db, row.id)
+            if m.role != SESSION_ROLE
         ],
         "proposals": [proposal_out(db, p) for p in _proposals(db, row.id)],
     }
@@ -1327,6 +1360,20 @@ def _strip_proposal_blocks(text: str) -> str:
     return _REPLAY_PROPOSAL_RE.sub(REPLAY_PROPOSAL_MARKER, text)
 
 
+def check_retry(db: Session, conversation: AssistantConversation, turn: int) -> None:
+    """A retry names the conversation's LATEST turn, and only one that failed."""
+    rows = [m for m in _messages(db, conversation.id) if m.turn == turn]
+    latest = max((m.turn for m in _messages(db, conversation.id)), default=0)
+    failed = any(m.role == "error" and m.name not in (PROPOSAL_REJECTED_NAME, TURN_RETRIED_NAME)
+                 for m in rows)
+    if not rows or turn != latest or not failed:
+        raise AppError(
+            "assistant.retry_not_allowed",
+            "only the latest turn, and only a failed one, can be retried",
+            {"turn": turn, "latest": latest}, status_code=409,
+        )
+
+
 def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
     """The current message is never truncated: too large for the final request → 413."""
     if len(prompt) > MAX_PROMPT_CHARS or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
@@ -1362,8 +1409,9 @@ def compose_messages(
     by_turn: dict[int, dict[str, list[str]]] = {}
     preamble = _preamble(conversation, inline=inline)
     strip = _base_of(conversation) is not None
+    retried = {m.turn for m in history if m.role == "error" and m.name == TURN_RETRIED_NAME}
     for m in history:
-        if not m.text:
+        if not m.text or m.turn in retried:
             continue
         if m.role == "error" and m.name == PROPOSAL_REJECTED_NAME:
             # Launchpad's own verdict on that turn's block, replayed as the member's
@@ -1773,6 +1821,20 @@ def _submissions(
     )
 
 
+def _replayable_turn_error(exc: BaseException) -> bool:
+    """Transient upstream failures, plus a model call cut off at ``max_tokens``: live
+    2026-10-05 a proposal call stopped there 40 s in, far short of the 65 536-token
+    budget (the manual retry wrote the 11 k-token proposal in 3 min). Timeouts and
+    iteration limits are never replayed."""
+    from app.evaluation.service import transient_invoke_error
+
+    if getattr(exc, "code", None) == "harness.execution_limit":
+        detail = getattr(exc, "detail", None)
+        return isinstance(detail, dict) and detail.get("stop_reason") == "max_tokens"
+    return (transient_invoke_error(exc)
+            and getattr(exc, "code", None) != "harness.execution_timeout")
+
+
 def run_turn(
     db: Session,
     conversation: AssistantConversation,
@@ -1781,6 +1843,7 @@ def run_turn(
     identity: Identity,
     prompt: str,
     run: TurnRun | None = None,
+    retry_of: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     """One assistant turn as SSE-ready events:
     ``meta → (tool|delta)* → (proposal)? → done`` or ``error``.
@@ -1790,7 +1853,10 @@ def run_turn(
     and any proposal land together in one locked transaction once the stream
     completed. A stream that errors, or is closed by the client before completion,
     persists the partial answer with an ``error`` row (no proposal) and releases the
-    claim; nothing is retried automatically.
+    claim. A transient upstream failure is first replayed ``TURN_TRANSIENT_RETRIES``
+    times in a fresh Harness session: the failed attempt's partial text and tool rows
+    are discarded, any inline submission it made is forgotten, and a ``retry`` event
+    tells the client to clear what it streamed.
     """
     run = run or TurnRun()
     agent = _require_available(db, row)
@@ -1813,6 +1879,8 @@ def run_turn(
         overrides = harness_tool_overrides(workspace, agent)
         submissions = _submissions(db, conversation) if overrides is not None else None
         history = [m for m in _messages(db, conversation_id) if m.turn != turn]
+        if retry_of is not None:  # the retried exchange is not replayed (see TURN_RETRIED_NAME)
+            history = [m for m in history if m.turn != retry_of]
         messages, omitted = compose_messages(conversation, history, prompt,
                                              inline=overrides is not None)
         # the FIRST write is fenced like every other one: composing the replay took
@@ -1827,6 +1895,12 @@ def run_turn(
             turn=turn, role="user", text=prompt, runtime_session_id=session_id,
             author=identity.username,
         ))
+        if retry_of is not None:
+            db.add(AssistantMessage(
+                workspace_id=conversation.workspace_id, conversation_id=conversation_id,
+                turn=retry_of, role="error", name=TURN_RETRIED_NAME,
+                text=f"retried in turn {turn}",
+            ))
         if not conversation.title:
             conversation.title = prompt.strip().splitlines()[0][:120] if prompt.strip() else ""
         conversation.preset_agent_id = agent.id
@@ -1853,47 +1927,77 @@ def run_turn(
             # (the consumer's session), which a rollback below has already expired
             harness_arn = agent.arn
 
+            # the current attempt's Harness session (a replay starts a fresh one)
+            attempt_session = [session_id]
+
             def produce() -> None:
-                try:
-                    request = messages
-                    client = data_client(workspace)
-                    while True:
-                        handoff: list[dict[str, Any]] | None = None
-                        for produced in hc.invoke_harness_events(
-                            client, harness_arn, request,
-                            session_id=session_id, actor_id=actor,
-                            on_stream=run.attach_upstream, **invoke_extra,
-                        ):
-                            if produced["event"] == "handoff":
-                                handoff = produced["data"]["calls"]
+                attempt = 0
+                while True:
+                    try:
+                        attempt_once()
+                        events.put(("end", None))
+                        return
+                    except BaseException as exc:  # surfaced to the consumer below
+                        if (attempt < TURN_TRANSIENT_RETRIES and not run.cancelled
+                                and _replayable_turn_error(exc)):
+                            attempt += 1
+                            attempt_session[0] = hc.new_session_id()
+                            if submissions is not None:
+                                submissions.reset()
+                            logger.warning("assistant: turn %s replayed after %s",
+                                           turn, _short(exc))
+                            # the new session is on the ledger before its data-plane call
+                            # (like the first one): wait for the consumer to record it
+                            recorded = threading.Event()
+                            events.put(("retry", {"attempt": attempt, "reason": _short(exc),
+                                                  "session_id": attempt_session[0],
+                                                  "recorded": recorded}))
+                            deadline = time.monotonic() + RETRY_RECORD_WAIT_S
+                            while not recorded.wait(HEARTBEAT_S):
+                                if run.cancelled or time.monotonic() > deadline:
+                                    break
+                            if recorded.is_set() and not run.cancelled:
                                 continue
-                            if (produced["event"] == "tool_input"
-                                    and produced["data"].get("name") == submission.TOOL_NAME):
-                                continue  # summarized from the complete input below
-                            events.put(("event", produced))
-                            if run.cancelled:
-                                break
-                        if handoff is None or run.cancelled or submissions is None:
+                        events.put(("error", exc))
+                        return
+
+            def attempt_once() -> None:
+                request = messages
+                client = data_client(workspace)
+                while True:
+                    handoff: list[dict[str, Any]] | None = None
+                    for produced in hc.invoke_harness_events(
+                        client, harness_arn, request,
+                        session_id=attempt_session[0], actor_id=actor,
+                        on_stream=run.attach_upstream, **invoke_extra,
+                    ):
+                        if produced["event"] == "handoff":
+                            handoff = produced["data"]["calls"]
+                            continue
+                        if (produced["event"] == "tool_input"
+                                and produced["data"].get("name") == submission.TOOL_NAME):
+                            continue  # summarized from the complete input below
+                        events.put(("event", produced))
+                        if run.cancelled:
                             break
-                        # the inline handoff: Launchpad's own verdict, answered on the
-                        # SAME session so the Harness resumes the paused execution
-                        results = []
-                        for call in handoff:
-                            events.put(("event", {"event": "tool_input", "data": {
-                                "name": call["name"], "id": call["id"],
-                                "input": submission.input_summary(call["input"])}}))
-                            verdict = (submissions.handle(call["input"])
-                                       if call["name"] == submission.TOOL_NAME
-                                       else {"status": "rejected",
-                                             "errors": [f"unknown tool {call['name']}"]})
-                            results.append({"toolResult": {
-                                "toolUseId": call["id"], "status": "success",
-                                "content": [{"text": json.dumps(verdict, ensure_ascii=False)}],
-                            }})
-                        request = [{"role": "user", "content": results}]
-                    events.put(("end", None))
-                except BaseException as exc:  # surfaced to the consumer below
-                    events.put(("error", exc))
+                    if handoff is None or run.cancelled or submissions is None:
+                        break
+                    # the inline handoff: Launchpad's own verdict, answered on the
+                    # SAME session so the Harness resumes the paused execution
+                    results = []
+                    for call in handoff:
+                        events.put(("event", {"event": "tool_input", "data": {
+                            "name": call["name"], "id": call["id"],
+                            "input": submission.input_summary(call["input"])}}))
+                        verdict = (submissions.handle(call["input"])
+                                   if call["name"] == submission.TOOL_NAME
+                                   else {"status": "rejected",
+                                         "errors": [f"unknown tool {call['name']}"]})
+                        results.append({"toolResult": {
+                            "toolUseId": call["id"], "status": "success",
+                            "content": [{"text": json.dumps(verdict, ensure_ascii=False)}],
+                        }})
+                    request = [{"role": "user", "content": results}]
 
             # no data-plane call without CURRENT ownership
             _lock_conversation(db, conversation_id)
@@ -1916,6 +2020,31 @@ def run_turn(
                     break
                 if kind == "error":
                     raise event
+                if kind == "retry":
+                    # the replay starts over: drop what the failed attempt streamed and its
+                    # tool rows; the user row keeps the first (already invoked) session and
+                    # a hidden SESSION_ROLE row reserves the new one before its call
+                    parts.clear()
+                    tool_rows.clear()
+                    session_id = event["session_id"]
+                    _lock_conversation(db, conversation_id)
+                    if not _holds_claim(db, conversation_id, turn, token):
+                        db.rollback()
+                        raise _ClaimLost()
+                    db.execute(delete(AssistantMessage).where(
+                        AssistantMessage.conversation_id == conversation_id,
+                        AssistantMessage.turn == turn, AssistantMessage.role == "tool"))
+                    db.add(AssistantMessage(
+                        workspace_id=conversation.workspace_id, conversation_id=conversation_id,
+                        turn=turn, role=SESSION_ROLE, name="turn_replay",
+                        text=f"replay {event['attempt']} after {event['reason']}"[:4000],
+                        runtime_session_id=session_id,
+                    ))
+                    db.commit()
+                    event["recorded"].set()
+                    yield {"event": "retry", "data": {"attempt": event["attempt"],
+                                                      "reason": event["reason"]}}
+                    continue
                 if run.cancelled:
                     break  # the owner cancelled: handled as interrupted below
                 if event["event"] == "tool":

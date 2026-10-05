@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from app.core.errors import AppError
-from app.harness_tool_access import selected_native_tools
+from app.harness_tool_access import selected_builtin_tool_names, selected_native_tools
 from app.services import kb_gateway, mcp_client
 
 if TYPE_CHECKING:
@@ -132,6 +132,7 @@ def rule_catalog_errors(
     known = support_tool_names(content, catalog)
     if content.get("method", "harness") == "harness":
         known.update(selected_native_tools(content))
+        known.update(selected_builtin_tool_names(content))
     missing: list[str] = []
     by_key = {tool["key"]: tool for tool in catalog.get("tools") or []}
     narrowed = content.get("tool_functions") or {}

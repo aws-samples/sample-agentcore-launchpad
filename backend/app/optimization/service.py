@@ -67,8 +67,9 @@ TRAFFIC_MAX_CONCURRENCY = 10
 # endpoint fallback kicks in. Raising it there and here are different decisions,
 # so this one is explicit. Well under the 15min AgentCore sync limit either way:
 # a prompt slower than this fails the stage rather than the sample (see the
-# exception contract below).
-TRAFFIC_REQUEST_TIMEOUT_S = 180.0
+# exception contract below). It covers the default agent execution budget (600 s)
+# plus a margin: at 180 s, slow research sessions failed whole canary rounds.
+TRAFFIC_REQUEST_TIMEOUT_S = 660.0
 # Runtime user id every experiment / canary replay session is attributed to.
 TRAFFIC_USER_ID = "launchpad-experiment-traffic"
 # Outcome for a prompt that was never sent because an earlier one failed
@@ -1573,11 +1574,17 @@ def act_abtest(exp_id: str, progress: Progress) -> None:
 
 def resolve_traffic_prompts(dataset: Any) -> list[str]:
     """Extract sendable prompts from an EvalDataset (legacy/predefined only)."""
+    return [prompt for _label, prompt in resolve_traffic_items(dataset)]
+
+
+def resolve_traffic_items(dataset: Any) -> list[tuple[str, str]]:
+    """``(scenario label, prompt)`` per sendable item — the label names a question
+    in a paired verdict (``scenario_id``, else ``item_<n>``)."""
     if dataset.kind == "simulated":
         raise ValueError("simulated datasets need an actor loop — pick a "
                          "predefined or legacy prompt dataset")
-    prompts: list[str] = []
-    for item in dataset.items or []:
+    prompts: list[tuple[str, str]] = []
+    for index, item in enumerate(dataset.items or []):
         if dataset.kind == "predefined":
             # a scenario's first user turn — reuse the eval replay extractor so
             # dict inputs ({"content"|"prompt": …}, imported JSON) unwrap the
@@ -1587,7 +1594,7 @@ def resolve_traffic_prompts(dataset: Any) -> list[str]:
         else:
             text = str(item.get("prompt") or "")
         if text.strip():
-            prompts.append(text.strip())
+            prompts.append((str(item.get("scenario_id") or f"item_{index + 1}"), text.strip()))
     if not prompts:
         raise ValueError("dataset has no usable prompts")
     return prompts

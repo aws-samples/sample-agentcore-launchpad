@@ -40,6 +40,11 @@ ReasoningEffort = Literal["low", "medium", "high"]
 # ``bedrockModelConfig.maxTokens`` from below only; a too-large value surfaces as a
 # model-side validation error, so this cap is a sanity bound, not a model catalogue.
 MAX_TOKENS_CEILING = 131072
+# Per-call ceiling a Harness on an OpenAI GPT model gets when the spec sets none: the
+# service default is too small for their hidden reasoning (live 2026-10-04: a GPT-6
+# call reasoned for 95 s and stopped at max_tokens before writing any answer). Other
+# families keep the service default — Bedrock rejects a value above a model's limit.
+DEFAULT_GPT_MAX_TOKENS = 65536
 
 
 def is_openai_model_id(model_id: str) -> bool:
@@ -517,9 +522,10 @@ class AgentSpec(BaseModel):
     studio_flow: dict[str, Any] | None = None
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     env: dict[str, str] = Field(default_factory=dict)
-    max_iterations: int = Field(default=10, ge=1, le=100)
-    timeout_seconds: int = Field(default=180, ge=10, le=3600)
-    # AgentCore Runtime persistent storage — consumed by the container method only
+    max_iterations: int = Field(default=100, ge=1, le=100)
+    timeout_seconds: int = Field(default=600, ge=10, le=3600)
+    # AgentCore Runtime persistent storage. Session storage mounts on the harness,
+    # zip_runtime/studio and container methods; BYO mounts are container-only.
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
     # VPC networkModeConfig; mandatory whenever a BYO file system is mounted
     network: VpcNetwork | None = None
@@ -780,6 +786,14 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":
+        # Only the container method wires VPC networking; the harness and Strands
+        # zip runtimes mount managed session storage alone. Refused, not dropped,
+        # so a spec never shows a mount its runtime does not have.
+        if self.filesystem.byo and self.method != "container":
+            raise ValueError(
+                "BYO file systems (S3 Files / EFS) are supported by the container "
+                "method only; harness and Strands agents mount session storage"
+            )
         if self.filesystem.byo and self.network is None:
             raise ValueError(
                 "BYO file systems (S3 Files / EFS) require VPC network configuration"

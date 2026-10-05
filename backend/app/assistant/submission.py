@@ -71,6 +71,11 @@ class Submissions:
         self.candidate: dict[str, Any] | None = None
         self.count = 0
 
+    def reset(self) -> None:
+        """Forget a failed attempt's submissions: a replayed turn starts over."""
+        self.candidate = None
+        self.count = 0
+
     def handle(self, raw_input: str) -> dict[str, Any]:
         """The tool result for one call (JSON-serializable)."""
         self.count += 1

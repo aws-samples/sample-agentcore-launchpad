@@ -42,6 +42,7 @@ WORKSPACE_SCOPED_TABLES = (
     "assistant_proposals",
     "agent_name_claims",
     "system_skill_records",
+    "managed_memories",
     "assistant_evaluation_plans",
     "evaluation_asset_operations",
     "eval_pipelines",
@@ -209,6 +210,7 @@ def _migrate(bind) -> None:
             ("name", "ALTER TABLE eval_runs ADD COLUMN name VARCHAR(64)"),
             ("description", "ALTER TABLE eval_runs ADD COLUMN description TEXT"),
             ("log_source", "ALTER TABLE eval_runs ADD COLUMN log_source JSON"),
+            ("budget_stops", "ALTER TABLE eval_runs ADD COLUMN budget_stops JSON"),
         ):
             if column not in existing:
                 with bind.begin() as conn:
@@ -269,6 +271,7 @@ def _migrate(bind) -> None:
     _migrate_system_skill_records_columns(bind)
     _migrate_system_skill_records_index(bind)
     _migrate_identity_indexes(bind)
+    _migrate_managed_memories_index(bind)
 
 
 def _migrate_inbound_auth_columns(bind) -> None:
@@ -413,6 +416,23 @@ def _migrate_system_skill_records_index(bind) -> None:
         )
 
 
+def _migrate_managed_memories_index(bind) -> None:
+    """The unique (workspace, memory) index behind memory ownership (issue #55):
+    an adopt racing a create of the same id leaves one row. `create_all` builds it
+    with the table; this keeps a ledger whose table lost it honest."""
+    from sqlalchemy import inspect, text
+
+    if "managed_memories" not in inspect(bind).get_table_names():
+        return
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_memories_workspace_memory "
+                "ON managed_memories (workspace_id, memory_id)"
+            )
+        )
+
+
 def _migrate_system_key_index(bind) -> None:
     """The partial unique index that arbitrates concurrent preset installs.
 
@@ -535,6 +555,7 @@ def _migrate_workspace_columns(bind) -> None:
         "system_skill_records": (
             "ALTER TABLE system_skill_records ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        "managed_memories": "ALTER TABLE managed_memories ADD COLUMN workspace_id VARCHAR(32)",
         "assistant_evaluation_plans": (
             "ALTER TABLE assistant_evaluation_plans ADD COLUMN workspace_id VARCHAR(32)"
         ),

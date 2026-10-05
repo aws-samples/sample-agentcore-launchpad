@@ -105,7 +105,7 @@ def test_late_failure_after_text_and_model_end_turn(mode, reason, code, status):
 
 def test_second_scenario_failure_identifies_attempt_without_marking_it_completed(monkeypatch):
     completed = Stream([text("complete answer"), stop("end_turn")])
-    truncated = Stream([text("partial"), stop("max_tokens")])
+    truncated = Stream([text("partial"), stop("cancelled")])  # final (a budget stop is scored)
     client = MagicMock()
     client.invoke_harness.side_effect = [{"stream": completed}, {"stream": truncated}]
     monkeypatch.setattr(evaluation, "data_client", lambda _ws: client)
@@ -127,8 +127,8 @@ def test_second_scenario_failure_identifies_attempt_without_marking_it_completed
     with SessionLocal() as db:
         row = db.get(EvalRun, run_id)
         assert row.status == "failed" and row.session_ids == [first]
-        assert "harness.execution_limit" in row.error
-        assert "stop_reason='max_tokens'" in row.error
+        assert "harness.execution_cancelled" in row.error
+        assert "stop_reason='cancelled'" in row.error
         assert "scenario_id=second" in row.error and f"session_id={second}" in row.error
         assert first not in row.error and row.batch_eval_id is None
     client.start_batch_evaluation.assert_not_called()
@@ -269,7 +269,8 @@ def test_shared_invoke_entry_propagates_harness_failure(monkeypatch, mode):
     assert stream.closed == 1
 
 
-@pytest.mark.parametrize("reason", ["timeout_exceeded", "cancelled", "limit_turns"])
+# Budget stops (timeout / limits) are scored as they are (see test_eval_transient_retry).
+@pytest.mark.parametrize("reason", ["cancelled", "content_filtered"])
 def test_failed_replay_never_waits_for_telemetry_or_starts_batch(monkeypatch, reason):
     stream = Stream([text("partial"), stop("end_turn"), stop(reason)])
     client = client_for(stream)

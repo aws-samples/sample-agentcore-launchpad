@@ -1,3 +1,5 @@
+import { evaluatorPolarity } from "./evaluators";
+
 export interface EvaluationDatasetInfo {
   id: string;
   name: string;
@@ -18,6 +20,25 @@ export interface CloudDatasetInfo {
 export interface EvaluationScore {
   evaluatorId: string;
   score: number;
+  /** Judgements this average covers (AWS `totalEvaluated`); absent on rows
+   *  recorded before it was stored. */
+  count?: number;
+}
+
+/** A run's cross-evaluator mean on the task detail's 0..1 "higher is better"
+ *  scale: penalty evaluators (Refusal) are flipped, and each evaluator weighs by
+ *  the judgements it averages (1 when `count` is absent), so it matches the
+ *  normalized mean over every result row. */
+export function runMeanScore(scores: EvaluationScore[]): number | null {
+  let total = 0;
+  let weight = 0;
+  for (const s of scores) {
+    if (typeof s.score !== "number") continue;
+    const w = s.count && s.count > 0 ? s.count : 1;
+    total += (evaluatorPolarity(s.evaluatorId) < 0 ? 1 - s.score : s.score) * w;
+    weight += w;
+  }
+  return weight > 0 ? total / weight : null;
 }
 
 export interface InsightCluster {
@@ -105,12 +126,22 @@ export interface EvaluationRunInfo {
   /** The AWS batch evaluation behind this run; absent for window-scoped runs that
    *  never started one. Required to pin RECOMMEND to this run's sessions. */
   batch_eval_id?: string | null;
+  /** dataset scenarios that ended on the agent's own budget (timeout after its
+   *  replay, iteration / token limit) and are scored as they stand. Absent on older backends. */
+  budget_stops?: EvaluationBudgetStop[];
   error: string | null;
   created_at?: string | null;
   /** operator-facing task name/description (console V2); null on unnamed runs */
   name?: string | null;
   description?: string | null;
   updated_at?: string | null;
+}
+
+export interface EvaluationBudgetStop {
+  scenario_id: string;
+  session_id: string;
+  code: string;
+  stop_reason: string;
 }
 
 type EvaluationRunDisplayStatus = EvaluationRunStatus | "completed_with_errors";
@@ -222,6 +253,14 @@ export interface RunRecommendation {
     recommended_prompt?: string;
     explanation?: string;
     tools?: Record<string, { description: string; explanation: string }>;
+    /** a 3rd-party provider row (e.g. gepa_lite): who produced it, with which model */
+    provider?: string;
+    provider_model_id?: string;
+    provider_meta?: { evidence_sessions?: number; evidence_records?: number; latency_ms?: number };
+    /** the provider job's last progress line while it runs */
+    progress?: string;
+    /** adversarial-test sessions left out of an AgentCore prompt recommendation's traces */
+    excluded_sessions?: { session_id: string; scenario_id: string }[];
   };
   error: string | null;
   /** set once the recommended prompt was accepted into a new Harness version */
@@ -232,9 +271,30 @@ export interface RunRecommendation {
     previous_version: string | null;
     job_id: string;
     deployment_id: string;
+    /** the published prompt was the operator's edit of the recommendation */
+    edited?: boolean;
   } | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** The cards a run shows by default: per kind the newest recommendation, plus any one
+ *  that was accepted (it is what got published). Everything else — a superseded
+ *  attempt, typically one AWS refused — is `earlier`, collapsed unless asked for.
+ *  `recs` is newest-first, as the API lists it. */
+export function splitRecommendations(recs: RunRecommendation[]): {
+  current: RunRecommendation[];
+  earlier: RunRecommendation[];
+} {
+  const seen = new Set<string>();
+  const current: RunRecommendation[] = [];
+  const earlier: RunRecommendation[] = [];
+  for (const rec of recs) {
+    if (!seen.has(rec.kind) || rec.accepted) current.push(rec);
+    else earlier.push(rec);
+    seen.add(rec.kind);
+  }
+  return { current, earlier };
 }
 
 export interface ExperimentReadiness {

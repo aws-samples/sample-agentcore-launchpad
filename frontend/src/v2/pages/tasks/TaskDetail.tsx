@@ -139,6 +139,16 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
         end={actions}
       />
       {data.run?.error && <Alert tone={data.status === "failed" ? "error" : "warn"}>{data.run.error}</Alert>}
+      {!!data.run?.budget_stops?.length && (
+        <div data-testid="v2-task-budget-stops">
+          <Alert tone="warn">
+            {t("v2.taskDetail.budgetStops", {
+              count: data.run.budget_stops.length,
+              list: data.run.budget_stops.map((b) => `${b.scenario_id} (${b.stop_reason || b.code})`).join(", "),
+            })}
+          </Alert>
+        </div>
+      )}
       {data.online?.failure_reason && <Alert tone="error">{data.online.failure_reason}</Alert>}
       <Card title={t("v2.taskDetail.overview")}>
         <Descriptions

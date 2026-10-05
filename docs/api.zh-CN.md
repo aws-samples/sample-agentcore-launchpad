@@ -391,11 +391,14 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
-| `GET` | `/api/memory/resources` | 工作区账号/区域内的全部记忆,默认记忆排首位,每条附带 spec 绑定了它的在线 Agent |
-| `POST` | `/api/memory/resources` | `CreateMemory`(`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`)→ `201`,返回 `CREATING` 状态的详情投影 |
+| `GET` | `/api/memory/resources` | 工作区账号/区域内的全部记忆,默认记忆排首位,每条附带 spec 绑定了它的在线 Agent 与 `managed`(见下文) |
+| `POST` | `/api/memory/resources` | `perm:memory.manage`。`CreateMemory`(`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`)→ `201`,返回 `CREATING` 状态的详情投影;新 id 登记为已纳管 |
 | `GET` | `/api/memory/resources/{memory_id}` | 详情投影:描述、状态、事件过期、执行角色、策略、命名空间键 |
-| `PUT` | `/api/memory/resources/{memory_id}` | 仅限 `{description?, event_expiry_days?}` 的 `UpdateMemory`——至少提供一项(否则 422),`description` 1–4096 字符(只能替换、不能清空),`event_expiry_days` 7–365(越界 422)。只发送 `memoryId` 加给出的字段,绝不发送 `namespaceKeys`(API 会整体替换该集合);响应是用 `GetMemory` 读回的详情投影。不会因被 Agent 引用或是平台默认而被阻止;未知 id → `404 aws.not_found` |
-| `DELETE` | `/api/memory/resources/{memory_id}` | `DeleteMemory`;工作区默认记忆返回 `409 memory.platform_protected`,仍被在线 Agent 的 spec 绑定时返回 `409 memory.in_use`(附 Agent 列表) |
+| `POST` | `/api/memory/resources/{memory_id}/adopt` | **admin**。将账号内已有的记忆登记为本工作区纳管(先经 `GetMemory` 确认存在——未知 id → `404 aws.not_found`);幂等;响应为详情投影 |
+| `PUT` | `/api/memory/resources/{memory_id}` | `perm:memory.manage`。仅限 `{description?, event_expiry_days?}` 的 `UpdateMemory`——至少提供一项(否则 422),`description` 1–4096 字符(只能替换、不能清空),`event_expiry_days` 7–365(越界 422)。只发送 `memoryId` 加给出的字段,绝不发送 `namespaceKeys`(API 会整体替换该集合);响应是用 `GetMemory` 读回的详情投影。不会因被 Agent 引用或是平台默认而被阻止;未知 id → `404 aws.not_found` |
+| `DELETE` | `/api/memory/resources/{memory_id}` | `perm:memory.manage`。`DeleteMemory`(不可逆);工作区默认记忆返回 `409 memory.platform_protected`,仍被在线 Agent 的 spec 绑定时返回 `409 memory.in_use`(附 Agent 列表);同时删除纳管登记 |
+
+**归属。** 账号内可能存在平台从未创建的记忆,因此只有工作区的 bootstrap 记忆,或 `managed_memories` 账本行登记的记忆(由上面的 `POST` 或管理员纳管写入——从不取自客户端请求)才算*已纳管*。其余 id 在任何 AWS 调用之前,所有按 id 的路由都返回 `404 memory.not_managed`;列表仍以 `managed: false` 展示它们。spec 的 `memory.memory_id` 必须已纳管且为 `ACTIVE`:`POST /api/agents`、重新发布与转换会以 `422 agent.memory_not_managed` / `409 agent.memory_not_active` 拒绝,部署作业在任何阶段之前再次校验。对绑定了未纳管 id 的旧 spec,Chat 记忆侧栏返回 `409 agent.memory_not_managed`。
 
 每条列表路由都接受并返回 `next_token`（AWS 按 100 条分页），并接受 `max_results`（上限 100）——
 不会有任何静默截断。`/records` 与 `/records/search` 的命名空间解析顺序：显式的 `namespace` 优先，

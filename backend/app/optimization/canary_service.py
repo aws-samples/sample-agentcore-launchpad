@@ -765,15 +765,120 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     return result
 
 
+def _paired_harness_traffic(
+    row: RuntimeCanary,
+    workspace: WorkspaceContext,
+    prompts: list[str],
+    scenario_ids: list[str] | None,
+    progress: Progress,
+) -> dict[str, Any]:
+    """Send every prompt to BOTH Harness endpoints (see ``canary_harness.PAIRED_MODE``).
+
+    Each (prompt, arm) is one InvokeHarness call on the arm's named endpoint in a
+    fresh session; up to ``TRAFFIC_MAX_CONCURRENCY`` run at once on daemon threads,
+    while ``progress`` stays on this thread. A transient upstream error is retried
+    once in a new session; any other failure marks that side of the pair, which the
+    verdict then leaves out — it never fails the whole replay."""
+    import queue
+    import threading
+    import uuid
+
+    from app.evaluation.service import transient_invoke_error
+
+    setup = row.artifacts["setup"]
+    arn = row.artifacts["agent_meta"]["arn"]
+    endpoints = {"control": setup["stable_endpoint"], "treatment": setup["treatment_endpoint"]}
+    actor = scoped_actor(row.champion_agent_id, "canary-traffic")
+    data = data_client(workspace)
+    labels = list(scenario_ids or [])
+    pairs = [
+        {"index": i, "scenario_id": labels[i] if i < len(labels) else f"item_{i + 1}",
+         "prompt": prompt[:160], "control_session_id": None, "treatment_session_id": None}
+        for i, prompt in enumerate(prompts)
+    ]
+    jobs: queue.SimpleQueue[tuple[int, str]] = queue.SimpleQueue()
+    for i in range(len(prompts)):
+        for arm in ("control", "treatment"):
+            jobs.put((i, arm))
+    done: queue.SimpleQueue[tuple[int, str, str | None, str | None]] = queue.SimpleQueue()
+
+    def worker() -> None:
+        while True:
+            try:
+                i, arm = jobs.get_nowait()
+            except queue.Empty:
+                return
+            error: str | None = None
+            sid: str | None = None
+            for attempt in range(2):
+                sid = hc.new_session_id()
+                try:
+                    hc.invoke_harness_text(
+                        data, arn, prompts[i], session_id=sid, actor_id=actor,
+                        qualifier=endpoints[arm],
+                        runtime_user_id=experiment_service.TRAFFIC_USER_ID,
+                    )
+                    error = None
+                    break
+                except Exception as exc:  # noqa: BLE001 — recorded per side, never raised
+                    error = (getattr(exc, "code", None) or type(exc).__name__)[:120]
+                    if attempt or not transient_invoke_error(exc):
+                        break
+            done.put((i, arm, sid, error))
+
+    workers = max(1, min(experiment_service.TRAFFIC_MAX_CONCURRENCY, 2 * len(prompts)))
+    tag = uuid.uuid4().hex[:4]
+    threads = [threading.Thread(target=worker, daemon=True, name=f"canary-pair-{tag}-{n}")
+               for n in range(workers)]
+    for thread in threads:
+        thread.start()
+    total, failed = 2 * len(prompts), 0
+    for finished in range(1, total + 1):
+        i, arm, sid, error = done.get()
+        pairs[i][f"{arm}_session_id"] = sid
+        if error:
+            failed += 1
+            pairs[i].setdefault("errors", {})[arm] = error
+            pairs[i]["error"] = ", ".join(f"{k}: {v}" for k, v in pairs[i]["errors"].items())
+        progress(f"paired replay · {finished}/{total} calls · {failed} failed")
+    for thread in threads:
+        thread.join()
+    for p in pairs:
+        p.pop("errors", None)
+    return {
+        "mode": canary_harness.PAIRED_MODE,
+        "pairs": pairs,
+        "session_ids": [p[k] for p in pairs for k in ("control_session_id", "treatment_session_id")
+                        if p[k]],
+        "sent": total - failed,
+        "failed": failed,
+        "status_counts": {"ok": total - failed, **({"error": failed} if failed else {})},
+    }
+
+
 def act_traffic(
     canary_id: str,
     prompts: list[str],
     dataset_info: dict[str, str],
     progress: Progress,
+    scenario_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     row = _get(canary_id)
     workspace = context_for_workspace(row.workspace_id)
     setup = row.artifacts["setup"]
+    if is_harness(row):
+        attempt = {
+            **_paired_harness_traffic(row, workspace, prompts, scenario_ids, progress),
+            **dataset_info,
+            "baseline_n": 0,
+            "completed_at": _now(),
+        }
+        rounds, current = _current_round(row, create=True)
+        assert current is not None
+        current.setdefault("traffic_attempts", []).append(attempt)
+        current.pop("verdict", None)
+        _update(canary_id, stage="traffic", artifact={"rounds": rounds})
+        return attempt
     metrics = ac.normalize_ab_results(
         ac.get_ab_test(data_client(workspace), ab_test_id=setup["ab_test_id"])
     )
@@ -809,12 +914,86 @@ def act_traffic(
     return attempt
 
 
+# a paired verdict waits for the online evaluations (session idle 2 min + judge lag
+# ~10 min) until this share of pairs is scored on every evaluator, or the deadline
+PAIRED_SCORED_SHARE = 0.9
+PAIRED_VERDICT_DEADLINE_S = 1800
+
+
+def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progress,
+                    ) -> dict[str, Any]:
+    """Verdict from paired replay: each question answered by both versions is one
+    unit of evidence (``canary_harness.paired_metrics``), read back from the two
+    arms' online-evaluation results by session id."""
+    import math
+
+    from app.services.observability import run_insights_queries
+
+    setup = row.artifacts["setup"]
+    workspace = context_for_workspace(row.workspace_id)
+    pairs = [p for a in current.get("traffic_attempts") or []
+             if a.get("mode") == canary_harness.PAIRED_MODE for p in a.get("pairs") or []]
+    complete = [p for p in pairs if p.get("control_session_id") and p.get("treatment_session_id")
+                and (not p.get("error") or canary_harness.budget_stop_only(p["error"]))]
+    config_ids = [setup["champion"]["online_eval_id"], setup["challenger"]["online_eval_id"]]
+    sessions = [p[k] for p in complete for k in ("control_session_id", "treatment_session_id")]
+    first = min((a.get("completed_at") or _now()) for a in current["traffic_attempts"])
+    started = datetime.fromisoformat(first)
+    deadline = datetime.now(UTC).timestamp() + PAIRED_VERDICT_DEADLINE_S
+    scores: dict[str, dict[str, float]] = {}
+    while True:
+        hours = math.ceil((datetime.now(UTC) - started).total_seconds() / 3600) + 1
+        queries = {
+            f"q{n}": canary_harness.paired_scores_query(
+                config_ids, sessions[n:n + canary_harness.SCORE_QUERY_CHUNK])
+            for n in range(0, len(sessions), canary_harness.SCORE_QUERY_CHUNK)
+        }
+        rows = run_insights_queries(queries, hours, workspace=workspace) if queries else {}
+        scores = canary_harness.parse_paired_scores([r for v in rows.values() for r in v])
+        evaluators = {e for s in scores.values() for e in s}
+        scored = min(
+            (sum(1 for p in complete
+                 if e in scores.get(p["control_session_id"], {})
+                 and e in scores.get(p["treatment_session_id"], {}))
+             for e in evaluators),
+            default=0,
+        )
+        if complete and evaluators and scored >= PAIRED_SCORED_SHARE * len(complete):
+            break
+        if datetime.now(UTC).timestamp() >= deadline:
+            break
+        progress(f"waiting for online evaluation of paired sessions · {scored}/{len(complete)} "
+                 "pairs scored (judge lag ≈ 10 min)")
+        experiment_service._sleep(45)
+    metrics, rows_out = canary_harness.paired_metrics(
+        complete, scores, polarity=ac.evaluator_polarity)
+    verdict = experiment_service.compute_verdict(metrics)
+    if not metrics:
+        verdict = {"verdict": "insufficient-data",
+                   "reason": "no paired session was scored by both online evaluations", "n": 0}
+    return {
+        "metrics": metrics,
+        **verdict,
+        "mode": canary_harness.PAIRED_MODE,
+        "pairs_sent": len(pairs),
+        "pairs_complete": len(complete),
+        "pairs": rows_out,
+        "baseline_n": 0,
+        "recorded_at": _now(),
+    }
+
+
 def act_verdict(canary_id: str, progress: Progress) -> dict[str, Any]:
     row = _get(canary_id)
     setup = row.artifacts["setup"]
     rounds, current = _current_round(row)
     if current is None or not current.get("traffic_attempts"):
         raise RuntimeError("current ramp stage has no traffic attempt")
+    if current["traffic_attempts"][-1].get("mode") == canary_harness.PAIRED_MODE:
+        stored = _paired_verdict(row, current, progress)
+        current["verdict"] = stored
+        _update(canary_id, stage="verdict", artifact={"rounds": rounds})
+        return stored
     baseline_n = int(current["traffic_attempts"][-1].get("baseline_n", 0))
     data = data_client(context_for_workspace(row.workspace_id))
     deadline = datetime.now(UTC).timestamp() + 900
