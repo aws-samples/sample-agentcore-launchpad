@@ -1,6 +1,8 @@
 # Identity P3 — real-AWS e2e evidence (inbound JWT, invoke as user, OBO)
 
-- **When and where:** 2026-09-28 (UTC), account `959545103699`, region `us-west-2`.
+> Real identifiers (account id, Cognito pool, client and domain ids, callback ids, gateway ids, local paths) are redacted to placeholders such as `123456789012` and `us-west-2_EXAMPLE`.
+
+- **When and where:** 2026-09-28 (UTC), account `123456789012`, region `us-west-2`.
 - **Driver:** [`backend/scripts/e2e_identity_inbound.py`](../backend/scripts/e2e_identity_inbound.py),
   subcommands `up` / `run` / `down` / `trail`.
 - **Stack:** a throwaway backend on `127.0.0.1:8793` with a temporary SQLite ledger
@@ -37,17 +39,17 @@ backend was then restarted with the account id, and the second attempt passed.
 
 | Resource | Identifier |
 |---|---|
-| Cognito user pool | `us-west-2_6W6obvi1c` (`lpid-e2e-p3-pool`) |
-| Cognito domain | `lpid-e2e-p3-081c22` |
-| Cognito M2M client | `5qt0ktl5devunfjckvab5c6te6` (scope `lpid-e2e-p3/invoke`) |
-| Cognito user client / user | `3thajrgjc907tnahiaekf9h48p` / `lpid-e2e-p3-user` (password only in the `0600` state file, deleted at teardown) |
-| Gateway (CUSTOM_JWT, the throwaway pool's discovery URL) | `lpid-e2e-p3-gw-wa4mvgo83h` |
+| Cognito user pool | `us-west-2_EXAMPLE` (`lpid-e2e-p3-pool`) |
+| Cognito domain | `lpid-e2e-p3-xxxxxx` |
+| Cognito M2M client | `<m2m-client-id>` (scope `lpid-e2e-p3/invoke`) |
+| Cognito user client / user | `<user-client-id>` / `lpid-e2e-p3-user` (password only in the `0600` state file, deleted at teardown) |
+| Gateway (CUSTOM_JWT, the throwaway pool's discovery URL) | `lpid-e2e-p3-gw-xxxxxxxxxx` |
 | Agent (zip Runtime) | ledger `a1532421699e44249c79388baaf5da6b`, runtime `lpid_e2e_p3_agent_bdcd9c-0RevAO6bjl` |
 | Workload identity | `lpid_e2e_p3_agent_bdcd9c-0RevAO6bjl` (created by the Runtime) |
 | Per-agent IAM roles | `launchpad-agent-lpid-e2e-p3-agent-0c6436af` (first attempt), `launchpad-agent-lpid-e2e-p3-agent-a1532421` |
 | Connections | `lpid-e2e-p3-cognito` (CustomOauth2 → the throwaway pool, no OBO), `lpid-e2e-p3-obo` (CustomOauth2, explicit endpoints, `obo: TOKEN_EXCHANGE / actor NONE`) |
 | Gateway target | `lpid-e2e-p3-obo-target` (`QQDGLP4RFM`, OpenAPI, `grantType: TOKEN_EXCHANGE`) |
-| Zip artifact | `s3://launchpad-artifacts-959545103699-us-west-2/agents/lpid-e2e-p3-agent/deployment_package.zip` |
+| Zip artifact | `s3://launchpad-artifacts-123456789012-us-west-2/agents/lpid-e2e-p3-agent/deployment_package.zip` |
 
 ## 3. The flow: 30 assertions passed, 0 failed (06:54:47Z–06:57:28Z)
 
@@ -86,7 +88,7 @@ Acceptance mapping:
 | Gateway target `lpid-e2e-p3-obo-target` | `DELETE /api/identity/gateway-targets/QQDGLP4RFM` → 200 |
 | Connection `lpid-e2e-p3-cognito` | console `DELETE` → 200; `GetOauth2CredentialProvider` → not found |
 | Connection `lpid-e2e-p3-obo` | console `DELETE` → 409 (the target was still being deleted), then `DeleteOauth2CredentialProvider` directly; `Get…` → not found |
-| Gateway `lpid-e2e-p3-gw-wa4mvgo83h` | `DeleteGateway` → `GetGateway` not found (`gateway.gone`) |
+| Gateway `lpid-e2e-p3-gw-xxxxxxxxxx` | `DeleteGateway` → `GetGateway` not found (`gateway.gone`) |
 | S3 prefix `agents/lpid-e2e-p3-agent/` | object deleted, 0 keys left |
 | Cognito domain + pool | `DeleteUserPoolDomain`, `DeleteUserPool`; no `lpid` pool listed |
 | IAM role `…-0c6436af` | CloudTrail `DeleteRolePolicy` `d02a27df-1491-4357-b867-14e07166ebdc` and **`DeleteRole` `d0144e57-3bef-4cc1-b4cd-da4835cfcf8f`** at 06:54:05Z (created by `CreateRole` `71e5ec0f-dec9-4db5-949a-de8e90aa664e`, 06:52:10Z) |

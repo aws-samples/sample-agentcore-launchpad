@@ -315,6 +315,36 @@ def _gateway_ids(spec: AgentSpec) -> list[str]:
     return sorted(gateway_id for gateway_id in ids if _GATEWAY_ID_RE.fullmatch(gateway_id))
 
 
+def runtime_name_base(agent_name: str) -> str:
+    """The deterministic part of an agent's Runtime name.
+
+    ``deployer.zip_runtime.sanitize_runtime_name`` appends ``_<6 hex>`` to this
+    for uniqueness; it lives here because the workload-identity scope below
+    must agree with it exactly. The agent name is immutable after create (the
+    re-publish route refuses a rename), so the base never drifts from the
+    runtime that already exists.
+    """
+    return re.sub(r"[^A-Za-z0-9_]", "_", agent_name).strip("_")[:40] or "agent"
+
+
+def own_workload_identity_arn(spec: AgentSpec, ctx: RoleContext) -> str:
+    """The agent's OWN auto-created workload identity, as an IAM resource.
+
+    The Runtime names that identity after the runtime id — ``<runtimeName>-
+    <10-char suffix>`` (deployer/return_url.py, live-verified 2026-09-19;
+    evidence docs/identity-e2e-evidence-p2.md / -p3.md) — and the runtime name
+    is ``<base>_<6 hex>``. Neither random part is known at provision time,
+    so the single-character ``?`` wildcard pins the 6-hex segment exactly: the
+    pattern matches this agent's runtimes, not another agent whose name merely
+    starts with the same characters (``a`` vs ``a_b``).
+    """
+    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    return (
+        f"{base}:workload-identity-directory/default/workload-identity/"
+        f"{runtime_name_base(spec.name)}_??????-*"
+    )
+
+
 def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
     """Per-Connection grants for tools carrying ``ToolRef.auth``.
 
@@ -335,13 +365,13 @@ def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, A
     )
     oauth2 = sorted({name for name, kind in wanted if kind == "oauth2"})
     api_key = sorted({name for name, kind in wanted if kind == "api_key"})
-    # The workload identity is auto-created by the Runtime and its name embeds the
-    # runtime id, unknown at provision time, so the directory-level wildcard is the
-    # narrowest expressible resource for the exchange call.
+    # The workload identity is auto-created by the Runtime and named after the
+    # runtime id, unknown at provision time — scoped to this agent's own name
+    # pattern (``own_workload_identity_arn``), never the whole directory.
     identity_resources = [
         f"{base}:token-vault/default",
         f"{base}:workload-identity-directory/default",
-        f"{base}:workload-identity-directory/default/workload-identity/*",
+        own_workload_identity_arn(spec, ctx),
     ]
     statements: list[dict[str, Any]] = []
     if oauth2:
@@ -564,9 +594,10 @@ def policy_document(
     # access token (GetWorkloadAccessTokenForJWT) on the runtime's own workload
     # identity — needed by agents whose role predates the Identity service-
     # linked role, and by the P2 OBO path. Skipped when the family-wide gateway
-    # grant above already carries the action; scoped to the workload-identity
-    # directory (the runtime's identity name embeds its runtime id, unknown at
-    # provision time), matching the devguide's GetAgentAccessToken policy.
+    # grant above already carries the action; scoped to the directory plus the
+    # runtime's OWN identity (its name embeds the runtime id, unknown at
+    # provision time — ``own_workload_identity_arn``), matching the devguide's
+    # GetAgentAccessToken policy shape.
     if inbound_jwt and not any(
         s.get("Sid") == "AgentCoreWorkloadIdentity" for s in statements
     ):
@@ -580,7 +611,7 @@ def policy_document(
             ],
             "Resource": [
                 f"{base}:workload-identity-directory/default",
-                f"{base}:workload-identity-directory/default/workload-identity/*",
+                own_workload_identity_arn(spec, ctx),
             ],
         })
 

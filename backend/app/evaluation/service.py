@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from botocore.exceptions import ClientError
 
 from app.core.config import get_settings
@@ -227,8 +228,12 @@ def transient_invoke_error(exc: BaseException) -> bool:
     prompt, the other replays answered normally), or a Harness execution timeout
     (live 2026-10-04: a model call that never returned held a research scenario
     silent until the 600 s budget ran out — retried at most
-    ``TIMEOUT_SCENARIO_RETRIES`` times). Iteration / token limits and every other
-    error are final."""
+    ``TIMEOUT_SCENARIO_RETRIES`` times). A JWT-inbound agent's bearer invoke
+    counts the same way: an HTTP 5xx / 429 answer (``RuntimeBearerHttpError``)
+    or a transport failure (``httpx.TransportError``: connect / read timeout,
+    dropped connection) is transient, while an authorizer rejection
+    (``RuntimeBearerAuthError``, 401/403) and any other 4xx are final.
+    Iteration / token limits and every other error are final."""
     if isinstance(exc, AppError):
         if exc.code == "harness.execution_timeout":
             return True
@@ -241,6 +246,12 @@ def transient_invoke_error(exc: BaseException) -> bool:
         error = exc.response.get("Error") or {}
         status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
         return error.get("Code") in _TRANSIENT_CODES or int(status) >= 500
+    if isinstance(exc, rt.RuntimeBearerAuthError):
+        return False
+    if isinstance(exc, rt.RuntimeBearerHttpError):
+        return exc.status_code >= 500 or exc.status_code == 429
+    if isinstance(exc, httpx.TransportError):
+        return True
     if isinstance(exc, RuntimeError):
         return str(exc).startswith(("runtime client error", "internal server error"))
     return False

@@ -1,15 +1,20 @@
 import type { InboundAuth, InboundAuthMode, InboundCustomClaim, JwtInboundConfig, OidcSource } from "./api";
 
+/** One editable custom-claim row: `match_values` stays the raw typed string. */
+export type JwtClaimForm = Omit<InboundCustomClaim, "match_values"> & { match_values: string };
+
 /**
- * Editable JWT-authorizer form state. Lists stay strings (comma/space separated)
- * so typing is unconstrained; `jwtConfigFromForm` produces the API shape.
+ * Editable JWT-authorizer form state. Lists — the allowed lists and each claim's
+ * match values — stay strings (comma/space separated) so typing is
+ * unconstrained (a trailing separator is not eaten mid-word);
+ * `jwtConfigFromForm` produces the API shape.
  */
 export interface JwtFormState {
   discovery_url: string;
   allowed_clients: string;
   allowed_audience: string;
   allowed_scopes: string;
-  custom_claims: InboundCustomClaim[];
+  custom_claims: JwtClaimForm[];
   /** display-only: the Connection `discovery_url` was picked from ("" = typed) */
   source_connection: string;
 }
@@ -34,6 +39,9 @@ export const inboundCapable = (method: string, protocol?: string) =>
 
 export const splitList = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 
+/** A new, empty custom-claim row. */
+export const EMPTY_CLAIM: JwtClaimForm = { name: "", value_type: "STRING", match_operator: "EQUALS", match_values: "" };
+
 export function jwtFormFromConfig(config: JwtInboundConfig | null | undefined): JwtFormState {
   if (!config) return { ...EMPTY_JWT_FORM };
   return {
@@ -41,7 +49,10 @@ export function jwtFormFromConfig(config: JwtInboundConfig | null | undefined): 
     allowed_clients: (config.allowed_clients ?? []).join(", "),
     allowed_audience: (config.allowed_audience ?? []).join(", "),
     allowed_scopes: (config.allowed_scopes ?? []).join(", "),
-    custom_claims: (config.custom_claims ?? []).map((claim) => ({ ...claim })),
+    custom_claims: (config.custom_claims ?? []).map((claim) => ({
+      ...claim,
+      match_values: (claim.match_values ?? []).join(", "),
+    })),
     source_connection: config.source_connection ?? "",
   };
 }
@@ -64,12 +75,8 @@ export function jwtConfigFromForm(form: JwtFormState): JwtInboundConfig {
     allowed_audience: splitList(form.allowed_audience),
     allowed_scopes: splitList(form.allowed_scopes),
     custom_claims: form.custom_claims
-      .filter((claim) => claim.name.trim() && claim.match_values.some((v) => v.trim()))
-      .map((claim) => ({
-        ...claim,
-        name: claim.name.trim(),
-        match_values: claim.match_values.map((v) => v.trim()).filter(Boolean),
-      })),
+      .map((claim) => ({ ...claim, name: claim.name.trim(), match_values: splitList(claim.match_values) }))
+      .filter((claim) => claim.name && claim.match_values.length),
     ...(form.source_connection ? { source_connection: form.source_connection } : {}),
   };
 }

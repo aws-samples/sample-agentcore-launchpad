@@ -32,6 +32,7 @@ __all__ = [
     "authorizer_configuration",
     "deployed_inbound_auth",
     "display_mode",
+    "fetch_discovery_document",
     "is_jwt_mode",
     "issuer_mismatch",
     "m2m_bearer_token",
@@ -45,6 +46,7 @@ __all__ = [
     "workspace_cognito_issuer",
     "workspace_default",
 ]
+from app.services.public_fetch import REASON_LABELS, PublicFetchError, fetch_public_json
 from app.services.workspace import WorkspaceContext, get_workspace_row
 
 logger = logging.getLogger("launchpad.inbound_auth")
@@ -57,12 +59,35 @@ ProbeFn = Callable[[str], dict[str, Any]]
 
 
 def _default_probe(url: str) -> dict[str, Any]:
-    response = httpx.get(url, timeout=DISCOVERY_PROBE_TIMEOUT_S, follow_redirects=True)
-    response.raise_for_status()
-    body = response.json()
-    if not isinstance(body, dict):
-        raise ValueError("discovery document is not a JSON object")
-    return body
+    """The production probe: https-only, public addresses only, no redirects
+    (``public_fetch``) — the URL is whatever a console user typed."""
+    return fetch_public_json(url, timeout=DISCOVERY_PROBE_TIMEOUT_S)
+
+
+def fetch_discovery_document(url: str, probe: ProbeFn | None = None) -> dict[str, Any]:
+    """GET a discovery document, failing as a generic 422 by category.
+
+    Shared by every save-time read of a user-supplied discovery URL (inbound
+    JWT config here, the OBO Connection check in ``identity_providers``). The
+    message carries the URL the caller typed and a short reason only — never
+    the exception text, which for an internal target would describe the
+    network behind the backend; the detail is logged server-side.
+    """
+    try:
+        return (probe or _default_probe)(url)
+    except AppError:
+        raise
+    except PublicFetchError as exc:
+        reason, label = exc.reason, exc.label
+    except Exception as exc:  # an injected probe, or an unexpected failure
+        logger.info("discovery fetch of %s failed: %s: %s", url, type(exc).__name__, exc)
+        reason, label = "unreachable", REASON_LABELS["unreachable"]
+    raise AppError(
+        "identity.discovery_unreachable",
+        f"could not fetch the OIDC discovery document at {url} ({label})",
+        {"reason": reason},
+        status_code=422,
+    )
 
 
 def probe_discovery(url: str, probe: ProbeFn | None = None) -> dict[str, Any]:
@@ -72,17 +97,7 @@ def probe_discovery(url: str, probe: ProbeFn | None = None) -> dict[str, Any]:
     failing the save with the real reason is the cheapest place to catch it.
     Returns the (non-secret) fields the UI echoes back: issuer + token endpoint.
     """
-    try:
-        document = (probe or _default_probe)(url)
-    except AppError:
-        raise
-    except Exception as exc:
-        raise AppError(
-            "identity.discovery_unreachable",
-            f"could not fetch the OIDC discovery document at {url}: "
-            f"{type(exc).__name__}: {exc}",
-            status_code=422,
-        ) from exc
+    document = fetch_discovery_document(url, probe)
     if not str(document.get("jwks_uri") or ""):
         raise AppError(
             "identity.discovery_invalid",
@@ -144,9 +159,10 @@ def resolve_for_agent(agent: Agent, db: Session) -> InboundAuth:
 def record_deployed_auth(agent: Agent, resolved: InboundAuth) -> None:
     """Snapshot the resolved choice onto the row (caller commits).
 
-    Written by the deploy stage in the same commit as the runtime identifiers,
-    so the ledger's answer to "how do I call this agent" always matches the
-    runtime that answered the Create/Update call.
+    Written by the deploy stage once the runtime reports READY (in the same
+    commit as the READY ARN/version), never at Create/Update acceptance: an
+    update that is accepted and then fails must not leave the ledger claiming
+    a mode the live runtime does not serve.
     """
     agent.inbound_auth_mode = resolved.mode
     agent.inbound_auth_config = (

@@ -594,7 +594,9 @@ def switch_inbound_auth(
         raise AppError(
             "agent.inbound_auth_invalid",
             "the stored spec cannot be re-published with this inbound auth",
-            {"errors": exc.errors(include_url=False, include_context=False)},
+            {"errors": exc.errors(
+                include_url=False, include_context=False, include_input=False
+            )},
             status_code=422,
         ) from exc
     return _start_redeploy(db, ws, agent, spec)

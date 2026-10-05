@@ -267,7 +267,6 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 ctx.log,
             )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
-            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
@@ -287,7 +286,6 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.resource_id = runtime_id
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
-            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
@@ -298,6 +296,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        # The inbound-auth snapshot lands only once the runtime is READY on the
+        # version that carries it: a Create/Update that is accepted and then
+        # fails leaves the ledger on the mode the live runtime still serves.
+        # A resumed job (create already accepted, or an update re-issued)
+        # reaches this line too, so the snapshot is never skipped.
+        inbound_auth_service.record_deployed_auth(row, resolved_auth)
         from app.deployer.input_contract import stamp_input_contract
 
         stamp_input_contract(ctx, db, row)

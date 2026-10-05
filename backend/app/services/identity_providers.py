@@ -569,15 +569,8 @@ def check_obo_idp(
         )
     if not discovery_url:
         return
-    try:
-        document = (probe or inbound_auth._default_probe)(discovery_url)
-    except Exception as exc:
-        raise AppError(
-            "identity.discovery_unreachable",
-            f"could not fetch the OIDC discovery document at {discovery_url}: "
-            f"{type(exc).__name__}: {exc}",
-            status_code=422,
-        ) from exc
+    # the same SSRF-guarded fetch + generic 422 as the inbound JWT probe
+    document = inbound_auth.fetch_discovery_document(discovery_url, probe)
     declared = document.get("grant_types_supported")
     if isinstance(declared, list) and urn not in declared:
         raise AppError(
@@ -830,7 +823,16 @@ def delete_connection(
     *,
     bound_targets: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Delete from the vault + drop the audit row; refuses system + referenced."""
+    """Delete from the vault + drop the audit row; refuses system, referenced
+    and external Connections.
+
+    Only a provider Launchpad created — one with a ledger row in THIS workspace
+    — is deleted from the vault. A vault-only provider (``source="external"``
+    in the list: created by another tool, another Launchpad, or by hand in the
+    same account + region) may back things Launchpad cannot see, so it is
+    refused by name rather than deleted. A ledger row whose provider is already
+    gone from the vault is still cleaned up.
+    """
     _require_kind(kind)
     if name in SYSTEM_PROVIDER_NAMES:
         raise AppError(
@@ -854,11 +856,18 @@ def delete_connection(
         raise NotFoundError(
             "identity.connection_not_found", f"no {kind} connection named {name!r}"
         )
+    if row is None:
+        raise AppError(
+            "identity.external_connection",
+            f"{name!r} was created outside Launchpad — delete it in AgentCore "
+            "Identity instead",
+            detail={"kind": kind, "name": name},
+            status_code=409,
+        )
     if known:
         if kind == KIND_OAUTH2:
             control.delete_oauth2_credential_provider(name=name)
         else:
             control.delete_api_key_credential_provider(name=name)
-    if row is not None:
-        db.delete(row)
-        db.commit()
+    db.delete(row)
+    db.commit()

@@ -313,9 +313,49 @@ def test_deleted_agents_do_not_hold_references(db):
     agent = _agent_with_auth(db, "team-idp")
     agent.status = "deleted"
     db.commit()
-    control = make_control(oauth=[{"name": "team-idp"}])
+    control = make_control()
+    _create_oauth(control, db)
+    control.list_oauth2_credential_providers.return_value = {
+        "credentialProviders": [{"name": "team-idp"}]
+    }
     ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "oauth2", "team-idp")
     control.delete_oauth2_credential_provider.assert_called_once()
+
+
+@pytest.mark.parametrize("kind", ["oauth2", "api_key"])
+def test_delete_refuses_an_external_provider_and_leaves_the_vault_alone(db, kind):
+    # in the vault, but no ledger row in this workspace: created outside Launchpad
+    control = make_control(oauth=[{"name": "theirs"}], api=[{"name": "theirs"}])
+    with pytest.raises(AppError) as err:
+        ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, kind, "theirs")
+    assert (err.value.code, err.value.status_code) == ("identity.external_connection", 409)
+    assert err.value.detail == {"kind": kind, "name": "theirs"}
+    control.delete_oauth2_credential_provider.assert_not_called()
+    control.delete_api_key_credential_provider.assert_not_called()
+
+
+def test_delete_refuses_a_provider_recorded_only_by_another_workspace(db):
+    control = make_control()
+    ip.create_oauth2_connection(
+        control, db, "acct-usw1", name="team-idp", vendor="CustomOauth2",
+        client_id="cid", client_secret=SECRET,
+        discovery_url="https://idp.example/.well-known/openid-configuration",
+    )
+    control.list_oauth2_credential_providers.return_value = {
+        "credentialProviders": [{"name": "team-idp"}]
+    }
+    with pytest.raises(AppError) as err:
+        ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "oauth2", "team-idp")
+    assert err.value.code == "identity.external_connection"
+    control.delete_oauth2_credential_provider.assert_not_called()
+
+
+def test_delete_cleans_up_a_ledger_row_whose_provider_is_gone(db):
+    control = make_control()
+    _create_oauth(control, db)  # recorded, then deleted from the vault out-of-band
+    ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "oauth2", "team-idp")
+    control.delete_oauth2_credential_provider.assert_not_called()
+    assert db.query(IdentityProvider).filter_by(name="team-idp").first() is None
 
 
 def test_delete_unknown_is_404(db):

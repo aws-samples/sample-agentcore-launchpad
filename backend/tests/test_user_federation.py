@@ -376,6 +376,89 @@ def test_invoke_text_relays_asks_without_the_session(monkeypatch, db):
     assert db.query(OauthPendingSession).one().user_id == "alice"
 
 
+ASK = {"provider": "team-idp", "tool": "userinfo", "url": AUTH_URL, "scopes": [],
+       "session_uri": SESSION}
+
+
+def _stub_runtime(monkeypatch):
+    def fake_stream(_client, _arn, _prompt, **_kw):
+        yield {"event": "auth_required", "data": dict(ASK)}
+        yield {"event": "complete", "data": {"text": ""}}
+
+    monkeypatch.setattr(invoke_service.rt, "stream_runtime_events", fake_stream)
+    monkeypatch.setattr(
+        invoke_service.rt, "invoke_runtime_text",
+        lambda *_a, **kw: {"text": "", "session_id": kw["session_id"],
+                           "auth_required": [dict(ASK)]},
+    )
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws: MagicMock())
+
+
+def test_a_non_console_caller_never_records_a_consent_it_cannot_complete(monkeypatch, db):
+    """/v1 has no signed-in console user: leg 4 could never complete, so the
+    ask is refused by name — on both the sync and the streaming invoke."""
+    agent = _fed_agent(db)
+    _stub_runtime(monkeypatch)
+    with pytest.raises(AppError) as err:
+        invoke_service.invoke_agent_text(
+            agent, "hi", session_id="s" * 40, actor_id=f"{agent.id}__api",
+            console_user=False,
+        )
+    assert (err.value.code, err.value.status_code) == (
+        oauth_sessions.AS_USER_REQUIRES_CONSOLE, 409)
+    assert err.value.detail == {"provider": "team-idp", "tool": "userinfo",
+                                "agent_id": agent.id}
+    assert AUTH_URL not in err.value.message
+    with pytest.raises(AppError) as err:
+        list(invoke_service.invoke_agent_events(
+            agent, "hi", session_id="s" * 40, actor_id=f"{agent.id}__api",
+            console_user=False,
+        ))
+    assert err.value.code == oauth_sessions.AS_USER_REQUIRES_CONSOLE
+    assert db.query(OauthPendingSession).count() == 0
+
+
+def test_v1_answers_an_as_user_ask_with_a_named_409_and_records_nothing(monkeypatch, db):
+    from app.models.ledger import ApiKey
+    from app.routers.apikeys import hash_key
+
+    agent = _fed_agent(db)
+    db.add(ApiKey(workspace_id=WS, name="v1", prefix="test", key_hash=hash_key("v1-key")))
+    db.commit()
+    _stub_runtime(monkeypatch)
+    headers = {"X-Api-Key": "v1-key"}
+    with TestClient(create_app()) as client:
+        sync = client.post(f"/v1/agents/{agent.id}/invoke", json={"prompt": "hi"},
+                           headers=headers)
+        stream = client.post(f"/v1/agents/{agent.id}/invoke-stream",
+                             json={"prompt": "hi"}, headers=headers)
+    assert sync.status_code == 409
+    assert sync.json()["code"] == "identity.as_user_requires_console"
+    assert AUTH_URL not in sync.text
+    assert stream.status_code == 200
+    assert "event: error" in stream.text
+    assert "identity.as_user_requires_console" in stream.text
+    assert "event: auth_required" not in stream.text and AUTH_URL not in stream.text
+    assert db.query(OauthPendingSession).count() == 0
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(document.cookie)",
+    "data:text/html,<script>alert(1)</script>",
+    "http://idp.example/authorize?x=1",
+    "//idp.example/authorize",
+    "https:///no-host",
+    "",
+])
+def test_auth_required_drops_a_url_that_is_not_https(url):
+    (event,) = rt._runtime_payload_events({
+        "event": "auth_required", "provider": "team-idp", "tool": "userinfo",
+        "url": url, "session_uri": SESSION,
+    })
+    assert event["data"]["url"] is None
+    assert event["data"]["provider"] == "team-idp"  # the ask itself still stands
+
+
 def test_agents_without_as_user_tools_never_touch_the_ledger(monkeypatch):
     agent = Agent(workspace_id=WS, spec={"tools": [{"type": "rest", "name": "x"}]})
     monkeypatch.setattr(invoke_service, "as_user_connections_stored", lambda _s: [])
@@ -532,23 +615,78 @@ def test_return_url_is_added_preserving_other_entries_and_is_idempotent():
     control.update_workload_identity.assert_not_called()
 
 
-def test_return_url_stage_is_a_noop_without_as_user_and_fails_loudly_otherwise():
+def test_return_url_stage_is_a_noop_without_as_user_and_warns_after_retries():
     control = MagicMock()
     m2m = {**AS_USER_TOOL, "auth": {**AS_USER_TOOL["auth"], "mode": "as_agent"}}
-    return_url.register_return_url_stage(
+    assert return_url.register_return_url_stage(
         control, AgentSpec(**{**AS_USER_SPEC, "tools": [m2m]}), "rt-1", lambda _m: None
-    )
+    ) is True
     control.get_workload_identity.assert_not_called()
 
     control.get_workload_identity.side_effect = ClientError(
         {"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "GetWorkloadIdentity"
     )
     logs: list[str] = []
-    with pytest.raises(ClientError):
-        return_url.register_return_url_stage(
-            control, AgentSpec(**AS_USER_SPEC), "rt-1", logs.append
-        )
-    assert "AccessDeniedException" in logs[-1]
+    slept: list[float] = []
+    # never raises: the runtime is already READY, and a failed stage would make
+    # the operator's retry a whole new UpdateAgentRuntime version
+    assert return_url.register_return_url_stage(
+        control, AgentSpec(**AS_USER_SPEC), "rt-1", logs.append, sleeper=slept.append
+    ) is False
+    assert control.get_workload_identity.call_count == return_url.RETURN_URL_ATTEMPTS
+    assert slept == [2.0, 4.0]
+    assert logs[-1].startswith("WARNING: return-URL registration failed")
+    assert "AccessDeniedException" in logs[-1] and "redeploy" in logs[-1]
+
+
+def test_return_url_stage_recovers_from_a_transient_failure():
+    control = MagicMock()
+    control.get_workload_identity.side_effect = [
+        ClientError({"Error": {"Code": "ThrottlingException", "Message": "slow"}},
+                    "GetWorkloadIdentity"),
+        {"allowedResourceOauth2ReturnUrls": []},
+    ]
+    logs: list[str] = []
+    assert return_url.register_return_url_stage(
+        control, AgentSpec(**AS_USER_SPEC), "rt-1", logs.append, sleeper=lambda _s: None
+    ) is True
+    control.update_workload_identity.assert_called_once()
+    assert "retrying (1/3)" in logs[0]
+
+
+def test_a_failed_return_url_registration_does_not_fail_the_deploy_stage(monkeypatch, db):
+    """READY + a failed allow-list call = a succeeded stage with a warning in
+    its detail, so resume / the operator never re-publishes for it."""
+    from types import SimpleNamespace
+
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+    from tests.conftest import ws_ctx
+
+    agent = Agent(workspace_id=WS, name="fed-agent", method="zip_runtime",
+                  status="deploying", spec=AgentSpec(**AS_USER_SPEC).model_dump())
+    db.add(agent)
+    db.commit()
+    control = MagicMock()
+    control.create_agent_runtime.return_value = {
+        "agentRuntimeId": "rt-9", "agentRuntimeArn": "arn:rt-9", "agentRuntimeVersion": "1"}
+    control.get_agent_runtime.return_value = {
+        "agentRuntimeId": "rt-9", "agentRuntimeArn": "arn:rt-9",
+        "agentRuntimeVersion": "1", "status": "READY"}
+    control.get_workload_identity.side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "GetWorkloadIdentity")
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: control)
+    monkeypatch.setattr(return_url, "RETURN_URL_BACKOFF_S", 0.0)
+    monkeypatch.setattr(zr, "get_settings", lambda: SimpleNamespace(
+        account_id="1", region="us-west-2", resources={}))
+    logs: list[str] = []
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j",
+                       workspace=ws_ctx({"artifacts_bucket": "b", "execution_role_arn": "r"}))
+    ctx.log = logs.append
+    result = zr._stage_deploy(ctx, agent)
+    assert result.detail == f"READY · arn:rt-9 · {return_url.RETURN_URL_WARNING}"
+    assert any(line.startswith("WARNING: return-URL") for line in logs)
+    control.create_agent_runtime.assert_called_once()
 
 
 # ── generated code: the non-blocking USER_FEDERATION exchange ────────────────
@@ -612,3 +750,148 @@ def test_rendered_main_with_an_as_user_tool_compiles_and_drains_notices():
     assert "IDENTITY_AUTH_NOTICES = identity_drain_auth_notices" in source
     assert 'force_reauth = payload.get("force_reauth_providers") or []' in source
     assert "'mode': 'as_user'" in source
+
+
+class _Recorder:
+    """A loopback HTTP server that answers every request with one fixed reply
+    and records the Authorization header it saw."""
+
+    def __init__(self, status: int, headers: dict | None = None, body: bytes = b""):
+        import http.server
+        import threading
+
+        seen: list = []
+        self.seen = seen
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 — http.server's hook name
+                seen.append(self.headers.get("Authorization"))
+                self.send_response(status)
+                for key, value in (headers or {}).items():
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_generated_rest_call_refuses_a_redirect_and_never_forwards_the_credential(monkeypatch):
+    ns, _dp = _identity_block(monkeypatch, {"accessToken": "user-token"})
+    thief = _Recorder(200, body=b"{}")
+    api = _Recorder(302, headers={"Location": f"{thief.url}/steal?x=1"})
+    try:
+        spec = {**ns["IDENTITY_AUTH_TOOLS"][0], "url": f"{api.url}/userinfo"}
+        answer = ns["_rest_call"](spec, "", "")
+    finally:
+        api.close()
+        thief.close()
+    assert api.seen == ["Bearer user-token"]
+    assert thief.seen == []  # the 302 was not followed
+    assert answer.startswith("error: the API answered HTTP 302")
+    assert "redirects are not followed" in answer
+    assert "x=1" not in answer and "user-token" not in answer
+
+
+def test_generated_mcp_client_refuses_a_cross_origin_redirect(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    ns, _dp = _identity_block(monkeypatch, {"accessToken": "user-token"})
+    thief = _Recorder(200, body=b"{}")
+    api = _Recorder(307, headers={"Location": f"{thief.url}/mcp/"})
+    factory = ns["_id_same_origin_mcp_factory"](f"{api.url}/mcp")
+
+    async def call():
+        async with factory(headers={"Authorization": "Bearer user-token"}) as client:
+            await client.get(f"{api.url}/mcp")
+
+    try:
+        with pytest.raises(httpx.RequestError, match="cross-origin redirect"):
+            asyncio.run(call())
+    finally:
+        api.close()
+        thief.close()
+    assert api.seen == ["Bearer user-token"]
+    assert thief.seen == []  # the credential never left the configured origin
+
+
+def test_generated_mcp_client_still_follows_a_same_origin_redirect(monkeypatch):
+    import asyncio
+    import http.server
+    import threading
+
+    ns, _dp = _identity_block(monkeypatch, {"accessToken": "user-token"})
+    seen: list = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — http.server's hook name
+            seen.append(self.path)
+            if self.path == "/mcp":  # the common `/mcp` → `/mcp/` hop
+                self.send_response(307)
+                self.send_header("Location", "/mcp/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/mcp"
+    factory = ns["_id_same_origin_mcp_factory"](url)
+
+    async def call():
+        async with factory(headers={"Authorization": "Bearer user-token"}) as client:
+            return (await client.get(url)).status_code
+
+    try:
+        assert asyncio.run(call()) == 200
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen == ["/mcp", "/mcp/"]
+
+
+def test_generated_rest_call_still_returns_a_plain_answer(monkeypatch):
+    ns, _dp = _identity_block(monkeypatch, {"accessToken": "user-token"})
+    api = _Recorder(200, headers={"Content-Type": "application/json"}, body=b'{"sub": "u1"}')
+    try:
+        spec = {**ns["IDENTITY_AUTH_TOOLS"][0], "url": f"{api.url}/userinfo"}
+        answer = ns["_rest_call"](spec, "", "")
+    finally:
+        api.close()
+    assert api.seen == ["Bearer user-token"]
+    assert answer.startswith("HTTP 200") and '"sub": "u1"' in answer
+
+
+@pytest.mark.parametrize(("run_mode", "urls", "warns"), [
+    ("prod", {}, True),  # the dev default http://localhost:5173
+    ("prod", {"public_base_url": "http://127.0.0.1:8080"}, True),
+    ("prod", {"public_base_url": "https://console.example"}, False),
+    ("prod", {"oauth_return_url": "https://proxy.example/lp/auth/return"}, False),
+    ("dev", {}, False),
+])
+def test_prod_startup_warns_on_a_localhost_oauth_return_url(run_mode, urls, warns):
+    from app.core.config import Settings
+    from app.main import _warn_local_return_url
+
+    # init kwargs outrank yaml + env, so the host's own config cannot leak in
+    settings = Settings(run_mode=run_mode, **{
+        "public_base_url": "http://localhost:5173", "oauth_return_url": "", **urls})
+    assert _warn_local_return_url(settings) is warns

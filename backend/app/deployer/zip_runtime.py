@@ -28,7 +28,7 @@ from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platfor
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
-from app.deployer.return_url import register_return_url_stage
+from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
@@ -42,9 +42,12 @@ from app.templates.strands_agent import base_requirements, render_main_py
 
 
 def sanitize_runtime_name(name: str) -> str:
-    """Runtime names must be alphanumeric/underscore; suffix keeps them unique."""
-    base = re.sub(r"[^A-Za-z0-9_]", "_", name).strip("_")[:40] or "agent"
-    return f"{base}_{uuid.uuid4().hex[:6]}"
+    """Runtime names must be alphanumeric/underscore; suffix keeps them unique.
+
+    The base is shared with the execution role's workload-identity scope
+    (``agent_iam.own_workload_identity_arn``), which pins the 6-hex suffix
+    length — change both together."""
+    return f"{agent_iam.runtime_name_base(name)}_{uuid.uuid4().hex[:6]}"
 
 
 # The deploy target: AgentCore Runtime zips run ARM64 on Python 3.13. The
@@ -572,7 +575,6 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 ctx.log,
             )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
-            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
@@ -592,7 +594,6 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.resource_id = runtime_id
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
-            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
@@ -603,6 +604,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        # The inbound-auth snapshot lands only once the runtime is READY on the
+        # version that carries it: a Create/Update that is accepted and then
+        # fails leaves the ledger on the mode the live runtime still serves.
+        # A resumed job (create already accepted, or an update re-issued)
+        # reaches this line too, so the snapshot is never skipped.
+        inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
         from app.deployer.input_contract import stamp_input_contract
 
@@ -610,8 +617,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         db.commit()
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)
-        register_return_url_stage(client, AgentSpec(**row.spec), runtime_id, ctx.log)
-        return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
+        detail = f"READY · {ready['agentRuntimeArn']}"
+        if not register_return_url_stage(client, AgentSpec(**row.spec), runtime_id, ctx.log):
+            detail += f" · {RETURN_URL_WARNING}"
+        return StageResult(detail=detail)
     finally:
         db.close()
 

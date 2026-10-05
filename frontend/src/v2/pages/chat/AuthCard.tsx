@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type UserGrantStatus } from "../../../lib/api";
-import { type AuthAsk, authCardView, pollGrant } from "../../../lib/user-grants";
+import { type AuthAsk, authCardView, pollGrant, safeAuthUrl } from "../../../lib/user-grants";
 import { Button, Tag } from "../../ui";
 
 /**
@@ -27,7 +27,9 @@ export function AuthCard({
   onRetry: (prompt: string) => void;
 }) {
   const { t } = useTranslation();
-  const live = ask.url !== null;
+  // https only (liveAuthAsk already normalizes; re-checked at the href)
+  const url = safeAuthUrl(ask.url);
+  const live = url !== null;
   const [status, setStatus] = useState<UserGrantStatus | null>(null);
   const [expired, setExpired] = useState(false);
   const view = authCardView({ live, status, expired, retryPrompt, retryDisabled });
@@ -80,10 +82,10 @@ export function AuthCard({
         </div>
       )}
       <div className="v2-chat-auth-actions">
-        {view.showOpen && ask.url && (
+        {view.showOpen && url && (
           <a
             className="v2-btn primary sm"
-            href={ask.url}
+            href={url}
             target="_blank"
             rel="noopener noreferrer"
             data-testid="auth-card-open"

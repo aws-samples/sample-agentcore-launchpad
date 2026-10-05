@@ -10,17 +10,23 @@ us-west-2), so no shadow identity is needed.
 Called from the zip_runtime and byoc deploy stages — the methods that honour
 tool-level auth — on create and redeploy alike: a no-op when the URL is already
 listed, and it adds the URL again when the console's public base URL changed.
+A failure is retried, then reported as a warning — never a failed stage (see
+``register_return_url_stage``).
 """
 
+import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import get_settings
 from app.core.errors import aws_error_code
 from app.schemas.agent import AgentSpec
 from app.templates.identity_support import uses_as_user
+
+logger = logging.getLogger("launchpad.deployer.return_url")
 
 
 def ensure_return_url_allowed(
@@ -50,26 +56,57 @@ def ensure_return_url_allowed(
     return True
 
 
+# Attempts at the GetWorkloadIdentity/UpdateWorkloadIdentity pair, and the
+# backoff between them: a freshly created runtime's identity (and a fresh role
+# grant) can lag the READY status by seconds.
+RETURN_URL_ATTEMPTS = 3
+RETURN_URL_BACKOFF_S = 2.0
+
+RETURN_URL_WARNING = "return URL not allow-listed (see job log)"
+
+
 def register_return_url_stage(
     control: Any,
     spec: AgentSpec,
     runtime_id: str,
     log: Callable[[str], None],
-) -> None:
+    sleeper: Callable[[float], None] = time.sleep,
+) -> bool:
     """Deploy-stage hook: reconcile the allow-list for specs with an as_user tool.
 
-    A failure fails the stage visibly: without the URL on the allow-list every
-    consent redirect dead-ends at the provider callback page.
+    Returns False when the URL could not be allow-listed. NON-FATAL by design:
+    it runs after the runtime is READY on its new version, and failing the
+    deploy stage there would mark a working agent failed — and the redeploy an
+    operator then starts issues another UpdateAgentRuntime (a new version) just
+    to retry this one call. So it retries with backoff, then leaves a warning
+    in the job log (and the stage detail) instead; until the URL is listed, a
+    consent redirect for this agent ends at the provider callback page, and
+    the next deploy of the agent reconciles it again.
     """
     if not uses_as_user(spec):
-        return
+        return True
     return_url = get_settings().resolved_oauth_return_url()
-    try:
-        ensure_return_url_allowed(control, runtime_id, return_url, log)
-    except ClientError as exc:
-        log(
-            f"return-URL registration failed on workload identity {runtime_id}: "
-            f"{aws_error_code(exc)} — as_user consent redirects cannot complete "
-            "until the URL is allow-listed"
-        )
-        raise
+    for attempt in range(1, RETURN_URL_ATTEMPTS + 1):
+        try:
+            ensure_return_url_allowed(control, runtime_id, return_url, log)
+            return True
+        except (ClientError, BotoCoreError) as exc:
+            code = aws_error_code(exc) if isinstance(exc, ClientError) else type(exc).__name__
+            if attempt < RETURN_URL_ATTEMPTS:
+                log(
+                    f"return-URL registration on workload identity {runtime_id} "
+                    f"failed ({code}); retrying ({attempt}/{RETURN_URL_ATTEMPTS})"
+                )
+                sleeper(RETURN_URL_BACKOFF_S * attempt)
+                continue
+            logger.warning(
+                "return-URL registration failed on workload identity %s: %s",
+                runtime_id, code,
+            )
+            log(
+                f"WARNING: return-URL registration failed on workload identity "
+                f"{runtime_id}: {code} — the agent is deployed, but as_user consent "
+                "redirects cannot return to the console until the URL is "
+                "allow-listed; redeploy the agent to retry"
+            )
+    return False

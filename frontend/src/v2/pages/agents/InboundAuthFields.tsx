@@ -6,10 +6,12 @@ import { Link } from "react-router-dom";
 import { api, errorMessage, type InboundAuth, type InboundCustomClaim, type JwtInboundConfig } from "../../../lib/api";
 import {
   applyOidcSource,
+  EMPTY_CLAIM,
   EMPTY_JWT_FORM,
   inboundCapable,
   type InboundChoice,
   issuerMismatch,
+  type JwtClaimForm,
   jwtConfigFromForm,
   type JwtFormState,
   jwtFormFromConfig,
@@ -18,12 +20,11 @@ import {
   m2mCurlExample,
   REACHABILITY_KEYS,
   type ReachabilityScope,
-  splitList,
   switchDialogInitial,
   withDiscoveryUrl,
 } from "../../../lib/inbound-auth";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, Descriptions, Field, Modal, Segmented, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, Descriptions, Field, LinkButton, Modal, Segmented, Tag } from "../../ui";
 import type { SectionProps } from "./wizardKit";
 
 /**
@@ -62,7 +63,7 @@ export function JwtConfigFields({
   const { t } = useTranslation();
   const sources = useLoad(() => api.listOidcSources(workspaceId), `oidc-sources:${workspaceId ?? ""}`);
   const set = (patch: Partial<JwtFormState>) => onChange({ ...form, ...patch });
-  const setClaim = (index: number, patch: Partial<InboundCustomClaim>) =>
+  const setClaim = (index: number, patch: Partial<JwtClaimForm>) =>
     set({ custom_claims: form.custom_claims.map((c, i) => (i === index ? { ...c, ...patch } : c)) });
   const problem = jwtFormProblem(form);
   const mismatch = issuerMismatch(form.discovery_url, cognitoIssuer);
@@ -172,10 +173,10 @@ export function JwtConfigFields({
                 </select>
                 <input
                   className="v2-input mono"
-                  value={claim.match_values.join(", ")}
+                  value={claim.match_values}
                   placeholder={t("inboundAuth.claimValues")}
                   aria-label={t("inboundAuth.claimValues")}
-                  onChange={(e) => setClaim(index, { match_values: splitList(e.target.value) })}
+                  onChange={(e) => setClaim(index, { match_values: e.target.value })}
                 />
                 <Button
                   size="sm"
@@ -193,10 +194,7 @@ export function JwtConfigFields({
             size="sm"
             onClick={() =>
               set({
-                custom_claims: [
-                  ...form.custom_claims,
-                  { name: "", value_type: "STRING", match_operator: "EQUALS", match_values: [] },
-                ],
+                custom_claims: [...form.custom_claims, { ...EMPTY_CLAIM }],
               })
             }
             testId={`${idPrefix}-add-claim`}
@@ -360,6 +358,9 @@ export function InboundSwitchCard({
   const target: "iam" | "jwt" = mode === "jwt" ? "iam" : "jwt";
   // The deployed authorizer, not just the dialog: a foreign issuer refuses Chat and /v1.
   const mismatch = mode === "jwt" && jwt ? issuerMismatch(jwt.discovery_url, defaults.data?.cognito_issuer) : null;
+  // The JWT dialog opens prefilled from the defaults: it needs them loaded.
+  const defaultsFailed = target === "jwt" && !defaults.data && !defaults.loading && !!defaults.error;
+  const switchBlocked = busy || (target === "jwt" && !defaults.data);
 
   const toIam = async () => {
     setSaving(true);
@@ -384,7 +385,8 @@ export function InboundSwitchCard({
         capable && canSwitch ? (
           <Button
             kind={target === "jwt" ? "primary" : undefined}
-            disabled={busy || defaults.loading}
+            disabled={switchBlocked}
+            title={defaultsFailed ? t("inboundAuth.switch.defaultsFailed") : undefined}
             onClick={() => setConfirming(true)}
             testId="v2-agent-inbound-switch"
           >
@@ -423,6 +425,13 @@ export function InboundSwitchCard({
         ]}
       />
       {mismatch && <ReachabilityWarning mismatch={mismatch} testId="v2-agent-inbound-issuer-warning" />}
+      {capable && canSwitch && defaultsFailed && (
+        <Alert tone="error" action={<LinkButton onClick={defaults.reload}>{t("v2.common.retry")}</LinkButton>}>
+          <span data-testid="v2-agent-inbound-defaults-error">
+            {t("inboundAuth.switch.defaultsFailed")} {defaults.error}
+          </span>
+        </Alert>
+      )}
       {!capable && <p className="v2-muted">{t("inboundAuth.notCapable")}</p>}
       {mode === "jwt" && invokeUrl && jwt && (
         <>

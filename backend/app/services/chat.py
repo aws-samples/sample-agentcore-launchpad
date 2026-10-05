@@ -38,6 +38,7 @@ def chat_stream(
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
+    console_user: bool = True,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
 
@@ -46,6 +47,8 @@ def chat_stream(
     ``bearer_token`` is the caller's JWT for a JWT-inbound agent (console Chat
     passes the signed-in user's token; absent, the invoke layer falls back to
     the workspace M2M token or fails with a named error).
+    ``console_user=False`` (public /v1) refuses as_user consent asks by name —
+    see ``invoke._record_auth_sessions``.
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -91,6 +94,8 @@ def chat_stream(
                 invoke_kwargs["attachments"] = attachments
             if bearer_token:
                 invoke_kwargs["bearer_token"] = bearer_token
+            if not console_user:
+                invoke_kwargs["console_user"] = False
             yield from invoke_agent_events(
                 agent,
                 prompt,

@@ -58,7 +58,12 @@ cd frontend && LAUNCHPAD_API=http://localhost:8011 npx vite --port 5199 &
 ```
 
 `vite.config.ts` honors `LAUNCHPAD_API`, so a second frontend can point at a
-second backend. Backend restarts re-run `resume_pending_jobs()` (real AWS side
+second backend. If you exercise as_user (3LO) consent on a throwaway stack,
+start its backend with `LAUNCHPAD_PUBLIC_BASE_URL=http://localhost:<vite port>`
+(e.g. `LAUNCHPAD_PUBLIC_BASE_URL=http://localhost:5199 uv run uvicorn ...`) and
+deploy the agent from that stack: the IdP consent redirect returns to
+`{public_base_url}/auth/return`, which defaults to `:5173` — the user-owned
+stack, not yours. Backend restarts re-run `resume_pending_jobs()` (real AWS side
 effects if interrupted deploy jobs exist in the ledger) — prefer the throwaway
 stack over restarting a stack you did not start.
 

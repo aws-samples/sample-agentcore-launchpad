@@ -90,6 +90,28 @@ def as_user_requires_user_jwt(
     )
 
 
+# An as_user ask raised on a call with no signed-in console user (the public
+# /v1 API). Leg 4 (CompleteResourceTokenAuth) is completed by the console's
+# return page for the user the ask was recorded against, and a /v1 caller is
+# an API key, not a console user — so its consent could never complete, and a
+# recorded session would only dangle. Such an ask is never recorded either.
+AS_USER_REQUIRES_CONSOLE = "identity.as_user_requires_console"
+
+
+def as_user_requires_console(
+    *, provider: str = "", tool: str = "", agent_id: str = ""
+) -> AppError:
+    """The named refusal for an as_user consent asked of a non-console caller."""
+    return AppError(
+        AS_USER_REQUIRES_CONSOLE,
+        "this agent's tool acts as the signed-in user, and the user has not "
+        "authorized it yet — tools that act as the user need a signed-in console "
+        "user to consent; authorize it once from the Chat console, then retry",
+        {"provider": provider, "tool": tool, "agent_id": agent_id},
+        status_code=409,
+    )
+
+
 def _aware(value: datetime | None) -> datetime | None:
     """SQLite drops tzinfo on the way back; every stored time is UTC."""
     if value is None:

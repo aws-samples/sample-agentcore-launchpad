@@ -93,6 +93,7 @@ def _record_auth_sessions(
     asks: list[dict[str, Any]],
     *,
     caller_kind: str = oauth_sessions.CALLER_IAM,
+    console_user: bool = True,
 ) -> list[dict[str, Any]]:
     """Persist each forwarded 3LO ask against the user it was asked of, and
     strip the session uri from what goes out to the caller.
@@ -106,9 +107,26 @@ def _record_auth_sessions(
     recorded and no consent URL goes out): its consent would bind to the one
     machine subject every M2M caller shares — see
     ``oauth_sessions.AS_USER_REQUIRES_USER_JWT``.
+
+    ``console_user=False`` (the public /v1 API) refuses every ask the same way:
+    the consent is completed by the console's return page for the console user
+    the ask was recorded against, and a /v1 caller is an API key whose
+    ``actor_id`` names nobody who can sign in — so its session could never
+    complete (``oauth_sessions.AS_USER_REQUIRES_CONSOLE``). The vault user a
+    /v1 turn presents is its scoped actor (``<agent>__<actor_id>``), never a
+    console username, so a consent given in Chat does not carry over either:
+    as_user tools are a Chat-console feature, and /v1 says so by name instead
+    of handing out a consent URL that dead-ends.
     """
     if not asks:
         return asks
+    if not console_user:
+        first = asks[0]
+        raise oauth_sessions.as_user_requires_console(
+            provider=str(first.get("provider") or ""),
+            tool=str(first.get("tool") or ""),
+            agent_id=agent.id,
+        )
     if caller_kind == oauth_sessions.CALLER_M2M:
         first = asks[0]
         raise oauth_sessions.as_user_requires_user_jwt(
@@ -444,7 +462,11 @@ def invoke_agent_text(
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
+    console_user: bool = True,
 ) -> dict[str, Any]:
+    """One synchronous turn. ``console_user=False`` marks a caller with no
+    signed-in console user (public /v1): an as_user consent ask is then refused
+    by name instead of recorded (see ``_record_auth_sessions``)."""
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
@@ -474,6 +496,7 @@ def invoke_agent_text(
         if result.get("auth_required"):
             result["auth_required"] = _record_auth_sessions(
                 agent, ledger_user, result["auth_required"], caller_kind=caller_kind,
+                console_user=console_user,
             )
         return result
     # An imported harness carries the harness ARN, so it invokes exactly like a
@@ -545,7 +568,7 @@ def invoke_agent_text(
         )
         if result.get("auth_required"):
             result["auth_required"] = _record_auth_sessions(
-                agent, resolved_user, result["auth_required"]
+                agent, resolved_user, result["auth_required"], console_user=console_user,
             )
         return result
     raise AppError(
@@ -606,6 +629,7 @@ def invoke_agent_events(
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
+    console_user: bool = True,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -614,6 +638,7 @@ def invoke_agent_events(
     parsed incrementally. A zip runtime deployed before its template streamed
     still answers a JSON ``{"result": ...}`` body, which the same parser turns
     into one delta — so the switch is safe for existing agents.
+    ``console_user`` as on ``invoke_agent_text``.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -643,6 +668,7 @@ def invoke_agent_events(
                         "event": "auth_required",
                         "data": _record_auth_sessions(
                             agent, ledger_user, [event["data"]], caller_kind=caller_kind,
+                            console_user=console_user,
                         )[0],
                     }
                 yield event
@@ -675,12 +701,16 @@ def invoke_agent_events(
             if event.get("event") == "auth_required":
                 event = {
                     "event": "auth_required",
-                    "data": _record_auth_sessions(agent, resolved_user, [event["data"]])[0],
+                    "data": _record_auth_sessions(
+                        agent, resolved_user, [event["data"]], console_user=console_user,
+                    )[0],
                 }
             yield event
         return
 
-    extra = {"attachments": attachments} if attachments else {}
+    extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
+    if not console_user:
+        extra["console_user"] = False
     result = invoke_agent_text(
         agent,
         prompt,

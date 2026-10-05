@@ -383,6 +383,18 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "a2a",
             "reason": "A2A agents are not compatible with HTTP target-canary traffic.",
         }
+    if getattr(agent_row, "inbound_auth_mode", None) == "jwt":
+        # The canary gateway reaches the runtime with SigV4 (runtime targets),
+        # and the invoke path's bearer branch bypasses canary routing — a JWT
+        # authorizer would 403 every variant request.
+        return {
+            **base,
+            "reason_code": "jwt-inbound",
+            "reason": (
+                "Agents with JWT inbound auth cannot be canaried: the canary "
+                "gateway calls the Runtime with SigV4, which a JWT authorizer refuses."
+            ),
+        }
     if ":runtime/" not in str(agent_row.arn or ""):
         return {
             **base,

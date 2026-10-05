@@ -30,7 +30,7 @@ from app.core.config import get_settings
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
-from app.deployer.return_url import register_return_url_stage
+from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
 from app.services import agent_iam, byoc_uploads
@@ -420,7 +420,6 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 ctx.log,
             )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
-            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
@@ -440,7 +439,6 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.resource_id = runtime_id
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
-            inbound_auth_service.record_deployed_auth(row, resolved_auth)
             db.commit()
             ctx.log(
                 f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
@@ -451,12 +449,20 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        # The inbound-auth snapshot lands only once the runtime is READY on the
+        # version that carries it: a Create/Update that is accepted and then
+        # fails leaves the ledger on the mode the live runtime still serves.
+        # A resumed job (create already accepted, or an update re-issued)
+        # reaches this line too, so the snapshot is never skipped.
+        inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
         db.commit()
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)
-        register_return_url_stage(client, spec, runtime_id, ctx.log)
-        return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
+        detail = f"READY · {ready['agentRuntimeArn']}"
+        if not register_return_url_stage(client, spec, runtime_id, ctx.log):
+            detail += f" · {RETURN_URL_WARNING}"
+        return StageResult(detail=detail)
     finally:
         db.close()
 

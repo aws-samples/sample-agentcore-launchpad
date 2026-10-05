@@ -2407,9 +2407,13 @@
     "identity.discovery_invalid": "The URL did not return an OIDC discovery document (no jwks_uri), so no token signature could be validated.",
     "memory.not_managed": "This memory is not managed by the workspace — it can be listed but not opened, edited or deleted. An administrator can adopt it.",
     "agent.memory_not_managed": "The selected memory is not managed by this workspace. Pick one from the Memory resources list, or ask an administrator to adopt it.",
-    "agent.memory_not_active": "The selected memory is not ACTIVE yet — wait for it to finish creating, then retry."
+    "agent.memory_not_active": "The selected memory is not ACTIVE yet — wait for it to finish creating, then retry.",
+    "identity.external_connection": "This Connection was created outside Launchpad. Delete it in AgentCore Identity.",
+    "identity.as_user_requires_console": "This tool acts as the signed-in user, so it needs a signed-in console user to authorize it. Use the Chat console.",
+    "registry.a2a_demo_jwt_unsupported": "This agent accepts JWT bearer tokens only, and the A2A demo calls with SigV4. Use an IAM-inbound agent, or chat with this one in the Chat console."
   },
   "chatPage": {
+    "authRetryNote": "After authorizing, send your message again.",
     "noAgents": "no active agents — deploy one first",
     "memoryOn": "MEMORY ON",
     "memoryOff": "MEMORY OFF",
@@ -3318,7 +3322,8 @@
       "container-followup": "Container canary candidate minting via CodeBuild is a follow-up.",
       "a2a": "A2A agents are not compatible with HTTP target-canary traffic.",
       "no-runtime-arn": "This agent has no deployed AgentCore Runtime ARN.",
-      "no-harness-arn": "The agent has no deployed Harness ARN."
+      "no-harness-arn": "The agent has no deployed Harness ARN.",
+      "jwt-inbound": "Agents with JWT inbound auth cannot be canaried: the canary gateway calls the Runtime with SigV4, which a JWT authorizer refuses."
     },
     "meta": "Live production traffic · candidate-version A/B · per-canary gateway",
     "modeLabel": "Experiment workflow",
@@ -6535,7 +6540,7 @@
         "scopes": "Scopes"
       },
       "asUser": "Invoke as me",
-      "asUserHint": "On: the Runtime receives your own sign-in JWT. Off: the workspace M2M token. Memory stays scoped to you either way.",
+      "asUserHint": "On: the Runtime receives your own sign-in JWT. Off: the workspace M2M token. Until you change it, your sign-in JWT is used when you are signed in through the workspace user pool, else the M2M token. Memory stays scoped to you either way.",
       "caller": {
         "user_jwt": "Called as you",
         "m2m": "Called as M2M client"
@@ -7968,7 +7973,8 @@
       "prefillNote": "Prefilled from: {{source}}. Every field is editable. To use your own OIDC identity provider (Okta, Auth0, Keycloak, Entra…), enter its discovery URL or choose a Connection.",
       "fromDefault": "Workspace default",
       "fromCognito": "Workspace Cognito pool",
-      "fromEmpty": "Nothing to prefill: enter your identity provider below"
+      "fromEmpty": "Nothing to prefill: enter your identity provider below",
+      "defaultsFailed": "Cannot switch to JWT: the workspace inbound-auth defaults the dialog is prefilled from failed to load."
     },
     "default": {
       "title": "Inbound auth default",

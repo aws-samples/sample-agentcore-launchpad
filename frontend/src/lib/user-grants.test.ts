@@ -12,6 +12,7 @@ import {
   retryPromptFor,
   revokeDisabled,
   runRevoke,
+  safeAuthUrl,
 } from "./user-grants";
 import { chatPathFor, parseReturnParams } from "../v2/pages/authReturnParams";
 import { appendDelta, type ChatMessage } from "../v2/pages/chat/messages";
@@ -121,6 +122,49 @@ describe("retry from restored history", () => {
       url: "https://idp/authorize?x",
       agent_id: "agent-1",
     });
+  });
+});
+
+describe("authorization URL is https-only", () => {
+  it("keeps an absolute https URL", () => {
+    expect(safeAuthUrl("https://idp.example.com/authorize?state=x")).toBe("https://idp.example.com/authorize?state=x");
+    expect(safeAuthUrl("  https://idp.example.com/a  ")).toBe("https://idp.example.com/a");
+  });
+
+  it.each([
+    "javascript:alert(document.cookie)",
+    "JavaScript:alert(1)",
+    " javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "http://idp.example.com/authorize",
+    "//idp.example.com/authorize",
+    "/relative/authorize",
+    "not a url",
+    "",
+  ])("drops %j", (url) => {
+    expect(safeAuthUrl(url)).toBeNull();
+  });
+
+  it("drops non-string values", () => {
+    expect(safeAuthUrl(undefined)).toBeNull();
+    expect(safeAuthUrl(null)).toBeNull();
+    expect(safeAuthUrl(42)).toBeNull();
+  });
+
+  it("turns a live ask with an unsafe URL into the no-URL (retry-only) card", () => {
+    const ask = liveAuthAsk({ provider: "google", url: "javascript:alert(1)" }, "agent-1");
+    expect(ask.url).toBeNull();
+    expect(authCardView({ live: ask.url !== null, status: null, expired: false, retryPrompt: "hi", retryDisabled: false }))
+      .toMatchObject({ phase: "restored", showOpen: false, showRetry: true });
+    expect(liveAuthAsk({ provider: "google", url: "http://idp/authorize" }, "agent-1").url).toBeNull();
+  });
+
+  it("never carries a URL on a restored history row, whatever the row holds", () => {
+    const row = { text: "google", name: "calendar", url: "javascript:alert(1)" };
+    expect(restoredAuthAsk(row, "agent-1").url).toBeNull();
+    const httpsRow = { ...row, url: "https://idp/authorize" };
+    expect(restoredAuthAsk(httpsRow, "agent-1").url).toBeNull();
   });
 });
 

@@ -273,6 +273,40 @@ def test_iam_grants_exactly_the_referenced_connections():
     }
 
 
+def test_iam_scopes_the_token_exchange_to_the_agents_own_workload_identity():
+    statements = _statements(AgentSpec(**SPEC))
+    own = (
+        "arn:aws:bedrock-agentcore:us-west-2:123456789012:workload-identity-directory/"
+        "default/workload-identity/auth_agent_??????-*"
+    )
+    for sid in ("ToolAuthOauth2Token", "ToolAuthApiKey"):
+        resources = statements[sid]["Resource"]
+        assert own in resources
+        assert not any(r.endswith("/workload-identity/*") for r in resources)
+
+
+def test_own_workload_identity_pattern_matches_the_runtime_ids_it_must():
+    from fnmatch import fnmatchcase
+
+    from app.deployer.zip_runtime import sanitize_runtime_name
+
+    def matches(arn_pattern: str, identity: str) -> bool:
+        # IAM ARN matching: * = any run, ? = exactly one character
+        suffix = arn_pattern.rsplit("/workload-identity/", 1)[1]
+        return fnmatchcase(identity, suffix)
+
+    pattern = agent_iam.own_workload_identity_arn(AgentSpec(**SPEC), CTX)
+    runtime_name = sanitize_runtime_name("auth-agent")
+    # the Runtime names its workload identity after the runtime id
+    assert matches(pattern, f"{runtime_name}-0RevAO6bjl")
+    assert not matches(pattern, "auth_agent_extra_1a2b3c-0RevAO6bjl")  # another agent
+    assert not matches(pattern, "other_agent_1a2b3c-0RevAO6bjl")
+    long_name = "a-" * 23 + "zz"  # 48 chars: the base truncates to 40, ending in "_"
+    long_pattern = agent_iam.own_workload_identity_arn(
+        AgentSpec(name=long_name, method="zip_runtime", system_prompt="p"), CTX)
+    assert matches(long_pattern, f"{sanitize_runtime_name(long_name)}-AbCdEf1234")
+
+
 def test_iam_adds_nothing_without_auth_tools():
     spec = AgentSpec(name="plain-agent", method="zip_runtime", system_prompt="p",
                      tools=[{"type": "rest", "name": "open",

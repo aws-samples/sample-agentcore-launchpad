@@ -1,6 +1,8 @@
 # Identity P2 — real-AWS e2e evidence (as_user / 3LO)
 
-Run on 2026-09-28 (UTC) in account `959545103699`, region `us-west-2`, driven by
+> Real identifiers (account id, Cognito pool, client and domain ids, callback ids, gateway ids, local paths) are redacted to placeholders such as `123456789012` and `us-west-2_EXAMPLE`.
+
+Run on 2026-09-28 (UTC) in account `123456789012`, region `us-west-2`, driven by
 [`backend/scripts/e2e_identity_3lo.py`](../backend/scripts/e2e_identity_3lo.py)
 against a throwaway stack: backend `127.0.0.1:8792` with a temporary SQLite ledger
 (`/tmp/lpid-e2e-3lo/ledger.db`), and vite `localhost:5192` proxying to it. The stack
@@ -23,15 +25,15 @@ AWS resource created is named `lpid-e2e-*`, apart from the per-agent role noted 
 
 | Resource | Identifier |
 |---|---|
-| Cognito user pool | `us-west-2_otbjcvk6x` (`lpid-e2e-3lo-pool`) |
-| Cognito domain | `lpid-e2e-3lo-f523ce.auth.us-west-2.amazoncognito.com` |
-| Cognito app client | `1sisvql5eco5tf37sjqn5fu8ko` (`lpid-e2e-3lo-client`); its CallbackURLs were set to the Connection callback below |
+| Cognito user pool | `us-west-2_EXAMPLE` (`lpid-e2e-3lo-pool`) |
+| Cognito domain | `lpid-e2e-3lo-xxxxxx.auth.us-west-2.amazoncognito.com` |
+| Cognito app client | `<app-client-id>` (`lpid-e2e-3lo-client`); its CallbackURLs were set to the Connection callback below |
 | Cognito user | `lpid-e2e-user` (permanent password, kept only in the `0600` state file, which was deleted in teardown) |
-| OAuth2 credential provider (Connection) | `arn:aws:bedrock-agentcore:us-west-2:959545103699:token-vault/default/oauth2credentialprovider/lpid-e2e-3lo`, callback `https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/60479f0a-1082-4346-b71a-748a0bdcb4c9` |
-| Agent (zip Runtime) | ledger `680717abc7b0437ba7a4411536f663af`, runtime `lpid_e2e_3lo_agent_cccf9a-3ltYh456kU`, with one REST tool `userinfo` → `https://lpid-e2e-3lo-f523ce.auth.us-west-2.amazoncognito.com/oauth2/userInfo`, `auth {connection: lpid-e2e-3lo, kind: oauth2, mode: as_user, scopes: [openid, profile, email]}` |
+| OAuth2 credential provider (Connection) | `arn:aws:bedrock-agentcore:us-west-2:123456789012:token-vault/default/oauth2credentialprovider/lpid-e2e-3lo`, callback `https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/<callback-uuid>` |
+| Agent (zip Runtime) | ledger `680717abc7b0437ba7a4411536f663af`, runtime `lpid_e2e_3lo_agent_cccf9a-3ltYh456kU`, with one REST tool `userinfo` → `https://lpid-e2e-3lo-xxxxxx.auth.us-west-2.amazoncognito.com/oauth2/userInfo`, `auth {connection: lpid-e2e-3lo, kind: oauth2, mode: as_user, scopes: [openid, profile, email]}` |
 | Workload identity | `lpid_e2e_3lo_agent_cccf9a-3ltYh456kU`, created by the Runtime (service-linked) |
 | Per-agent IAM role | `launchpad-agent-lpid-e2e-3lo-agent-680717ab` (see the deviation in §1) |
-| Zip artifact | `s3://launchpad-artifacts-959545103699-us-west-2/agents/lpid-e2e-3lo-agent/deployment_package.zip` (38.1 MB) |
+| Zip artifact | `s3://launchpad-artifacts-123456789012-us-west-2/agents/lpid-e2e-3lo-agent/deployment_package.zip` (38.1 MB) |
 
 ## 3. The flow: 24 assertions passed, 0 failed (04:53:00Z–04:53:41Z)
 
@@ -102,7 +104,7 @@ polling while consent completed in a second tab, and **Retry** returned the clai
 
 ## 4. Screenshots
 
-These are in `/home/ec2-user/.openclaw/workspace/tmp/identity-v2-p2-shots/`. Each has a zh-CN version and an `-en` twin, and all were taken against the live stack above:
+These are in `<scratch>/identity-v2-p2-shots/`. Each has a zh-CN version and an `-en` twin, and all were taken against the live stack above:
 
 - `chat-auth-card-pending`: a real `auth_required` in Chat.
 - `chat-auth-card-authorized`: taken after a real consent in a second tab. The retry is enabled.
@@ -127,8 +129,8 @@ workload_identity.gone     lpid_e2e_3lo_agent_cccf9a-3ltYh456kU   (went with the
 credential_provider.gone   lpid-e2e-3lo
 artifact.deleted           s3://launchpad-artifacts-…/agents/lpid-e2e-3lo-agent/deployment_package.zip
 artifact.gone              prefix agents/lpid-e2e-3lo-agent/ · 0 objects left
-cognito.domain.deleted     lpid-e2e-3lo-f523ce
-cognito.pool.gone          us-west-2_otbjcvk6x (this deletes its app client and user too)
+cognito.domain.deleted     lpid-e2e-3lo-xxxxxx
+cognito.pool.gone          us-west-2_EXAMPLE (this deletes its app client and user too)
 cognito.pools.lpid_left    []
 state_file.deleted         /tmp/lpid-e2e-3lo-state.json
 DOWN OK

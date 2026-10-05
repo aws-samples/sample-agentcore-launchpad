@@ -25,6 +25,7 @@ import {
 } from "../components/chat/attachments";
 import type {
   AgentInfo,
+  AuthRequiredEvent,
   ChatAttachmentMetadata,
   ChatHistoryMessage,
   ChatRequest,
@@ -32,13 +33,16 @@ import type {
 } from "../lib/api";
 import { api, errorMessage, localizedMessage, responseMessage } from "../lib/api";
 import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../lib/chat";
+import { type AuthAsk, liveAuthAsk, restoredAuthAsk } from "../lib/user-grants";
 
 interface Message {
-  kind: "user" | "agent" | "tool" | "memory" | "error";
+  kind: "user" | "agent" | "tool" | "memory" | "error" | "auth";
   text: string;
   name?: string;
   streaming?: boolean;
   attachments?: ChatAttachmentMetadata[];
+  /** kind "auth": the as_user consent ask (url is https-only, else null) */
+  auth?: AuthAsk;
 }
 
 interface MemorySummary {
@@ -84,6 +88,38 @@ const CLASSIC_MEMORY_TAG = {
   off: "chatPage.memoryOff",
   "agent-defined": "chatPage.memoryAgentDefined",
 } as const;
+
+/**
+ * as_user consent ask in the classic thread: the Connection, the https-only
+ * authorization link (a restored row has none — the URL is single-use), and a
+ * note to re-send after authorizing. No polling here; the V2 Chat card polls.
+ */
+function AuthNotice({ ask }: { ask: AuthAsk }) {
+  const { t } = useTranslation();
+  const vars = { tool: ask.tool || "—", connection: ask.provider };
+  return (
+    <div className="note" style={{ borderColor: "var(--warn)" }} data-testid="chat-auth-notice">
+      <span className="i" style={{ color: "var(--warn)" }}>
+        [!]
+      </span>
+      <span>
+        <b>{t("v2.chat.auth.title")}</b> · <span className="mono">{ask.provider}</span>
+        <br />
+        {ask.url ? t("v2.chat.auth.body", vars) : t("v2.chat.auth.restored", vars)}
+        {ask.url && (
+          <>
+            {" "}
+            <a href={ask.url} target="_blank" rel="noopener noreferrer" data-testid="chat-auth-open">
+              {t("v2.chat.auth.open")} ↗
+            </a>
+            <br />
+            {t("chatPage.authRetryNote")}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
 
 export function Chat() {
   const { t } = useTranslation();
@@ -217,7 +253,10 @@ export function Chat() {
               ? { kind: "agent", text: r.text }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
-                : { kind: "error", text: r.text },
+                : r.role === "auth"
+                  ? // the consent URL is single-use and never persisted
+                    { kind: "auth", text: r.text, name: r.name ?? "", auth: restoredAuthAsk(r, agentId) }
+                  : { kind: "error", text: r.text },
         ),
       );
       setSessionId(sid);
@@ -308,12 +347,21 @@ export function Chat() {
             { kind: "tool", text: payload.name ?? "tool", name: payload.name },
           ]);
           agentIdxSet = false;
+        } else if (event === "auth_required") {
+          // as_user consent ask; the answer keeps streaming into the same bubble
+          const ask: Partial<AuthRequiredEvent> = payload;
+          setMessages((m) => [
+            ...m,
+            { kind: "auth", text: ask.provider ?? "", name: ask.tool, auth: liveAuthAsk(ask, agentId) },
+          ]);
         } else if (event === "delta") {
           setMessages((m) => {
             const next = [...m];
-            const last = next[next.length - 1];
+            let at = next.length - 1;
+            while (at >= 0 && next[at].kind === "auth") at -= 1;
+            const last = next[at];
             if (agentIdxSet && last?.kind === "agent") {
-              next[next.length - 1] = { ...last, text: last.text + (payload.text ?? "") };
+              next[at] = { ...last, text: last.text + (payload.text ?? "") };
             } else {
               next.push({ kind: "agent", text: payload.text ?? "", streaming: true });
             }
@@ -597,6 +645,8 @@ export function Chat() {
                 <div key={i} className="memline">
                   <i>◈</i> {msg.text}
                 </div>
+              ) : msg.kind === "auth" ? (
+                <AuthNotice key={i} ask={msg.auth ?? restoredAuthAsk(msg, agentId)} />
               ) : (
                 <div key={i} className="note" style={{ borderColor: "var(--crit)" }}>
                   <span className="i" style={{ color: "var(--crit)" }}>

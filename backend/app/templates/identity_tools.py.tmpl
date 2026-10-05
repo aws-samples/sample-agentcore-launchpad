@@ -251,8 +251,25 @@ def identity_credential(auth: dict) -> tuple[dict, dict] | str | None:
     return {name: key}, {}
 
 
+def _id_no_redirect_opener():
+    """A urllib opener that never follows a redirect.
+
+    urllib's default redirect handler re-sends every header — the credential
+    included — to whatever host the Location names, so a compromised or
+    hostile API could harvest the bearer / API key with one 302. Refusing the
+    hop surfaces the 3xx as an HTTPError the tool reports instead."""
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    return urllib.request.build_opener(_NoRedirect)
+
+
 def _rest_call(spec: dict, path: str, body: str) -> str:
     import json as _json
+    import urllib.error
     import urllib.parse
     import urllib.request
 
@@ -290,9 +307,28 @@ def _rest_call(spec: dict, path: str, body: str) -> str:
         request_headers.setdefault("Content-Type", "application/json")
     request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _id_no_redirect_opener().open(request, timeout=30) as response:
             text = response.read().decode("utf-8", errors="replace")
             status = response.status
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            # the redirect target is named by host only (its query may carry
+            # state); the credential never left for it
+            location = str(exc.headers.get("Location") or "")
+            target = _id_host_only(location) if "://" in location else "a relative path"
+            _id_log(f"{spec['name']} {method} {spec['url']} refused a {exc.code} redirect")
+            return (
+                f"error: the API answered HTTP {exc.code} (redirect to {target}); "
+                "redirects are not followed, so the request and its credentials "
+                "were not re-sent — configure the tool with the final URL"
+            )
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:2000]
+        except Exception:
+            detail = ""
+        _id_log(f"{spec['name']} {method} {spec['url']} failed: HTTP {exc.code}")
+        return f"error: {type(exc).__name__}: {exc} {detail}".strip()
     except Exception as exc:
         detail = ""
         if hasattr(exc, "read"):
@@ -325,6 +361,38 @@ def _make_rest_tool(spec: dict):
     return _tool(_call)
 
 
+def _id_same_origin_mcp_factory(url: str):
+    """An MCP httpx client factory that follows same-origin redirects only.
+
+    MCP's default client follows every redirect and re-sends its client-level
+    headers (an API-key header included) to whatever host the Location names.
+    Many servers answer `/mcp` with a 307 to `/mcp/`, so redirects stay on —
+    but a hop to another scheme/host/port fails before the request is sent."""
+    import httpx
+
+    def _origin(u) -> tuple:
+        return (u.scheme, u.host, u.port)
+
+    origin = _origin(httpx.URL(url))
+
+    async def _guard(request) -> None:
+        if _origin(request.url) != origin:
+            raise httpx.RequestError(
+                f"refusing a cross-origin redirect to {request.url.host}", request=request
+            )
+
+    def _factory(headers=None, timeout=None, auth=None):
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            headers=headers,
+            timeout=timeout if timeout is not None else httpx.Timeout(30, read=300),
+            auth=auth,
+            event_hooks={"request": [_guard]},
+        )
+
+    return _factory
+
+
 def _identity_mcp_client(spec: dict):
     credential = identity_credential(spec)
     if credential == IDENTITY_AUTH_REQUIRED:
@@ -345,7 +413,10 @@ def _identity_mcp_client(spec: dict):
         from mcp.client.streamable_http import streamablehttp_client
         from strands.tools.mcp import MCPClient
 
-        return MCPClient(lambda: streamablehttp_client(url, headers=headers))
+        factory = _id_same_origin_mcp_factory(url)
+        return MCPClient(
+            lambda: streamablehttp_client(url, headers=headers, httpx_client_factory=factory)
+        )
     except Exception as exc:
         _id_log(f"MCP client construction failed: {type(exc).__name__}: {exc}")
         return None

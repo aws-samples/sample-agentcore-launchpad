@@ -47,6 +47,19 @@ class RuntimeBearerAuthError(RuntimeError):
         self.detail = detail
 
 
+class RuntimeBearerHttpError(RuntimeError):
+    """A bearer invoke answered a non-200 status other than 401/403.
+
+    Typed so a retry policy can tell an upstream 5xx / 429 (transient) from a
+    4xx (final) without parsing the message; the message keeps the historical
+    ``bearer invoke returned HTTP <status>`` text."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
 def _protocol_configuration(protocol: str | None) -> dict[str, Any] | None:
     """protocolConfiguration param, or None for the HTTP default.
 
@@ -481,6 +494,29 @@ def _repr_event(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _safe_auth_url(value: Any) -> str | None:
+    """An auth_required ``url`` fit to render as a link, else None.
+
+    The runtime's stream is agent-authored (BYOC code, a prompt-injected tool),
+    so a ``javascript:`` / ``data:`` / plain-http URL here would reach the
+    console's consent card. Only an absolute https URL with a host survives;
+    anything else is dropped (the card then has no link) and logged by scheme
+    only — the URL itself carries the consent session's state.
+    """
+    url = str(value or "").strip()
+    if not url:
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        parts = None
+    if parts is not None and parts.scheme.lower() == "https" and parts.hostname:
+        return url
+    scheme = (parts.scheme if parts is not None else "") or "<none>"
+    logger.warning("dropped a non-https auth_required url (scheme %r)", scheme[:16])
+    return None
+
+
 def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     """Normalize one runtime payload to Chat's tool/delta/complete contract
     (lenient ``str()`` coercion of text fields, shared by Chat, the public API
@@ -528,13 +564,15 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
             # user must open; `session_uri` is the consent session the platform
             # completes (CompleteResourceTokenAuth) once the user returns — the
             # invoke layer records it and strips it before the caller sees the
-            # event (services/oauth_sessions.py). Never logged.
+            # event (services/oauth_sessions.py). Never logged. The url comes
+            # out of agent code, so only an https URL is passed through (see
+            # ``_safe_auth_url``) — the console renders it as a link.
             yield {
                 "event": "auth_required",
                 "data": {
                     "provider": str(payload.get("provider", "")),
                     "tool": str(payload.get("tool", "")),
-                    "url": str(payload.get("url", "")),
+                    "url": _safe_auth_url(payload.get("url")),
                     "scopes": [str(s) for s in payload.get("scopes") or []],
                     "session_uri": str(payload.get("session_uri", "")),
                 },
@@ -915,9 +953,10 @@ def stream_runtime_events_bearer(
             )
         if status != 200:
             detail = _read_error_body(response)
-            raise RuntimeError(
+            raise RuntimeBearerHttpError(
+                status,
                 f"bearer invoke returned HTTP {status}"
-                + (f": {detail}" if detail else "")
+                + (f": {detail}" if detail else ""),
             )
         content_type = str(
             (getattr(response, "headers", None) or {}).get("content-type") or ""

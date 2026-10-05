@@ -24,7 +24,15 @@ import {
   errorMessage,
   localizedMessage,
 } from "../../lib/api";
-import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../../lib/chat";
+import {
+  agentMemoryState,
+  type AsUserChoice,
+  asUserChecked,
+  asUserField,
+  chatEligible,
+  isHarnessAgent,
+  sseEvents,
+} from "../../lib/chat";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
@@ -66,8 +74,9 @@ export function V2Chat() {
   const resolvedRef = useRef(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  // JWT-inbound agents: send the member's own Cognito JWT (off ⇒ the workspace M2M token)
-  const [asUser, setAsUser] = useState(true);
+  // JWT-inbound agents: null = auto (as_user omitted: the member's pool JWT when
+  // signed in, else the workspace M2M token); a toggle pins it explicitly.
+  const [asUser, setAsUser] = useState<AsUserChoice>(null);
   /** who the Runtime authenticated on the last JWT turn (meta.inbound.caller) */
   const [caller, setCaller] = useState<"user_jwt" | "m2m" | null>(null);
   const [input, setInput] = useState("");
@@ -232,7 +241,8 @@ export function V2Chat() {
     let activeSessionId = sessionId;
     try {
       const request: ChatRequest = { prompt, session_id: sessionId };
-      if (jwtAgent) request.as_user = asUser;
+      const asUserValue = asUserField(jwtAgent, asUser);
+      if (asUserValue !== undefined) request.as_user = asUserValue;
       if (files.length) {
         request.attachments = await Promise.all(files.map(encodeAttachment)).catch(() => {
           throw new Error(t("chatPage.attachments.readFailed"));
@@ -459,7 +469,7 @@ export function V2Chat() {
                 <label className="v2-check v2-chat-asuser" title={t("v2.chat.asUserHint")} data-testid="chat-as-user">
                   <input
                     type="checkbox"
-                    checked={asUser}
+                    checked={asUserChecked(asUser, authRequired && !!username)}
                     disabled={busy}
                     onChange={(e) => setAsUser(e.target.checked)}
                   />

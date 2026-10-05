@@ -18,9 +18,12 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field, model_validator
 
 # The service model's CustomJWTAuthorizerConfiguration.discoveryUrl pattern
-# (bedrock-agentcore-control 1.43.x), plus a scheme requirement so a pasted
-# hostname fails at validation rather than at the first invoke.
-DISCOVERY_URL_RE = re.compile(r"^https?://.+/\.well-known/openid-configuration$")
+# (bedrock-agentcore-control 1.43.x), plus an https requirement: a pasted
+# hostname fails at validation rather than at the first invoke, and the save-time
+# probe (``services.public_fetch``) only ever fetches https — a discovery
+# document served over plain HTTP could be swapped in transit, along with the
+# jwks_uri every token signature is checked against.
+DISCOVERY_URL_RE = re.compile(r"^https://.+/\.well-known/openid-configuration$")
 
 # customClaims patterns from the same service model: inboundTokenClaimName
 # `[A-Za-z0-9_.-:]+` and matchValueString `[A-Za-z0-9_.-]+` (1.43.103). A
@@ -90,8 +93,8 @@ class JwtInboundConfig(BaseModel):
     def _shape(self) -> "JwtInboundConfig":
         if not DISCOVERY_URL_RE.match(self.discovery_url):
             raise ValueError(
-                "discovery_url must be an OpenID Connect discovery URL ending in "
-                "/.well-known/openid-configuration"
+                "discovery_url must be an https OpenID Connect discovery URL "
+                "ending in /.well-known/openid-configuration"
             )
         for field_name in ("allowed_clients", "allowed_audience", "allowed_scopes"):
             for entry in getattr(self, field_name):

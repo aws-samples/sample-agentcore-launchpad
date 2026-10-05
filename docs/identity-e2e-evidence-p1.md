@@ -1,6 +1,8 @@
 # Identity P1 — real-AWS e2e evidence
 
-Run on 2026-09-28 (UTC) in account `959545103699`, region `us-west-2`, driven by
+> Real identifiers (account id, Cognito pool, client and domain ids, callback ids, gateway ids, local paths) are redacted to placeholders such as `123456789012` and `us-west-2_EXAMPLE`.
+
+Run on 2026-09-28 (UTC) in account `123456789012`, region `us-west-2`, driven by
 [`backend/scripts/e2e_identity_connections.py`](../backend/scripts/e2e_identity_connections.py)
 against a local backend on `127.0.0.1:8791` with a throwaway SQLite ledger
 (`/tmp/lpid-e2e-run/launchpad.db`). No `config/launchpad.yaml` was present, no
@@ -11,18 +13,18 @@ production host or DB was touched, and every AWS resource created is named
 
 | Decision | Why |
 |---|---|
-| The Gateway targets live on a **throwaway gateway `lpid-e2e-gw`**, not on `launchpad-gw` | Adding a target to the shared `launchpad-gw` would modify an existing `launchpad-*` resource, which the rules forbid. The backend under test was started with `LAUNCHPAD_RESOURCES='{"gateway_id": "lpid-e2e-gw-7b874fovyx"}'`, so `/api/identity/gateway-targets` operated on it only |
-| `lpid-e2e-gw` is created with `roleArn = arn:aws:iam::959545103699:role/launchpad-gateway-role` (`authorizerType AWS_IAM`, `protocolType MCP`) | The role is only **referenced**; it was not modified. No IAM role, user or access key was created |
-| The OAuth2 Connection uses the `cognito` template with the `launchpad-users` pool's discovery URL (`https://cognito-idp.us-west-2.amazonaws.com/us-west-2_Qy79RAFIr/.well-known/openid-configuration`) and **placeholder** client credentials | Creating an app client inside the existing `launchpad-users` pool would modify that pool. `CreateOauth2CredentialProvider` does not validate the client credentials, and an OpenAPI target binds the provider without fetching a token, so creation and binding are exercised in full. No Cognito app client was created |
+| The Gateway targets live on a **throwaway gateway `lpid-e2e-gw`**, not on `launchpad-gw` | Adding a target to the shared `launchpad-gw` would modify an existing `launchpad-*` resource, which the rules forbid. The backend under test was started with `LAUNCHPAD_RESOURCES='{"gateway_id": "lpid-e2e-gw-xxxxxxxxxx"}'`, so `/api/identity/gateway-targets` operated on it only |
+| `lpid-e2e-gw` is created with `roleArn = arn:aws:iam::123456789012:role/launchpad-gateway-role` (`authorizerType AWS_IAM`, `protocolType MCP`) | The role is only **referenced**; it was not modified. No IAM role, user or access key was created |
+| The OAuth2 Connection uses the `cognito` template with the `launchpad-users` pool's discovery URL (`https://cognito-idp.us-west-2.amazonaws.com/us-west-2_EXAMPLE/.well-known/openid-configuration`) and **placeholder** client credentials | Creating an app client inside the existing `launchpad-users` pool would modify that pool. `CreateOauth2CredentialProvider` does not validate the client credentials, and an OpenAPI target binds the provider without fetching a token, so creation and binding are exercised in full. No Cognito app client was created |
 | The identity-page screenshot uses one agent row **seeded only in the temporary ledger** (`lpid-e2e-crm-agent`, no AWS resource), whose spec references both Connections | A real deploy would need a zip Runtime and is not required for P1 acceptance. The row was deleted before cleanup |
 
 ## 2. Resources created
 
 | Resource | Identifier |
 |---|---|
-| Gateway | `lpid-e2e-gw-7b874fovyx` (`lpid-e2e-gw`), READY at 03:32:39Z |
-| API-key credential provider | `arn:aws:bedrock-agentcore:us-west-2:959545103699:token-vault/default/apikeycredentialprovider/lpid-e2e-apikey` |
-| OAuth2 credential provider | `arn:aws:bedrock-agentcore:us-west-2:959545103699:token-vault/default/oauth2credentialprovider/lpid-e2e-oauth` (callback `https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/7dc7ba51-bf5d-439a-a973-76a9650dff73`) |
+| Gateway | `lpid-e2e-gw-xxxxxxxxxx` (`lpid-e2e-gw`), READY at 03:32:39Z |
+| API-key credential provider | `arn:aws:bedrock-agentcore:us-west-2:123456789012:token-vault/default/apikeycredentialprovider/lpid-e2e-apikey` |
+| OAuth2 credential provider | `arn:aws:bedrock-agentcore:us-west-2:123456789012:token-vault/default/oauth2credentialprovider/lpid-e2e-oauth` (callback `https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/<callback-uuid>`) |
 | Gateway target (OpenAPI, OAuth2, as_agent) | `GZCP6S4EYN` `lpid-e2e-crm-oauth` |
 | Gateway target (OpenAPI, API key, as_agent) | `ZICUEGDTHA` `lpid-e2e-facts-key` |
 
@@ -51,16 +53,16 @@ confirmed the stored `credentialProviderConfigurations`:
 ```json
 {"name": "lpid-e2e-crm-oauth", "status": "READY", "cred": [{"credentialProviderType": "OAUTH",
   "credentialProvider": {"oauthCredentialProvider": {
-    "providerArn": "arn:aws:bedrock-agentcore:us-west-2:959545103699:token-vault/default/oauth2credentialprovider/lpid-e2e-oauth",
+    "providerArn": "arn:aws:bedrock-agentcore:us-west-2:123456789012:token-vault/default/oauth2credentialprovider/lpid-e2e-oauth",
     "scopes": ["lpid-e2e/read"], "grantType": "CLIENT_CREDENTIALS"}}}]}
 {"name": "lpid-e2e-facts-key", "status": "READY", "cred": [{"credentialProviderType": "API_KEY",
   "credentialProvider": {"apiKeyCredentialProvider": {
-    "providerArn": "arn:aws:bedrock-agentcore:us-west-2:959545103699:token-vault/default/apikeycredentialprovider/lpid-e2e-apikey",
+    "providerArn": "arn:aws:bedrock-agentcore:us-west-2:123456789012:token-vault/default/apikeycredentialprovider/lpid-e2e-apikey",
     "credentialParameterName": "X-Api-Key", "credentialLocation": "HEADER"}}}]}
 ```
 
 While the resources were kept, the six P1 screenshots were taken against them
-(`/home/ec2-user/.openclaw/workspace/tmp/identity-v2-p1-shots/`).
+(`<scratch>/identity-v2-p1-shots/`).
 
 ## 4. Deletion evidence
 
@@ -76,18 +78,18 @@ connection.delete  api_key lpid-e2e-apikey  200 {"deleted":true}
 connection.readback_after_delete  api_key lpid-e2e-apikey  404 identity.connection_not_found
 ```
 
-`gateway-down` (03:38:35Z): `{"event": "gateway.gone", "gateway_id": "lpid-e2e-gw-7b874fovyx"}`.
+`gateway-down` (03:38:35Z): `{"event": "gateway.gone", "gateway_id": "lpid-e2e-gw-xxxxxxxxxx"}`.
 
 Independent CLI check afterwards:
 
 ```text
 ## gateways
-launchpad-gw-hsfsvucxar	launchpad-gw	READY
-## get-gateway lpid-e2e-gw-7b874fovyx
+launchpad-gw-xxxxxxxxxx	launchpad-gw	READY
+## get-gateway lpid-e2e-gw-xxxxxxxxxx
 ResourceNotFoundException: Failed to retrieve gateway because it doesn't exist.
 ## launchpad-gw targets (unchanged from the pre-run baseline)
-G0B6N4AXBD	office-facts	READY
-QQI3WPVIR9	hr-database	READY
+<target-id>	office-facts	READY
+<target-id>	hr-database	READY
 ## oauth2 providers
 launchpad-gw-m2m	p2-github
 ## api-key providers

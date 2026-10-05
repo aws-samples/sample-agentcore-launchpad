@@ -53,7 +53,7 @@ class TestModel:
 
     @pytest.mark.parametrize("url", [
         "https://idp.example.com/x/.well-known/openid-configuration",
-        "http://localhost:8080/realms/r/.well-known/openid-configuration",
+        "https://localhost:8443/realms/r/.well-known/openid-configuration",
     ])
     def test_discovery_url_accepts(self, url):
         JwtInboundConfig(discovery_url=url, allowed_clients=["c"])
@@ -62,6 +62,9 @@ class TestModel:
         "https://idp.example.com/.well-known/jwks.json",
         "idp.example.com/.well-known/openid-configuration",  # no scheme
         "https://idp.example.com/openid-configuration",
+        # https only: the probe never fetches plain http
+        "http://localhost:8080/realms/r/.well-known/openid-configuration",
+        "http://idp.example.com/.well-known/openid-configuration",
     ])
     def test_discovery_url_rejects(self, url):
         with pytest.raises(ValueError, match="discovery_url"):
@@ -218,13 +221,28 @@ class TestProbe:
         )
         assert result["jwks_uri"] == "https://i/jwks"
 
-    def test_unreachable_names_the_url(self):
+    def test_unreachable_names_the_url_but_not_the_exception(self):
         def failing(url):
-            raise OSError("connection refused")
+            raise OSError("connection refused by 10.0.3.7:8443 (internal-db)")
         with pytest.raises(AppError) as excinfo:
             svc.probe_discovery(DISCOVERY, probe=failing)
         assert excinfo.value.code == "identity.discovery_unreachable"
+        assert excinfo.value.status_code == 422
         assert DISCOVERY in excinfo.value.message
+        assert excinfo.value.message.endswith("(unreachable)")
+        assert "10.0.3.7" not in excinfo.value.message
+        assert "internal-db" not in json.dumps(excinfo.value.detail)
+        assert excinfo.value.detail == {"reason": "unreachable"}
+
+    def test_guard_refusals_surface_their_category_only(self):
+        from app.services.public_fetch import PublicFetchError
+
+        def refused(url):
+            raise PublicFetchError("non_public_address")
+        with pytest.raises(AppError) as excinfo:
+            svc.probe_discovery(DISCOVERY, probe=refused)
+        assert excinfo.value.message.endswith("(non-public address)")
+        assert excinfo.value.detail == {"reason": "non_public_address"}
 
     def test_missing_jwks_uri_refused(self):
         with pytest.raises(AppError) as excinfo:
@@ -394,6 +412,13 @@ class StubRuntimeControl:
                 "agentRuntimeVersion": "1", "status": "READY"}
 
 
+class FailingRuntimeControl(StubRuntimeControl):
+    def get_agent_runtime(self, agentRuntimeId):
+        status = "UPDATE_FAILED" if self.updated_with else "CREATE_FAILED"
+        return {"agentRuntimeId": agentRuntimeId, "agentRuntimeArn": "arn:rt-1",
+                "status": status, "failureReason": "boom"}
+
+
 class TestDeployerAuthorizer:
     """The zip deploy stage resolves, passes and snapshots the authorizer.
 
@@ -403,7 +428,7 @@ class TestDeployerAuthorizer:
     """
 
     def _deploy(self, monkeypatch, db, *, spec_auth=None, workspace_auth=None,
-                existing=None, mode="create"):
+                existing=None, mode="create", stub=None):
         from types import SimpleNamespace
 
         from app.deployer import zip_runtime as zr
@@ -428,7 +453,7 @@ class TestDeployerAuthorizer:
         db.commit()
         agent_id = agent.id
 
-        stub = StubRuntimeControl()
+        stub = stub or StubRuntimeControl()
         monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
         monkeypatch.setattr(zr, "get_settings", lambda: SimpleNamespace(
             account_id="111122223333", region="us-west-2",
@@ -442,7 +467,12 @@ class TestDeployerAuthorizer:
         fresh = SessionLocal()
         agent = fresh.get(Agent, agent_id)
         fresh.close()
-        zr._stage_deploy(ctx, agent)
+        try:
+            zr._stage_deploy(ctx, agent)
+        except RuntimeError as exc:
+            if not isinstance(stub, FailingRuntimeControl):
+                raise
+            stub.raised = exc
         reloaded = SessionLocal()
         row = reloaded.get(Agent, agent_id)
         reloaded.close()
@@ -499,6 +529,37 @@ class TestDeployerAuthorizer:
         assert sent["allowedClients"] == ["client-b"]
         assert row.inbound_auth_config["jwt"]["allowed_clients"] == ["client-b"]
 
+    def test_a_failed_update_keeps_the_mode_the_runtime_still_serves(self, monkeypatch, db):
+        # UpdateAgentRuntime accepted, then UPDATE_FAILED: the live runtime
+        # stays on its previous (IAM) version, and so must the ledger
+        stub = FailingRuntimeControl()
+        stub, row = self._deploy(
+            monkeypatch, db, spec_auth=jwt_auth(), mode="update", stub=stub,
+            existing={"resource_id": "rt-1", "arn": "arn:rt-1", "version": "1",
+                      "inbound_auth_mode": "iam"},
+        )
+        assert "authorizerConfiguration" in stub.updated_with
+        assert "UPDATE_FAILED" in str(stub.raised)
+        assert row.inbound_auth_mode == "iam"
+        assert row.inbound_auth_config is None
+
+    def test_a_failed_create_records_no_mode(self, monkeypatch, db):
+        stub, row = self._deploy(
+            monkeypatch, db, spec_auth=jwt_auth(), stub=FailingRuntimeControl())
+        assert row.resource_id == "rt-1"  # the accepted create is still recorded
+        assert row.inbound_auth_mode is None
+
+    def test_a_resumed_create_records_the_snapshot_at_ready(self, monkeypatch, db):
+        # the create was accepted before a restart: resume only polls to READY,
+        # and that is where the snapshot is written
+        stub, row = self._deploy(
+            monkeypatch, db, spec_auth=jwt_auth(),
+            existing={"resource_id": "rt-1", "arn": "arn:rt-1", "version": "1"},
+        )
+        assert stub.created_with is None and stub.updated_with is None
+        assert row.inbound_auth_mode == "jwt"
+        assert row.inbound_auth_config["jwt"]["allowed_clients"] == ["client-a"]
+
     def test_spec_iam_pins_against_workspace_jwt_default(self, monkeypatch, db):
         stub, row = self._deploy(
             monkeypatch, db,
@@ -527,6 +588,14 @@ class TestJwtIamGrant:
         grant = next(s for s in statements if s["Sid"] == "InboundJwtWorkloadToken")
         assert "bedrock-agentcore:GetWorkloadAccessTokenForJWT" in grant["Action"]
         assert all(":workload-identity-directory/" in r for r in grant["Resource"])
+        # the agent's own identity (runtime id = <name>_<6 hex>-<suffix>), never
+        # every workload identity in the directory
+        assert grant["Resource"] == [
+            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+            "workload-identity-directory/default",
+            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+            "workload-identity-directory/default/workload-identity/ia_role_a_??????-*",
+        ]
 
     def test_iam_mode_gets_nothing_extra(self):
         spec = AgentSpec(name="ia-role-b", method="zip_runtime", system_prompt="s")

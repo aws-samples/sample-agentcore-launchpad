@@ -7,6 +7,7 @@ the service-model claim patterns and the caller-kind migration."""
 import json
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
@@ -598,3 +599,114 @@ def test_caller_kind_column_is_migrated(tmp_path):
     with engine.begin() as conn:
         kinds = conn.execute(sa.text("SELECT caller_kind FROM oauth_pending_sessions")).all()
     assert kinds == [("iam",)]
+
+
+# ── JWT inbound vs the SigV4-only side doors ─────────────────────────────────
+
+
+RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/jwt-AbCdEf1234"
+
+
+def test_a_jwt_inbound_agent_is_not_canary_eligible():
+    from types import SimpleNamespace
+
+    from app.optimization.service import canary_capability
+
+    row = SimpleNamespace(method="zip_runtime", status="active", arn=RUNTIME_ARN, spec={},
+                          inbound_auth_mode="jwt")
+    cap = canary_capability(row)
+    assert (cap["eligible"], cap["reason_code"]) == (False, "jwt-inbound")
+    assert "SigV4" in cap["reason"]
+    for mode in ("iam", None):
+        row.inbound_auth_mode = mode
+        assert canary_capability(row)["eligible"] is True
+
+
+def test_the_a2a_demo_refuses_a_jwt_agent_before_signing_a_request(client, monkeypatch):
+    from app.services.agentcore import client as ac_client
+
+    data = MagicMock()
+    monkeypatch.setattr(ac_client, "data_client", lambda _ws=None: data)
+    with SessionLocal() as session:
+        agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="jwt-desk", method="zip_runtime",
+                      status="active", arn=RUNTIME_ARN, spec={"system_prompt": "s"},
+                      inbound_auth_mode="jwt")
+        session.add(agent)
+        session.commit()
+        agent_id = agent.id
+    res = client.post("/api/registry/a2a-demo", json={"agent_id": agent_id, "question": "q"})
+    assert res.status_code == 409
+    assert res.json()["code"] == "registry.a2a_demo_jwt_unsupported"
+    data.invoke_agent_runtime.assert_not_called()
+
+
+# ── evaluation retry policy over the bearer transport ────────────────────────
+
+
+def _bearer_failure(status: int):
+    from tests.test_inbound_auth import FakeBearerResponse, _opener
+
+    response = FakeBearerResponse(status_code=status, body=b'{"message":"x"}')
+    try:
+        rt.invoke_runtime_text_bearer(
+            "us-west-2", RUNTIME_ARN, "tok", "hi", http_response=_opener(response, {}))
+    except Exception as exc:  # noqa: BLE001 — the raised type is the subject
+        return exc
+    raise AssertionError("the bearer invoke did not fail")
+
+
+@pytest.mark.parametrize(("status", "transient"), [
+    (500, True), (502, True), (503, True), (429, True),
+    (400, False), (404, False), (401, False), (403, False),
+])
+def test_bearer_http_failures_retry_only_when_upstream_is_at_fault(status, transient):
+    from app.evaluation.service import transient_invoke_error
+
+    exc = _bearer_failure(status)
+    expected = rt.RuntimeBearerAuthError if status in (401, 403) else rt.RuntimeBearerHttpError
+    assert isinstance(exc, expected)
+    prefix = (
+        "the Runtime's JWT authorizer" if status in (401, 403)
+        else f"bearer invoke returned HTTP {status}"
+    )
+    assert str(exc).startswith(prefix)
+    assert transient_invoke_error(exc) is transient
+
+
+@pytest.mark.parametrize("exc", [
+    httpx.ConnectError("refused"),
+    httpx.ReadTimeout("slow"),
+    httpx.RemoteProtocolError("peer closed connection"),
+])
+def test_bearer_transport_failures_are_transient(exc):
+    from app.evaluation.service import transient_invoke_error
+
+    assert transient_invoke_error(exc) is True
+
+
+# ── the in-place switch's 422 never echoes the stored spec ───────────────────
+
+
+def test_switch_422_does_not_echo_the_stored_spec(monkeypatch):
+    import app.routers.agents as agents_router
+
+    marker = "stored-value-that-must-not-leak"
+    monkeypatch.setattr(agents_router, "start_deploy_async", lambda _job: None)
+    with SessionLocal() as session:
+        agent = Agent(
+            workspace_id=DEFAULT_WORKSPACE_ID, name="sw-echo", method="zip_runtime",
+            status="active", arn=RUNTIME_ARN, resource_id="rt-echo",
+            # a stored spec the current schema refuses (env values are strings)
+            spec={"name": "sw-echo", "method": "zip_runtime", "system_prompt": "p",
+                  "env": {"API_PASS": [marker]}},
+        )
+        session.add(agent)
+        session.commit()
+        agent_id = agent.id
+    with TestClient(create_app()) as client:
+        res = client.post(f"/api/agents/{agent_id}/inbound-auth",
+                          json={"inbound_auth": {"mode": "iam"}})
+    assert res.status_code == 422, res.text
+    assert res.json()["code"] == "agent.inbound_auth_invalid"
+    assert marker not in res.text
+    assert all("input" not in error for error in res.json()["detail"]["errors"])

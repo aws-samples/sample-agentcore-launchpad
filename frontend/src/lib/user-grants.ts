@@ -14,19 +14,36 @@ export const AUTH_POLL_LIMIT_MS = 15 * 60 * 1000;
  *  authorization URL is single-use and never persisted. */
 export type AuthAsk = Omit<AuthRequiredEvent, "url"> & { url: string | null };
 
-/** The ask carried by a live `auth_required` SSE event. */
+/**
+ * The authorization URL a card may link, or null. Only an absolute `https:`
+ * URL survives: the value comes from the IdP via the agent's stream, and a
+ * `javascript:`/`data:` href would run in the console's origin on click.
+ */
+export function safeAuthUrl(url: unknown): string | null {
+  if (typeof url !== "string" || !url.trim()) return null;
+  try {
+    return new URL(url.trim()).protocol === "https:" ? url.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The ask carried by a live `auth_required` SSE event. A URL that is not
+ *  https is dropped, so the card renders its no-URL (retry-only) state. */
 export function liveAuthAsk(event: Partial<AuthRequiredEvent>, agentId: string): AuthAsk {
   return {
     provider: event.provider ?? "",
     tool: event.tool ?? "",
     scopes: event.scopes ?? [],
-    url: event.url ?? null,
+    url: safeAuthUrl(event.url),
     agent_id: event.agent_id || agentId,
   };
 }
 
 /** The ask behind a restored history row (`role: "auth"`, text = the
- *  Connection, name = the tool): no URL, so the card can only retry. */
+ *  Connection, name = the tool). The authorization URL is single-use and never
+ *  persisted, so a restored card never links one — whatever the row carries —
+ *  and can only retry. */
 export function restoredAuthAsk(row: { text: string; name?: string | null }, agentId: string): AuthAsk {
   return { provider: row.text, tool: row.name ?? "", scopes: [], url: null, agent_id: agentId };
 }

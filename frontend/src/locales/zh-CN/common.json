@@ -2407,9 +2407,13 @@
     "identity.discovery_invalid": "该 URL 返回的不是 OIDC 发现文档（缺少 jwks_uri），因此无法校验任何令牌签名。",
     "memory.not_managed": "该记忆资源不由本工作区管理——只能在列表中看到，无法打开、编辑或删除。管理员可以将其纳管。",
     "agent.memory_not_managed": "所选记忆资源不由本工作区管理。请从记忆资源列表中选择，或请管理员将其纳管。",
-    "agent.memory_not_active": "所选记忆资源尚未处于 ACTIVE 状态——请等待创建完成后重试。"
+    "agent.memory_not_active": "所选记忆资源尚未处于 ACTIVE 状态——请等待创建完成后重试。",
+    "identity.external_connection": "该连接是在 Launchpad 之外创建的，请在 AgentCore Identity 中删除。",
+    "identity.as_user_requires_console": "该工具以登录用户身份执行，需由已登录控制台的用户授权，请使用 Chat 控制台。",
+    "registry.a2a_demo_jwt_unsupported": "该 Agent 仅接受 JWT Bearer 令牌，而 A2A 演示使用 SigV4 调用。请改用 IAM 入站的 Agent，或在 Chat 控制台中与其对话。"
   },
   "chatPage": {
+    "authRetryNote": "完成授权后，请重新发送你的消息。",
     "noAgents": "暂无运行中的 Agent — 请先部署",
     "memoryOn": "记忆开启",
     "memoryOff": "记忆关闭",
@@ -3318,7 +3322,8 @@
       "container-followup": "容器 Agent 的候选版本铸造需通过 CodeBuild，属于后续工作。",
       "a2a": "A2A Agent 不兼容 HTTP target-canary 流量。",
       "no-runtime-arn": "该 Agent 尚无已部署的 AgentCore Runtime ARN。",
-      "no-harness-arn": "该 Agent 没有已部署的 Harness ARN。"
+      "no-harness-arn": "该 Agent 没有已部署的 Harness ARN。",
+      "jwt-inbound": "使用 JWT 入站认证的 Agent 无法进行金丝雀发布：金丝雀网关以 SigV4 调用 Runtime，JWT 授权器会拒绝该请求。"
     },
     "meta": "真实生产流量 · 候选版本 A/B · 每金丝雀独立网关",
     "modeLabel": "实验流程",
@@ -6535,7 +6540,7 @@
         "scopes": "权限范围"
       },
       "asUser": "以用户身份调用",
-      "asUserHint": "开启：Runtime 收到你本人的登录 JWT。关闭：使用工作区 M2M 令牌。两种方式下记忆都按你隔离。",
+      "asUserHint": "开启：Runtime 收到你本人的登录 JWT。关闭：使用工作区 M2M 令牌。未手动切换时，若你通过工作区用户池登录则使用你的登录 JWT，否则使用 M2M 令牌。两种方式下记忆都按你隔离。",
       "caller": {
         "user_jwt": "以你的身份调用",
         "m2m": "以 M2M 客户端调用"
@@ -7968,7 +7973,8 @@
       "prefillNote": "预填来源：{{source}}。所有字段均可编辑。要使用自己的 OIDC 身份提供商（Okta、Auth0、Keycloak、Entra 等），请填写其发现 URL 或从连接选择。",
       "fromDefault": "工作区默认值",
       "fromCognito": "工作区 Cognito 用户池",
-      "fromEmpty": "没有可预填的配置：请在下方填写身份提供商"
+      "fromEmpty": "没有可预填的配置：请在下方填写身份提供商",
+      "defaultsFailed": "无法切换为 JWT：用于预填对话框的工作区入站认证默认值加载失败。"
     },
     "default": {
       "title": "入站认证默认值",

@@ -4,6 +4,7 @@ import { type AgentFormCatalogs, agentFormValid, buildAgentSpec, formFromStoredS
 import {
   applyOidcSource,
   bearerInvokeUrl,
+  EMPTY_CLAIM,
   EMPTY_JWT_FORM,
   inboundDraftChanged,
   issuerFromDiscoveryUrl,
@@ -40,6 +41,27 @@ describe("JWT form", () => {
     expect(jwtConfigFromForm(jwtFormFromConfig(config))).toEqual(config);
   });
 
+  it("keeps claim values as the raw typed string and splits them only for the payload", () => {
+    const claim = {
+      name: "groups",
+      value_type: "STRING_ARRAY" as const,
+      match_operator: "CONTAINS_ANY" as const,
+      match_values: ["admins", "ops"],
+    };
+    const form = jwtFormFromConfig({ ...JWT, custom_claims: [claim] });
+    expect(form.custom_claims[0].match_values).toBe("admins, ops");
+    // mid-typing: a trailing separator stays in the form state untouched
+    const typing = { ...form, custom_claims: [{ ...form.custom_claims[0], match_values: "admins, ops, " }] };
+    expect(typing.custom_claims[0].match_values).toBe("admins, ops, ");
+    expect(jwtConfigFromForm(typing).custom_claims).toEqual([claim]);
+    const spaced = { ...form, custom_claims: [{ ...form.custom_claims[0], match_values: " admins ops,dev " }] };
+    expect(jwtConfigFromForm(spaced).custom_claims[0].match_values).toEqual(["admins", "ops", "dev"]);
+    // a row without values or name is not sent
+    const blank = { ...form, custom_claims: [{ ...form.custom_claims[0], match_values: " , " }, { ...EMPTY_CLAIM }] };
+    expect(jwtConfigFromForm(blank).custom_claims).toEqual([]);
+    expect(jwtConfigFromForm(jwtFormFromConfig({ ...JWT, custom_claims: [claim] }))).toEqual({ ...JWT, custom_claims: [claim] });
+  });
+
   it("names the first problem", () => {
     const form = jwtFormFromConfig(JWT);
     expect(jwtFormProblem(form)).toBeNull();
@@ -50,7 +72,7 @@ describe("JWT form", () => {
     expect(
       jwtFormProblem({
         ...form,
-        custom_claims: [{ name: "bad name", value_type: "STRING", match_operator: "EQUALS", match_values: ["x"] }],
+        custom_claims: [{ name: "bad name", value_type: "STRING", match_operator: "EQUALS", match_values: "x" }],
       }),
     ).toBe("inboundAuth.problems.claimPattern");
   });

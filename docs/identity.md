@@ -75,7 +75,10 @@ cross-checked against [aws/agentcore-cli docs/gateway.md](https://github.com/aws
   → `apiKey`.
 - IAM resources for both: the token vault (`token-vault/default`), the provider ARN
   (`token-vault/default/oauth2credentialprovider/<name>` or
-  `.../apikeycredentialprovider/<name>`), the workload identity directory, and
+  `.../apikeycredentialprovider/<name>`), the workload identity directory plus the
+  agent's **own** workload identity (`workload-identity/<runtime base>_??????-*`,
+  never `workload-identity/*`: a wildcard would let one agent's role mint tokens
+  for another agent's identity and read its users' 3LO tokens), and
   `secretsmanager:GetSecretValue` on
   `bedrock-agentcore-identity!default/{oauth2|apikey}/<name>-*`.
 
@@ -392,9 +395,11 @@ Error codes (all under `apiErrors.<code>` in the console):
 - **Agent wizard**: an OAuth2 tool can pick the acting mode `as_user`. An api_key
   tool cannot.
 
-**Known limitation:** `/v1` callers receive the `auth_required` URL like the
-console does, but leg 4 needs a signed-in console user matching the recorded
-runtime user. A pure API caller therefore cannot complete a consent on its own.
+**`/v1` never starts a consent.** Leg 4 needs a signed-in console user matching
+the recorded runtime user, and a `/v1` caller is an API key, not a console user.
+So when an `as_user` tool asks for consent on a `/v1` call, Launchpad records no
+pending session and the call fails with `identity.as_user_requires_console` (409;
+an `error` event on the stream). Authorize the tool once from console Chat.
 
 Real-AWS evidence: [identity-e2e-evidence-p2.md](identity-e2e-evidence-p2.md).
 
@@ -411,7 +416,7 @@ exercised live.**
 
 - **Available.** The consent-portal operations are in the
   `bedrock-agentcore-control` model of the pinned botocore (≥ 1.43.103). Live
-  `ListConsentPortals` in `959545103699` / us-west-2 returned 200
+  `ListConsentPortals` in `123456789012` / us-west-2 returned 200
   `{"consentPortals": []}`.
 - **Integrated.** The wrappers are `services/agentcore/consent_portal.py`, the
   service is `services/consent_portals.py`, the routes are listed in §7.4, and
