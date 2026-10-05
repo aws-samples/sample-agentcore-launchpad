@@ -94,7 +94,9 @@ export function ConnectionList() {
               {t("v2.connections.callback")}
             </LinkButton>
           )}
-          {manage && !row.system && (
+          {/* only Connections Launchpad created: an external vault provider may back
+              another team's runtime, and the backend refuses it (409) */}
+          {manage && !row.system && row.source === "launchpad" && (
             <LinkButton danger onClick={() => setRemoving(row)} testId={`v2-conn-delete-${row.name}`}>
               {t("v2.common.delete")}
             </LinkButton>

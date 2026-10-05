@@ -9,12 +9,18 @@ nothing existing is modified. The IdP is a NEW throwaway Cognito user pool (neve
     uv run python scripts/e2e_identity_inbound.py up --gateway-role-arn ARN
     LAUNCHPAD_DATABASE_URL=sqlite:////tmp/lpid-e2e-p3.db \\
     LAUNCHPAD_RESOURCES='{"execution_role_arn": "...", "artifacts_bucket": "...",
-                          "gateway_id": "<lpid-e2e-p3-gw id printed by up>"}' \\
+                          "gateway_id": "<lpid-e2e-p3-gw id printed by up>",
+                          "user_pool_id": ""}' \\
         uv run uvicorn app.main:app --port 8793
     LAUNCHPAD_DATABASE_URL=sqlite:////tmp/lpid-e2e-p3.db LAUNCHPAD_RESOURCES='…same…' \\
         uv run python scripts/e2e_identity_inbound.py run --base http://127.0.0.1:8793
     uv run python scripts/e2e_identity_inbound.py down --base http://127.0.0.1:8793
     uv run python scripts/e2e_identity_inbound.py trail   # CloudTrail, ~15 min later
+
+`user_pool_id: ""` matters on a bootstrapped box: the yaml's workspace pool
+otherwise merges in, and the platform then refuses (by design,
+`agent.inbound_issuer_mismatch`) to invoke an agent that trusts the throwaway
+pool — step 3's backend-invoke-chain leg would stop there.
 
 `run` proves, on ONE zip Runtime:
 
