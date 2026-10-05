@@ -2275,6 +2275,26 @@ def test_a_transient_failure_is_replayed_in_a_fresh_session(client, ready, harne
     assert detail["turn_in_progress"] is None
 
 
+def test_a_max_tokens_stop_is_replayed_but_an_iteration_limit_is_not(client, ready, harness):
+    """Live 2026-10-05: a proposal call stopped at ``max_tokens`` 40 s in, far short of
+    its budget; the manual retry answered. Replay it once; iteration limits stay final."""
+    cid = _open(client)
+    harness.reply("The full proposal.")
+    harness.queued = [[{"contentBlockDelta": {"delta": {"text": "half"}}},
+                       {"messageStop": {"stopReason": "max_tokens"}}]]
+    events = _turn(client, cid, "q")
+    kinds = [k for k, _ in events]
+    assert "retry" in kinds and kinds[-1] == "done" and len(harness.calls) == 2
+    assert _latest(client, cid)["messages"][-1]["text"] == "The full proposal."
+
+    harness.calls.clear()
+    harness.queued = []
+    harness.script = [{"messageStop": {"stopReason": "max_iterations"}}]
+    events = _turn(client, cid, "q2")
+    assert "retry" not in [k for k, _ in events] and events[-1][0] == "error"
+    assert len(harness.calls) == 1
+
+
 def test_an_execution_timeout_is_not_replayed(client, ready, harness):
     cid = _open(client)
     harness.script = [{"contentBlockDelta": {"delta": {"text": "partial"}}},
