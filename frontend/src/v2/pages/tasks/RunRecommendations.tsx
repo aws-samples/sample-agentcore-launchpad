@@ -4,7 +4,12 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../../../auth/auth-context";
 import { DiffPanes } from "../../../components/DiffPanes";
 import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
-import type { EvaluationRunInfo, RunRecommendation, RunRecommendationKind } from "../../../lib/evaluation";
+import {
+  splitRecommendations,
+  type EvaluationRunInfo,
+  type RunRecommendation,
+  type RunRecommendationKind,
+} from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
@@ -110,6 +115,8 @@ export function RunRecommendations({
   const [modelCustom, setModelCustom] = useState("");
   const list = useLoad(() => api.runRecommendations(run.id), `rec-list:${run.id}:${tick}`);
   const recs = useMemo(() => list.data?.recommendations ?? [], [list.data]);
+  const shown = useMemo(() => splitRecommendations(recs), [recs]);
+  const [showEarlier, setShowEarlier] = useState(false);
   const active = recs.some((r) => ACTIVE.has(r.status));
   useEffect(() => {
     if (!active) return;
@@ -394,7 +401,7 @@ export function RunRecommendations({
     <div className="v2-form">
       {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && form}
       {list.error && <Alert tone="error">{list.error}</Alert>}
-      {recs.map((rec) => (
+      {[...shown.current, ...(showEarlier ? shown.earlier : [])].map((rec) => (
         <RecommendationResult
           key={rec.id}
           rec={rec}
@@ -407,6 +414,13 @@ export function RunRecommendations({
           }}
         />
       ))}
+      {shown.earlier.length > 0 && (
+        <div>
+          <Button size="sm" onClick={() => setShowEarlier((v) => !v)} testId="v2-rec-earlier">
+            {showEarlier ? t("v2.rec.hideEarlier") : t("v2.rec.showEarlier", { count: shown.earlier.length })}
+          </Button>
+        </div>
+      )}
     </div>
   );
   if (embedded) {

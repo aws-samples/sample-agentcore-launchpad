@@ -7421,6 +7421,8 @@
       "updatedBy": "最近保存人"
     },
     "rec": {
+      "showEarlier": "更早的建议（{{count}}）",
+      "hideEarlier": "收起更早的建议",
       "title": "优化建议",
       "sub": "AgentCore Recommendations 读取本任务的 trace",
       "new": "新建优化建议",
