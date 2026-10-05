@@ -12,7 +12,7 @@ import {
   errorMessage,
 } from "../../../lib/api";
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
-import { type EvaluationRunInfo, evaluationRunPresentation, RUN_TERMINAL_STATUSES } from "../../../lib/evaluation";
+import { type EvaluationRunInfo, evaluationRunPresentation, RUN_TERMINAL_STATUSES, runMeanScore } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, Select, Tag } from "../../ui";
@@ -35,8 +35,7 @@ const RUN_POLL_MS = 5000;
 const AGENT_POLL_MS = 5000;
 const RUN_HISTORY_LIMIT = 10;
 
-const meanScore = (run: EvaluationRunInfo) =>
-  run.scores.length > 0 ? run.scores.reduce((acc, s) => acc + (s.score ?? 0), 0) / run.scores.length : null;
+const meanScore = (run: EvaluationRunInfo) => runMeanScore(run.scores);
 
 function Step({ n, title, children, actions, testId }: {
   n: number; title: ReactNode; children: ReactNode; actions?: ReactNode; testId: string;
