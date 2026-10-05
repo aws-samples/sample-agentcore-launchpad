@@ -9,20 +9,27 @@ agents that pick none, so it is delete-protected here and a memory referenced by
 a live agent's spec refuses deletion too. Editing is never blocked: a new
 description or expiry is harmless to the agents on the memory (the console
 merely names them in its confirm dialog).
+
+Ownership (issue #55): the account can hold memories the platform never
+created, so the list marks each row ``managed`` (``services/memory_ownership``)
+and every per-id route answers ``404 memory.not_managed`` for the rest — they
+are *detected, not managed*. A memory becomes managed when this router creates
+it, or when an administrator adopts it explicitly.
 """
 
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, mapped_aws_error
 from app.models.ledger import Agent
+from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import memory_admin
+from app.services import memory_admin, memory_ownership
 
 router = APIRouter(prefix="/api/memory/resources", tags=["memory-resources"])
 
@@ -142,17 +149,23 @@ def list_resources(
 ) -> dict[str, Any]:
     page = _guard(memory_admin.list_memory_resources, ws.context)
     usage = _agents_by_memory(db, ws)
+    managed = memory_ownership.managed_ids(db, ws.context)
     for item in page["items"]:
         item["agents"] = usage.get(item["id"] or "", [])
+        # everything else in the account is detected, not managed: listed, but no
+        # per-id route reaches it and no agent may pin it
+        item["managed"] = bool(item["id"]) and item["id"] in managed
     return page
 
 
 @router.post("", status_code=201)
 def create_resource(
     req: CreateMemoryResourceRequest,
+    request: Request,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return _guard(
+    created = _guard(
         memory_admin.create_memory_resource,
         ws.context,
         req.name,
@@ -161,20 +174,57 @@ def create_resource(
         req.strategies,
         [k.model_dump() for k in req.namespace_keys],
     )
+    memory_ownership.register(
+        db,
+        ws.context,
+        created.get("id") or "",
+        origin="created",
+        created_by=require_identity(request).username,
+    )
+    return {**created, "managed": True}
 
 
 @router.get("/{memory_id}")
 def get_resource(
     memory_id: str,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return _guard(memory_admin.get_memory_resource, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id)
+    detail = _guard(memory_admin.get_memory_resource, ws.context, memory_id)
+    return {**detail, "managed": True}
+
+
+@router.post("/{memory_id}/adopt")
+def adopt_resource(
+    memory_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Bring an existing memory of this account under the workspace's management.
+
+    Administrator-only (route policy): adopting is the governance decision that
+    lets members pin, edit and delete a resource the platform did not create —
+    e.g. one created through the console before ownership was recorded. The id
+    must resolve with ``GetMemory`` first (an unknown id is ``404 aws.not_found``).
+    """
+    detail = _guard(memory_admin.get_memory_resource, ws.context, memory_id)
+    memory_ownership.register(
+        db,
+        ws.context,
+        detail.get("id") or memory_id,
+        origin="adopted",
+        created_by=require_identity(request).username,
+    )
+    return {**detail, "managed": True}
 
 
 @router.put("/{memory_id}")
 def update_resource(
     memory_id: str,
     req: UpdateMemoryResourceRequest,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Edit description / event expiry; the reply is the refreshed detail.
@@ -184,13 +234,15 @@ def update_resource(
     confirm dialog (from the list route's ``agents`` annotation) so the operator
     knows whom a shorter expiry window reaches.
     """
-    return _guard(
+    memory_ownership.require_managed(db, ws.context, memory_id)
+    detail = _guard(
         memory_admin.update_memory_resource,
         ws.context,
         memory_id,
         description=req.description,
         event_expiry_days=req.event_expiry_days,
     )
+    return {**detail, "managed": True}
 
 
 @router.delete("/{memory_id}")
@@ -199,6 +251,7 @@ def delete_resource(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    memory_ownership.require_managed(db, ws.context, memory_id)
     agents = _agents_by_memory(db, ws).get(memory_id, [])
     if agents:
         raise AppError(
@@ -208,4 +261,6 @@ def delete_resource(
             {"agents": agents},
             status_code=409,
         )
-    return _guard(memory_admin.delete_memory_resource, ws.context, memory_id)
+    deleted = _guard(memory_admin.delete_memory_resource, ws.context, memory_id)
+    memory_ownership.forget(db, ws.context, memory_id)
+    return deleted

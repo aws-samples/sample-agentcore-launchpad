@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { useAuth } from "../../../auth/auth-context";
 import {
   api,
   errorMessage,
@@ -105,20 +106,59 @@ function useDelete(onDone: () => void) {
   return { ask: setPending, busy, dialog };
 }
 
+/** Administrator-only: bring an unmanaged account memory under the workspace. */
+function useAdopt(onDone: () => void) {
+  const { t } = useTranslation();
+  const toast = useV2Toast();
+  const [pending, setPending] = useState<MemoryResourceRow | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (!pending?.id) return;
+    setBusy(true);
+    try {
+      await api.memoryResourceAdopt(pending.id);
+      toast("success", t("v2.memory.res.adopted", { id: pending.id }));
+      setPending(null);
+      onDone();
+    } catch (err) {
+      toast("error", t("v2.memory.res.adoptFailed", { msg: errorMessage(err) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const dialog = (
+    <Confirm
+      open={pending !== null}
+      title={t("v2.memory.res.adoptTitle")}
+      body={t("v2.memory.res.adoptBody", { id: pending?.id ?? "" })}
+      confirmLabel={t("v2.memory.res.adopt")}
+      busy={busy}
+      onConfirm={() => void run()}
+      onClose={() => setPending(null)}
+    />
+  );
+  return { ask: setPending, busy, dialog };
+}
+
 /**
  * Memory resources in this workspace's account/region. The bootstrap memory is
- * the delete-protected default; others become selectable per agent in the
- * Create wizard (`spec.memory.memory_id`). A memory still referenced by agents
- * cannot be deleted.
+ * the delete-protected default; other *managed* memories (created here or
+ * adopted by an administrator) become selectable per agent in the Create wizard
+ * (`spec.memory.memory_id`). A memory still referenced by agents cannot be
+ * deleted. Anything else in the account is listed as not managed and offers no
+ * action but an administrator's adopt.
  */
 export function ResourceList() {
   const { t } = useTranslation();
+  const { can, isAdmin } = useAuth();
+  const mayManage = can("memory.manage");
   const [, setParams] = useSearchParams();
   const [tick, setTick] = useState(0);
   const { data, loading, error, reload } = useLoad(() => api.memoryResources(), `memory-resources:${tick}`);
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const del = useDelete(reload);
+  const adopt = useAdopt(reload);
 
   const all = useMemo(() => data?.items ?? [], [data]);
   const statuses = useMemo(() => [...new Set(all.map((r) => r.status ?? "").filter(Boolean))].sort(), [all]);
@@ -139,7 +179,7 @@ export function ResourceList() {
     return () => window.clearInterval(timer);
   }, [transient]);
 
-  const open = (row: MemoryResourceRow) => row.id && setParams({ view: "resource", id: row.id });
+  const open = (row: MemoryResourceRow) => row.managed && row.id && setParams({ view: "resource", id: row.id });
 
   const columns: Column<MemoryResourceRow>[] = [
     {
@@ -148,12 +188,23 @@ export function ResourceList() {
       render: (row) => (
         <>
           <span className="v2-row" style={{ flexWrap: "nowrap" }}>
-            <LinkButton onClick={() => open(row)} testId={`v2-memory-res-${row.id ?? ""}`}>
-              <span className="ellipsis" style={{ maxWidth: 240 }} title={row.name ?? ""}>
+            {row.managed ? (
+              <LinkButton onClick={() => open(row)} testId={`v2-memory-res-${row.id ?? ""}`}>
+                <span className="ellipsis" style={{ maxWidth: 240 }} title={row.name ?? ""}>
+                  {row.name ?? "—"}
+                </span>
+              </LinkButton>
+            ) : (
+              <span className="ellipsis v2-muted" style={{ maxWidth: 240 }} title={row.name ?? ""} data-testid={`v2-memory-res-${row.id ?? ""}`}>
                 {row.name ?? "—"}
               </span>
-            </LinkButton>
+            )}
             {row.is_default && <Tag tone="orange">{t("v2.memory.res.default")}</Tag>}
+            {!row.managed && (
+              <Tag tone="outline" title={t("v2.memory.res.externalHint")}>
+                {t("v2.memory.res.external")}
+              </Tag>
+            )}
           </span>
           <span className="sub mono" title={row.arn ?? ""}>
             ID: {row.id ?? "—"}
@@ -178,12 +229,27 @@ export function ResourceList() {
       title: t("v2.common.actions"),
       className: "right",
       render: (row) => {
-        const block = deleteBlock(t, row);
+        if (!row.managed) {
+          // detected, not managed: only an administrator's adopt applies
+          return (
+            <div className="v2-actions">
+              {isAdmin ? (
+                <LinkButton disabled={!row.id || adopt.busy} onClick={() => adopt.ask(row)} testId="v2-memory-res-adopt">
+                  {t("v2.memory.res.adopt")}
+                </LinkButton>
+              ) : (
+                <span className="v2-muted">—</span>
+              )}
+            </div>
+          );
+        }
+        const block = mayManage ? deleteBlock(t, row) : t("v2.memory.res.noPermission");
         return (
           <div className="v2-actions">
             <LinkButton onClick={() => open(row)}>{t("v2.common.view")}</LinkButton>
             <LinkButton
-              disabled={!row.id || isTransient(row.status)}
+              disabled={!row.id || isTransient(row.status) || !mayManage}
+              title={mayManage ? undefined : t("v2.memory.res.noPermission")}
               onClick={() => row.id && setParams({ view: "resource-edit", id: row.id })}
               testId="v2-memory-res-edit"
             >
@@ -207,7 +273,13 @@ export function ResourceList() {
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>
-          <Button kind="primary" onClick={() => setParams({ view: "resource-new" })} testId="v2-memory-res-new">
+          <Button
+            kind="primary"
+            disabled={!mayManage}
+            title={mayManage ? undefined : t("v2.memory.res.noPermission")}
+            onClick={() => setParams({ view: "resource-new" })}
+            testId="v2-memory-res-new"
+          >
             <Plus size={14} aria-hidden="true" />
             {t("v2.memory.res.new")}
           </Button>
@@ -236,6 +308,7 @@ export function ResourceList() {
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
       </Card>
       {del.dialog}
+      {adopt.dialog}
     </>
   );
 }
@@ -283,6 +356,8 @@ function StrategyTable({ strategies }: { strategies: MemoryResourceStrategy[] })
 /** One memory resource: configuration, strategies, namespace keys and who uses it. */
 export function ResourceDetail({ id }: { id: string }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
+  const mayManage = can("memory.manage");
   const [, setParams] = useSearchParams();
   const [tick, setTick] = useState(0);
   const detail = useLoad(() => api.memoryResource(id), `memory-resource:${id}:${tick}`);
@@ -315,7 +390,13 @@ export function ResourceDetail({ id }: { id: string }) {
     );
   }
 
-  const block = row ? deleteBlock(t, row) : mem.is_default ? t("v2.memory.res.defaultProtected") : t("v2.memory.res.agentsUnknown");
+  const block = !mayManage
+    ? t("v2.memory.res.noPermission")
+    : row
+      ? deleteBlock(t, row)
+      : mem.is_default
+        ? t("v2.memory.res.defaultProtected")
+        : t("v2.memory.res.agentsUnknown");
 
   return (
     <>
@@ -333,7 +414,12 @@ export function ResourceDetail({ id }: { id: string }) {
         end={
           <>
             <Button onClick={() => setTick((n) => n + 1)}>{t("v2.common.refresh")}</Button>
-            <Button disabled={transient} onClick={() => setParams({ view: "resource-edit", id })} testId="v2-memory-res-edit">
+            <Button
+              disabled={transient || !mayManage}
+              title={mayManage ? undefined : t("v2.memory.res.noPermission")}
+              onClick={() => setParams({ view: "resource-edit", id })}
+              testId="v2-memory-res-edit"
+            >
               {t("v2.common.edit")}
             </Button>
             {!mem.is_default && (

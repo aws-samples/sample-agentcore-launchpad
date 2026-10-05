@@ -2989,6 +2989,19 @@ the IAM grant, and the platform's read-back paths (Chat memory rail,
 observability transcripts). `None` keeps the shared bootstrap memory, so every
 pre-existing spec is unaffected.
 
+**Ownership, not the account, bounds what a spec may pin** (issue #55). The spoke
+role holds `bedrock-agentcore:*` on `*`, so any memory in the account — another
+team's included — would otherwise be reachable by pinning its id.
+`services/memory_ownership.py` defines *managed*: the workspace's bootstrap memory,
+or a `managed_memories` ledger row written only when this console creates a memory
+or an administrator adopts one (`POST /api/memory/resources/{id}/adopt`). A pinned
+id must be managed and `ACTIVE` — checked at create / re-publish / convert time and
+again by `execute_deploy_job` before any stage, so the execution-role grant and the
+runtime binding never see a foreign id, whichever path started the job. Read-back
+refuses a legacy unmanaged pin rather than reading it. The lifecycle routes list
+unmanaged memories as *not managed* and answer `404 memory.not_managed` on every
+per-id route; writes ride the revocable `perm:memory.manage`.
+
 **Extraction is not a console surface.** Turning short-term events into long-term
 records is a job the AgentCore Memory service runs itself, asynchronously, from the
 strategies configured on the resource — the platform never starts one.

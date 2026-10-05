@@ -52,6 +52,8 @@ def _pre_p2_database(tmp_path):
         conn.execute(sa.text("DROP INDEX uq_agents_workspace_system_key"))
         # so does the system-skill registration index (SE-043)
         conn.execute(sa.text("DROP INDEX uq_system_skill_records_workspace_preset"))
+        # and the memory-ownership index (issue #55)
+        conn.execute(sa.text("DROP INDEX uq_managed_memories_workspace_memory"))
         for table in WORKSPACE_SCOPED_TABLES:
             conn.execute(sa.text(f"DROP INDEX ix_{table}_workspace_id"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))

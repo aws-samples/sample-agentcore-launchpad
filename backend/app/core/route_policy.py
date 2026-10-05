@@ -32,6 +32,11 @@ bases, governance, evaluation datasets/evaluators, experiments, canaries, API ke
 studio local exec, tools/demos, prices refresh) is now `MEMBER`; only `/api/users*`
 still requires an administrator. The `perm:*` entries keep their revocation
 semantics unchanged.
+Amended 2026-10-04 (issue #55): creating, editing and deleting AgentCore Memory
+resources (`/api/memory/resources` writes) is member-grantable via
+`perm:memory.manage` on the same default-granted, revocable terms — DeleteMemory
+is irreversible — and those routes reach only memories the workspace manages.
+Adopting an existing account memory into management is `ADMIN`.
 Since 2026-08-12 the table carries a **second dimension**: whether a route
 operates inside a workspace (one account/region environment). `WORKSPACE_EXEMPT`
 names the hub-global routes; every other entry is workspace-scoped, and
@@ -79,6 +84,7 @@ PERM_AGENT_IMPORT = "perm:agents.import"
 PERM_AGENT_DELETE = "perm:agents.delete"
 PERM_AGENT_CONVERT = "perm:agents.convert"
 PERM_EVAL_RUN = "perm:eval.run"
+PERM_MEMORY_MANAGE = "perm:memory.manage"
 _PERM_PREFIX = "perm:"
 
 API_PREFIX = "/api"
@@ -391,10 +397,15 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/memory/records/search"): MEMBER,  # a search, not a mutation
     ("GET", "/api/memory/sessions"): MEMBER,
     ("GET", "/api/memory/resources"): MEMBER,
-    ("POST", "/api/memory/resources"): MEMBER,  # creates an AgentCore Memory resource
-    ("GET", "/api/memory/resources/{memory_id}"): MEMBER,
-    ("PUT", "/api/memory/resources/{memory_id}"): MEMBER,  # description / event expiry
-    ("DELETE", "/api/memory/resources/{memory_id}"): MEMBER,
+    # creates a billable AgentCore Memory resource, registered as managed
+    ("POST", "/api/memory/resources"): PERM_MEMORY_MANAGE,
+    ("GET", "/api/memory/resources/{memory_id}"): MEMBER,  # managed memories only
+    # description / event expiry; managed memories only
+    ("PUT", "/api/memory/resources/{memory_id}"): PERM_MEMORY_MANAGE,
+    # irreversible (every event and record goes); managed memories only
+    ("DELETE", "/api/memory/resources/{memory_id}"): PERM_MEMORY_MANAGE,
+    # brings a memory the platform did not create under workspace management
+    ("POST", "/api/memory/resources/{memory_id}/adopt"): ADMIN,
     ("GET", "/api/observability/dashboard"): MEMBER,
     ("GET", "/api/observability/sessions"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}"): MEMBER,

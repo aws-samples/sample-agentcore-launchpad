@@ -2362,7 +2362,10 @@
     "dataset.kind_unsupported": "模拟用户数据集不能接收观测到的轨迹。",
     "pipeline.running": "该 Pipeline 正在运行中。",
     "pipeline.not_found": "Pipeline 不存在。",
-    "agent.converted_locked": "转换来的 Agent 的系统提示词和模型已写入导出的代码，重新部署时不能修改。"
+    "agent.converted_locked": "转换来的 Agent 的系统提示词和模型已写入导出的代码，重新部署时不能修改。",
+    "memory.not_managed": "该记忆资源不由本工作区管理——只能在列表中看到，无法打开、编辑或删除。管理员可以将其纳管。",
+    "agent.memory_not_managed": "所选记忆资源不由本工作区管理。请从记忆资源列表中选择，或请管理员将其纳管。",
+    "agent.memory_not_active": "所选记忆资源尚未处于 ACTIVE 状态——请等待创建完成后重试。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -3995,7 +3998,15 @@
       "saveBodyAgents": "使用该记忆的 Agent（{{count}} 个）：{{names}}。",
       "updated": "记忆 {{id}} 已更新。",
       "updateFailed": "更新失败：{{msg}}",
-      "note": "平台默认记忆由引导脚本创建，无法在此删除。Agent 在创建/重新发布时选择记忆；已有 Agent 仍写入其当前记忆。"
+      "note": "平台默认记忆由引导脚本创建，无法在此删除。Agent 在创建/重新发布时选择记忆；已有 Agent 仍写入其当前记忆。",
+      "external": "未纳管",
+      "externalHint": "在本账号中检测到，但不由本工作区管理：无法打开、编辑、删除，也不能被智能体选用。管理员可以将其纳管。",
+      "adopt": "纳管",
+      "adoptTitle": "纳管记忆资源",
+      "adoptBody": "将 {{id}} 纳入本工作区管理？之后拥有 memory.manage 权限的成员可以将其绑定到智能体、编辑和删除——删除会清除全部事件和记录。",
+      "adopted": "{{id}} 已由本工作区管理。",
+      "adoptFailed": "纳管失败：{{msg}}",
+      "noPermission": "你的账号缺少 memory.manage 权限。"
     },
     "overview": {
       "actorsTile": "参与者",
@@ -4112,7 +4123,7 @@
     "deleted": "已删除 {{username}}。",
     "permissionsUpdated": "已更新 {{username}} 的权限。",
     "permissionsAll": "全部（管理员）",
-    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部四项。",
+    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部各项。",
     "workspacesAll": "全部（管理员）",
     "workspacesHint": "工作区访问权限——点击授予或收回。管理员按角色可访问所有工作区。",
     "workspacesUpdated": "已更新 {{username}} 的工作区访问权限。",
@@ -4123,7 +4134,8 @@
       "import": "导入",
       "delete": "删除",
       "convert": "转换",
-      "run": "评估运行"
+      "run": "评估运行",
+      "manage": "记忆资源"
     },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",
@@ -6518,7 +6530,15 @@
         "nsKeys": "命名空间变量",
         "nsKey": "键",
         "nsValues": "允许值",
-        "nsRegex": "正则模式"
+        "nsRegex": "正则模式",
+        "external": "未纳管",
+        "externalHint": "在本账号中检测到，但不由本工作区管理：无法打开、编辑、删除，也不能被智能体选用。管理员可以将其纳管。",
+        "adopt": "纳管",
+        "adoptTitle": "纳管记忆资源",
+        "adoptBody": "将 {{id}} 纳入本工作区管理？之后拥有 memory.manage 权限的成员可以将其绑定到智能体、编辑和删除——删除会清除全部事件和记录。",
+        "adopted": "{{id}} 已由本工作区管理。",
+        "adoptFailed": "纳管失败：{{msg}}",
+        "noPermission": "你的账号缺少 memory.manage 权限。"
       }
     },
     "observability": {
@@ -7279,7 +7299,8 @@
         "import": "导入",
         "delete": "删除",
         "convert": "转换",
-        "run": "评估运行"
+        "run": "评估运行",
+        "manage": "记忆资源"
       }
     },
     "workspaces": {

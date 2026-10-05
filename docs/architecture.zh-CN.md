@@ -1680,6 +1680,8 @@ ingestion 失败时才暴露。
 | `long-term` | 解析出的命名空间下的记录,以及带相关度评分的语义检索 | `ListMemoryRecords`、`RetrieveMemoryRecords` |
 | `resources` | 账号/区域内的全部记忆(标出工作区默认记忆,以及 spec 绑定了每个记忆的 Agent);创建记忆(名称、描述、事件过期、与引导布局一致的策略选择,以及——目前仅 API 可用——最多 5 个灵活命名空间变量键:CreateMemory `namespaceKeys`,控制台表单通过 `ResourcesTab.tsx` 的 `SHOW_NS_KEYS` 隐藏该编辑器);行内编辑描述与事件过期(7–365 天)——`UpdateMemory` 只发送 `memoryId` 加实际改动的字段,**绝不**发送 `namespaceKeys`(API 文档写明该字段整体替换现有集合,漏掉的键会被删除),随后用 `GetMemory` 读回详情;策略、命名空间变量与执行角色不可编辑,编辑不会被阻止,确认对话框会列出使用该记忆的 Agent(缩短过期窗口会影响它们全部);删除记忆——工作区默认记忆与仍被在线 Agent 引用的记忆受删除保护 | `ListMemories`、`GetMemory`、`CreateMemory`、`UpdateMemory`、`DeleteMemory` |
 
+**约束 spec 可绑定范围的是归属,而不是账号**(issue #55)。spoke 角色在 `*` 上持有 `bedrock-agentcore:*`,否则只要填入 id,账号内任何记忆——包括其他团队的——都可被绑定。`services/memory_ownership.py` 定义*已纳管*:工作区的 bootstrap 记忆,或 `managed_memories` 账本行登记的记忆——该行只在本控制台创建记忆、或管理员纳管(`POST /api/memory/resources/{id}/adopt`)时写入。被绑定的 id 必须已纳管且为 `ACTIVE`:在创建、重新发布、转换时检查,`execute_deploy_job` 在任何阶段之前再查一次,因此无论哪条路径启动作业,执行角色授权与运行时绑定都不会见到外部 id。读回路径对绑定了未纳管 id 的旧 spec 直接拒绝,而不是去读它。生命周期路由把未纳管的记忆列为*未纳管*,所有按 id 的路由返回 `404 memory.not_managed`;写操作走可撤销的 `perm:memory.manage`。
+
 `ListEvents` 的载荷条目是一个标签联合：`conversational`、`blob`，以及自 2026 年 8 月
 Memory 发布起新增的 `json`（`{json: {content: <任意 JSON 值>}}`）。控制台把每条投影为
 `{kind, role, text, parts, blob_bytes}`：`json` 条目的 `role` 保持为 null（它是 Agent 存下的

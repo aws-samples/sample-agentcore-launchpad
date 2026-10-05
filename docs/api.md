@@ -620,11 +620,23 @@ Memory resource management (`?view=resources`):
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/api/memory/resources` | Every memory in the workspace's account/region, default first, each with the live agents whose spec pins it |
-| `POST` | `/api/memory/resources` | `CreateMemory` (`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`) → `201` with the detail projection in `CREATING` state |
+| `GET` | `/api/memory/resources` | Every memory in the workspace's account/region, default first, each with the live agents whose spec pins it and `managed` (see below) |
+| `POST` | `/api/memory/resources` | `perm:memory.manage`. `CreateMemory` (`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`) → `201` with the detail projection in `CREATING` state; the new id is registered as managed |
 | `GET` | `/api/memory/resources/{memory_id}` | Detail projection: description, status, event expiry, execution role, strategies, namespace keys |
-| `PUT` | `/api/memory/resources/{memory_id}` | `UpdateMemory` limited to `{description?, event_expiry_days?}` — at least one required (422 otherwise), `description` 1–4096 chars (it can be replaced, not cleared), `event_expiry_days` 7–365 (422 outside). Sends exactly `memoryId` + the given fields and never `namespaceKeys` (the API replaces that set wholesale); the reply is the detail projection read back with `GetMemory`. Not blocked by referencing agents or the platform default; unknown id → `404 aws.not_found` |
-| `DELETE` | `/api/memory/resources/{memory_id}` | `DeleteMemory`; `409 memory.platform_protected` for the workspace default, `409 memory.in_use` (with the agents) while a live agent's spec pins it |
+| `POST` | `/api/memory/resources/{memory_id}/adopt` | **admin**. Registers an existing account memory as managed by the workspace (after `GetMemory` resolves it — unknown id → `404 aws.not_found`); idempotent; replies with the detail projection |
+| `PUT` | `/api/memory/resources/{memory_id}` | `perm:memory.manage`. `UpdateMemory` limited to `{description?, event_expiry_days?}` — at least one required (422 otherwise), `description` 1–4096 chars (it can be replaced, not cleared), `event_expiry_days` 7–365 (422 outside). Sends exactly `memoryId` + the given fields and never `namespaceKeys` (the API replaces that set wholesale); the reply is the detail projection read back with `GetMemory`. Not blocked by referencing agents or the platform default; unknown id → `404 aws.not_found` |
+| `DELETE` | `/api/memory/resources/{memory_id}` | `perm:memory.manage`. `DeleteMemory` (irreversible); `409 memory.platform_protected` for the workspace default, `409 memory.in_use` (with the agents) while a live agent's spec pins it; the managed registration is dropped |
+
+**Ownership.** The account can hold memories the platform never created, so a
+memory is *managed* only when it is the workspace's bootstrap memory or a
+`managed_memories` ledger row names it (written by `POST` above or by an
+administrator's adopt — never from a client payload). Every per-id route answers
+`404 memory.not_managed` for any other id, before any AWS call; the list still
+shows such memories with `managed: false`. A spec's `memory.memory_id` must be
+managed and `ACTIVE`: `POST /api/agents`, re-publish and convert refuse it with
+`422 agent.memory_not_managed` / `409 agent.memory_not_active`, and the deploy job
+re-checks before any stage. The Chat memory rail answers
+`409 agent.memory_not_managed` for a legacy spec pinning an unmanaged id.
 
 Every list route accepts and returns `next_token` (AWS pages at 100 items) and
 accepts `max_results` (clamped to 100) — nothing is capped silently. Namespace

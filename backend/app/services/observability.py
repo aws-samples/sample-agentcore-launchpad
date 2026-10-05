@@ -27,7 +27,7 @@ from app.core.errors import AppError
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.optimization.models import Experiment
-from app.services import memory
+from app.services import memory, memory_ownership
 from app.services.agentcore import evaluation as agentcore_evaluation
 from app.services.agentcore.client import data_client
 from app.services.workspace import WorkspaceContext
@@ -1831,16 +1831,25 @@ def session_transcript(
         agent = db.get(Agent, run.agent_id)
         mem_actor = "default"
         agent_id, actor_display = run.agent_id, mem_actor
-    memory_error = None
-    # an agent whose spec pins its own memory writes its turns there
-    mem_override = memory.spec_memory_id(agent.spec if agent else None)
+    memory_error: Exception | None = None
+    events: list[dict[str, Any]] = []
+    # an agent whose spec pins its own memory writes its turns there — read only
+    # from a memory this workspace manages (issue #55)
+    mem_override: str | None = None
     try:
-        events = memory.list_events(
-            workspace, mem_actor, session_id, max_results=100, memory_id=mem_override
+        mem_override = memory_ownership.readable_spec_memory_id(
+            db, workspace, agent.spec if agent else None
         )
-    except Exception as exc:
-        memory_error = exc
-        events = []  # chat may fall back to its ledger; eval may use content logs
+        readable = True
+    except AppError as exc:
+        memory_error, readable = exc, False
+    if readable:
+        try:
+            events = memory.list_events(
+                workspace, mem_actor, session_id, max_results=100, memory_id=mem_override
+            )
+        except Exception as exc:
+            memory_error = exc  # chat may fall back to its ledger; eval to content logs
     turns = _turns_from_events(events)
     origin = "memory"
     if row is not None:
@@ -1875,7 +1884,7 @@ def session_transcript(
     # shares the bare "default" actor, so its namespaces aggregate across
     # every agent's runs and say nothing about this session.
     long_term = None
-    if row is not None:
+    if row is not None and readable:
         try:
             long_term = sum(
                 len(

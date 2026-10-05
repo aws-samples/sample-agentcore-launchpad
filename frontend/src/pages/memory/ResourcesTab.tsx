@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useAuth } from "../../auth/auth-context";
+
 import { Btn, Chip, ConfirmDialog, DataTable, Panel, useToast } from "../../components";
 import type {
   MemoryNamespaceKeyInput,
@@ -143,6 +145,9 @@ interface EditDraft {
 export function ResourcesTab() {
   const { t } = useTranslation();
   const toast = useToast();
+  const { can, isAdmin } = useAuth();
+  const mayManage = can("memory.manage");
+  const noPermission = mayManage ? undefined : t("memoryPage.resources.noPermission");
 
   const [rows, setRows] = useState<MemoryResourceRow[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -156,6 +161,7 @@ export function ResourcesTab() {
   const [nsKeys, setNsKeys] = useState<NsKeyDraft[]>([]);
   const [creating, setCreating] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<MemoryResourceRow | null>(null);
+  const [pendingAdopt, setPendingAdopt] = useState<MemoryResourceRow | null>(null);
   const [edit, setEdit] = useState<EditDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmSave, setConfirmSave] = useState(false);
@@ -383,6 +389,24 @@ export function ResourcesTab() {
         .join(" ")
     : "";
 
+  const adopt = (row: MemoryResourceRow) => {
+    if (!row.id) return;
+    api
+      .memoryResourceAdopt(row.id)
+      .then(() => {
+        toast(t("memoryPage.resources.adopted", { id: row.id }), "good");
+        load();
+      })
+      .catch((err: unknown) => {
+        toast(
+          t("memoryPage.resources.adoptFailed", {
+            msg: err instanceof Error ? err.message : String(err),
+          }),
+          "crit",
+        );
+      });
+  };
+
   const remove = (row: MemoryResourceRow) => {
     if (!row.id) return;
     api
@@ -437,6 +461,11 @@ export function ResourcesTab() {
                       {m.is_default && (
                         <Chip tone="amber">{t("memoryPage.resources.defaultBadge")}</Chip>
                       )}
+                      {!m.managed && (
+                        <span title={t("memoryPage.resources.externalHint")}>
+                          <Chip>{t("memoryPage.resources.external")}</Chip>
+                        </span>
+                      )}
                     </div>
                     <div className="mono dim" title={m.arn ?? ""}>
                       {shortId(m.id, 18)}
@@ -452,28 +481,42 @@ export function ResourcesTab() {
                   </td>
                   <td className="mono">{stamp(m.created_at)}</td>
                   <td>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <Btn
-                        onClick={() => (edit?.row.id === m.id ? setEdit(null) : openEdit(m))}
-                        disabled={!m.id || saving}
-                        data-testid="memory-resource-edit"
-                      >
-                        {t("memoryPage.resources.edit")}
-                      </Btn>
-                      {!m.is_default && (
+                    {!m.managed ? (
+                      // detected, not managed: only an administrator's adopt applies
+                      isAdmin && (
                         <Btn
-                          onClick={() => setPendingDelete(m)}
-                          disabled={m.agents.length > 0}
-                          title={
-                            m.agents.length > 0
-                              ? t("memoryPage.resources.inUseHint")
-                              : undefined
-                          }
+                          onClick={() => setPendingAdopt(m)}
+                          disabled={!m.id}
+                          data-testid="memory-resource-adopt"
                         >
-                          {t("memoryPage.resources.delete")}
+                          {t("memoryPage.resources.adopt")}
                         </Btn>
-                      )}
-                    </div>
+                      )
+                    ) : (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <Btn
+                          onClick={() => (edit?.row.id === m.id ? setEdit(null) : openEdit(m))}
+                          disabled={!m.id || saving || !mayManage}
+                          disabledReason={noPermission}
+                          data-testid="memory-resource-edit"
+                        >
+                          {t("memoryPage.resources.edit")}
+                        </Btn>
+                        {!m.is_default && (
+                          <Btn
+                            onClick={() => setPendingDelete(m)}
+                            disabled={m.agents.length > 0 || !mayManage}
+                            title={
+                              m.agents.length > 0
+                                ? t("memoryPage.resources.inUseHint")
+                                : noPermission
+                            }
+                          >
+                            {t("memoryPage.resources.delete")}
+                          </Btn>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
                 {edit && edit.row.id === m.id && (
@@ -679,7 +722,8 @@ export function ResourcesTab() {
           <Btn
             primary
             onClick={create}
-            disabled={!nameValid || !expiryValid || !nsValid || creating}
+            disabled={!nameValid || !expiryValid || !nsValid || creating || !mayManage}
+            disabledReason={noPermission}
             data-testid="memory-resource-create"
           >
             {creating
@@ -705,6 +749,18 @@ export function ResourcesTab() {
           setPendingDelete(null);
         }}
         onCancel={() => setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingAdopt !== null}
+        title={t("memoryPage.resources.adoptTitle")}
+        body={t("memoryPage.resources.adoptBody", { id: pendingAdopt?.id ?? "" })}
+        confirmLabel={t("memoryPage.resources.adopt")}
+        onConfirm={() => {
+          if (pendingAdopt) adopt(pendingAdopt);
+          setPendingAdopt(null);
+        }}
+        onCancel={() => setPendingAdopt(null)}
       />
 
       <ConfirmDialog

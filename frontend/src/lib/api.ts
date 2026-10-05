@@ -2071,6 +2071,10 @@ export interface MemoryResourceRow {
   is_default: boolean;
   /** live agents whose spec pins this memory (default users excluded) */
   agents: { id: string; name: string }[];
+  /** the workspace manages it (bootstrap, console-created or adopted). Anything
+   *  else in the account is detected, not managed: no detail/edit/delete, and no
+   *  agent may pin it — an administrator can adopt it. */
+  managed: boolean;
 }
 
 export interface MemoryResourceList {
@@ -2111,6 +2115,8 @@ export interface MemoryResourceDetail {
   is_default: boolean;
   strategies: MemoryResourceStrategy[];
   namespace_keys: MemoryResourceNamespaceKey[];
+  /** always true — the per-id routes answer 404 `memory.not_managed` otherwise */
+  managed: boolean;
 }
 
 /** `PUT /api/memory/resources/{id}` — both optional, at least one required.
@@ -2563,7 +2569,8 @@ export type AgentPermission =
   | "agents.import"
   | "agents.delete"
   | "agents.convert"
-  | "eval.run";
+  | "eval.run"
+  | "memory.manage";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
@@ -2571,6 +2578,7 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.delete",
   "agents.convert",
   "eval.run",
+  "memory.manage",
 ];
 
 export interface AuthStatus {
@@ -4691,6 +4699,13 @@ export const api = {
     request<{ deleted: boolean; id: string }>(
       `/api/memory/resources/${encodeURIComponent(memoryId)}`,
       { method: "DELETE" },
+    ),
+  /** `POST /api/memory/resources/{id}/adopt` — administrator only: brings an
+   *  existing account memory under this workspace's management. */
+  memoryResourceAdopt: (memoryId: string) =>
+    request<MemoryResourceDetail>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}/adopt`,
+      { method: "POST" },
     ),
   // NOTE: `GET /api/memory/extraction-jobs` exists on the backend but is not
   // surfaced in the console — the AWS list only ever returns FAILED jobs

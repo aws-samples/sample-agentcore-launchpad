@@ -3340,7 +3340,8 @@ const deployLock = !canDeploy
               >
                 <option value="">{t("create.configure.memoryDefault")}</option>
                 {memoryOptions
-                  .filter((m) => m.id && !m.is_default)
+                  // only memories this workspace manages may be pinned
+                  .filter((m) => m.id && !m.is_default && m.managed)
                   .map((m) => (
                     <option
                       key={m.id}
@@ -3353,9 +3354,15 @@ const deployLock = !canDeploy
                   ))}
                 {/* an edited spec may pin a memory that has since vanished from
                     the list — keep it selectable so re-publish round-trips */}
-                {memoryId && !memoryOptions.some((m) => m.id === memoryId) && (
-                  <option value={memoryId}>{memoryId}</option>
-                )}
+                {memoryId &&
+                  !memoryOptions.some((m) => m.id === memoryId && m.managed) && (
+                    <option value={memoryId}>
+                      {memoryId}
+                      {memoryOptions.some((m) => m.id === memoryId)
+                        ? ` (${t("memoryPage.resources.external")})`
+                        : ""}
+                    </option>
+                  )}
               </select>
               <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
                 {t("create.configure.memoryResourceHint")}

@@ -35,6 +35,7 @@ AGENT_PERMISSIONS = (
     "agents.delete",
     "agents.convert",
     "eval.run",
+    "memory.manage",
 )
 
 # --- password hashing -------------------------------------------------------
