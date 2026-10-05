@@ -1,3 +1,5 @@
+import { evaluatorPolarity } from "./evaluators";
+
 export interface EvaluationDatasetInfo {
   id: string;
   name: string;
@@ -18,6 +20,25 @@ export interface CloudDatasetInfo {
 export interface EvaluationScore {
   evaluatorId: string;
   score: number;
+  /** Judgements this average covers (AWS `totalEvaluated`); absent on rows
+   *  recorded before it was stored. */
+  count?: number;
+}
+
+/** A run's cross-evaluator mean on the task detail's 0..1 "higher is better"
+ *  scale: penalty evaluators (Refusal) are flipped, and each evaluator weighs by
+ *  the judgements it averages (1 when `count` is absent), so it matches the
+ *  normalized mean over every result row. */
+export function runMeanScore(scores: EvaluationScore[]): number | null {
+  let total = 0;
+  let weight = 0;
+  for (const s of scores) {
+    if (typeof s.score !== "number") continue;
+    const w = s.count && s.count > 0 ? s.count : 1;
+    total += (evaluatorPolarity(s.evaluatorId) < 0 ? 1 - s.score : s.score) * w;
+    weight += w;
+  }
+  return weight > 0 ? total / weight : null;
 }
 
 export interface InsightCluster {

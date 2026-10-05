@@ -497,7 +497,8 @@ def _finish_from_result(
         parsed = (
             {"insights": ac.parse_insights(result)}
             if mode == "insights"
-            else {"scores": ac.parse_eval_scores(result)}
+            else {"scores": ac.parse_eval_scores(
+                result, records_reader=_records_reader(workspace, result))}
         )
         _update(run_id, status="stopped", error=reason[:500], **parsed)
         return
@@ -526,8 +527,18 @@ def _finish_from_result(
         _update(run_id, status="completed", insights=ac.parse_insights(result),
                 error=error)
     else:
-        _update(run_id, status="completed", scores=ac.parse_eval_scores(result),
-                error=error)
+        scores = ac.parse_eval_scores(
+            result, records_reader=_records_reader(workspace, result))
+        _update(run_id, status="completed", scores=scores, error=error)
+
+
+def _records_reader(workspace: WorkspaceContext | None, result: dict[str, Any]) -> Any:
+    """Lazy reader of a finished batch's results-stream records, for the
+    evaluators AWS summarises without an average (``parse_eval_scores``)."""
+    location = ac.results_stream(result)
+    if workspace is None or location is None:
+        return None
+    return lambda: ac.read_result_records(workspace.client("logs"), *location)
 
 
 def reconcile_run(
