@@ -3,8 +3,9 @@
 import pytest
 
 import app.routers.agents as agents_router
-from app.core.db import SessionLocal
-from app.models.ledger import Agent
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.models.ledger import Agent, UserGrant
+from app.services import oauth_sessions
 
 SPEC = {
     "name": "api-test-agent",
@@ -134,10 +135,19 @@ def test_delete_marks_ledger(client, monkeypatch):
         lambda agent, _ws: deleted.append(agent.name),
     )
     agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
+    db = SessionLocal()
+    oauth_sessions.record_pending(
+        db, DEFAULT_WORKSPACE_ID, session_uri="urn:s1", provider="team-idp",
+        user_id="alice", agent_id=agent_id, tool="t", scopes=["openid"],
+    )
     res = client.delete(f"/api/agents/{agent_id}")
     assert res.status_code == 200 and res.json()["deleted"] is True
     assert deleted == ["api-test-agent"]
     assert client.get("/api/agents").json()["agents"] == []  # deleted rows hidden
+    # its workload identity is gone, so are the users' grants on it
+    db.expire_all()
+    assert db.query(UserGrant).filter_by(agent_id=agent_id).count() == 0
+    db.close()
 
 
 def _activate(agent_id: str) -> None:

@@ -392,6 +392,10 @@ Error codes (all under `apiErrors.<code>` in the console):
   agent), with status. Revoke goes through a ConfirmDialog, is busy while the call
   runs, and is disabled while a revocation is in force or without
   `identity.grant`.
+  Deleting an agent drops every user's grants on it (its workload identity, and
+  every vaulted token keyed by it, goes with the runtime); deleting a Connection
+  drops its grants, revocations and in-flight consents. Grants of an agent
+  deleted before that cleanup existed are hidden from the list.
 - **Agent wizard**: an OAuth2 tool can pick the acting mode `as_user`. An api_key
   tool cannot.
 

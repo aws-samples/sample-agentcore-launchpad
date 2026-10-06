@@ -39,7 +39,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import OauthPendingSession, UserGrant, UserTokenRevocation
+from app.models.ledger import Agent, OauthPendingSession, UserGrant, UserTokenRevocation
 
 logger = logging.getLogger(__name__)
 
@@ -442,11 +442,49 @@ def _grant_view(grant: UserGrant, revocation: UserTokenRevocation | None) -> dic
     }
 
 
+def forget_agent(db: Session, workspace_id: str, agent_id: str) -> int:
+    """Drop every user's grant and in-flight consent for a deleted agent.
+
+    The vault keys a 3LO token by the agent's workload identity, which the
+    Runtime deletes with the agent — so its grants no longer describe anything
+    the user could revoke. Caller commits."""
+    db.query(OauthPendingSession).filter(
+        OauthPendingSession.workspace_id == workspace_id,
+        OauthPendingSession.agent_id == agent_id,
+    ).delete(synchronize_session=False)
+    return (
+        db.query(UserGrant)
+        .filter(UserGrant.workspace_id == workspace_id, UserGrant.agent_id == agent_id)
+        .delete(synchronize_session=False)
+    )
+
+
+def forget_connection(db: Session, workspace_id: str, provider: str) -> int:
+    """Drop every user's grants, revocation and in-flight consents for a deleted
+    Connection: the credential provider (and its vaulted tokens) is gone. Caller
+    commits."""
+    for model in (OauthPendingSession, UserTokenRevocation):
+        db.query(model).filter(
+            model.workspace_id == workspace_id, model.provider == provider
+        ).delete(synchronize_session=False)
+    return (
+        db.query(UserGrant)
+        .filter(UserGrant.workspace_id == workspace_id, UserGrant.provider == provider)
+        .delete(synchronize_session=False)
+    )
+
+
 def list_grants(db: Session, workspace_id: str, *, user_id: str) -> list[dict[str, Any]]:
-    """The caller's own grants, newest first. Never another user's."""
+    """The caller's own grants, newest first. Never another user's.
+
+    Grants of a deleted agent are hidden: rows left by a delete that predates
+    ``forget_agent`` would otherwise read "authorized" forever."""
     rows = (
         db.query(UserGrant)
+        .outerjoin(Agent, Agent.id == UserGrant.agent_id)
         .filter(UserGrant.workspace_id == workspace_id, UserGrant.user_id == user_id)
+        # a deleted agent keeps its ledger row (status "deleted"): that is the tombstone
+        .filter(Agent.id.is_(None) | (Agent.status != "deleted"))
         .order_by(UserGrant.updated_at.desc())
         .all()
     )

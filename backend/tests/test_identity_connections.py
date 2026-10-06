@@ -11,8 +11,9 @@ from botocore.exceptions import ClientError
 import app.routers.identity as identity_router
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import Agent, IdentityProvider
+from app.models.ledger import Agent, IdentityProvider, UserGrant
 from app.services import identity_providers as ip
+from app.services import oauth_sessions
 
 VAULT = "arn:aws:bedrock-agentcore:us-west-2:111:token-vault/default"
 OAUTH_ARN = f"{VAULT}/oauth2credentialprovider/team-idp"
@@ -279,9 +280,14 @@ def test_delete_removes_provider_and_audit_row(db):
     control.list_oauth2_credential_providers.return_value = {
         "credentialProviders": [{"name": "team-idp"}]
     }
+    oauth_sessions.record_pending(
+        db, DEFAULT_WORKSPACE_ID, session_uri="urn:s1", provider="team-idp",
+        user_id="alice", agent_id="a1", tool="t", scopes=["openid"],
+    )
     ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "oauth2", "team-idp")
     control.delete_oauth2_credential_provider.assert_called_once_with(name="team-idp")
     assert db.query(IdentityProvider).filter_by(name="team-idp").first() is None
+    assert db.query(UserGrant).filter_by(provider="team-idp").count() == 0
 
 
 def test_delete_refuses_system_connections(db):

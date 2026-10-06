@@ -41,6 +41,7 @@ from app.services import (
     byoc_uploads,
     identity_providers,
     memory_ownership,
+    oauth_sessions,
 )
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
@@ -744,6 +745,8 @@ def delete_agent_row(db: Session, agent: Agent, workspace: WorkspaceContext) -> 
     # Before the AWS teardown: a refused delete must leave the harness untouched.
     system_agents.refuse_system_mutation(agent, "delete")
     aws_resource_deleted = _delete_agent_resources(agent, workspace)
+    # its workload identity (and every 3LO token keyed by it) went with the runtime
+    oauth_sessions.forget_agent(db, agent.workspace_id, agent.id)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
     agent_names.release_agent_name(db, agent.workspace_id, agent.name, agent.id)
