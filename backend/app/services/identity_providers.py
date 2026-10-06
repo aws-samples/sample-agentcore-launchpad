@@ -30,7 +30,7 @@ from app.schemas.inbound_auth import (
     issuer_from_discovery_url,
     normalize_issuer,
 )
-from app.services import inbound_auth
+from app.services import inbound_auth, oauth_sessions
 from app.services.gateway_bootstrap import (
     API_KEY_PROVIDER_NAME,
     GATEWAY_M2M_PROVIDER_NAME,
@@ -870,4 +870,6 @@ def delete_connection(
         else:
             control.delete_api_key_credential_provider(name=name)
     db.delete(row)
+    # the provider and its vaulted tokens are gone: so is every user's grant on it
+    oauth_sessions.forget_connection(db, workspace_id, name)
     db.commit()

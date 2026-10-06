@@ -21,7 +21,13 @@ from app.core.errors import AppError, NotFoundError
 from app.deployer import return_url
 from app.deployer.environment import ENV_AGENT_ID, ENV_OAUTH_RETURN_URL, runtime_environment
 from app.main import create_app
-from app.models.ledger import Agent, ChatMessage, OauthPendingSession, UserGrant
+from app.models.ledger import (
+    Agent,
+    ChatMessage,
+    OauthPendingSession,
+    UserGrant,
+    UserTokenRevocation,
+)
 from app.schemas.agent import AgentSpec
 from app.services import identity_providers as ip
 from app.services import invoke as invoke_service
@@ -224,6 +230,39 @@ def test_list_grants_is_the_callers_own_only(db):
         ("team-idp", "a1", "pending")
     ]
     assert oauth_sessions.list_grants(db, WS, user_id="carol") == []
+
+
+def test_grants_of_a_deleted_agent_are_hidden_and_forgotten_on_delete(db):
+    gone = Agent(workspace_id=WS, name="gone-agent", method="zip_runtime", status="deleted")
+    live = Agent(workspace_id=WS, name="live-agent", method="zip_runtime", status="active")
+    db.add_all([gone, live])
+    db.commit()
+    _record(db, user="alice", agent=gone.id, session="s-gone")
+    _record(db, user="alice", agent=live.id, session="s-live")
+    # a stale row (deleted before forget_agent existed) never lists
+    assert [g["agent_id"] for g in oauth_sessions.list_grants(db, WS, user_id="alice")] == [
+        live.id
+    ]
+    assert oauth_sessions.forget_agent(db, WS, gone.id) == 1
+    db.commit()
+    assert db.query(UserGrant).filter_by(agent_id=gone.id).count() == 0
+    assert db.query(OauthPendingSession).filter_by(agent_id=gone.id).count() == 0
+    assert db.query(UserGrant).filter_by(agent_id=live.id).count() == 1
+
+
+def test_forget_connection_drops_its_grants_revocations_and_sessions(db):
+    _record(db, user="alice", provider="team-idp", session="s1")
+    _record(db, user="bob", provider="team-idp", agent="a2", session="s2")
+    _record(db, user="alice", provider="other-idp", session="s3")
+    oauth_sessions.revoke(db, WS, user_id="alice", provider="team-idp")
+    assert oauth_sessions.forget_connection(db, WS, "team-idp") == 2
+    db.commit()
+    assert db.query(UserGrant).filter_by(provider="team-idp").count() == 0
+    assert db.query(UserTokenRevocation).filter_by(provider="team-idp").count() == 0
+    assert db.query(OauthPendingSession).filter_by(provider="team-idp").count() == 0
+    assert [g["connection"] for g in oauth_sessions.list_grants(db, WS, user_id="alice")] == [
+        "other-idp"
+    ]
 
 
 def test_user_grants_table_is_in_the_schema_without_drift():
