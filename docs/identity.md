@@ -170,7 +170,9 @@ tables and columns are used by the later phases: `oauth_pending_sessions` and
 
 `identity.manage` is a member-grantable permission (default granted, revocable
 per user in Users). It gates Connection create/delete and Gateway target
-create/delete. Reads are plain member. The v2 Connections page lives in the admin
+create/delete. Reads are plain member. The v2 page (`/v2/connections`, shown in the
+console as **Outbound credentials** / 出站凭证 — each entry a credential / 凭证; the
+API and this document keep the name Connection) lives in the admin
 navigation group, but a member who holds the permission can use it by URL.
 
 ## 3. Gateway targets bound to a Connection
@@ -271,7 +273,7 @@ The v2 page is `/v2/agents?view=identity&id=<agent>`.
 
 - Secret rotation through `Update*CredentialProvider`. The API exists (§1.1,
   re-confirmed in §8.4); a console action is deferred.
-- `as_user` (3LO), `My connections`, revocation (all shipped in P2, §7), inbound
+- `as_user` (3LO), `My authorizations`, revocation (all shipped in P2, §7), inbound
   JWT, and `obo` (shipped in P3, §8).
 - Per-Connection workspace visibility. A Connection is scoped to its workspace's
   token vault by construction.
@@ -388,7 +390,7 @@ Error codes (all under `apiErrors.<code>` in the console):
   - Runs leg 4 and removes the spent `session_id` from the address bar.
   - Shows binding / done / failed, with the mapped error code.
   - Offers a way back to the chat named in the `state`.
-- **My connections** (`/v2/my-connections`): the caller's grants per (Connection,
+- **My authorizations** / 我的授权 (`/v2/my-connections`): the caller's grants per (Connection,
   agent), with status. Revoke goes through a ConfirmDialog, is busy while the call
   runs, and is disabled while a revocation is in force or without
   `identity.grant`.

@@ -17,7 +17,7 @@ const STATUS_TONE: Record<UserGrantInfo["status"], TagTone> = {
 };
 
 /**
- * 我的连接 — the signed-in user's own as_user (3LO) grants: which agent may call
+ * 我的授权 (My authorizations) — the signed-in user's own as_user (3LO) grants: which agent may call
  * which Connection as them. Revoking forces a fresh consent on that
  * Connection's next call for every agent (AgentCore Identity has no revoke
  * API; the platform sends forceAuthentication until the user re-authorizes).
