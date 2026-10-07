@@ -169,6 +169,12 @@ export interface ChatStreamPayload {
   url?: string;
   scopes?: string[];
   agent_id?: string;
+  /** `policy_denied` (Harness): a Gateway tool call a Cedar policy denied; also
+   *  carries `tool` — see lib/policy-deny.ts */
+  tool_use_id?: string;
+  reason?: string;
+  policy_id?: string | null;
+  gateway_id?: string | null;
 }
 
 export interface ChatHistoryMessage {

@@ -15,6 +15,7 @@ from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, envelope
 from app.models.ledger import Agent
 from app.services import inbound_auth as inbound_auth_service
+from app.services import policy_denials
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
@@ -40,7 +41,9 @@ def chat_stream(
     bearer_token: str | None = None,
     console_user: bool = True,
 ) -> Iterator[dict[str, Any]]:
-    """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
+    """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
+
+    ``policy_denied`` (Harness only) marks a Gateway tool call a Cedar policy denied.
 
     Never raises mid-stream; errors surface as an `error` event. ``workspace``
     defaults to the agent's own — see ``invoke._agent_workspace``.
@@ -139,19 +142,70 @@ def _harness_events(
     response = data_client(workspace).invoke_harness(
         **params,
     )
+    # toolUseId → tool name, and the toolResult blocks being streamed (by block
+    # index): a Cedar denial only shows up in a result's text (policy_denials)
+    tool_names: dict[Any, str] = {}
+    results: dict[Any, dict[str, Any]] = {}
     with closing(hc.iter_harness_stream(response["stream"])) as events:
         for event in events:
             if "contentBlockStart" in event:
-                tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
+                block = event["contentBlockStart"]
+                start = block.get("start", {})
+                tool_use = start.get("toolUse")
+                tool_result = start.get("toolResult")
                 if tool_use:
+                    tool_names[tool_use.get("toolUseId")] = tool_use.get("name", "")
                     yield {
                         "event": "tool",
                         "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
                     }
+                elif isinstance(tool_result, dict):
+                    results[block.get("contentBlockIndex")] = {
+                        "id": tool_result.get("toolUseId"),
+                        "status": tool_result.get("status"),
+                        "chunks": [],
+                    }
             elif "contentBlockDelta" in event:
-                delta = event["contentBlockDelta"].get("delta", {})
+                block = event["contentBlockDelta"]
+                delta = block.get("delta", {})
                 if delta.get("text"):
                     yield {"event": "delta", "data": {"text": delta["text"]}}
+                pending = results.get(block.get("contentBlockIndex"))
+                if pending is not None and isinstance(delta.get("toolResult"), list):
+                    pending["chunks"].extend(
+                        str(part["text"]) for part in delta["toolResult"]
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    )
+            elif "contentBlockStop" in event:
+                done = results.pop(event["contentBlockStop"].get("contentBlockIndex"), None)
+                denied = _policy_denied(done, tool_names, workspace)
+                if denied is not None:
+                    yield {"event": "policy_denied", "data": denied}
+
+
+def _policy_denied(
+    result: dict[str, Any] | None, tool_names: dict[Any, str], workspace: WorkspaceContext,
+) -> dict[str, Any] | None:
+    """The ``policy_denied`` payload for a finished toolResult the Gateway denied.
+
+    Only an error result carrying the Gateway's denial signature qualifies. A tool
+    reached through the signed-in user's Gateway alias is named as the catalog
+    names it (``<target>___<tool>``) and linked to the workspace gateway; any other
+    alias is resolved only by the deployed Harness, so it keeps its name unlinked.
+    """
+    if result is None or result.get("status") != "error":
+        return None
+    denial = policy_denials.parse_tool_denial("".join(result["chunks"]))
+    if denial is None:
+        return None
+    tool = tool_names.get(result["id"])
+    tool = tool if isinstance(tool, str) else ""  # a toolResult with no toolUse seen
+    gateway_id = None
+    prefix = f"{hc.USER_GATEWAY_ALIAS}_"
+    if tool.startswith(prefix):
+        tool = tool[len(prefix):]
+        gateway_id = workspace.resources.get("gateway_id") or None
+    return {"tool": tool, "tool_use_id": result["id"], **denial, "gateway_id": gateway_id}
 
 
 def sse_encode(event: dict[str, Any]) -> str:

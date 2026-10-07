@@ -1,6 +1,5 @@
 """Governance API — policy card, test-evaluate, decision log, traces, generation."""
 
-import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path
@@ -32,6 +31,11 @@ from app.services import traces as trace_service
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client, iam_client
 from app.services.observability import cw_client, logs_client
+from app.services.policy_denials import (
+    DENIED_MARKER,
+    POLICY_DENIED_RPC_CODE,
+    determining_policy_id,
+)
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
@@ -508,16 +512,6 @@ _ERROR_CODES = frozenset(
     }
 )
 
-# JSON-RPC error code the Gateway returns for a Cedar denial, captured from a real
-# response (see the task research note). Preferred over message matching because it
-# survives wording changes.
-POLICY_DENIED_RPC_CODE = -32002
-DETERMINING_POLICY_RE = re.compile(
-    r"Policy evaluation denied due to ([A-Za-z0-9][A-Za-z0-9_-]*)",
-    re.IGNORECASE,
-)
-
-
 def _is_policy_denial(exc: AppError) -> bool:
     """`gateway.rpc_error` wraps any JSON-RPC error, so it needs discriminating.
 
@@ -535,7 +529,7 @@ def _is_policy_denial(exc: AppError) -> bool:
     if detail.get("code") == POLICY_DENIED_RPC_CODE:
         return True
     message = f"{detail.get('message') or ''} {exc.message}".lower()
-    if "tool execution denied" in message:
+    if DENIED_MARKER in message:
         return True
     return "policy" in message and ("denied" in message or "not allowed" in message)
 
@@ -555,9 +549,7 @@ def _determining_policy_id(exc: AppError) -> str | None:
     explicit = detail.get("policy")
     if isinstance(explicit, str) and explicit:
         return explicit
-    message = f"{detail.get('message') or ''} {exc.message}"
-    match = DETERMINING_POLICY_RE.search(message)
-    return match.group(1) if match else None
+    return determining_policy_id(f"{detail.get('message') or ''} {exc.message}")
 
 
 @router.post("/governance/policy-test")

@@ -6,12 +6,13 @@ import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
+import { PolicyDenyCard } from "./PolicyDenyCard";
 import { type ChatMessage, retryPromptFor } from "./messages";
 
 export type { ChatMessage } from "./messages";
 
-/** The conversation: user / agent bubbles, tool calls, consent cards, memory
- *  writes and errors. */
+/** The conversation: user / agent bubbles, tool calls, consent and policy-deny
+ *  cards, memory writes and errors. */
 export function Thread({
   messages,
   userLabel,
@@ -81,6 +82,8 @@ export function Thread({
             retryDisabled={retryDisabled || !onRetry}
             onRetry={(prompt) => onRetry?.(prompt)}
           />
+        ) : msg.kind === "policy" && msg.policy ? (
+          <PolicyDenyCard key={i} deny={msg.policy} />
         ) : msg.kind === "memory" ? (
           <div key={i} className="v2-chat-memline">
             <Database size={13} aria-hidden="true" />

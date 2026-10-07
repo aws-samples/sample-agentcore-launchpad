@@ -269,6 +269,11 @@ def chat(
                 else:
                     _save_message(workspace_id, agent.id, session_id, "auth", ask[0],
                                   name=ask[1])
+            elif kind == "policy_denied" and session_id:
+                # the tool event already closed the open bubble: the card follows
+                # its tool row; the reason carries the policy id for the restore
+                _save_message(workspace_id, agent.id, session_id, "policy",
+                              data.get("reason", ""), name=data.get("tool"))
             elif kind == "delta":
                 answer_parts.append(data.get("text", ""))
             elif kind == "error" and session_id:

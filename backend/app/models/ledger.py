@@ -333,7 +333,7 @@ class ChatMessage(Base):
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
     session_id: Mapped[str] = mapped_column(String(80), index=True)
-    role: Mapped[str] = mapped_column(String(16))  # user | agent | tool | auth | error
+    role: Mapped[str] = mapped_column(String(16))  # user|agent|tool|auth|policy|error
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)

@@ -823,3 +823,12 @@ Everything after that is the normal governance flow: a new policy starts
 `LOG_ONLY`, and promotion and enforcement are unchanged. When the gateway has not
 yet discovered the target's tools, the editor says so instead of producing an empty
 policy.
+
+In Chat, a Managed Harness call that an enforced policy denies for the signed-in
+user shows a **policy-deny card** next to the as_user consent card (tool, reason,
+determining policy when named, the console identity, a link to the gateway's
+policies — or to the Governance landing page for a card restored from history).
+Only a rule with an input condition (`context.input.*`) is denied at call
+time; a rule without one hides the tool from `tools/list`. Number inputs are Cedar
+`decimal`, so compare them as `context.input.amount.lessThanOrEqual(decimal("500.0"))`
+— `<= 500` fails validation.

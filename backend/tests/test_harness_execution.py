@@ -457,3 +457,78 @@ def test_chat_stream_keeps_invocation_scoped_gateway_identity(monkeypatch):
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
     }
     assert stream.closed == 1
+
+
+def test_chat_stream_surfaces_a_gateway_policy_denial(monkeypatch):
+    """A Cedar-denied tool call becomes one ``policy_denied`` event after its tool
+    row; an allowed call next to it adds nothing (live shape, dev 2026-10-07)."""
+    alias = f"{hc.USER_GATEWAY_ALIAS}_hr-database___"
+
+    def call(index, tool_id, tool, status, result_text):
+        return [
+            {"contentBlockStart": {"contentBlockIndex": index, "start": {
+                "toolUse": {"toolUseId": tool_id, "name": alias + tool, "type": "tool_use"},
+            }}},
+            {"contentBlockStop": {"contentBlockIndex": index}},
+            stop("tool_use"),
+            {"messageStart": {"role": "user"}},
+            {"contentBlockStart": {"contentBlockIndex": 0, "start": {
+                "toolResult": {"toolUseId": tool_id, "status": status},
+            }}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {
+                "toolResult": [{"text": result_text}],
+            }}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            stop("tool_result"),
+        ]
+
+    stream = Stream([
+        *call(1, "t-ok", "get_employee", "success", '{"employee_id": "EMP-1024"}'),
+        *call(1, "t-deny", "create_payout", "error",
+              "Tool execution failed: Tool Execution Denied: Tool call not allowed due to "
+              "policy enforcement [No policy applies to the request (denied by default).]"),
+        text("The payout was blocked."), stop("end_turn"),
+    ])
+    monkeypatch.setattr(chat, "data_client", lambda _ws=None: client_for(stream))
+    workspace = ws_ctx({"gateway_id": "launchpad-gw-abc"})
+    events = list(chat.chat_stream(create_agent(), "pay", session_id=SID, workspace=workspace))
+    assert [e["event"] for e in events] == [
+        "meta", "tool", "tool", "policy_denied", "delta", "done",
+    ]
+    assert events[3]["data"] == {
+        "tool": "hr-database___create_payout",
+        "tool_use_id": "t-deny",
+        "reason": "No policy applies to the request (denied by default).",
+        "policy_id": None,
+        "gateway_id": "launchpad-gw-abc",
+    }
+    assert stream.closed == 1
+
+
+def test_chat_stream_ignores_malformed_tool_result_blocks(monkeypatch):
+    """The deny branch is on every Harness turn's hot path: blocks with missing
+    indexes, non-list deltas, a stop with nothing pending, or a toolResult whose
+    toolUse was never seen must not raise (the last one still yields an unnamed,
+    unlinked card)."""
+    deny = (
+        "Tool Execution Denied: Tool call not allowed due to policy enforcement "
+        "[Policy evaluation denied due to cap-1]"
+    )
+    stream = Stream([
+        {"contentBlockStop": {"contentBlockIndex": 7}},
+        {"contentBlockStart": {"start": {"toolResult": {"toolUseId": "t-x", "status": "error"}}}},
+        {"contentBlockDelta": {"delta": {"toolResult": "not-a-list"}}},
+        {"contentBlockDelta": {"delta": {"toolResult": [None, {"text": 3}, {"text": deny}]}}},
+        {"contentBlockStop": {}},
+        {"contentBlockStart": {"contentBlockIndex": 2, "start": {"toolResult": "odd"}}},
+        {"contentBlockStop": {"contentBlockIndex": 2}},
+        text("done."), stop("end_turn"),
+    ])
+    monkeypatch.setattr(chat, "data_client", lambda _ws=None: client_for(stream))
+    workspace = ws_ctx({"gateway_id": "launchpad-gw-abc"})
+    events = list(chat.chat_stream(create_agent(), "pay", session_id=SID, workspace=workspace))
+    assert [e["event"] for e in events] == ["meta", "policy_denied", "delta", "done"]
+    assert events[1]["data"] == {
+        "tool": "", "tool_use_id": "t-x", "reason": "Policy evaluation denied due to cap-1",
+        "policy_id": "cap-1", "gateway_id": None,
+    }

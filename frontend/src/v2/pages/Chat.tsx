@@ -33,6 +33,7 @@ import {
   isHarnessAgent,
   sseEvents,
 } from "../../lib/chat";
+import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
@@ -176,7 +177,9 @@ export function V2Chat() {
                       name: r.name ?? "",
                       auth: restoredAuthAsk(r, agentId),
                     }
-                  : { kind: "error", text: r.text },
+                  : r.role === "policy"
+                    ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
+                    : { kind: "error", text: r.text },
         ),
       );
       setSessionId(sid);
@@ -282,6 +285,10 @@ export function V2Chat() {
             },
           ]);
           // the answer keeps streaming into the same bubble around the card
+        } else if (event === "policy_denied") {
+          // follows its tool row, which already closed the open bubble
+          const policy = livePolicyDeny(payload);
+          setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
         } else if (event === "delta") {
           const open = agentOpen;
           setMessages((m) => appendDelta(m, payload.text ?? "", open));
