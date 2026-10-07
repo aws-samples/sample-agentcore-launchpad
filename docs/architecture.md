@@ -68,6 +68,10 @@ each video. A one-time database import preserves the previously bundled
 `backend/app/data/videos.initial.json` entries; later changes come from the ledger,
 so publishing metadata does not rebuild the frontend. Video bytes still play
 directly from the browser's CDN URL, independent of workspace and AgentCore.
+Every V2 module page also offers its own recordings: each published collection
+carries its module's sidebar `path`, and the V2 shell adds a **Demo videos**
+button to the page header of any module with V2 recordings, playing them in a
+drawer.
 The separate `launchpad-videos` CDK stack retains its private S3 origin and
 OAC-restricted CloudFront distribution. See [Video library](video-library.md)
 for management and immutable media publication.

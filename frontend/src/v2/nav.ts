@@ -116,3 +116,27 @@ export const V2_NAV: V2NavGroup[] = [
     ],
   },
 ];
+
+export function isNavItemActive(item: V2NavItem, pathname: string, search: string): boolean {
+  const [path, query] = item.to.split("?");
+  if (query) {
+    // an entry for a `?view=` sub-page is active only on that sub-page
+    const want = new URLSearchParams(query);
+    const have = new URLSearchParams(search);
+    if (pathname !== path) return false;
+    return [...want].every(([k, v]) => have.get(k) === v);
+  }
+  if (item.end) return pathname === path || pathname === `${path}/`;
+  return [path, ...(item.also ?? [])].some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
+/** The sidebar entry (module) a location belongs to, including its sub-pages. */
+export function activeNavItem(pathname: string, search: string): V2NavItem | undefined {
+  for (const group of V2_NAV) {
+    const item = group.items.find((entry) => isNavItemActive(entry, pathname, search));
+    if (item) return item;
+  }
+  return undefined;
+}

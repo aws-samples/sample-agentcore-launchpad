@@ -1,10 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { errorMessage } from "../lib/api";
 
 export type ToastFn = (tone: "success" | "error", text: string) => void;
 
 export const ToastContext = createContext<ToastFn>(() => undefined);
+
+/**
+ * Shell-provided control rendered at the end of every PageHeader (the module's
+ * demo-video button). Null outside the V2 shell, so a page renders without it.
+ */
+export const PageHeaderAsideContext = createContext<ComponentType | null>(null);
 
 /** Transient success/error message at the top of the V2 shell. */
 export function useV2Toast(): ToastFn {

@@ -23,6 +23,8 @@ export interface VideoCatalog {
   collections: {
     id: string;
     categoryId: string;
+    /** the module's V2 sidebar path (`/v2/agents`) */
+    path: string;
     title: VideoText;
     description: VideoText;
     videoIds: string[];
@@ -80,6 +82,7 @@ export interface ManagedVideoCatalog {
 export interface VideoCollection {
   id: string;
   categoryId: string;
+  path: string;
   title: VideoText;
   description: VideoText;
   videos: LibraryVideo[];
@@ -109,6 +112,12 @@ export function videoCollectionsByVersion(
       ? [{ ...collection, description: videos[0].description, videos }]
       : [];
   }));
+}
+
+/** The V2 recordings of the module whose sidebar entry is `path`, or null when it has none. */
+export function moduleVideoCollection(catalog: VideoCatalog, path: string): VideoCollection | null {
+  return videoCollectionsByVersion(videoCollections(catalog), "v2")
+    .find((collection) => collection.path === path) ?? null;
 }
 
 export function videoTimestamp(seconds: number): string {

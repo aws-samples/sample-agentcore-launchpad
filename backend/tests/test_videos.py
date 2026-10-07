@@ -55,6 +55,8 @@ def test_existing_directory_imports_once_with_all_media_metadata(client):
     assert first["posterUrl"].endswith("/poster.jpg")
     collection = next(c for c in catalog["collections"] if c["id"] == "assistant")
     assert collection["categoryId"] == "build"
+    # the console's per-module demo button joins on the V2 sidebar path
+    assert collection["path"] == "/v2/assistant"
     assert collection["videoIds"] == ["architect-assistant", "architect-assistant-runtime-ab"]
     skill_lab = next(c for c in catalog["collections"] if c["id"] == "skill-lab")
     assert skill_lab["videoIds"] == ["skill-tasksets", "skill-evaluation", "skill-optimization"]

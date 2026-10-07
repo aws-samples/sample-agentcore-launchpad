@@ -418,6 +418,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-mask.tall { padding-top: 24px; }
 .v2-modal.tall { max-height: calc(100vh - 48px); }
 .v2-drawer { background: #fff; width: 640px; max-width: 100%; height: 100%; display: flex; flex-direction: column; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.1); }
+.v2-drawer.wide { width: 880px; }
 .v2-modal-head { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--v2-line-2); font-weight: 600; font-size: 16px; }
 .v2-modal-head button { margin-left: auto; border: 0; background: none; cursor: pointer; color: var(--v2-ink-3); display: grid; }
 .v2-modal-body { padding: 20px; overflow-y: auto; flex: 1; }

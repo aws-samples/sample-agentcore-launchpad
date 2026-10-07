@@ -116,6 +116,15 @@
 .v2 .v2-videos-chapters .time { flex: none; min-width: 44px; font-family: var(--v2-mono); font-size: 12px; color: var(--v2-primary); }
 .v2 .v2-videos-dir-foot { padding: 10px 24px 14px; border-top: 1px solid var(--v2-line-2); }
 
+/* per-module demo drawer (PageHeader 演示视频): one column, the drawer body scrolls */
+.v2 .v2-videos-demo .v2-videos-player { border-radius: var(--v2-radius-sm); }
+.v2 .v2-videos-demo-details { padding: 14px 0 4px; }
+.v2 .v2-videos-demo-dir { margin-top: 12px; padding: 12px 0 8px; border-top: 1px solid var(--v2-line-2); }
+.v2 .v2-videos-demo .v2-videos-scroll { max-height: none; overflow: visible; }
+.v2 .v2-videos-demo .v2-videos-help { padding: 4px 0 8px; }
+.v2 .v2-videos-demo .v2-videos-chapters { padding: 0; }
+.v2 .v2-videos-demo .v2-videos-episodes button { padding-left: 8px; padding-right: 8px; }
+
 @media (max-width: 1180px) {
   .v2 .v2-videos-layout { grid-template-columns: 1fr; }
   .v2 .v2-videos-layout > .v2-card:last-child { position: static; }
