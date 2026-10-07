@@ -169,7 +169,11 @@
     "noResultsHint": "请尝试其他标题或分类。",
     "clearFilters": "清除筛选",
     "invalidLink": "该视频链接已失效，请从视频库重新选择。",
-    "changeModule": "返回视频库，浏览其他模块。"
+    "changeModule": "返回视频库，浏览其他模块。",
+    "moduleDemo": "演示视频",
+    "moduleDemoHint": "观看本模块的操作演示录屏",
+    "moduleDemoTitle": "{{module}} · 演示视频",
+    "openInLibrary": "在视频库中打开"
   },
   "videoManage": {
     "title": "视频管理",

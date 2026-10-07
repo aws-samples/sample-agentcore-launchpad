@@ -324,6 +324,7 @@ def published_catalog(db: Session) -> dict[str, Any]:
         "collections": [{
             "id": item["id"],
             "categoryId": item["categoryId"],
+            "path": item["path"],
             "title": item["title"],
             "description": by_section[item["id"]][0].published_content["description"],
             "videoIds": [row.id for row in by_section[item["id"]]],

@@ -169,7 +169,11 @@
     "noResultsHint": "Try another title or category.",
     "clearFilters": "Clear filters",
     "invalidLink": "This video link is no longer available. Choose a video from the library.",
-    "changeModule": "Return to the library to explore another module."
+    "changeModule": "Return to the library to explore another module.",
+    "moduleDemo": "Demo videos",
+    "moduleDemoHint": "Watch recorded walkthroughs of this module",
+    "moduleDemoTitle": "{{module}} · Demo videos",
+    "openInLibrary": "Open in the video library"
   },
   "videoManage": {
     "title": "Video management",

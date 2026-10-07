@@ -79,6 +79,23 @@ exposes chapters directly. The directory scrolls independently, and the full
 introduction is collapsed until opened. Tab changes keep the player mounted;
 selecting another video pauses and unmounts it.
 
+## Demo videos inside each module
+
+Every V2 module page shows its own recordings without leaving the page. Each
+published collection carries its module's V2 sidebar `path` from
+`video_sections.json`. The V2 shell loads the published catalog once, resolves
+the current location to its sidebar entry (sub-pages, `?view=` views, and the
+classic flows listed under an entry's `also` count as that module), and gives
+the page header a **Demo videos** button when the module has V2 recordings.
+The button shows the recording count when there is more than one. Classic-only
+recordings, the library page itself, and a failed catalog load show no button.
+The button opens a drawer with the shared player, the module's playlist, and
+chapters. **Open in the video library** jumps to the same video's watch page.
+Closing the drawer or navigating away unmounts and pauses the player. A video
+reaches its module's button once it is published under that module. The shell
+reloads the catalog when the administrator leaves video management; other open
+tabs pick changes up on their next page load.
+
 ## Infrastructure
 
 The optional, standalone `launchpad-videos` stack is defined by

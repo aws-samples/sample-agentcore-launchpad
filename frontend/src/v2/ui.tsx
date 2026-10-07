@@ -20,6 +20,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -28,7 +29,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { ToastContext } from "./hooks";
+import { PageHeaderAsideContext, ToastContext } from "./hooks";
 
 /* ---------- button ---------- */
 export function Button({
@@ -551,12 +552,18 @@ export function PageHeader({
   tabs?: ReactNode;
   end?: ReactNode;
 }) {
+  const Aside = useContext(PageHeaderAsideContext);
   return (
     <div className="v2-page-head">
       <h1>{title}</h1>
       {tabs}
       {desc && <span className="desc">{desc}</span>}
-      {end && <div className="end">{end}</div>}
+      {(Aside || end) && (
+        <div className="end">
+          {Aside && <Aside />}
+          {end}
+        </div>
+      )}
     </div>
   );
 }
@@ -1011,6 +1018,7 @@ export function Drawer({
   open,
   onClose,
   footer,
+  wide,
   children,
   testId,
 }: {
@@ -1018,12 +1026,14 @@ export function Drawer({
   open: boolean;
   onClose: () => void;
   footer?: ReactNode;
+  /** media content (a video player) that needs more than the form width */
+  wide?: boolean;
   children: ReactNode;
   testId?: string;
 }) {
   if (!open) return null;
   return (
-    <DrawerFrame title={title} onClose={onClose} footer={footer} testId={testId}>
+    <DrawerFrame title={title} onClose={onClose} footer={footer} wide={wide} testId={testId}>
       {children}
     </DrawerFrame>
   );
@@ -1033,12 +1043,14 @@ function DrawerFrame({
   title,
   onClose,
   footer,
+  wide,
   children,
   testId,
 }: {
   title: ReactNode;
   onClose: () => void;
   footer?: ReactNode;
+  wide?: boolean;
   children: ReactNode;
   testId?: string;
 }) {
@@ -1046,7 +1058,7 @@ function DrawerFrame({
   useEscape(onClose);
   return (
     <div className="v2-mask drawer" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="v2-drawer" role="dialog" aria-modal="true" data-testid={testId}>
+      <div className={wide ? "v2-drawer wide" : "v2-drawer"} role="dialog" aria-modal="true" data-testid={testId}>
         <div className="v2-modal-head">
           {title}
           <button type="button" onClick={onClose} aria-label={t("v2.common.close")}>
