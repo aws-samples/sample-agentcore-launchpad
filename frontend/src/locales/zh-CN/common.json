@@ -6543,6 +6543,16 @@
         "noPrompt": "本会话中没有可重试的上一条消息。",
         "scopes": "权限范围"
       },
+      "policy": {
+        "title": "被治理策略拦截",
+        "denied": "已拒绝",
+        "body": "智能体通过 Gateway 调用了 {{tool}}，Cedar 策略按你的身份拒绝了这次调用。下方智能体的回答基于这一拒绝结果。",
+        "reason": "原因",
+        "policy": "策略",
+        "identity": "身份",
+        "openPolicies": "查看 Gateway 策略",
+        "openGovernance": "打开治理"
+      },
       "asUser": "以用户身份调用",
       "asUserHint": "开启：Runtime 收到你本人的登录 JWT。关闭：使用工作区 M2M 令牌。未手动切换时，若你通过工作区用户池登录则使用你的登录 JWT，否则使用 M2M 令牌。两种方式下记忆都按你隔离。",
       "caller": {

@@ -87,6 +87,10 @@
 .v2 .v2-chat-auth-scopes code { font-size: 11.5px; }
 .v2 .v2-chat-auth-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .v2 .v2-chat-auth-actions a.v2-btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.v2 .v2-chat-policy { border-color: var(--v2-danger); background: var(--v2-danger-soft); }
+.v2 .v2-chat-policy-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
+.v2 .v2-chat-policy-facts dt { color: var(--v2-ink-3); }
+.v2 .v2-chat-policy-facts dd { margin: 0; overflow-wrap: anywhere; }
 .v2 .v2-chat-memline { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--v2-ink-3); }
 .v2 .v2-chat-memline code { font-size: 11.5px; }
 .v2 .v2-chat-error { max-width: 82%; }

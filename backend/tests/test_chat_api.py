@@ -324,6 +324,36 @@ def test_chat_history_records_errors(client, monkeypatch):
     assert "runtime exploded" in history[1]["text"]
 
 
+def test_chat_history_records_policy_denials(client, monkeypatch):
+    """A Gateway policy denial is stored after its tool row and replayed as a
+    ``policy`` row (reason in ``text``, catalog tool name in ``name``)."""
+    agent_id = make_active_agent(name="chat-hist-policy")
+
+    def events(*_a, **_k):
+        yield {"event": "tool", "data": {"name": "gw_create_payout", "id": "t-1"}}
+        yield {"event": "policy_denied", "data": {
+            "tool": "hr-database___create_payout", "tool_use_id": "t-1",
+            "reason": "Policy evaluation denied due to cap-1", "policy_id": "cap-1",
+            "gateway_id": "gw-1",
+        }}
+        yield from delta_events("blocked by policy")
+
+    monkeypatch.setattr(chat_service, "invoke_agent_events", events)
+    response = client.post(
+        f"/api/chat/{agent_id}", json={"prompt": "pay 800", "session_id": "p" * 40}
+    )
+    assert "event: policy_denied" in response.text
+    history = client.get(
+        f"/api/chat/{agent_id}/history", params={"session_id": "p" * 40}
+    ).json()["messages"]
+    assert [(m["role"], m["text"], m["name"]) for m in history] == [
+        ("user", "pay 800", None),
+        ("tool", "", "gw_create_payout"),
+        ("policy", "Policy evaluation denied due to cap-1", "hr-database___create_payout"),
+        ("agent", "blocked by policy", None),
+    ]
+
+
 def test_v1_and_console_share_invoke_chain():
     """Code-level proof: both surfaces call the same chain functions."""
     import inspect

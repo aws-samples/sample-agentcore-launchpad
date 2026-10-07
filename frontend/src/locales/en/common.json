@@ -6543,6 +6543,16 @@
         "noPrompt": "No earlier message in this session to retry.",
         "scopes": "Scopes"
       },
+      "policy": {
+        "title": "Blocked by governance policy",
+        "denied": "Denied",
+        "body": "The agent called {{tool}} through the Gateway, and a Cedar policy refused the call for your identity. The agent's answer below reflects that refusal.",
+        "reason": "Reason",
+        "policy": "Policy",
+        "identity": "Identity",
+        "openPolicies": "View gateway policies",
+        "openGovernance": "Open Governance"
+      },
       "asUser": "Invoke as me",
       "asUserHint": "On: the Runtime receives your own sign-in JWT. Off: the workspace M2M token. Until you change it, your sign-in JWT is used when you are signed in through the workspace user pool, else the M2M token. Memory stays scoped to you either way.",
       "caller": {
