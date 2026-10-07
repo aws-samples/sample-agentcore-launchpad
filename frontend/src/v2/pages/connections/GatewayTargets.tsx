@@ -16,7 +16,7 @@ import {
 } from "../../../lib/api";
 import { targetModes } from "../../../lib/obo";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, type Column, Confirm, Field, LinkButton, Modal, Segmented, Table, Tag } from "../../ui";
+import { Alert, Button, Card, type Column, Confirm, Field, LinkButton, Modal, Segmented, Select, Table, Tag } from "../../ui";
 import { KindTag } from "./ConnectionList";
 
 const TARGET_NAME_RE = /^([0-9a-zA-Z][-]?){1,100}$/;
@@ -321,14 +321,14 @@ function CreateTarget({
           hint={source === "mcp" ? t("v2.connections.targets.mcpOauthOnly") : undefined}
           full
         >
-          <select className="v2-select" value={connection} onChange={(e) => setConnection(e.target.value)} data-testid="v2-target-connection">
-            <option value="">{t("v2.common.choose")}</option>
-            {usable.map((c) => (
-              <option key={`${c.kind}:${c.name}`} value={`${c.kind}:${c.name}`}>
-                {c.name} · {t(`identity.kind.${c.kind}`)}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={connection}
+            onChange={setConnection}
+            ariaLabel={t("v2.connections.targets.colConnection")}
+            testId="v2-target-connection"
+            placeholder={t("v2.common.choose")}
+            options={usable.map((c) => ({ value: `${c.kind}:${c.name}`, label: `${c.name} · ${t(`identity.kind.${c.kind}`)}` }))}
+          />
         </Field>
         <Field label={t("v2.connections.targets.colMode")} hint={t(`v2.connections.targets.modeHints.${actingMode}`)} full>
           {modes.length > 1 ? (
@@ -355,10 +355,16 @@ function CreateTarget({
         {picked?.kind === "api_key" && (
           <div className="v2-grid-3">
             <Field label={t("identity.tools.keyIn")}>
-              <select className="v2-select" value={location} onChange={(e) => setLocation(e.target.value as typeof location)}>
-                <option value="HEADER">{t("identity.tools.keyInHeader")}</option>
-                <option value="QUERY_PARAMETER">{t("identity.tools.keyInQuery")}</option>
-              </select>
+              <Select
+                value={location}
+                onChange={(v) => setLocation(v as typeof location)}
+                ariaLabel={t("identity.tools.keyIn")}
+                testId="v2-target-key-location"
+                options={[
+                  { value: "HEADER", label: t("identity.tools.keyInHeader") },
+                  { value: "QUERY_PARAMETER", label: t("identity.tools.keyInQuery") },
+                ]}
+              />
             </Field>
             <Field label={t("identity.tools.keyName")}>
               <input className="v2-input mono" value={parameter} onChange={(e) => setParameter(e.target.value)} />

@@ -24,8 +24,11 @@ import {
   withDiscoveryUrl,
 } from "../../../lib/inbound-auth";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, Descriptions, Field, LinkButton, Modal, Segmented, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, Descriptions, Field, LinkButton, Modal, Segmented, Select, Tag } from "../../ui";
 import type { SectionProps } from "./wizardKit";
+
+const CLAIM_VALUE_TYPES: InboundCustomClaim["value_type"][] = ["STRING", "STRING_ARRAY"];
+const CLAIM_OPERATORS: InboundCustomClaim["match_operator"][] = ["EQUALS", "CONTAINS", "CONTAINS_ANY"];
 
 /**
  * The JWT-authorizer field set (discovery URL, allowed lists, custom-claim rows).
@@ -92,24 +95,19 @@ export function JwtConfigFields({
               {t("inboundAuth.useCognito")}
             </Button>
           )}
-          <select
-            className="v2-select"
+          <Select
             value={options.some((o) => o.name === form.source_connection) ? form.source_connection : ""}
             disabled={!options.length}
-            aria-label={t("inboundAuth.idpSource.pickConnection")}
-            onChange={(e) => {
-              const picked = options.find((o) => o.name === e.target.value);
+            ariaLabel={t("inboundAuth.idpSource.pickConnection")}
+            onChange={(v) => {
+              const picked = options.find((o) => o.name === v);
               if (picked) onChange(applyOidcSource(form, picked));
             }}
-            data-testid={`${idPrefix}-connection-source`}
-          >
-            <option value="">{pickerLabel}</option>
-            {options.map((o) => (
-              <option key={o.name} value={o.name}>
-                {o.name} · {o.issuer}
-              </option>
-            ))}
-          </select>
+            testId={`${idPrefix}-connection-source`}
+            placeholder={pickerLabel}
+            options={options.map((o) => ({ value: o.name, label: `${o.name} · ${o.issuer}` }))}
+            style={{ width: "auto", minWidth: 220 }}
+          />
           {form.source_connection && (
             <Tag tone="blue">{t("inboundAuth.idpSource.fromConnection", { name: form.source_connection })}</Tag>
           )}
@@ -150,27 +148,22 @@ export function JwtConfigFields({
                   aria-label={t("inboundAuth.claimName")}
                   onChange={(e) => setClaim(index, { name: e.target.value })}
                 />
-                <select
-                  className="v2-select"
+                <Select
+                  mono
                   value={claim.value_type}
-                  aria-label={t("inboundAuth.claimValueType")}
-                  onChange={(e) => setClaim(index, { value_type: e.target.value as InboundCustomClaim["value_type"] })}
-                >
-                  <option value="STRING">STRING</option>
-                  <option value="STRING_ARRAY">STRING_ARRAY</option>
-                </select>
-                <select
-                  className="v2-select"
+                  ariaLabel={t("inboundAuth.claimValueType")}
+                  onChange={(v) => setClaim(index, { value_type: v as InboundCustomClaim["value_type"] })}
+                  testId={`${idPrefix}-claim-type-${index}`}
+                  options={CLAIM_VALUE_TYPES.map((v) => ({ value: v, label: v }))}
+                />
+                <Select
+                  mono
                   value={claim.match_operator}
-                  aria-label={t("inboundAuth.claimOperator")}
-                  onChange={(e) =>
-                    setClaim(index, { match_operator: e.target.value as InboundCustomClaim["match_operator"] })
-                  }
-                >
-                  <option value="EQUALS">EQUALS</option>
-                  <option value="CONTAINS">CONTAINS</option>
-                  <option value="CONTAINS_ANY">CONTAINS_ANY</option>
-                </select>
+                  ariaLabel={t("inboundAuth.claimOperator")}
+                  onChange={(v) => setClaim(index, { match_operator: v as InboundCustomClaim["match_operator"] })}
+                  testId={`${idPrefix}-claim-operator-${index}`}
+                  options={CLAIM_OPERATORS.map((v) => ({ value: v, label: v }))}
+                />
                 <input
                   className="v2-input mono"
                   value={claim.match_values}

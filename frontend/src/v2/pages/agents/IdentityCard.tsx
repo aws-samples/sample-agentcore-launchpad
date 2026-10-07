@@ -16,7 +16,7 @@ import {
   connectionOptions,
   pickConnection,
 } from "../../../lib/identity-ui";
-import { Alert, Button, Card, LinkButton, Tag } from "../../ui";
+import { Alert, Button, Card, LinkButton, Select, Tag } from "../../ui";
 import type { SectionProps } from "./wizardKit";
 
 /**
@@ -74,18 +74,20 @@ export function IdentityCard({
           {form.authTools.map((row, i) => {
             const errors = show(i) ? authRowErrors(t, row, issues.rows[i]) : [];
             const oauth = row.kind === "oauth2";
+            const connOptions = connectionOptions(t, connections, row, row.type === "rest" && !byoc);
             return (
               <div key={i} className="v2-agents-auth" data-testid={`v2-agent-identity-row-${i}`}>
                 <div className="v2-agents-row auth-head">
-                  <select
-                    className="v2-select"
+                  <Select
                     value={row.type}
-                    aria-label={t("identity.tools.type")}
-                    onChange={(e) => patch(i, { type: e.target.value as AuthToolRow["type"] })}
-                  >
-                    <option value="rest">{t("identity.tools.typeRest")}</option>
-                    <option value="mcp">{t("identity.tools.typeMcp")}</option>
-                  </select>
+                    ariaLabel={t("identity.tools.type")}
+                    onChange={(v) => patch(i, { type: v as AuthToolRow["type"] })}
+                    testId={`v2-agent-identity-type-${i}`}
+                    options={[
+                      { value: "rest", label: t("identity.tools.typeRest") },
+                      { value: "mcp", label: t("identity.tools.typeMcp") },
+                    ]}
+                  />
                   <input
                     className="v2-input mono"
                     value={row.name}
@@ -94,23 +96,20 @@ export function IdentityCard({
                     onChange={(e) => patch(i, { name: e.target.value })}
                     data-testid={`v2-agent-identity-name-${i}`}
                   />
-                  <select
-                    className="v2-select"
+                  <Select
                     value={row.connection ? `${row.kind}:${row.connection}` : ""}
-                    aria-label={t("identity.tools.connection")}
-                    onChange={(e) => {
-                      const picked = pickConnection(e.target.value);
+                    ariaLabel={t("identity.tools.connection")}
+                    onChange={(v) => {
+                      const picked = pickConnection(v);
                       // acting as the user is OAuth2-only (3LO)
                       patch(i, "kind" in picked && picked.kind !== "oauth2" ? { ...picked, mode: "as_agent" } : picked);
                     }}
-                    data-testid={`v2-agent-identity-connection-${i}`}
-                  >
-                    {connectionOptions(t, connections, row, row.type === "rest" && !byoc).map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                    testId={`v2-agent-identity-connection-${i}`}
+                    options={connOptions}
+                    // no "none" option (mcp / byoc need a Connection): an unpicked row reads
+                    // "choose", not a blank trigger
+                    placeholder={connOptions.some((o) => o.value === "") ? undefined : t("v2.common.choose")}
+                  />
                   <Button
                     size="sm"
                     onClick={() => set((prev: AgentForm) => ({ authTools: prev.authTools.filter((_, j) => j !== i) }))}
@@ -140,15 +139,16 @@ export function IdentityCard({
                   )}
                   {row.connection && !oauth && (
                     <div className="v2-agents-row auth-key">
-                      <select
-                        className="v2-select"
+                      <Select
                         value={row.keyIn}
-                        aria-label={t("identity.tools.keyIn")}
-                        onChange={(e) => patch(i, { keyIn: e.target.value as AuthToolRow["keyIn"] })}
-                      >
-                        <option value="header">{t("identity.tools.keyInHeader")}</option>
-                        <option value="query">{t("identity.tools.keyInQuery")}</option>
-                      </select>
+                        ariaLabel={t("identity.tools.keyIn")}
+                        onChange={(v) => patch(i, { keyIn: v as AuthToolRow["keyIn"] })}
+                        testId={`v2-agent-identity-keyin-${i}`}
+                        options={[
+                          { value: "header", label: t("identity.tools.keyInHeader") },
+                          { value: "query", label: t("identity.tools.keyInQuery") },
+                        ]}
+                      />
                       <input
                         className="v2-input mono"
                         value={row.keyName}
@@ -158,20 +158,23 @@ export function IdentityCard({
                     </div>
                   )}
                   {row.connection && oauth && !byoc && (
-                    <select
-                      className="v2-select"
-                      value={row.mode}
-                      aria-label={t("identity.tools.mode")}
-                      title={t(row.mode === "as_user" ? "identity.tools.modeHintUser" : "identity.tools.modeHint")}
-                      onChange={(e) => patch(i, { mode: e.target.value })}
-                      data-testid={`v2-agent-identity-mode-${i}`}
+                    <span title={t(row.mode === "as_user" ? "identity.tools.modeHintUser" : "identity.tools.modeHint")}
                     >
-                      <option value="as_agent">{t("identity.mode.as_agent")}</option>
-                      <option value="as_user">{t("identity.mode.as_user")}</option>
-                      {row.mode !== "as_agent" && row.mode !== "as_user" && (
-                        <option value={row.mode}>{t(`identity.mode.${row.mode}`, row.mode)}</option>
-                      )}
-                    </select>
+                      <Select
+                        value={row.mode}
+                        ariaLabel={t("identity.tools.mode")}
+                        onChange={(v) => patch(i, { mode: v })}
+                        testId={`v2-agent-identity-mode-${i}`}
+                        options={[
+                          { value: "as_agent", label: t("identity.mode.as_agent") },
+                          { value: "as_user", label: t("identity.mode.as_user") },
+                          // a stored, unsupported mode stays visible (and flagged) rather than snapping
+                          ...(row.mode !== "as_agent" && row.mode !== "as_user"
+                            ? [{ value: row.mode, label: t(`identity.mode.${row.mode}`, row.mode) }]
+                            : []),
+                        ]}
+                      />
+                    </span>
                   )}
                   {row.connection && (!oauth || byoc) && (
                     <Tag tone={issues.rows[i]?.mode ? "red" : "blue"} title={t("identity.tools.modeHint")}>
