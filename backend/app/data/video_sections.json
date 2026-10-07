@@ -18,7 +18,7 @@
     {"id": "observability", "categoryId": "run", "title": {"en": "Observability", "zh-CN": "可观测"}, "path": "/v2/observability"},
     {"id": "memory", "categoryId": "run", "title": {"en": "Memory", "zh-CN": "记忆"}, "path": "/v2/memory"},
     {"id": "governance", "categoryId": "run", "title": {"en": "Governance", "zh-CN": "治理"}, "path": "/v2/governance"},
-    {"id": "my-connections", "categoryId": "run", "title": {"en": "My connections", "zh-CN": "我的连接"}, "path": "/v2/my-connections"},
+    {"id": "my-connections", "categoryId": "run", "title": {"en": "My authorizations", "zh-CN": "我的授权"}, "path": "/v2/my-connections"},
     {"id": "eval-data", "categoryId": "eval", "title": {"en": "Data Center", "zh-CN": "数据中心"}, "path": "/v2/eval/data"},
     {"id": "eval-tasks", "categoryId": "eval", "title": {"en": "Evaluation Tasks", "zh-CN": "评估任务"}, "path": "/v2/eval/tasks"},
     {"id": "eval-insights", "categoryId": "eval", "title": {"en": "Evaluation overview", "zh-CN": "评估总览"}, "path": "/v2/eval/insights"},
@@ -28,7 +28,7 @@
     {"id": "skill-lab", "categoryId": "eval", "title": {"en": "Skill Lab", "zh-CN": "技能实验室"}, "path": "/v2/skill-lab"},
     {"id": "users", "categoryId": "admin", "title": {"en": "User Management", "zh-CN": "用户管理"}, "path": "/v2/users"},
     {"id": "workspaces", "categoryId": "admin", "title": {"en": "Workspaces", "zh-CN": "工作区"}, "path": "/v2/workspaces"},
-    {"id": "connections", "categoryId": "admin", "title": {"en": "Connections", "zh-CN": "连接"}, "path": "/v2/connections"},
+    {"id": "connections", "categoryId": "admin", "title": {"en": "Outbound credentials", "zh-CN": "出站凭证"}, "path": "/v2/connections"},
     {"id": "announcements", "categoryId": "admin", "title": {"en": "Announcements", "zh-CN": "公告管理"}, "path": "/v2/announcements"},
     {"id": "videos", "categoryId": "learn", "title": {"en": "Video introductions", "zh-CN": "视频介绍"}, "path": "/v2/videos"},
     {"id": "video-management", "categoryId": "admin", "title": {"en": "Video management", "zh-CN": "视频管理"}, "path": "/v2/video-management"}

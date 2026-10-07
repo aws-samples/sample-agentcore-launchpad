@@ -1,7 +1,7 @@
 import type { AuthRequiredEvent, UserGrantInfo, UserGrantState, UserGrantStatus } from "./api";
 
 /**
- * as_user (3LO) grant logic behind the Chat auth card and 我的连接, kept free
+ * as_user (3LO) grant logic behind the Chat auth card and 我的授权, kept free
  * of React so the polling, retry and revoke behavior is unit-testable.
  */
 
