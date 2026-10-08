@@ -61,6 +61,12 @@ class RegistryUnavailableError(AppError):
         )
 
 
+# A Registry record's description: CreateRegistryRecord allows up to 4096 characters.
+# It used to be cut at 200, so saving ANY edit in the console silently dropped the rest
+# of a long description — which is exactly where Gateway records carry their tool fields
+# and test accounts for the architect assistant (live 2026-10-08, prod store-crm).
+RECORD_DESCRIPTION_MAX = 4096
+
 def _registry_id(workspace: WorkspaceContext) -> str:
     resources = workspace.resources
     registry_id = resources.get("registry_id")
@@ -194,7 +200,7 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
         client,
         registry_id,
         name=SKILL_NAME,
-        description=bundle["definition"]["description"][:200],
+        description=bundle["definition"]["description"][:RECORD_DESCRIPTION_MAX],
         descriptor_type="AGENT_SKILLS",
         descriptors=reg.build_skills_descriptors(
             skill_md=bundle["skill_md"], definition=bundle["definition"]
@@ -1130,7 +1136,7 @@ def register_skill_bundle(
             client,
             registry_id,
             name=name,
-            description=(description or name)[:200],
+            description=(description or name)[:RECORD_DESCRIPTION_MAX],
             descriptor_type="AGENT_SKILLS",
             descriptors=reg.build_skills_descriptors(
                 skill_md=bundle.skill_md, definition=definition
@@ -1328,7 +1334,7 @@ def _reupload_and_update(
         client,
         registry_id,
         name=name,
-        description=(description or name)[:200],
+        description=(description or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type="AGENT_SKILLS",
         descriptors=reg.build_skills_descriptors(
             skill_md=bundle.skill_md, definition=definition
@@ -1408,7 +1414,7 @@ def update_record(
         client,
         registry_id,
         name=name,
-        description=(new_desc or name)[:200],
+        description=(new_desc or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type=rtype,
         descriptors=record.get("descriptors") or {},
     )
@@ -1430,7 +1436,7 @@ def _update_mcp_url(
         client,
         registry_id,
         name=name,
-        description=(description or name)[:200],
+        description=(description or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type="MCP",
         descriptors=reg.build_mcp_descriptors(
             target=name, description=description, gateway_url=url, tools=None
@@ -1502,7 +1508,7 @@ def _update_skill_md(
         client,
         registry_id,
         name=name,
-        description=(definition["description"] or name)[:200],
+        description=(definition["description"] or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type="AGENT_SKILLS",
         descriptors=reg.build_skills_descriptors(skill_md=skill_md, definition=definition),
         record_version=new_version,
