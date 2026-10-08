@@ -534,8 +534,8 @@ export function CreateAgentAssistant() {
           list: fp.blockers.map((b) => b.reason).join("; "),
         }),
       );
-    } else if (fp.requires_admin && !isAdmin) {
-      lines.push(t("assistantPage.clear.adminOnly"));
+    } else if (!fp.can_clear) {
+      lines.push(t("assistantPage.clear.noPermission"));
     } else if (fp.agents.length || cloud.length) {
       lines.push(t("assistantPage.clear.irreversible"));
     } else {
@@ -1380,8 +1380,8 @@ export function CreateAgentAssistant() {
             toast(t("assistantPage.clear.blocked"));
             return;
           }
-          if (fp.requires_admin && !isAdmin) {
-            toast(t("assistantPage.clear.adminOnly"));
+          if (!fp.can_clear) {
+            toast(t("assistantPage.clear.noPermission"));
             return;
           }
           void doClear();

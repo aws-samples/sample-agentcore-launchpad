@@ -310,7 +310,7 @@ export function EvalAssetsCard({
   const summary = current?.summary;
   const canCreate = !!current && current.status === "draft" && !invalid && canMaterialize && !busy && !operation;
   const createReason = !canMaterialize
-    ? t("assistantEval.adminOnly")
+    ? t("assistantEval.noPermission")
     : invalid
       ? reviewPending ? t("assistantEval.reviewPending", { n: reviewPending }) : t("assistantEval.fixErrors")
       : undefined;

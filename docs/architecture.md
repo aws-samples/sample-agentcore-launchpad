@@ -1323,9 +1323,10 @@ conversation stays so the remaining resources stay attributable), the local Data
 rows (an AWS copy a member synced by hand is that member's asset and stays), the
 shared `delete_agent_row` teardown per Agent (preset refusal, resource, role, ledger,
 name claim), and only then the ledger rows. Owner-bound; a member may clear a bare
-transcript, while anything involving cloud assets or an Agent requires an administrator
-(`403 assistant.conversation_purge_admin`) — the same bar as the individual cleanup /
-deploy routes. Evaluation runs already recorded keep their rows.
+transcript, while cloud assets additionally need `perm:agents.deploy` and an Agent
+`perm:agents.delete` (`403 auth.permission_required`; the footprint reports
+`required_permissions` and the caller's `can_clear`) — the same bar as the individual
+cleanup / agent-delete routes. Evaluation runs already recorded keep their rows.
 
 **Approval — the only executor.** `POST …/proposal/approve` (`perm:agents.deploy`,
 the same permission as `POST /api/agents`, re-asserted in the handler) names
@@ -1460,7 +1461,7 @@ resources. `make verify` alone is not proof that the model follows the protocol.
 
 A proposal's `golden_tests` / `evaluator_recommendations` stay inert solution content.
 SE-047 adds a **separate, private, versioned plan** on the same conversation that says
-what those recommendations become, and one **administrator-only, idempotent
+what those recommendations become, and one **`perm:agents.deploy`-gated, idempotent
 materialization** that creates the assets. The Agent proposal, its approval and the
 deployed Agent are never touched; approving an Agent is not permission for cloud
 evaluation resources.
@@ -1471,7 +1472,7 @@ evaluation resources.
 |---|---|---|---|
 | Prepare / edit a plan | `POST …/evaluation-plan/prepare`, `PUT …/evaluation-plan` (member, owner-bound) | a new plan revision row (`assistant_evaluation_plans`), validated against the exact proposal revision + content hash it names | none |
 | Ask the assistant to fix an invalid plan | `POST …/turns` with `evaluation_plan_repair: {plan_revision, plan_hash}` (member, owner-bound) | an ordinary discussion turn with server-resolved plan/errors and proposal context → a new inert proposal; the console then prepares a plan from that exact new revision for validation and review | one ordinary preset invocation; no resource creation |
-| Create assets | `POST …/evaluation-plan/materialize` (admin **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and one **Lambda** per code evaluator, each with its own role/log group/resource policy and additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
+| Create assets | `POST …/evaluation-plan/materialize` (`perm:agents.deploy` **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and one **Lambda** per code evaluator, each with its own role/log group/resource policy and additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
 | Sync the Dataset to AWS | existing `POST /api/eval/datasets/{id}/sync-to-aws` | unchanged, explicit, separate | CreateDataset/AddDatasetExamples |
 | Run an evaluation | existing `POST /api/eval/runs` (`perm:eval.run`) | unchanged, separate, billable | invokes + StartBatchEvaluation |
 
@@ -1615,8 +1616,7 @@ checks, human review, metric baselines or external controls as scenarios or eval
 does not require hand-written schemas. The seed runs the **same routing rules as the
 plan** (`_routing_errors`: global `golden_test_ids`, every-scenario references), so an
 evaluator aimed at a subset of golden tests makes the proposal *invalid* at proposal time
-rather than surfacing after approval and deployment when an administrator creates the
-assets. A rejected model block also leaves an `error` transcript row named
+rather than surfacing after approval and deployment when the assets are created. A rejected model block also leaves an `error` transcript row named
 `proposal_rejected`, which `compose_messages` replays to the model as the member's side
 of the next turn — the member says "fix it" instead of relaying the errors — and the
 skill bundle carries `references/proposal-self-check.md`, a checklist mirroring every
@@ -1686,13 +1686,13 @@ rules must not score live traffic (the operation flags them `reference_dependent
 **Durable, fenced materialization** (`app/assistant/evaluation_assets.py`). Approval
 is one atomic claim: a conditional UPDATE of the plan row (still `draft`, still this
 hash, still the newest revision, conversation still owned by the approver's principal,
-and — for a registered account — the approver still an active, unexpired administrator,
+and — for a registered account — the approver still an active, unexpired account holding `agents.deploy`,
 all as predicates of that same write) in the same transaction that inserts the operation
 with every intent and the **pinned workspace identity** (account, region, assume-role
 ARN/external id, execution-role ARN and — when a grant is requested — the execution
 role's RoleId, accepted only if the role carries the `launchpad:managed` tag, never by
 name prefix); the caller is re-resolved from the database inside that transaction and
-must still be an administrator who owns the conversation. A superseded / edited /
+must still hold `agents.deploy` and own the conversation. A superseded / edited /
 already-claimed plan is `409 assistant.evaluation_plan_stale` before any write. One
 host-local `flock` per operation plus a database lease token fence the worker: before
 **every** cloud write it re-reads the token, re-checks the approver and compares the
@@ -1753,7 +1753,7 @@ foreign. Because AgentCore evaluator names are unique per account and Region, an
 but is never repaired. Retries are explicit and bounded (5 attempts); a partial
 outcome stays `partial` with each resource's error.
 
-**Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) runs under the same
+**Cleanup** (`DELETE …/operations/{id}/assets`, `perm:agents.deploy` + owner) runs under the same
 lock, lease, re-authorization and pinned-identity checks, one persisted checkpoint per
 effect and a fresh fence before every single mutation, dependency first. **A create whose
 response was lost before the service-issued identity was recorded is never adopted or
@@ -1832,14 +1832,14 @@ unchanged), recording an append-only `revision_history` entry
 event before any write; every `UpdateFunctionCode` / `UpdateFunctionConfiguration` moves
 `LastModified`, so an unchanged `LastModified` is what tells the service's own transition
 from a replacement. Lambda bumps the RevisionId on that transition for **every** new
-function, so without this rule every code evaluator needed an administrator. Without the
+function, so without this rule every code evaluator needed a manual review. Without the
 evidence (a legacy record without a lifecycle snapshot, a moved `LastModified`, a changed
 member) the drift still records a `conflict` tagged `review.kind = initial_revision_changed`
 with the observed RevisionId / LastModified, and nothing rebases: an equal digest and role
 are downloadable content. An explicit retry re-attempts exactly two kinds of conflict —
 that settleable Lambda drift and a read-only `existing` binding — and leaves every other
 conflict durable. The **reviewed recovery**
-(`POST …/operations/{id}/lambda-revision-review`, administrator **and** owner, exact plan
+(`POST …/operations/{id}/lambda-revision-review`, `perm:agents.deploy` **and** owner, exact plan
 hash, expected created and current RevisionId, the CloudTrail event id and a reason) reads
 the nominated `CreateFunction20150331` event server-side through the workspace client
 funnel (`LookupEvents` by `EventId`; exactly one well-formed record, eventually consistent
@@ -1886,7 +1886,7 @@ the worker skips ready dependencies) and a resource policy is proven absent only
 — the operation's status / token / attempts / plan binding / owner / approver / exact
 pinned and intents JSON, the approved plan row including the exact JSON of its
 validated content, the conversation owner, the workspace identity including its exact
-`resources` JSON, and the approver's and reviewer's active administrator rows — as
+`resources` JSON, and the approver's and reviewer's active `agents.deploy`-holding account rows — as
 predicates of that one statement, with the caller re-resolved inside the host lock. The
 verified state is persisted as `reviewed_baseline` and the resumed worker re-validates it
 immediately before its first mutation (configuration + tags, dependencies, inventories,

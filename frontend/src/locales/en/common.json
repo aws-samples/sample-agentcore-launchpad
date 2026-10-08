@@ -4452,7 +4452,7 @@
       "datasetCloud": "A copy of a Dataset was synced to AWS by hand; that AWS Dataset stays (delete it in Evaluation → Datasets if unwanted).",
       "onlyTranscript": "No Agent, cloud asset or Dataset was created from it.",
       "blockers": "Cannot clear yet: {{list}}. Wait for it to finish (or stop it) and try again.",
-      "adminOnly": "This conversation created cloud assets or an Agent; only an administrator can clear it together with them.",
+      "noPermission": "This conversation created cloud assets or an Agent; clearing it together with them requires the agents.deploy permission (cloud assets) and the agents.delete permission (an Agent).",
       "irreversible": "This deletes real AWS resources and cannot be undone. Evaluation runs already recorded stay in the Evaluation list.",
       "irreversibleLocal": "This cannot be undone; nothing on AWS is touched.",
       "confirm": "CLEAR CONVERSATION & ASSETS",
@@ -4581,7 +4581,7 @@
   "assistantEval": {
     "title": "EVALUATION ASSETS",
     "sub": "reviewed plan · separate from the Agent approval",
-    "scopeNote": "This plan is private to you until an administrator creates assets from it. Creating assets registers a local Dataset, AgentCore evaluators and — for each code evaluator — a separate Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
+    "scopeNote": "This plan is private to you until assets are created from it. Creating assets registers a local Dataset, AgentCore evaluators and — for each code evaluator — a separate Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
     "sourceRevision": "From proposal revision",
     "prepare": "PREPARE PLAN",
     "prepareAgain": "PREPARE AGAIN (new revision)",
@@ -4653,7 +4653,7 @@
       "declined": "declined"
     },
     "create": "CREATE ASSETS",
-    "adminOnly": "Only an administrator who owns this conversation can create assets. You can still prepare and edit the plan.",
+    "noPermission": "Creating assets requires the agents.deploy permission. You can still prepare and edit the plan.",
     "fixErrors": "Fix the validation errors first.",
     "unresolvedHint": "{{n}} recommendation(s) are unresolved — they will be shown as such, not implemented.",
     "confirmTitle": "Create the assets of plan revision {{n}}?",

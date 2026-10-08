@@ -1476,11 +1476,11 @@ def test_superseded_plan_or_demoted_approver_cannot_claim(app_ready):
     finally:
         db.close()
 
-    # 2. the approver is no longer an administrator at the claim → nothing persisted
+    # 2. the approver lost agents.deploy at the claim → nothing persisted
     def demoted(session):
         from app.routers.auth import Identity
 
-        return Identity(username="member", role="member")
+        return Identity(username="member", role="member", permissions=frozenset())
 
     with pytest.raises(AppError) as exc:
         _approve(cid, h, fakes=fakes, recheck=demoted)
@@ -1830,14 +1830,17 @@ def test_revoked_approver_stops_before_any_mutation(app_ready):
     op_id, *_ = _approve(cid, h, approver_user_id=uid, approved_by="boss", fakes=fakes)
     db = SessionLocal()
     try:
-        db.get(User, uid).role = "member"
+        # a demoted member keeps agents.deploy by default; the revocation is what stops it
+        user = db.get(User, uid)
+        user.role = "member"
+        user.permissions = {"agents.deploy": False}
         db.commit()
     finally:
         db.close()
     fakes.requested.clear()
     _run(op_id, fakes)
     op = _op(op_id)
-    assert op.status == "failed" and "no longer an administrator" in op.error
+    assert op.status == "failed" and "no longer holds the agents.deploy permission" in op.error
     assert fakes.requested == [] and fakes.lam.create_calls == 0
     db = SessionLocal()
     try:
@@ -2029,8 +2032,19 @@ def _url(cid: str, tail: str = "") -> str:
     return f"{BASE}/conversations/{cid}/evaluation-plan{tail}"
 
 
-def test_member_prepares_and_edits_but_cannot_materialize(gated, monkeypatch):
+def _set_member_permissions(user_id: str, permissions: dict[str, bool] | None) -> None:
+    db = SessionLocal()
+    try:
+        db.get(User, user_id).permissions = permissions
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_member_without_deploy_permission_prepares_and_edits_but_cannot_materialize(
+        gated, monkeypatch):
     admin, member, member_id = gated
+    _set_member_permissions(member_id, {"agents.deploy": False})
     cid, h = _conversation(f"user:{member_id}", owner="member")
     monkeypatch.setattr(assets, "start_async", lambda *a, **k: None)
     res = member.post(_url(cid, "/prepare"), json={"revision": 1})
@@ -2048,7 +2062,8 @@ def test_member_prepares_and_edits_but_cannot_materialize(gated, monkeypatch):
     assert res.status_code == 200 and res.json()["plan"]["status"] == "invalid"
     body = {"plan_revision": 2, "plan_hash": res.json()["plans"][1]["content_hash"],
             "acknowledge_disclosure": True}
-    assert member.post(_url(cid, "/materialize"), json=body).status_code == 403
+    res = member.post(_url(cid, "/materialize"), json=body)
+    assert res.status_code == 403 and res.json()["code"] == "auth.permission_required"
     assert not SessionLocal().query(EvaluationAssetOperation).count()
     assert admin.get(_url(cid)).status_code == 404
     assert admin.post(_url(cid, "/materialize"), json=body).status_code == 404
@@ -2085,9 +2100,44 @@ def test_admin_owner_materializes_own_plan_with_disclosure_and_exact_hash(gated,
     assert res.status_code == 200 and res.json()["operation"]["plan_hash"] == plan["content_hash"]
     assert admin.get(_url(cid)).json()["plans"][0]["status"] == "approved"
     assert member.get(_url(cid, f"/operations/{op['id']}")).status_code == 404
-    assert member.delete(_url(cid, f"/operations/{op['id']}/assets")).status_code == 403
+    # a member holding agents.deploy still only reaches conversations they collaborate on
+    assert member.delete(_url(cid, f"/operations/{op['id']}/assets")).status_code == 404
     snap = _snapshot_proposal(cid)
     assert snap["status"] == "approved" and snap["hash"] == h and snap["agent_id"] == "agent-1"
+
+
+def test_member_with_deploy_permission_materializes_own_plan(gated, monkeypatch):
+    _, member, member_id = gated
+    cid, h = _conversation(f"user:{member_id}", owner="member")
+    launched: list[str] = []
+    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: launched.append(op_id))
+    assert member.get(BASE).json()["can_materialize_evaluation_assets"] is True
+    res = member.put(_url(cid), json={"content": _valid_plan(cid, h, with_code=False)})
+    assert res.status_code == 200, res.text
+    plan = res.json()["plan"]
+    body = {"plan_revision": plan["revision"], "plan_hash": plan["content_hash"],
+            "acknowledge_disclosure": True}
+    res = member.post(_url(cid, "/materialize"), json=body)
+    assert res.status_code == 202, res.text
+    op = res.json()["operation"]
+    assert op["status"] == "queued" and launched == [op["id"]]
+    db = SessionLocal()
+    try:
+        row = db.get(EvaluationAssetOperation, op["id"])
+        assert row.approver_user_id == member_id and row.approved_by == "member"
+    finally:
+        db.close()
+    # revoking the permission afterwards fences the worker and refuses the follow-ups
+    _set_member_permissions(member_id, {"agents.deploy": False})
+    db = SessionLocal()
+    try:
+        reason = assets.approver_authorized(db, db.get(EvaluationAssetOperation, op["id"]))
+    finally:
+        db.close()
+    assert reason and "agents.deploy" in reason
+    for res in (member.post(_url(cid, f"/operations/{op['id']}/retry")),
+                member.delete(_url(cid, f"/operations/{op['id']}/assets"))):
+        assert res.status_code == 403 and res.json()["code"] == "auth.permission_required"
 
 
 def test_ordinary_evaluator_delete_refuses_operation_owned_records(app_ready):
@@ -2328,7 +2378,9 @@ def test_demotion_committed_by_another_session_before_the_claim_is_refused(app_r
     def demote_then_return_admin(session):
         other = SessionLocal()  # a separate committed session, immediately before the UPDATE
         try:
-            other.get(User, uid).role = "member"
+            demoted = other.get(User, uid)
+            demoted.role = "member"
+            demoted.permissions = {"agents.deploy": False}
             other.commit()
         finally:
             other.close()
@@ -3397,15 +3449,18 @@ def test_conversation_purge_removes_assets_datasets_agents_then_rows(app_ready, 
         assert fp["operations"][0]["status"] == "succeeded"
         assert fp["operations"][0]["cloud_resources"] >= 6  # evaluators + Lambda chain
         assert [d["id"] for d in fp["datasets"]] == [dataset_id]
-        assert fp["blockers"] == [] and fp["requires_admin"] is True
+        assert fp["blockers"] == []
+        assert fp["required_permissions"] == ["agents.deploy", "agents.delete"]
 
-        # a member may not purge cloud assets / an Agent
-        with pytest.raises(AppError) as exc:
-            purge.purge(db, row, ws_ctx(RESOURCES), is_admin=False, clients=fakes)
-        assert exc.value.status_code == 403
+        # a caller missing either permission may not purge cloud assets / an Agent
+        for held in ({"agents.deploy"}, {"agents.delete"}, set()):
+            with pytest.raises(AppError) as exc:
+                purge.purge(db, row, ws_ctx(RESOURCES), can=held.__contains__, clients=fakes)
+            assert exc.value.status_code == 403
+            assert exc.value.code == "auth.permission_required"
         assert db.get(EvaluationAssetOperation, op_id).status == "succeeded"  # untouched
 
-        result = purge.purge(db, row, ws_ctx(RESOURCES), is_admin=True, clients=fakes)
+        result = purge.purge(db, row, ws_ctx(RESOURCES), can=lambda _p: True, clients=fakes)
     finally:
         db.close()
     assert result["deleted"] is True
@@ -3445,7 +3500,7 @@ def test_conversation_purge_refuses_while_busy_and_keeps_rows_when_cleanup_stall
         fp = purge.footprint(db, row)  # queued, not run yet → blocked
         assert [b["kind"] for b in fp["blockers"]] == ["operation"]
         with pytest.raises(AppError) as exc:
-            purge.purge(db, row, ws_ctx(RESOURCES), is_admin=True, clients=fakes)
+            purge.purge(db, row, ws_ctx(RESOURCES), can=lambda _p: True, clients=fakes)
         assert exc.value.code == "assistant.conversation_busy" and exc.value.status_code == 409
     finally:
         db.close()
@@ -3456,7 +3511,7 @@ def test_conversation_purge_refuses_while_busy_and_keeps_rows_when_cleanup_stall
     try:
         row = db.get(AssistantConversation, cid)
         with pytest.raises(AppError) as exc:
-            purge.purge(db, row, ws_ctx(RESOURCES), is_admin=True, clients=fakes)
+            purge.purge(db, row, ws_ctx(RESOURCES), can=lambda _p: True, clients=fakes)
         assert exc.value.code == "assistant.conversation_assets_remain"
         assert exc.value.status_code == 409
         assert any(r["status"] == "delete_failed" for r in exc.value.detail["remaining"])
@@ -3470,14 +3525,15 @@ def test_conversation_purge_refuses_while_busy_and_keeps_rows_when_cleanup_stall
 
 def test_conversation_purge_routes_are_owner_bound_and_a_bare_transcript_is_a_member_delete(
         app_ready):
-    """Over HTTP: the footprint of a transcript-only conversation says no admin is
-    needed and the owner deletes it; another principal sees 404, never 403 (the
+    """Over HTTP: the footprint of a transcript-only conversation needs no permission
+    and the owner deletes it; another principal sees 404, never 403 (the
     conversation must not be discoverable)."""
     client = TestClient(app_ready)
     cid, _ = _conversation("local-operator", status="draft")
     base = f"/api/assistant/architect/conversations/{cid}"
     fp = client.get(base + "/footprint").json()
-    assert fp["requires_admin"] is False and fp["agents"] == [] and fp["operations"] == []
+    assert fp["required_permissions"] == [] and fp["can_clear"] is True
+    assert fp["agents"] == [] and fp["operations"] == []
     other, _ = _conversation("user:someone-else", status="draft")
     foreign = f"/api/assistant/architect/conversations/{other}"
     assert client.get(foreign + "/footprint").status_code == 404

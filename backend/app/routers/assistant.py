@@ -447,7 +447,6 @@ def approve_proposal(
 # ---------------------------------------------------------------------------
 
 from app.assistant import evaluation_assets as assets  # noqa: E402
-from app.routers.auth import require_admin  # noqa: E402
 
 
 class PlanPrepare(RevisionRef):
@@ -549,15 +548,13 @@ def materialize_evaluation_plan(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> Any:
-    """Administrator collaborating on the conversation: claim exactly one plan revision/hash for
+    """A collaborator holding ``agents.deploy``: claim exactly one plan revision/hash for
     materialization. 202 when this call created the operation (worker launched), 200
     with the recorded operation for a repeated / concurrent request. Creates a local
     Dataset, AgentCore evaluators and one Lambda + role per code evaluator; never
     deploys, runs, syncs or invokes anything."""
-    require_admin(request)  # belt and braces with ROUTE_POLICY
+    require_permission(request, assets.PERMISSION)  # belt and braces with ROUTE_POLICY
     identity = _caller(request)
-    if not identity.is_admin:
-        raise AppError("auth.admin_required", "administrator role required", status_code=403)
     if not req.acknowledge_disclosure:
         raise AppError("assistant.disclosure_required",
                        "acknowledge that selected test content becomes visible in the "
@@ -566,20 +563,23 @@ def materialize_evaluation_plan(
     # fresh re-resolution of the caller and the workspace grant at the claim boundary
     if auth_enabled():
         fresh = resolve_identity(request, db=db)
-        if fresh is None or not fresh.is_admin or principal_of(fresh) != principal_of(identity):
+        if fresh is None or principal_of(fresh) != principal_of(identity):
             raise AppError("auth.required", "Authentication required", status_code=401)
+        if not assets.may_materialize(fresh):
+            raise assets.permission_error()
     ws_row = db.get(Workspace, ws.id)
     if ws_row is None:
         raise AppError("workspace.not_found", "workspace not found", status_code=404)
     _authorize(db, identity, ws_row)
     def recheck(session: Session) -> Identity:
-        # re-resolved from the database INSIDE the claim transaction: a demotion,
-        # disablement or grant removal between the route check and the claim is honoured
+        # re-resolved from the database INSIDE the claim transaction: a permission
+        # revocation, disablement or grant removal between the route check and the
+        # claim is honoured
         fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
         if fresh is None:
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not fresh.is_admin:
-            raise AppError("auth.admin_required", "administrator role required", status_code=403)
+        if not assets.may_materialize(fresh):
+            raise assets.permission_error()
         fresh_ws = session.get(Workspace, ws.id)
         if fresh_ws is None:
             raise AppError("workspace.not_found", "workspace not found", status_code=404)
@@ -626,7 +626,7 @@ def retry_evaluation_operation(
 ) -> dict[str, Any]:
     """Explicit, bounded retry of a partial/failed operation: resumes the persisted
     intents (same tokens/requests); never a fresh create."""
-    require_admin(request)
+    require_permission(request, assets.PERMISSION)
     identity = _caller(request)
     row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     op = assets.owned_operation(db, row, operation_id)
@@ -646,14 +646,12 @@ def review_lambda_revision(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Administrator + owner reviewed recovery of ONE conflict: the Lambda's RevisionId
+    """``agents.deploy`` + owner reviewed recovery of ONE conflict: the Lambda's RevisionId
     moved between CreateFunction (Pending) and Active. Reads the nominated CloudTrail
     CreateFunction event and the settled function server-side, records an append-only
     review and re-queues the ordinary worker. No cloud write happens in this route."""
-    require_admin(request)
+    require_permission(request, assets.PERMISSION)
     identity = _caller(request)
-    if not identity.is_admin:
-        raise AppError("auth.admin_required", "administrator role required", status_code=403)
     row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     op = assets.owned_operation(db, row, operation_id)
     ws_row = db.get(Workspace, ws.id)
@@ -665,8 +663,10 @@ def review_lambda_revision(
         fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
         if fresh is None:
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not fresh.is_admin or principal_of(fresh) != principal_of(identity):
-            raise AppError("auth.admin_required", "administrator role required", status_code=403)
+        if principal_of(fresh) != principal_of(identity):
+            raise AppError("auth.required", "Authentication required", status_code=401)
+        if not assets.may_materialize(fresh):
+            raise assets.permission_error()
         fresh_ws = session.get(Workspace, ws.id)
         if fresh_ws is None:
             raise AppError("workspace.not_found", "workspace not found", status_code=404)
@@ -695,7 +695,7 @@ def cleanup_evaluation_operation(
 ) -> dict[str, Any]:
     """Delete exactly the cloud artifacts the operation created (evaluators, Lambda,
     its role/log group, the additive role policy). The local Dataset stays."""
-    require_admin(request)
+    require_permission(request, assets.PERMISSION)
     identity = _caller(request)
     row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     op = assets.owned_operation(db, row, operation_id)
@@ -720,8 +720,10 @@ def conversation_footprint(
     """What CLEAR would remove for this conversation (Agents deployed from its
     approvals, evaluation-assets operations with their cloud resources, the local
     Datasets they created) and what currently blocks it. Ledger read only; owner-bound."""
-    row = service.owned_conversation(db, ws.id, principal_of(_caller(request)), conversation_id)
-    return purge_mod.footprint(db, row)
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    fp = purge_mod.footprint(db, row)
+    return {**fp, "can_clear": all(identity.can(p) for p in fp["required_permissions"])}
 
 
 @router.delete("/conversations/{conversation_id}")
@@ -733,10 +735,10 @@ def delete_conversation(
 ) -> dict[str, Any]:
     """Delete the conversation and everything it created: fenced cleanup of every
     evaluation-assets operation, the local Datasets, every deployed Agent (the same
-    teardown as DELETE /api/agents/{id}), then the ledger rows. Owner-bound; an
-    administrator is required as soon as cloud assets or an Agent are involved.
+    teardown as DELETE /api/agents/{id}), then the ledger rows. Owner-bound; the caller
+    also needs ``agents.deploy`` for cloud assets and ``agents.delete`` for an Agent.
     Refuses (409, nothing deleted) while a turn, an operation or a deployment job is
     still running, and stops (409) if an operation cannot be fully cleaned."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
-    return purge_mod.purge(db, row, ws.context, is_admin=identity.is_admin)
+    return purge_mod.purge(db, row, ws.context, can=identity.can)

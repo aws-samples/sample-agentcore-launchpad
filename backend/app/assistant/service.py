@@ -316,8 +316,8 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   literals only. Before emitting the block, walk the skill's
   `references/proposal-self-check.md` — Launchpad runs the same checks and rejects the
   block on the first failure. It is an inert seed the member reviews; nothing is
-  created by this block or by the Agent approval — an administrator creates assets in
-  a separate step.
+  created by this block or by the Agent approval — the member creates assets in a
+  separate step.
 - optional `fishbone`: the customer's Agent-DLC five-dimension launch-barrier fishbone
   (see the skill's `references/fishbone-methodology.md`) — `{{"version": 1, "customer",
   "date": "YYYY-MM-DD", "use_case", "service_target": "internal|b2b|b2c", "coverage":
@@ -390,7 +390,7 @@ Hard rules of this environment:
    Gateway/tool provisioning and
    natural-language Skill generation are unavailable. Evaluators and
    datasets are NOT created by this conversation either: the member later reviews a
-   separate evaluation-assets plan and an administrator may create them from it.
+   separate evaluation-assets plan and may create them from it.
 """
 
 
@@ -814,9 +814,9 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
             "kb_gateway": bool(res.get("kb_gateway_id") and res.get("oauth_provider_arn")),
         },
         "is_admin": identity.is_admin,
-        # SE-047: only an administrator may materialize an evaluation plan (AWS
-        # evaluators + Lambda + IAM); members prepare/edit plans
-        "can_materialize_evaluation_assets": identity.is_admin,
+        # SE-047: materializing an evaluation plan (AWS evaluators + Lambda + IAM)
+        # needs the deploy permission; every member prepares/edits plans
+        "can_materialize_evaluation_assets": identity.can(PERMISSION_DEPLOY),
         "owner": identity.username,
         "principal": principal_of(identity),
     }

@@ -19,8 +19,9 @@ paths that already delete them one by one** and in dependency order:
    then the ledger rows (operations, plans, proposals, messages, conversation).
 
 Authorization: owner-bound like every conversation route; when the footprint holds
-anything beyond ledger rows (cloud assets or an Agent) the caller must also be an
-administrator — the same bar the individual cleanup / deploy routes set.
+anything beyond ledger rows the caller must also hold the permission the individual
+route sets — ``agents.deploy`` for cloud assets (cleanup parity) and ``agents.delete``
+for an Agent (``DELETE /api/agents/{id}`` parity). Administrators hold both.
 
 The purge is not atomic across AWS calls (no transaction spans them); it is idempotent
 in the sense that a retry after a partial failure continues from what is left.
@@ -29,6 +30,7 @@ in the sense that a retry after a partial failure continues from what is left.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import delete
@@ -48,6 +50,8 @@ from app.models.ledger import Agent, Job
 from app.services.workspace import WorkspaceContext
 
 logger = logging.getLogger(__name__)
+
+PERMISSION_AGENT_DELETE = "agents.delete"
 
 LIVE_JOB_STATUSES = ("queued", "running")
 LIVE_OPERATION_STATUSES = ("queued", "running", "cleaning")
@@ -136,18 +140,22 @@ def footprint(db: Session, row: AssistantConversation) -> dict[str, Any]:
         "datasets": [{"id": d.id, "name": d.name, "item_count": len(d.items or []),
                       "cloud": bool(d.cloud)} for d in datasets],
         "blockers": blockers,
-        # anything beyond ledger rows needs an administrator (cleanup / deploy parity)
-        "requires_admin": bool(agents or cloud_operations),
+        # anything beyond ledger rows needs the permission of the individual route
+        "required_permissions": (
+            ([assets.PERMISSION] if cloud_operations else [])
+            + ([PERMISSION_AGENT_DELETE] if agents else [])
+        ),
     }
 
 
 def purge(
-    db: Session, row: AssistantConversation, workspace: WorkspaceContext, *, is_admin: bool,
+    db: Session, row: AssistantConversation, workspace: WorkspaceContext, *,
+    can: Callable[[str], bool],
     clients: assets.ClientFactory = assets._default_clients,
 ) -> dict[str, Any]:
     """Delete the conversation and everything it created (see module docstring).
     Raises ``AppError`` 409 when blocked or when an operation's cleanup leaves owned
-    resources; 403 when assets exist and the caller is not an administrator."""
+    resources; 403 when assets exist and ``can`` refuses a required permission."""
     fp = footprint(db, row)
     if fp["blockers"]:
         raise AppError(
@@ -156,12 +164,14 @@ def purge(
             "before clearing: " + "; ".join(b["reason"] for b in fp["blockers"]),
             {"blockers": fp["blockers"]}, status_code=409,
         )
-    if fp["requires_admin"] and not is_admin:
+    missing = [p for p in fp["required_permissions"] if not can(p)]
+    if missing:
         raise AppError(
-            "assistant.conversation_purge_admin",
-            "this conversation created cloud assets or an Agent; only an administrator can "
-            "clear it together with them",
-            {"agents": fp["agents"], "operations": fp["operations"]}, status_code=403,
+            "auth.permission_required",
+            "this conversation created cloud assets or an Agent; clearing it together with "
+            f"them requires the {', '.join(repr(p) for p in missing)} permission",
+            {"permission": missing[0], "missing": missing,
+             "agents": fp["agents"], "operations": fp["operations"]}, status_code=403,
         )
     conversation_id = row.id
     removed: dict[str, Any] = {"operations_cleaned": [], "datasets": [], "agents": []}
