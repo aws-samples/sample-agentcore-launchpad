@@ -576,8 +576,8 @@ def parse_insights(result: dict[str, Any]) -> dict[str, Any]:
 # trace itself. Per the AgentCore docs (create-evaluator): "Custom evaluators
 # that use ground truth placeholders cannot be used in online evaluation
 # configurations" — live traffic carries no ground truth. ``{context}``,
-# ``{assistant_turn}``, ``{available_tools}``, ``{tool_turn}`` and
-# ``{actual_tool_trajectory}`` are all trace-derived and stay valid online.
+# ``{assistant_turn}``, ``{available_tools}`` and ``{tool_turn}`` are
+# trace-derived and stay valid online.
 GROUND_TRUTH_PLACEHOLDERS = (
     "expected_response",
     "expected_tool_trajectory",
@@ -589,6 +589,21 @@ def ground_truth_placeholders(instructions: str) -> list[str]:
     """Ground-truth placeholders a custom judge's instructions reference."""
     text = instructions or ""
     return [p for p in GROUND_TRUTH_PLACEHOLDERS if f"{{{p}}}" in text]
+
+
+# The SESSION-level ``{actual_tool_trajectory}`` is listed by AWS among the reference-input
+# placeholders too: a batch evaluation fills it, but CreateOnlineEvaluationConfig rejects a
+# judge that uses it ("require reference inputs … support on-demand evaluation only" —
+# live, us-east-1 2026-10-08). It is not ground truth a Dataset must carry, so it stays out
+# of GROUND_TRUTH_PLACEHOLDERS and only blocks online use.
+ONLINE_UNAVAILABLE_PLACEHOLDERS = (*GROUND_TRUTH_PLACEHOLDERS, "actual_tool_trajectory")
+
+
+def online_unavailable_placeholders(instructions: str) -> list[str]:
+    """Placeholders a custom judge's instructions reference that online evaluation
+    cannot fill (ground truth plus ``actual_tool_trajectory``)."""
+    text = instructions or ""
+    return [p for p in ONLINE_UNAVAILABLE_PLACEHOLDERS if f"{{{p}}}" in text]
 
 
 def judge_instructions(detail: dict[str, Any]) -> str:

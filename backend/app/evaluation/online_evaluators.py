@@ -135,13 +135,13 @@ def _assert_no_ground_truth(
         # a control-plane blip must not block the caller's action: AWS enforces
         # the same constraint server-side, so fail open and let it have the last word
         return
-    placeholders = ac.ground_truth_placeholders(ac.judge_instructions(detail))
+    placeholders = ac.online_unavailable_placeholders(ac.judge_instructions(detail))
     if placeholders:
         rendered = ", ".join(f"{{{p}}}" for p in placeholders)
         raise AppError(
             code,
-            f"{evaluator} references {rendered}, which is ground truth online "
-            "evaluation does not carry — use a batch evaluation run instead",
+            f"{evaluator} references {rendered}, which online evaluation does not "
+            "carry (reference inputs) — use a batch evaluation run instead",
             {"evaluator": evaluator, "placeholders": placeholders},
             status_code=400,
         )
