@@ -37,6 +37,10 @@ resources (`/api/memory/resources` writes) is member-grantable via
 `perm:memory.manage` on the same default-granted, revocable terms — DeleteMemory
 is irreversible — and those routes reach only memories the workspace manages.
 Adopting an existing account memory into management is `ADMIN`.
+Amended 2026-10-08: the architect assistant's evaluation-assets routes (materialize,
+retry, Lambda revision review, cleanup) are member-grantable via `perm:agents.deploy`
+— the same permission that approves a proposal into a deployed Agent — instead of
+`ADMIN`; clearing a conversation with assets needs the matching `perm:` keys.
 Since 2026-08-12 the table carries a **second dimension**: whether a route
 operates inside a workspace (one account/region environment). `WORKSPACE_EXEMPT`
 names the hub-global routes; every other entry is workspace-scoped, and
@@ -150,29 +154,31 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
         PERM_AGENT_DEPLOY,
     # ---- SE-047 evaluation-assets plan: preparing/editing the private plan is
     # discussion (member, owner-bound); materializing creates AWS evaluators + a
-    # Lambda + IAM → admin, owner-bound, exact plan revision/hash; status is a
-    # ledger read; cleanup deletes only operation-owned artifacts → admin ----
+    # Lambda + IAM → the deploy permission (amended 2026-10-08: was admin), owner-
+    # bound, exact plan revision/hash; status is a ledger read; retry / review /
+    # cleanup of an operation ride the same permission ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare"):
         MEMBER,
     ("PUT", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
     ("POST",
      "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize"):
-        ADMIN,
+        PERM_AGENT_DEPLOY,
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
      "{operation_id}"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
-     "{operation_id}/retry"): ADMIN,
+     "{operation_id}/retry"): PERM_AGENT_DEPLOY,
     # SE-049: reviewed recovery of the Lambda first-initialization RevisionId conflict —
-    # admin + owner, reads CloudTrail / Lambda, writes only the ledger review + requeue
+    # deploy permission + owner, reads CloudTrail / Lambda, writes only the ledger
+    # review + requeue
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
-     "{operation_id}/lambda-revision-review"): ADMIN,
+     "{operation_id}/lambda-revision-review"): PERM_AGENT_DEPLOY,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
-     "operations/{operation_id}/assets"): ADMIN,
+     "operations/{operation_id}/assets"): PERM_AGENT_DEPLOY,
     # ---- clearing a conversation (History panel): the footprint is a ledger read;
-    # the purge is owner-bound and MEMBER at the policy layer — the handler escalates
-    # to administrator as soon as the footprint holds cloud assets or an Agent
-    # (cleanup / deploy parity), so a plain transcript stays the member's to delete ----
+    # the purge is owner-bound and MEMBER at the policy layer — the handler adds
+    # agents.deploy for cloud assets and agents.delete for an Agent (cleanup /
+    # delete parity), so a plain transcript stays the member's to delete ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/footprint"): MEMBER,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
     # ---- credential minting ----

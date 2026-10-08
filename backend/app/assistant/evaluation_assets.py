@@ -45,7 +45,8 @@ create is an effect that may exist.
 
 **Fencing.** One host-local ``flock`` per operation (worker and cleanup) plus a
 database lease token; before EVERY cloud write the worker re-reads the lease token,
-re-checks the approver is still an active administrator and that the workspace row
+re-checks the approver is still an active account holding ``agents.deploy`` and that the
+workspace row
 still equals the identity pinned at approval (account, region, assume-role, execution
 role ARN/RoleId). A quick process restart re-acquires the free flock and resumes
 without waiting for a lease timeout; a live worker is never stolen.
@@ -81,7 +82,7 @@ from urllib.parse import unquote
 from botocore.exceptions import ClientError
 from botocore.loaders import Loader
 from botocore.model import ServiceModel, Shape
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -101,11 +102,38 @@ from app.models.assistant import (
 )
 from app.models.ledger import User, Workspace
 from app.models.ledger import _id as _new_id
-from app.routers.auth import ROLE_ADMIN, Identity
+from app.routers.auth import ROLE_ADMIN, Identity, granted_permissions
 from app.services import users as users_service
 from app.services.workspace import WorkspaceContext, workspace_context
 
 logger = logging.getLogger(__name__)
+
+# Materializing (and retrying, reviewing, cleaning up) rides the member-grantable
+# deploy permission: an operation creates evaluators, a Lambda and its IAM role — the
+# same class of footprint as deploying an Agent. Administrators hold it implicitly.
+PERMISSION = "agents.deploy"
+
+
+def may_materialize(identity: Identity) -> bool:
+    return identity.can(PERMISSION)
+
+
+def permission_error() -> AppError:
+    return AppError("auth.permission_required",
+                    f"This action requires the '{PERMISSION}' permission",
+                    {"permission": PERMISSION}, status_code=403)
+
+
+def _authorized_user(user_id: str) -> Any:
+    """SQL predicate: the account is active, unexpired and holds ``PERMISSION`` — an
+    administrator, or a member without a stored denial (``users.permissions`` records
+    only explicit ``false`` entries)."""
+    return select(User.id).where(
+        User.id == user_id, User.status == "active",
+        (User.expires_at.is_(None)) | (User.expires_at > _now()),
+        or_(User.role == ROLE_ADMIN,
+            func.coalesce(User.permissions[PERMISSION].as_boolean(), true()) == true()),
+    ).exists()
 
 HANDLER_PATH = Path(__file__).resolve().parent / "lambda_runtime" / "handler.py"
 LOCK_DIR = DATA_DIR / "locks" / "eval-assets"
@@ -606,8 +634,9 @@ class Materialization:
 
 
 def approver_authorized(db: Session, op: EvaluationAssetOperation) -> str | None:
-    """Fresh check that the approver is still an active administrator. ``None`` when
-    fine, else the reason. The config admin has no row and stays authorized."""
+    """Fresh check that the approver is still an active account holding ``PERMISSION``.
+    ``None`` when fine, else the reason. The config admin has no row and stays
+    authorized."""
     if op.approver_user_id is None:
         return None
     user = db.get(User, op.approver_user_id)
@@ -615,8 +644,8 @@ def approver_authorized(db: Session, op: EvaluationAssetOperation) -> str | None
         return "the approving account no longer exists"
     if user.status != "active" or users_service.is_expired(user):
         return "the approving account is disabled or expired"
-    if user.role != ROLE_ADMIN:
-        return "the approving account is no longer an administrator"
+    if user.role != ROLE_ADMIN and PERMISSION not in granted_permissions(user.permissions):
+        return f"the approving account no longer holds the {PERMISSION} permission"
     return None
 
 
@@ -681,7 +710,7 @@ def approve_plan(
     hash, still the newest revision) in the same transaction that inserts the
     operation with every intent and the pinned workspace identity; ``recheck`` (when
     given) re-resolves the caller from the database inside that transaction and must
-    still be an administrator who owns the conversation. Repeated / concurrent calls
+    still hold ``PERMISSION`` and collaborate on the conversation. Repeated / concurrent calls
     for the same plan return the recorded operation (200); a superseded, edited or
     already-claimed plan is ``409 assistant.evaluation_plan_stale`` before any write.
     """
@@ -768,7 +797,7 @@ def approve_plan(
     if recheck is not None:
         identity = recheck(db)
         current = db.get(AssistantConversation, conversation.id)
-        if not identity.is_admin or not may_collaborate(current, principal_of(identity)):
+        if not may_materialize(identity) or not may_collaborate(current, principal_of(identity)):
             db.rollback()
             raise NotFoundError("assistant.conversation_not_found", "conversation not found")
         op.approved_by = identity.username
@@ -791,10 +820,7 @@ def approve_plan(
         owner_ok,
     ]
     if op.approver_user_id is not None:
-        conditions.append(select(User.id).where(
-            User.id == op.approver_user_id, User.role == ROLE_ADMIN, User.status == "active",
-            (User.expires_at.is_(None)) | (User.expires_at > _now()),
-        ).exists())
+        conditions.append(_authorized_user(op.approver_user_id))
     claimed = db.execute(
         update(AssistantEvaluationPlan).where(*conditions).values(status="approved")
     ).rowcount
@@ -1610,7 +1636,7 @@ class _Runner:
         # $LATEST must still be exactly what the service returned to us (RevisionId included)
         # before ANY further write; our own later writes re-pin it deliberately below. A
         # RevisionId that ALONE moved during the first initialization is not rebased
-        # automatically: it is recorded as a review-required conflict an administrator
+        # automatically: it is recorded as a review-required conflict an authorized owner
         # settles with the CreateFunction CloudTrail event (review_lambda_initial_revision).
         drift = _latest_drift(cfg, approved, stored["revision_id"])
         if drift == ["RevisionId"] and initial_revision_conflict_eligible(res):
@@ -1643,7 +1669,7 @@ class _Runner:
             raise _Conflict("$LATEST differs from the approved identity before publish on "
                             "['RevisionId'] — the function was changed or replaced; refusing "
                             "to continue. The RevisionId moved while the function was still "
-                            "provisioning: an administrator may review it against the "
+                            "provisioning: an authorized owner may review it against the "
                             "CreateFunction CloudTrail event (lambda-revision-review)")
         self._require_latest(cfg, approved, stored["revision_id"], "before publish")
         if not stored.get("settled_revision_id"):
@@ -2331,7 +2357,7 @@ def start_async(op_id: str, **kwargs: Any) -> threading.Thread | None:
 
 
 def resume_operations() -> list[str]:
-    """Startup: re-wake ONLY operations an administrator explicitly approved and that
+    """Startup: re-wake ONLY operations an authorized caller explicitly approved and that
     were interrupted (queued/running). The host lock decides whether a worker is
     still alive — a quick restart resumes at once, a live worker is never stolen.
     Finished, partial and failed operations need an explicit retry."""
@@ -3059,8 +3085,8 @@ def review_lambda_initial_revision(
         db.expire_all()  # BEFORE the recheck: its reads must not hit cached rows
         fresh_identity = recheck(db) if recheck else None
         principal = principal_of(fresh_identity) if fresh_identity else None
-        if fresh_identity is not None and not fresh_identity.is_admin:
-            raise AppError("auth.admin_required", "administrator role required", status_code=403)
+        if fresh_identity is not None and not may_materialize(fresh_identity):
+            raise permission_error()
         db.expire_all()
         op = db.get(EvaluationAssetOperation, op.id)
         if op is None:
@@ -3172,10 +3198,7 @@ def review_lambda_initial_revision(
             owner_ok, plan_ok, workspace_ok,
         ]
         for user_id in {op.approver_user_id, review["reviewer_user_id"]} - {None}:
-            conditions.append(select(User.id).where(
-                User.id == user_id, User.role == ROLE_ADMIN, User.status == "active",
-                (User.expires_at.is_(None)) | (User.expires_at > _now()),
-            ).exists())
+            conditions.append(_authorized_user(user_id))
         rows = db.execute(
             update(EvaluationAssetOperation)
             .where(*conditions)

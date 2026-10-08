@@ -1305,8 +1305,10 @@ export interface AssistantConversationFootprint {
   }[];
   datasets: { id: string; name: string; item_count: number; cloud: boolean }[];
   blockers: { kind: "turn" | "operation" | "job"; id: string; reason: string }[];
-  /** cloud assets or an Agent are involved → only an administrator may clear */
-  requires_admin: boolean;
+  /** permissions clearing needs: agents.deploy for cloud assets, agents.delete for an Agent */
+  required_permissions: string[];
+  /** the caller holds every required permission */
+  can_clear: boolean;
 }
 
 export interface AssistantConversationPurgeResult {

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { useAuth } from "../../../auth/auth-context";
 import { api, type AssistantConversationFootprint } from "../../../lib/api";
 import { useV2Toast } from "../../hooks";
 import { Alert, Confirm } from "../../ui";
@@ -16,7 +15,6 @@ export function useClearConversation(onCleared: (id: string) => void) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const apiMessage = useApiMessage();
-  const { isAdmin } = useAuth();
   const [clearing, setClearing] = useState<{
     id: string;
     title: string;
@@ -43,8 +41,8 @@ export function useClearConversation(onCleared: (id: string) => void) {
       toast("error", t("assistantPage.clear.blocked"));
       return;
     }
-    if (fp.requires_admin && !isAdmin) {
-      toast("error", t("assistantPage.clear.adminOnly"));
+    if (!fp.can_clear) {
+      toast("error", t("assistantPage.clear.noPermission"));
       return;
     }
     const { id, title } = clearing;
@@ -73,8 +71,8 @@ export function useClearConversation(onCleared: (id: string) => void) {
   const closing = fp
     ? fp.blockers.length
       ? { tone: "error" as const, text: t("assistantPage.clear.blockers", { list: fp.blockers.map((b) => b.reason).join("; ") }) }
-      : fp.requires_admin && !isAdmin
-        ? { tone: "warn" as const, text: t("assistantPage.clear.adminOnly") }
+      : !fp.can_clear
+        ? { tone: "warn" as const, text: t("assistantPage.clear.noPermission") }
         : fp.agents.length || cloud.length
           ? { tone: "warn" as const, text: t("assistantPage.clear.irreversible") }
           : { tone: "info" as const, text: t("assistantPage.clear.irreversibleLocal") }

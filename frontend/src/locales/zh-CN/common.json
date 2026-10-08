@@ -4452,7 +4452,7 @@
       "datasetCloud": "其中有 Dataset 曾被手动同步到 AWS；该 AWS Dataset 会保留（如不需要，请在 评估 → Datasets 中删除）。",
       "onlyTranscript": "该会话没有创建 Agent、云端资产或 Dataset。",
       "blockers": "暂时无法清除：{{list}}。请等待其完成（或停止）后重试。",
-      "adminOnly": "该会话创建了云端资产或 Agent；只有管理员才能连同这些资产一起清除。",
+      "noPermission": "该会话创建了云端资产或 Agent；连同这些资产一起清除需要 agents.deploy 权限（云端资产）和 agents.delete 权限（Agent）。",
       "irreversible": "此操作会删除真实的 AWS 资源且无法撤销。已记录的评估运行仍会保留在评估页列表中。",
       "irreversibleLocal": "此操作无法撤销；不会改动任何 AWS 资源。",
       "confirm": "清除会话与资产",
@@ -4581,7 +4581,7 @@
   "assistantEval": {
     "title": "评估资产",
     "sub": "已评审的计划 · 独立于 Agent 批准",
-    "scopeNote": "在管理员据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及为每个代码评估器分别创建一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
+    "scopeNote": "在据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及为每个代码评估器分别创建一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
     "sourceRevision": "来源提案版本",
     "prepare": "准备计划",
     "prepareAgain": "重新准备（新版本）",
@@ -4653,7 +4653,7 @@
       "declined": "已拒绝"
     },
     "create": "创建资产",
-    "adminOnly": "只有拥有该对话的管理员才能创建资产。你仍可以准备和编辑计划。",
+    "noPermission": "创建资产需要 agents.deploy 权限。你仍可以准备和编辑计划。",
     "fixErrors": "请先修正校验错误。",
     "unresolvedHint": "有 {{n}} 条建议未解决——它们会如实显示为未解决，不会被实现。",
     "confirmTitle": "创建计划版本 {{n}} 的资产？",

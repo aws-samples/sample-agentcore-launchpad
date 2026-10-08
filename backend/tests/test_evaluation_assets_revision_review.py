@@ -746,6 +746,9 @@ def _route(cid, op_id):
 def test_route_admin_owner_reviews_member_and_foreign_are_refused(gated, monkeypatch,
                                                                   no_threads):
     admin, member, member_id = gated
+    with SessionLocal() as db:  # a member whose agents.deploy was revoked
+        db.get(User, member_id).permissions = {"agents.deploy": False}
+        db.commit()
     cid, h, op_id, fakes = _blocked(principal="config-admin", owner="admin")
     _create_event(op_id, fakes)
     monkeypatch.setattr(assets, "review_lambda_initial_revision",
@@ -784,11 +787,11 @@ def test_route_admin_owner_reviews_member_and_foreign_are_refused(gated, monkeyp
     assert _res(_op(op2), "lambda_function")["status"] == "conflict"
 
 
-def test_route_policy_names_the_review_route_admin():
-    from app.core.route_policy import ADMIN, ROUTE_POLICY
+def test_route_policy_names_the_review_route_deploy_permission():
+    from app.core.route_policy import PERM_AGENT_DEPLOY, ROUTE_POLICY
     key = ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
                    "operations/{operation_id}/lambda-revision-review")
-    assert ROUTE_POLICY[key] == ADMIN
+    assert ROUTE_POLICY[key] == PERM_AGENT_DEPLOY
 
 
 def test_cloudtrail_casing_is_rebuilt_from_the_model_and_data_maps_stay_lossless():

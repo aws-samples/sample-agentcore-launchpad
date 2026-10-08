@@ -803,8 +803,9 @@ Agent、每次评估资产操作及其仍存活的云端资源、这些操作创
 对每次操作执行带围栏的 `cleanup_operation`（未达到 `cleaned` 的操作以 `409 assistant.conversation_assets_remain`
 中止清除，会话保留以便剩余资源仍可归属）、删除本地 Dataset 行（成员手动同步到 AWS 的副本属于该成员，保留）、
 对每个 Agent 执行共享的 `delete_agent_row` 拆除（预置拒绝、资源、角色、账本、名称占用），最后才删账本行。
-按所有者绑定；成员可以清除只有对话记录的会话，涉及云端资产或 Agent 时必须是管理员
-（`403 assistant.conversation_purge_admin`）——与单独的清理 / 部署路由同一门槛。已记录的评估运行保留。
+按所有者绑定；成员可以清除只有对话记录的会话，涉及云端资产时还需要 `perm:agents.deploy`，涉及 Agent
+时还需要 `perm:agents.delete`（`403 auth.permission_required`；footprint 返回 `required_permissions` 与调用者的
+`can_clear`）——与单独的清理 / 删除 Agent 路由同一门槛。已记录的评估运行保留。
 
 **批准——唯一的执行者。** `POST …/proposal/approve`（`perm:agents.deploy`，与 `POST /api/agents`
 同一权限，处理器内再次断言）指定 `{revision, content_hash}`。首先解析**请求的确切修订**：已批准的
@@ -891,10 +892,10 @@ AWS 回答、有效的模型生成提案、授权批准创建测试 Harness、�
 ### 评估资产计划（SE-047）——从黄金测试到经审阅的资产创建
 
 提案中的 `golden_tests` / `evaluator_recommendations` 仍是惰性的方案内容。SE-047 在同一对话上增加一份
-**独立、私有、带版本的类型化计划**，以及一次**仅限管理员、幂等的资产创建**。Agent 提案、它的批准和已部署的
+**独立、私有、带版本的类型化计划**，以及一次**受 `perm:agents.deploy` 控制、幂等的资产创建**。Agent 提案、它的批准和已部署的
 Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
 
-- **四件事刻意分开**：准备 / 编辑计划（成员，仅账本写入）；创建资产（管理员且为对话所有者，精确计划版本 +
+- **四件事刻意分开**：准备 / 编辑计划（成员，仅账本写入）；创建资产（`perm:agents.deploy` 且为对话所有者，精确计划版本 +
   哈希，需确认披露）→ 本地 Launchpad Dataset、AgentCore 评估器，以及代码规则对应的一个 Lambda（含独立角色 /
   日志组 / 资源策略 / 对执行角色的附加授权）；把 Dataset 同步到 AWS（既有的独立操作）；运行评估（既有的独立、
   计费操作）。创建过程绝不部署、不运行评估、不同步 Dataset、不启用在线评估、不调用模型。
@@ -935,7 +936,7 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   协议禁止把多 actor / 多 session 流程、runner 计算的检查、人工评审、指标基线或外部控制作为场景或评估器写入种子——
   它们进入 `blocked_golden_tests` 与 `manual_tasks`。种子与计划共用**同一套路由规则**（`_routing_errors`：
   `golden_test_ids` 必须全局、参考驱动的评估器要求每个场景都带参考），因此只针对部分黄金测试的评估器会在提案阶段
-  就让修订*无效*，而不是等到批准、部署之后管理员创建资产时才暴露。被拒的模型提案块还会在对话记录里留下一条
+  就让修订*无效*，而不是等到批准、部署之后创建资产时才暴露。被拒的模型提案块还会在对话记录里留下一条
   `proposal_rejected` 的 `error` 行，`compose_messages` 在下一轮把它作为成员一侧的内容回放给模型——成员只需说
   “请修正”，无需转述错误；技能包同时携带 `references/proposal-self-check.md`，逐条镜像契约规则，模型在首次提交
   前逐项核对（回复内校验见“提案的提交、校验与修订”）。唯一草拟的评审器
@@ -948,7 +949,7 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   必须属于本 session 且不冲突。任何违反都返回错误信封，绝不 PASS。
 - **持久化、带围栏的创建**：批准是一次原子声明（计划行仍为 draft、同哈希、最新版本的条件更新，与插入操作及
   **钉住的 Workspace 身份**（账号、Region、AssumeRole、执行角色 ARN/RoleId——仅接受带 `launchpad:managed` 标签
-  的角色）同一事务；调用者在事务内重新解析，必须仍是拥有该对话的管理员）。每个操作一把主机本地 `flock` +
+  的角色）同一事务；调用者在事务内重新解析，必须仍持有 `agents.deploy` 且拥有该对话）。每个操作一把主机本地 `flock` +
   数据库租约令牌；每次云端写入之前重新读取令牌、重新检查批准者、比对 Workspace 身份，任何变化即停止。快速重启
   立即恢复，活跃 worker 绝不被抢占。`PublishVersion` 依据 `ListVersionsByFunction` 对账（恰好一个已发布版本
   携带摘要）；对执行角色的授权仅限**已发布版本 ARN**，绝不含 `$LATEST`；所有回读（评估器 id / 名称 / 级别 /
@@ -996,11 +997,11 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   追加一条 `revision_history` 记录（`initial_activation_settled`、from → to、证据）与 `lambda_function:settled` 事件；
   任何 `UpdateFunctionCode` / `UpdateFunctionConfiguration` 都会改变 `LastModified`，所以「LastModified 不变」正是区分
   服务自身状态转换与函数被替换的依据。Lambda 对**每个**新函数都会在这次转换上更换 RevisionId，没有这条规则每个代码
-  评估器都要等管理员。证据不足时（SE-049 之前没有生命周期快照的旧记录、`LastModified` 变了、某成员变了）仍记为
+  评估器都要人工复核。证据不足时（SE-049 之前没有生命周期快照的旧记录、`LastModified` 变了、某成员变了）仍记为
   `conflict` 并标记 `review.kind = initial_revision_changed`（附观察到的 RevisionId / LastModified），不做任何自动重钉：
   相同摘要与角色只是可下载的内容。显式重试只重新尝试两类冲突——这种可结算的 Lambda 漂移和只读的 `existing` 绑定——
   其余冲突保持不变。**经审阅的恢复**
-  （`POST …/operations/{id}/lambda-revision-review`，管理员**且**所有者，精确的计划哈希、期望的初始与当前 RevisionId、
+  （`POST …/operations/{id}/lambda-revision-review`，`perm:agents.deploy` **且**所有者，精确的计划哈希、期望的初始与当前 RevisionId、
   CloudTrail 事件 ID 与原因）通过 Workspace 客户端漏斗在服务端读取指定的 `CreateFunction20150331` 事件（按 `EventId`
   调用 `LookupEvents`；必须恰好一条格式正确的记录，最终一致的历史失败关闭），要求它就是本操作的成功创建（来源、账号、
   区域、请求字段、响应中的 FunctionArn / 初始 RevisionId / CodeSha256 / `Pending` / `Creating` / `lastModified`，SE-049
@@ -1023,7 +1024,7 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   类型校验，信封折叠仅限良构空形态，`CodeSize` 保留并比较。依赖与记录快照重新比对（信任策略、
   内联策略、标签、保留期 —— `ready` 账本状态不能背书，worker 会跳过 ready 依赖），资源策略只有 `NotFound` 才证明不存在。记录
   审阅的条件 UPDATE 把审阅依赖的每个值 —— 操作的状态 / 令牌 / 尝试次数 / 计划绑定 / 所有者 / 审批人 / 精确的 pinned 与意图 JSON、
-  含经校验内容精确 JSON 的已批准计划行、对话所有者、含精确 `resources` JSON 的 Workspace 身份、审批人与审阅人的活跃管理员行 ——
+  含经校验内容精确 JSON 的已批准计划行、对话所有者、含精确 `resources` JSON 的 Workspace 身份、审批人与审阅人仍持有 `agents.deploy` 的活跃账号行 ——
   都绑定为同一语句的谓词，并在主机锁内重新解析调用者。核验状态持久化为 `reviewed_baseline`，恢复的 worker 在首次变更前立即重新校验（配置 + 标签、依赖、清单、策略不存在、
   无预留并发）：外部发布的同代码版本、他人的别名 / 策略 / 并发或任何漂移都是 `conflict`，永不采纳或覆盖。无论是否经审阅，普通
   worker 在**首次** `PublishVersion` 派发被拒时都不会采纳同摘要版本（只有自身派发的丢失响应才对账到恰好一个版本），也永不覆盖

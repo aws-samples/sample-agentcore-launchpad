@@ -2,7 +2,7 @@
 
 A proposal's ``golden_tests`` / ``evaluator_recommendations`` are inert solution
 content. This module adds the separate, versioned, typed plan that says what those
-recommendations become **if** an administrator later materializes it:
+recommendations become **if** the plan is later materialized:
 
 * ``scenarios``   — the Launchpad Dataset items (one per golden test, standard
   predefined shape; every scenario is ONE runtime session — no multi-actor /
@@ -1044,7 +1044,7 @@ def seed_errors(
                        for m in _check_rules(e.rules) + _code_level_errors(e)]
     # the execution-time routing rules apply to the seed too: a proposal whose
     # evaluators target a subset of the golden tests used to pass here and fail only
-    # when an administrator tried to create the assets, after the Agent was deployed
+    # when someone tried to create the assets, after the Agent was deployed
     errors += [f"evaluation_plan.{m}" for m in _routing_errors(plan)]
     if proposal_content is not None:
         errors += [
