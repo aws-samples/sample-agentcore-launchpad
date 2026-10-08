@@ -926,6 +926,34 @@ def acceptance_target(
     return row, agent, prompt
 
 
+def save_edit(db: Session, row: EvalRecommendation, prompt: str | None, *, by: str) -> None:
+    """Save (or, with ``None`` / the unchanged text, clear) the operator's revision of
+    a COMPLETED, not yet accepted system-prompt recommendation."""
+    if row.kind != "system_prompt":
+        raise AppError("recommendation.edit_kind",
+                       "only a system-prompt recommendation can be edited", status_code=400)
+    recommended = str((row.result or {}).get("recommended_prompt") or "").strip()
+    if row.status != "COMPLETED" or not recommended:
+        raise AppError("recommendation.not_completed",
+                       "the recommendation has not completed with a recommended prompt",
+                       {"status": row.status}, status_code=409)
+    if row.accepted:
+        raise AppError("recommendation.already_accepted",
+                       "an accepted recommendation can no longer be edited",
+                       {"accepted": row.accepted}, status_code=409)
+    text = (prompt or "").strip()
+    row.edit = (
+        {"prompt": text, "by": by, "at": datetime.now(UTC).isoformat()}
+        if text and text != recommended else None
+    )
+    db.commit()
+
+
+def edited_prompt(row: EvalRecommendation) -> str | None:
+    text = str((row.edit or {}).get("prompt") or "").strip()
+    return text or None
+
+
 def record_acceptance(
     db: Session, row: EvalRecommendation, *, by: str, agent_id: str,
     previous_version: str | None, job_id: str, deployment_id: str, edited: bool = False,
@@ -958,6 +986,7 @@ def out(row: EvalRecommendation) -> dict[str, Any]:
         "result": row.result or {},
         "error": row.error,
         "accepted": row.accepted,
+        "edit": row.edit,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

@@ -274,6 +274,9 @@ export interface RunRecommendation {
     /** the published prompt was the operator's edit of the recommendation */
     edited?: boolean;
   } | null;
+  /** an operator's saved revision of the recommended system prompt (null = none);
+   *  the card, copy and accept use it in place of `result.recommended_prompt` */
+  edit?: { prompt: string; by: string; at: string } | null;
   created_at: string | null;
   updated_at: string | null;
 }

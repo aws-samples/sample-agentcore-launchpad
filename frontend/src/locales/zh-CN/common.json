@@ -7665,6 +7665,21 @@
         "resetEdit": "恢复为 AI 建议原文",
         "acceptedEdited": "发布前经过人工修改。"
       },
+      "edit": {
+        "button": "编辑",
+        "title": "编辑推荐的提示词",
+        "hint": "修改会保存在这条优化建议上，不会发布任何内容。之后的差异对比、复制和采纳都使用修改后的版本；原始建议会保留，可随时恢复。",
+        "label": "推荐的系统提示词（你的修改）",
+        "save": "保存修改",
+        "saving": "保存中…",
+        "savedToast": "修改已保存，尚未发布。",
+        "restore": "恢复原始建议",
+        "restoredToast": "已恢复为原始建议。",
+        "tag": "已手动修改",
+        "by": "{{by}} 于 {{at}} 修改",
+        "afterLabel": "推荐（已修改）",
+        "noPermission": "你的账号缺少 eval.run 权限，无法编辑优化建议。"
+      },
       "toolDiff": "工具描述",
       "modelRequired": "请输入自定义模型 ID。",
       "providerNote": "GEPA-lite 用一次 Bedrock 反思，读取这次运行的全部评估器分数与评审说明以及会话记录，直接给出改写后的系统提示词；不经过 AgentCore 推荐服务（例如它拒绝输入时可改用这里）。工具描述建议仍由 AgentCore 生成。",

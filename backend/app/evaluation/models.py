@@ -109,6 +109,10 @@ class EvalRecommendation(Base):
     # set once a system-prompt recommendation was accepted into a new Harness version:
     # {by, at, agent_id, job_id, deployment_id, previous_version}
     accepted: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # an operator's saved revision of the recommended system prompt, kept apart from
+    # ``result`` (which every GetRecommendation refresh rewrites): {prompt, by, at};
+    # accepting publishes it unless the dialog sends its own text
+    edit: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
