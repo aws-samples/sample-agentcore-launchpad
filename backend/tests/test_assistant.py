@@ -1996,9 +1996,9 @@ def test_admin_share_opens_a_conversation_to_every_member_except_delete(gated, h
         private_cid: (ADMIN_CREDS["username"], True, False)}
     before = _latest(admin, admin_cid)["updated_at"]
 
-    # only an administrator may share — a member is refused by the route policy
+    # a member cannot reach (so cannot share) the administrator's private conversation
     res = member.put(f"{BASE}/conversations/{admin_cid}/sharing", json={"shared": True})
-    assert res.status_code == 403
+    assert res.status_code == 404
     res = admin.put(f"{BASE}/conversations/{admin_cid}/sharing", json={"shared": True})
     assert res.status_code == 200, res.text
     body = res.json()
@@ -2075,6 +2075,38 @@ def test_unshare_during_approval_is_honoured_at_the_claim(gated, harness, monkey
     res = _approve(member, cid, r1)
     assert res.status_code == 404 and res.json()["code"] == "assistant.conversation_not_found"
     assert _count(Job) == 0
+
+
+def test_owner_member_shares_and_unshares_their_own_conversation(gated, harness):
+    """A member owns their conversation's sharing: they open it to the workspace and
+    close it again; a collaborator on the shared conversation cannot toggle it, and an
+    administrator can close a member-shared one."""
+    admin, member, other, _ids, _preset = gated
+    cid = _open(member)
+    url = f"{BASE}/conversations/{cid}/sharing"
+    assert other.get(f"{BASE}/conversations/{cid}").status_code == 404
+
+    res = member.put(url, json={"shared": True})
+    assert res.status_code == 200, res.text
+    assert res.json()["shared"] is True and res.json()["shared_by"] == MEMBER_CREDS["username"]
+    assert other.get(f"{BASE}/conversations/{cid}").status_code == 200
+    assert admin.get(f"{BASE}/conversations/{cid}").status_code == 200
+    assert {c["id"]: c["mine"] for c in other.get(f"{BASE}/conversations").json()[
+        "conversations"]}.get(cid) is False
+
+    # a collaborator may read it but not change its sharing
+    res = other.put(url, json={"shared": False})
+    assert res.status_code == 403 and res.json()["code"] == "assistant.share_forbidden"
+
+    res = member.put(url, json={"shared": False})
+    assert res.status_code == 200 and res.json()["shared"] is False
+    assert other.get(f"{BASE}/conversations/{cid}").status_code == 404
+
+    # an administrator can close a conversation a member shared
+    assert member.put(url, json={"shared": True}).status_code == 200
+    res = admin.put(url, json={"shared": False})
+    assert res.status_code == 200 and res.json()["shared"] is False
+    assert admin.get(f"{BASE}/conversations/{cid}").status_code == 404
 
 
 def test_admin_cannot_share_a_conversation_it_cannot_read(gated, harness):

@@ -142,7 +142,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/assistant/architect/conversations"): MEMBER,
     ("POST", "/api/assistant/architect/conversations"): MEMBER,
     ("GET", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): ADMIN,
+    # sharing: the owner (amended 2026-10-08) or an administrator — the handler refuses
+    # a non-owner member; nobody can reach a private conversation it does not own
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/catalog"): MEMBER,
     ("PUT", "/api/assistant/architect/conversations/{conversation_id}/preparation"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/preparation/skills"):
