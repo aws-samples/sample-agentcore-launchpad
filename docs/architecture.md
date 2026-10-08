@@ -11,19 +11,20 @@ unified create → deploy → invoke → observe experience, not to reimplement 
 
 ```
  Browser
- ┌─────────────────────────────┐        ┌──────────────────────────┐
- │ Platform console  :5173     │        │ Strands Studio UI  :5273 │
- │  Overview · Create · Chat   │        │  drag-and-drop canvas    │
- │  Registry · Governance ·    │        │  (方式C, vendored)       │
- │  Evaluation                 │        └────────────┬─────────────┘
- └──────────────┬──────────────┘            /api,/ws │  /launchpad-api
-                │ /api  /v1                           │  (→ platform /api)
-                ▼                                     ▼
- ┌─────────────────────────────┐        ┌──────────────────────────┐
- │ Platform backend  :8000     │◀───────│ Studio backend    :8100  │
- │  FastAPI                    │ deploy  │  FastAPI (local run,     │
- │  · deploy pipeline          │ via     │  chat, exec history)     │
- │  · invoke chain (/api,/v1)  │ pipeline└──────────────────────────┘
+ ┌─────────────────────────────┐
+ │ Platform console  :5173     │
+ │  Overview · Create (incl.   │
+ │  Studio canvas) · Chat ·    │
+ │  Registry · Governance ·    │
+ │  Evaluation                 │
+ └──────────────┬──────────────┘
+                │ /api  /v1
+                ▼
+ ┌─────────────────────────────┐
+ │ Platform backend  :8000     │
+ │  FastAPI                    │
+ │  · deploy pipeline          │
+ │  · invoke chain (/api,/v1)  │
  │  · SQLite ledger (data/)    │
  └──────────────┬──────────────┘
                 │ boto3 (bedrock-agentcore control + data planes)
@@ -3550,6 +3551,7 @@ mode binds both services to loopback by default; production mode binds both
 services to `0.0.0.0`. `LAUNCHPAD_HOST` and `LAUNCHPAD_API_HOST` override those
 bindings.
 
-The standalone app under `apps/studio/` is not started by the root lifecycle.
-The platform console provides the supported native canvas at `/create/studio`.
-See [studio-integration.md](studio-integration.md).
+The Strands Studio canvas is part of the platform console at `/create/studio`;
+the former vendored standalone app (`apps/studio/`) was removed because its
+backend executed caller-supplied code without authentication. See
+[studio-integration.md](studio-integration.md).

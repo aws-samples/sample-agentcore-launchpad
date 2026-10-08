@@ -101,8 +101,8 @@ English: [troubleshooting.md](troubleshooting.md)
 - **Vite 自动切换前端端口。** 若 `5173` 被占用,平台前端会落到 `5174`(或下一个
   空闲端口)。设置 `PLATFORM_UI_PORT` 可固定它。后端保持在 `8000`。此行为适用于
   `make dev`;`start.py` 使用严格端口,任一配置端口被占用时会在启动前失败。
-- **根目录不再启动独立 Studio。** 根目录生命周期在 `/create/studio` 提供原生
-  双语画布;仅在明确需要时,才从 `apps/studio/` 单独运行 vendored 应用。
+- **Studio 内置于控制台。** Strands Studio 画布位于 `/create/studio`;没有单独的
+  Studio 进程或端口。
 
 ## 治理
 

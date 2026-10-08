@@ -11,7 +11,7 @@ deploy it to AgentCore Runtime, and consume it** over chat or HTTP.
 ## What it is
 
 Launchpad is one console (React) over one FastAPI backend, plus shared AWS
-infrastructure (CDK) and a vendored Strands Studio sub-app. It delivers:
+infrastructure (CDK). It delivers:
 
 - **Four creation methods, one deploy pipeline.** Users create agents via
   **方式B — Managed Harness** (declarative `CreateHarness` — model, prompt,
@@ -162,8 +162,8 @@ Full API reference (sync + SSE streaming, Python): [docs/api.md](docs/api.md).
 ## Start and stop
 
 The root lifecycle scripts manage the platform backend and frontend as one
-local stack. The standalone vendored Studio is not part of this lifecycle; the
-platform's native Studio experience is available at `/create/studio`.
+local stack. The Strands Studio canvas is built into the platform console at
+`/create/studio`.
 
 ### Background development mode
 
@@ -248,7 +248,6 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | `backend/app/deployer/` | Unified pipeline + per-method stages (harness, zip_runtime, container, studio, byoc) |
 | `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Skill Lab, Governance |
 | `infra/` | AWS CDK app — the `launchpad-base` shared stack |
-| `apps/studio/` | Vendored Strands Studio sub-app (方式C), rewired to the platform pipeline |
 | `vendor/skillopt/` | Vendored SkillOpt subset (skill evaluation & training engine; pin + patches in `LAUNCHPAD_DEVIATIONS.md`) |
 | `start.py`, `stop.sh` | Background local-stack lifecycle, health checks, PID ownership and logs |
 | `scripts/` | `bootstrap.py`, `teardown.py`, `dev.sh`, `verify.sh`, `i18n_check.py`, `i18n_zh_punct.py` |

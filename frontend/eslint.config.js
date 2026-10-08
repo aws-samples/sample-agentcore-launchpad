@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 
 export default [
   // dist = build output; src/studio/lib = pure generator/validator files ported
-  // verbatim from apps/studio (kept byte-faithful to upstream for re-vendoring —
+  // verbatim from upstream strands_studio_ui (kept byte-faithful for re-syncing —
   // do not restyle). tsc still type-checks them under the project tsconfig.
   { ignores: ["dist", "src/studio/lib/**"] },
   js.configs.recommended,
