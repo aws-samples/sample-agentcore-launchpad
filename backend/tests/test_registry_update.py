@@ -161,6 +161,21 @@ def test_update_description_only_does_not_bump(monkeypatch):
     assert fake.ops == []  # no S3 writes for a metadata-only edit
 
 
+def test_a_long_description_survives_an_edit(monkeypatch):
+    """A Gateway record carries its tool fields and test accounts in the description
+    (up to AWS's 4096): an edit must not cut it at the old 200-character limit."""
+    fake = FakeS3()
+    record = _mcp_record(version="1.0.0")
+    captured = _patch_update_aws(monkeypatch, fake, record)
+    long = "工具 1 find_customer…" + "x" * 2500
+
+    console_mod.update_record("m1", WS, description=long)
+    assert captured["description"] == long
+
+    console_mod.update_record("m1", WS, description="y" * 5000)
+    assert len(captured["description"]) == console_mod.RECORD_DESCRIPTION_MAX == 4096
+
+
 # ---------- service: MCP url ----------
 
 def test_update_mcp_url_rebuilds_descriptor_and_bumps(monkeypatch):
