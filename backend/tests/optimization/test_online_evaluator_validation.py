@@ -53,7 +53,7 @@ def test_default_fallback_makes_no_aws_call():
 
 @pytest.mark.parametrize(
     "placeholder",
-    ["expected_response", "expected_tool_trajectory", "assertions"],
+    ["expected_response", "expected_tool_trajectory", "assertions", "actual_tool_trajectory"],
 )
 def test_ground_truth_judge_rejected(placeholder):
     control = StubControl(
@@ -69,10 +69,10 @@ def test_ground_truth_judge_rejected(placeholder):
 
 
 def test_trace_only_placeholders_are_fine_online():
-    """context / assistant_turn / actual_tool_trajectory come from the trace."""
+    """context / assistant_turn / available_tools come from the trace."""
     control = StubControl({
         "quality_judge": _judge(
-            "Rate {assistant_turn} given {context} and {actual_tool_trajectory}."
+            "Rate {assistant_turn} given {context} and {available_tools}."
         )
     })
     chosen = normalize_online_evaluators(["quality_judge"], control)
