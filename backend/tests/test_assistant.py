@@ -748,6 +748,21 @@ def test_protocol_asks_for_a_lean_first_prompt_and_ready_made_evaluators_first()
     assert "lean by design" in skill and "ready-made evaluators first" in skill
 
 
+def test_first_version_prompt_is_capped_at_50_characters_everywhere():
+    """v1 prompts stay minimal (≤ 50 characters) so the optimization loop has visible
+    headroom: the preamble, the skill and its self-check all carry the same cap, and the
+    skill no longer asks for tool instructions inside the v1 prompt."""
+    assert "at most 50 characters" in service.PROTOCOL_PREAMBLE
+    skill = (ARCHITECT.skill_path() / "SKILL.md").read_text(encoding="utf-8")
+    check = (ARCHITECT.skill_path() / "references" / "proposal-self-check.md").read_text(
+        encoding="utf-8")
+    assert "**at most 50 characters**" in skill and "**≤ 50 characters**" in check
+    assert "have the system prompt tell it" not in skill
+    assert "have the prompt say" not in skill
+    example = skill.split("Example:\n", 1)[1].split("\n", 1)[0].strip("「」")
+    assert 0 < len(example) <= 50
+
+
 def test_partial_fishbone_is_emitted_not_dropped():
     """Live conversation: one barrier confirmed, then "你自己看着办" — the model dropped
     the whole fishbone as "not fully explored". One confirmed barrier is a result; the

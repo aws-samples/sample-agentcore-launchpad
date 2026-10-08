@@ -772,8 +772,8 @@ AgentCore Memory 及其全部策略）；“仅短期”的退出无法表达，
 **现成评估器**——AWS 内置（静态列表）加上账户中 ACTIVE 的 `ThirdParty.*` 评估器（一次只读
 `ListEvaluators`；自定义评估器不在其列；列举失败时退化为仅内置并附警告）——不在列表中的 `existing`
 id 是引用错误。协议把这份列表定为首选（内置 / 第三方 → 逐场景 `assertions` → 只有二者都无法打分时才
-自定义 judge 或代码规则），并要求**精简的第一版 `system_prompt`**（身份、目标、硬边界、升级触发、
-语气）：提示词之后通过 Evaluation → Optimization 循环迭代，而不是一开始就写全。
+自定义 judge 或代码规则），并要求**极简的第一版 `system_prompt`**（不超过 50 个字，只写 Agent 是谁、做什么；红线、
+升级触发、语气和工具用法放在黄金测试、评估器和 `requirements_baseline` 里）：提示词之后通过 Evaluation → Optimization 循环迭代，而不是一开始就写全。
 `to_agent_spec` 是映射到 `AgentSpec` 的
 唯一路径，`resource_bindings` 是映射到**已审阅部署身份**的唯一路径：spec 加上每个资源的 Gateway
 ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope——绝非凭据值）、技能记录 ID + S3 路径 +

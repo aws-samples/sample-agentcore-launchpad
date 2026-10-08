@@ -201,15 +201,16 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   `launchpad-`, `harness-` or `system-`
 - `model_id` (string) and `model_source` (`"bedrock"` or `"mantle"`); default
   `{proposal_contract.PROPOSAL_DEFAULT_MODEL_ID}` / `"bedrock"`
-- `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean
-  (hard cap 20000 chars): identity and audience, the goal, the
-  hard boundaries the golden tests enforce (what it must never do, when to escalate),
-  tone and language. Do NOT try to cover every case, enumerate scenario scripts or
-  paste the golden tests into it: the prompt is iterated afterwards through
+- `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean and
+  minimal: at most 50 characters (a Chinese prompt ≤ 50 汉字 incl. punctuation, an
+  English one ≤ 50 words; the schema cap is 20000): one or two plain sentences saying
+  who the agent is and what it does for whom. Leave out red lines, escalation, tone,
+  output format, tool-usage instructions and scenarios — they belong in golden tests,
+  evaluators and `requirements_baseline`. The prompt is iterated afterwards through
   Launchpad's Evaluation → Optimization loop (evaluate against the dataset, take the
-  prompt recommendation, A/B it), so a short baseline that the evaluators can improve
-  is worth more than a long one nobody can attribute regressions to. Say this in the
-  reply when you hand over the proposal.
+  prompt recommendation, A/B it), and a minimal baseline makes each round's gain
+  visible. Write a longer v1 only when the user explicitly asks for one. Say this in
+  the reply when you hand over the proposal.
 - `tools`: list of catalog **tool keys** from the list below (may be empty)
 - `tool_functions`: optional object narrowing selected **Gateway** tools to some of
   their functions: `{{"gateway:<name>": ["<runtime callable name>", ...]}}`, names

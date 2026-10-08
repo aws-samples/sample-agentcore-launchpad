@@ -31,9 +31,12 @@ evaluate natural-language acceptance criteria.
 - [ ] `name`: `^[a-z][a-z0-9-]{2,47}$`; not starting with `launchpad-`, `harness-`,
       `system-`; not the name of an Agent already in the catalog.
 - [ ] `model_id` / `model_source` (`bedrock` | `mantle`).
-- [ ] `system_prompt`: 1–20,000 chars — and lean: identity, goal, hard boundaries,
-      escalation, tone, language — nothing more. No scenario scripts, no
-      golden tests pasted in; coverage comes from the Evaluation → Optimization loop.
+- [ ] `system_prompt`: schema allows 1–20,000 chars, but v1 is **≤ 50 characters**
+      (≤ 50 汉字 incl. punctuation; English ≤ 50 words): who the agent is and what it
+      does for whom — nothing more. No red lines, escalation, tone, tool instructions,
+      scenario scripts or golden tests; those live in golden tests, evaluators and
+      `requirements_baseline`, and reach the prompt through the Evaluation →
+      Optimization loop. Longer only when the user explicitly asked for it.
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.
 - [ ] `memory`: `disabled` | `workspace`.

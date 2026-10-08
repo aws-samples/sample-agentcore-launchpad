@@ -1271,8 +1271,9 @@ built-ins (static) plus the account's ACTIVE `ThirdParty.*` evaluators from one 
 built-ins with a warning) — and an `existing` id outside that list is a reference error.
 The protocol makes that list the first choice (built-in / third-party → per-scenario
 assertions → custom judge or code rule only for what nothing listed scores) and asks for
-a deliberately **lean first-version `system_prompt`** (identity, goal, hard boundaries,
-escalation, tone) because the prompt is iterated afterwards through
+a deliberately **minimal first-version `system_prompt`** (≤ 50 characters: who the
+agent is and what it does; red lines, escalation, tone and tool instructions stay in
+golden tests, evaluators and `requirements_baseline`) because the prompt is iterated afterwards through
 Evaluation → Optimization rather than written exhaustively up front. `to_agent_spec`
 is the single mapping into an `AgentSpec`, and `resource_bindings` the single mapping
 into the **reviewed deployment identity**: the spec plus, per resource, the gateway
