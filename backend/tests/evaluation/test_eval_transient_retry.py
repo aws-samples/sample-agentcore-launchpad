@@ -30,7 +30,9 @@ def _run_row() -> str:
 
 def _execute(monkeypatch, streams):
     client = MagicMock()
-    client.invoke_harness.side_effect = [{"stream": s} for s in streams]
+    # an exception item makes the InvokeHarness call itself raise (no stream at all)
+    client.invoke_harness.side_effect = [
+        s if isinstance(s, BaseException) else {"stream": s} for s in streams]
     client.start_batch_evaluation.return_value = {"batchEvaluationId": "batch-1"}
     monkeypatch.setattr(evaluation, "data_client", lambda _ws: client)
     monkeypatch.setattr(evaluation, "_wait_for_fresh_telemetry", lambda **_kw: None)
@@ -62,6 +64,19 @@ def test_a_transient_server_error_replays_the_scenario_in_a_fresh_session(monkey
     assert len(sessions) == 3 and sessions[1] != sessions[2]
     assert row.session_ids == [sessions[0], sessions[2]]  # the failed attempt is dropped
     assert row.batch_eval_id == "batch-1" and finished == [row.id]
+
+
+def test_a_failed_runtime_health_check_on_the_call_replays_the_scenario(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    health = ClientError({"Error": {"Code": "RuntimeClientError",
+                                    "Message": "Runtime health check failed or timed out."},
+                          "ResponseMetadata": {"HTTPStatusCode": 424}}, "InvokeHarness")
+    row, sessions, finished = _execute(monkeypatch, [ok(), health, ok()])
+
+    assert len(sessions) == 3 and sessions[1] != sessions[2]
+    assert row.session_ids == [sessions[0], sessions[2]]
+    assert row.batch_eval_id == "batch-1" and finished == [row.id] and row.error is None
 
 
 def test_a_scenario_that_keeps_failing_fails_the_run_naming_it(monkeypatch):
@@ -96,6 +111,11 @@ def test_transient_classification():
         {"Error": {"Code": "Other"}, "ResponseMetadata": {"HTTPStatusCode": 503}}, "Invoke"))
     assert not evaluation.transient_invoke_error(ClientError(
         {"Error": {"Code": "AccessDeniedException"}}, "Invoke"))
+    # the InvokeHarness call itself failing a runtime health check (4xx, capitalised code)
+    assert evaluation.transient_invoke_error(ClientError(
+        {"Error": {"Code": "RuntimeClientError",
+                   "Message": "Runtime health check failed or timed out."},
+         "ResponseMetadata": {"HTTPStatusCode": 424}}, "InvokeHarness"))
     assert evaluation.transient_invoke_error(AppError("harness.execution_timeout", "x"))
     assert not evaluation.transient_invoke_error(AppError("harness.execution_limit", "x"))
     # a loop cut short right after a tool step is replayed; an empty end_turn is not

@@ -211,8 +211,12 @@ TIMEOUT_SCENARIO_RETRIES = 1
 # token limit): that is the scenario's result — its session is scored as it stands and
 # recorded in ``EvalRun.budget_stops`` instead of failing the whole run.
 BUDGET_STOP_CODES = frozenset({"harness.execution_timeout", "harness.execution_limit"})
+# ``runtimeClientError`` is the mid-stream event; ``RuntimeClientError`` the same failure
+# raised by the InvokeHarness call itself, with a 4xx status (live 2026-10-08: "Runtime
+# health check failed or timed out" failed a whole 19-scenario run at one scenario)
 _TRANSIENT_CODES = frozenset({
-    "runtimeClientError", "internalServerException", "InternalServerException",
+    "runtimeClientError", "RuntimeClientError", "internalServerException",
+    "InternalServerException",
     "throttlingException", "ThrottlingException", "serviceUnavailableException",
     "ServiceUnavailableException",
 })
