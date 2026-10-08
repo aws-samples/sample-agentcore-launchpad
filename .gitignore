@@ -13,7 +13,8 @@
 /.darwin/
 /data/
 /design/
-/samples/
+/samples/*
+!/samples/store-demo/
 /docs/issues/
 .playwright-cli/
 # --- python ---

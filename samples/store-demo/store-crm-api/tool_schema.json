@@ -1,0 +1,159 @@
+[
+ {
+  "name": "find_customer",
+  "description": "查询门店会员档案（无人机授权体验店 CRM 测试环境）。按 customer_id（CNNNN）或手机号后 4 位 phone_last4 查询，二选一。返回 customer_id、姓名、脱敏手机号、member_since 入会日期、tenure_months 会员时长（月，按 as_of 计算）、tier 会员等级（普通/银卡/金卡/钻石卡）、city、marketing_consent 是否同意接收营销推荐。手机号后 4 位匹配多名会员时不返回档案，只返回 ambiguous=true 和脱敏候选 candidates（customer_id、name_masked、phone、city），需向客户核对姓名后用 customer_id 再查。错误：customer_not_found、invalid_customer_id、missing_lookup_key。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "customer_id": {
+     "type": "string",
+     "description": "会员号，格式 CNNNN，例如 C1001"
+    },
+    "phone_last4": {
+     "type": "string",
+     "description": "手机号后 4 位，例如 1001"
+    }
+   },
+   "required": []
+  }
+ },
+ {
+  "name": "list_purchases",
+  "description": "列出一名会员在门店的全部购买记录（新到旧），并给出 summary：order_count、drone_purchase_count、owned_drone_models 持有机型、last_drone_purchase_date 最近一次购买无人机整机（category=drone）的日期、last_drone_model、days_since_last_drone_purchase 距 as_of 的天数、last_any_purchase_date 最近一次任意购买（含配件/服务）的日期。每条记录含 order_id、order_date、sku、product_name、category（drone=整机，其余为电池/充电/桨叶/镜头配件/收纳/服务）、drone_model 适用机型、quantity、amount_cny。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "customer_id": {
+     "type": "string",
+     "description": "会员号，格式 CNNNN"
+    }
+   },
+   "required": [
+    "customer_id"
+   ]
+  }
+ },
+ {
+  "name": "list_products",
+  "description": "查询门店可推荐商品目录（配件、随心换服务、整机升级）。可按 compatible_model 适用机型（Mavic 4 Pro / Lito X1 / Mavic 3 Pro / Air 3S / Mini 4 Pro）和 category（电池 / 充电 / 桨叶 / 镜头配件 / 收纳 / 服务 / 整机升级）过滤。返回 sku、name、category、compatible_models、price_cny 门店价、stock 库存、selling_point 卖点。价格为门店测试价，不含促销。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "compatible_model": {
+     "type": "string",
+     "description": "可选，适用机型，例如 Mavic 4 Pro"
+    },
+    "category": {
+     "type": "string",
+     "description": "可选，商品类别，例如 电池"
+    }
+   },
+   "required": []
+  }
+ },
+ {
+  "name": "list_tickets",
+  "description": "列出一名会员的售后工单（新到旧）：ticket_id、category、subject、status、priority、created_at、updated_at。可选 status 过滤：待处理 / 处理中 / 待客户回复 / 已解决 / 已关闭。查看处理记录用 get_ticket。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "customer_id": {
+     "type": "string",
+     "description": "会员号，格式 CNNNN"
+    },
+    "status": {
+     "type": "string",
+     "description": "可选：待处理 / 处理中 / 待客户回复 / 已解决 / 已关闭"
+    }
+   },
+   "required": [
+    "customer_id"
+   ]
+  }
+ },
+ {
+  "name": "get_ticket",
+  "description": "查询一张工单的详情，含全部处理记录 notes（at 时间、by 处理人、text 内容）和 related_order_id 关联订单。错误：ticket_not_found、invalid_ticket_id。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ticket_id": {
+     "type": "string",
+     "description": "工单号，格式 TK-NNNN"
+    }
+   },
+   "required": [
+    "ticket_id"
+   ]
+  }
+ },
+ {
+  "name": "create_ticket",
+  "description": "为会员新建售后工单（写操作），初始状态为 待处理。category 必须是：保修维修 / 退换货 / 物流 / 使用咨询 / 随心换 / 其他；priority：低 / 中 / 高（默认 中）；subject 一句话标题；description 问题描述（作为第一条处理记录）；related_order_id 可选，必须是该会员自己的订单。返回新工单号 ticket_id。不能用于退款或下单。处理记录统一记为 AI 助手。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "customer_id": {
+     "type": "string",
+     "description": "会员号，格式 CNNNN"
+    },
+    "category": {
+     "type": "string",
+     "description": "保修维修 / 退换货 / 物流 / 使用咨询 / 随心换 / 其他"
+    },
+    "subject": {
+     "type": "string",
+     "description": "工单标题，一句话"
+    },
+    "description": {
+     "type": "string",
+     "description": "问题描述"
+    },
+    "priority": {
+     "type": "string",
+     "description": "可选：低 / 中 / 高，默认 中"
+    },
+    "related_order_id": {
+     "type": "string",
+     "description": "可选，关联订单号 SO-NNNNN"
+    }
+   },
+   "required": [
+    "customer_id",
+    "category",
+    "subject",
+    "description"
+   ]
+  }
+ },
+ {
+  "name": "update_ticket",
+  "description": "更新工单（写操作）：必须同时给出工单号 ticket_id 和所属会员号 customer_id（不一致返回 ticket_customer_mismatch），追加一条处理记录 note（必填），可同时修改 status（待处理 / 处理中 / 待客户回复 / 已解决 / 已关闭）。已关闭的工单不能再修改（返回 ticket_closed，需新建工单）。返回 previous_status 与新的 status。处理记录统一记为 AI 助手。",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ticket_id": {
+     "type": "string",
+     "description": "工单号，格式 TK-NNNN"
+    },
+    "customer_id": {
+     "type": "string",
+     "description": "工单所属会员号，格式 CNNNN；与工单不符返回 ticket_customer_mismatch"
+    },
+    "note": {
+     "type": "string",
+     "description": "本次处理记录"
+    },
+    "status": {
+     "type": "string",
+     "description": "可选，新状态"
+    }
+   },
+   "required": [
+    "ticket_id",
+    "customer_id",
+    "note"
+   ]
+  }
+ }
+]
