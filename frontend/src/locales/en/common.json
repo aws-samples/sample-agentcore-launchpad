@@ -7665,6 +7665,21 @@
         "resetEdit": "Reset to the recommendation",
         "acceptedEdited": "The prompt was edited before publishing."
       },
+      "edit": {
+        "button": "Edit",
+        "title": "Edit the recommended prompt",
+        "hint": "Your revision is saved on this recommendation without publishing anything. The diff, COPY and ACCEPT then use it; the generated text is kept so you can restore it.",
+        "label": "Recommended system prompt (your revision)",
+        "save": "Save revision",
+        "saving": "Saving…",
+        "savedToast": "Revision saved — not published yet.",
+        "restore": "Restore the generated recommendation",
+        "restoredToast": "Restored the generated recommendation.",
+        "tag": "Manually edited",
+        "by": "Edited by {{by}} at {{at}}",
+        "afterLabel": "Recommended (edited)",
+        "noPermission": "Your account lacks the eval.run permission needed to edit a recommendation."
+      },
       "toolDiff": "Tool description",
       "modelRequired": "Enter the custom model ID.",
       "providerNote": "GEPA-lite runs one Bedrock reflection over this run's evaluator scores, judge explanations and session transcripts and proposes a revised system prompt directly — without the AgentCore recommendation service (use it, for example, when that service refuses the input). Tool-description recommendations still come from AgentCore.",

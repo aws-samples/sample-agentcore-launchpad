@@ -982,3 +982,75 @@ def test_an_empty_reviewed_prompt_is_refused(client, monkeypatch):
     assert res.status_code == 422
     assert res.json()["code"] == "recommendation.accept_prompt_empty"
     assert started == []
+
+
+# ─── save a manual revision before accepting ────────────────────────────────
+def test_a_saved_edit_is_published_on_accept(client, monkeypatch):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    agent_id = _harness_agent()
+    run_id = _run(agent_id)
+    rec_id = _rec(run_id)
+    url = f"/api/eval/runs/{run_id}/recommendations/{rec_id}"
+
+    res = client.put(f"{url}/edit", json={"system_prompt": "  new prompt, tightened  "})
+    assert res.status_code == 200, res.text
+    edit = res.json()["recommendation"]["edit"]
+    assert edit["prompt"] == "new prompt, tightened" and edit["by"] and edit["at"]
+    # the generated text stays untouched next to the revision
+    assert res.json()["recommendation"]["result"]["recommended_prompt"] == "new prompt"
+    listed = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"]
+    assert listed[0]["edit"]["prompt"] == "new prompt, tightened"
+    assert started == []  # saving publishes nothing
+
+    res = client.post(f"{url}/accept")
+    assert res.status_code == 202, res.text
+    assert res.json()["recommendation"]["accepted"]["edited"] is True
+    db = SessionLocal()
+    try:
+        assert db.get(Agent, agent_id).spec["system_prompt"] == "new prompt, tightened"
+    finally:
+        db.close()
+    # an accepted recommendation is locked
+    locked = client.put(f"{url}/edit", json={"system_prompt": "again"})
+    assert locked.status_code == 409 and locked.json()["code"] == "recommendation.already_accepted"
+
+
+@pytest.mark.parametrize("body", [{"system_prompt": None}, {"system_prompt": "  "},
+                                  {"system_prompt": "new prompt"}])
+def test_clearing_or_restoring_the_text_drops_the_edit(client, monkeypatch, body):
+    _stub(monkeypatch)
+    _no_deploy(monkeypatch)
+    run_id = _run(_harness_agent())
+    rec_id = _rec(run_id)
+    url = f"/api/eval/runs/{run_id}/recommendations/{rec_id}"
+    assert client.put(f"{url}/edit", json={"system_prompt": "changed"}).json()[
+        "recommendation"]["edit"]["prompt"] == "changed"
+
+    res = client.put(f"{url}/edit", json=body)
+    assert res.status_code == 200 and res.json()["recommendation"]["edit"] is None
+    res = client.post(f"{url}/accept")
+    assert res.status_code == 202 and res.json()["recommendation"]["accepted"]["edited"] is False
+
+
+@pytest.mark.parametrize(("rec_fields", "code", "status"), [
+    ({"kind": "tool_descriptions", "result": {"tools": {}}}, "recommendation.edit_kind", 400),
+    ({"status": "IN_PROGRESS", "result": {}}, "recommendation.not_completed", 409),
+])
+def test_only_a_completed_prompt_recommendation_is_editable(client, monkeypatch, rec_fields,
+                                                            code, status):
+    _stub(monkeypatch)
+    run_id = _run(_harness_agent())
+    rec_id = _rec(run_id, **rec_fields)
+    res = client.put(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/edit",
+                     json={"system_prompt": "x"})
+    assert res.status_code == status and res.json()["code"] == code
+
+
+def test_editing_another_runs_recommendation_is_not_found(client, monkeypatch):
+    _stub(monkeypatch)
+    agent_id = _harness_agent()
+    rec_id = _rec(_run(agent_id))
+    res = client.put(f"/api/eval/runs/{_run(agent_id)}/recommendations/{rec_id}/edit",
+                     json={"system_prompt": "x"})
+    assert res.status_code == 404

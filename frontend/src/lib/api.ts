@@ -4298,11 +4298,19 @@ export const api = {
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** `PUT …/recommendations/{recId}/edit` — save (or with null / the unchanged text,
+   *  drop) a manual revision of a completed, not yet accepted system-prompt
+   *  recommendation. Ledger-only; needs `eval.run`. */
+  editRunRecommendation: (runId: string, recId: string, systemPrompt: string | null) =>
+    request<{ recommendation: RunRecommendation }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/edit`,
+      { method: "PUT", body: JSON.stringify({ system_prompt: systemPrompt }) },
+    ),
   /** `POST …/recommendations/{recId}/accept` (202) — re-publishes the run's Harness
    *  with the recommended system prompt (a NEW Harness version, DEFAULT follows it).
    *  Needs `agents.deploy`; accepted once (409 afterwards). */
-  /** `systemPrompt` = the operator-reviewed text to publish (the recommendation as
-   *  generated when omitted). */
+  /** `systemPrompt` = the operator-reviewed text to publish (the saved revision, else
+   *  the recommendation as generated, when omitted). */
   acceptRunRecommendation: (runId: string, recId: string, systemPrompt?: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string; recommendation: RunRecommendation }>(
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/accept`,

@@ -18,7 +18,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, aws_error_code
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import recommendations, service
-from app.evaluation.models import EvalDataset, EvalRun
+from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
@@ -1519,9 +1519,16 @@ class RecommendationCreate(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
 
 
+class RecommendationEdit(BaseModel):
+    # the operator's revision of the recommended prompt; null / empty / unchanged
+    # text drops a saved revision (back to the recommendation as generated)
+    system_prompt: str | None = Field(default=None, max_length=recommendations.SYSTEM_PROMPT_MAX)
+
+
 class RecommendationAccept(BaseModel):
-    # the reviewed prompt to publish — the recommendation as generated when omitted;
-    # an operator edit (e.g. removing a loosened boundary) is recorded as such
+    # the reviewed prompt to publish — the saved revision (``edit``) or else the
+    # recommendation as generated when omitted; any difference from the generated
+    # text (e.g. removing a loosened boundary) is recorded as an edit
     system_prompt: str | None = Field(default=None, max_length=recommendations.SYSTEM_PROMPT_MAX)
 
 
@@ -1582,6 +1589,27 @@ def create_run_recommendations(
     return {"recommendations": [recommendations.out(r) for r in rows]}
 
 
+@router.put("/runs/{run_id}/recommendations/{rec_id}/edit")
+def edit_run_recommendation(
+    run_id: str,
+    rec_id: str,
+    req: RecommendationEdit,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Save the operator's revision of a COMPLETED system-prompt recommendation without
+    publishing anything; the card, copy and accept then use it. Ledger-only."""
+    run = _run_in(db, ws, run_id)
+    row = db.get(EvalRecommendation, rec_id)
+    if row is None or row.run_id != run.id or row.workspace_id != run.workspace_id:
+        raise NotFoundError("recommendation.not_found", "recommendation not found")
+    identity = getattr(request.state, "identity", None)
+    recommendations.save_edit(db, row, req.system_prompt,
+                              by=getattr(identity, "username", None) or "unknown")
+    return {"recommendation": recommendations.out(row)}
+
+
 @router.post("/runs/{run_id}/recommendations/{rec_id}/accept", status_code=202)
 def accept_run_recommendation(
     run_id: str,
@@ -1600,14 +1628,14 @@ def accept_run_recommendation(
 
     run = _run_in(db, ws, run_id)
     row, agent, prompt = recommendations.acceptance_target(db, run, rec_id)
-    edited = False
+    reviewed = recommendations.edited_prompt(row)
     if req is not None and req.system_prompt is not None:
         reviewed = req.system_prompt.strip()
         if not reviewed:
             raise AppError("recommendation.accept_prompt_empty",
                            "the reviewed prompt is empty", status_code=422)
-        edited = reviewed != prompt
-        prompt = reviewed
+    edited = reviewed is not None and reviewed != prompt
+    prompt = reviewed or prompt
     previous_version = agent.version
     current = AgentSpec(**(agent.spec or {}))
     # the recommendation revised the LIVE prompt, which already carries the

@@ -360,6 +360,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # starts billable AWS recommendation jobs — same revocable grant as a run
     ("POST", "/api/eval/runs/{run_id}/recommendations"): PERM_EVAL_RUN,
     # re-publishes the Harness (a new version) — the same grant as a redeploy
+    # saving a revision of a recommendation is ledger-only, on the generating permission
+    ("PUT", "/api/eval/runs/{run_id}/recommendations/{rec_id}/edit"): PERM_EVAL_RUN,
     ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): PERM_AGENT_DEPLOY,
     ("DELETE", "/api/eval/runs/{run_id}"): PERM_EVAL_RUN,
     # online evaluation configs: create/resume start billed judge calls on live
