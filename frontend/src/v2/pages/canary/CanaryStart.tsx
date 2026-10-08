@@ -5,13 +5,16 @@ import { useSearchParams } from "react-router-dom";
 import { api, errorMessage } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
+import { CanaryEvaluatorFields } from "./CanaryEvaluators";
+import { useCanaryEvaluators } from "./evaluatorChoice";
 import { versionOptions } from "./common";
 import { RampPlan } from "./RampPlan";
 
 /**
  * 新建金丝雀: the champion agent and the candidate edit (system prompt, plus the
- * code for a Studio agent). `champion=` / `sourceExp=` carry an experiment's
- * promote hand-off; picking another agent drops the source experiment.
+ * code for a Studio agent), and the evaluators both versions are scored by plus
+ * the primary evaluator that decides the verdict. `champion=` / `sourceExp=` carry
+ * an experiment's promote hand-off; picking another agent drops the source experiment.
  */
 export function CanaryStart() {
   const { t } = useTranslation();
@@ -28,6 +31,7 @@ export function CanaryStart() {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const evaluators = useCanaryEvaluators();
 
   // default to the first eligible agent once the list is in (a hand-off keeps its champion)
   useEffect(() => {
@@ -74,8 +78,13 @@ export function CanaryStart() {
       if (isStudio && code.trim()) candidate.code = code;
       const row = await api.createRuntimeCanary(
         isHarness
-          ? { agent_id: agentId, harness_versions: { control, treatment: latest }, start_stage: runFirst ? 0 : 1 }
-          : { agent_id: agentId, candidate, ...(sourceExp ? { source_experiment_id: sourceExp } : {}) },
+          ? {
+              agent_id: agentId,
+              harness_versions: { control, treatment: latest },
+              start_stage: runFirst ? 0 : 1,
+              ...evaluators.body,
+            }
+          : { agent_id: agentId, candidate, ...(sourceExp ? { source_experiment_id: sourceExp } : {}), ...evaluators.body },
       );
       toast("success", t("v2.canary.created", { name: row.name }));
       setParams({ mode: "canary", canary: row.id });
@@ -92,7 +101,12 @@ export function CanaryStart() {
         title={t("canaryPage.create")}
         onBack={() => setParams({ mode: "canary" })}
         end={
-          <Button kind="primary" disabled={busy || !agentId || !hasEdit} onClick={() => void create()} testId="v2-canary-create">
+          <Button
+            kind="primary"
+            disabled={busy || !agentId || !hasEdit || evaluators.selected.length === 0}
+            onClick={() => void create()}
+            testId="v2-canary-create"
+          >
             {t("canaryPage.create")}
           </Button>
         }
@@ -165,6 +179,12 @@ export function CanaryStart() {
         </div>
       </Card>
       )}
+      <Card
+        title={t("v2.canary.eval.title")}
+        sub={t("v2.canary.eval.summary", { evaluators: evaluators.names || "—", primary: evaluators.primaryName })}
+      >
+        <CanaryEvaluatorFields choice={evaluators} disabled={busy} />
+      </Card>
     </>
   );
 }

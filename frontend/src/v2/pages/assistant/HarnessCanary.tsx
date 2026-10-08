@@ -6,6 +6,8 @@ import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type RuntimeCanaryInfo } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Select, Tag } from "../../ui";
+import { CanaryEvaluatorFields } from "../canary/CanaryEvaluators";
+import { useCanaryEvaluators } from "../canary/evaluatorChoice";
 import { CANARY_TONE, openingWeights, versionOptions, versionsLabel, weightsLabel } from "../canary/common";
 import { RampPlan } from "../canary/RampPlan";
 
@@ -18,7 +20,8 @@ const byNumber = (a: string, b: string) => Number(a) - Number(b);
  * accepted in step 3) against an earlier version, default the first. Creating the
  * canary is behind a confirm and runs `setup` right away (dedicated gateway, two
  * Harness endpoints, per-variant online evals, an A/B test at 90/10 — or 50/50 when
- * the ramp plan drops 90/10); traffic, verdict,
+ * the ramp plan drops 90/10). A collapsed 评估器 section picks the evaluators both
+ * versions are scored by and the primary one that decides the verdict; traffic, verdict,
  * ramp, promote/rollback and cleanup live on the canary's detail page.
  */
 export function HarnessCanary({
@@ -64,6 +67,7 @@ export function HarnessCanary({
   const [runFirst, setRunFirst] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const evaluators = useCanaryEvaluators();
   const mayCreate = can("eval.run");
   const blocked = !mayCreate
     ? t("assistantNext.canary.noPermission")
@@ -84,6 +88,7 @@ export function HarnessCanary({
         agent_id: agentId,
         harness_versions: { control, treatment: latest },
         start_stage: runFirst ? 0 : 1,
+        ...evaluators.body,
       });
       await api.runtimeCanaryAction(row.id, { action: "setup" });
       toast("success", t("assistantNext.canary.startedToast", { name: row.name }));
@@ -136,7 +141,7 @@ export function HarnessCanary({
           <Button
             size="sm"
             kind="primary"
-            disabled={!!blocked || creating || !control || !latest}
+            disabled={!!blocked || creating || !control || !latest || evaluators.selected.length === 0}
             title={blocked}
             onClick={() => setConfirm(true)}
             testId="v2-assistant-next-canary-create"
@@ -147,6 +152,15 @@ export function HarnessCanary({
         </div>
       )}
       {!live && <RampPlan runFirst={runFirst} onChange={setRunFirst} disabled={creating} />}
+      {!live && (
+        <details data-testid="v2-assistant-next-canary-evaluators">
+          <summary className="v2-link">
+            {t("v2.canary.eval.summary", { evaluators: evaluators.names || "—", primary: evaluators.primaryName })}
+            <span className="v2-muted"> · {t("v2.canary.eval.change")}</span>
+          </summary>
+          <CanaryEvaluatorFields choice={evaluators} disabled={creating} />
+        </details>
+      )}
       {current && (
         <div className="v2-assistant-sub-row" data-testid="v2-assistant-next-canary-current">
           <span>{t("assistantNext.canary.current")}</span>
@@ -165,9 +179,18 @@ export function HarnessCanary({
       <Confirm
         open={confirm}
         title={t("assistantNext.canary.confirmTitle")}
-        body={t("assistantNext.canary.confirmBody", {
-          name: agentName, control, treatment: latest ?? "—", account, region, weights: openingWeights(runFirst),
-        })}
+        body={
+          <div className="v2-stack">
+            <div>
+              {t("assistantNext.canary.confirmBody", {
+                name: agentName, control, treatment: latest ?? "—", account, region, weights: openingWeights(runFirst),
+              })}
+            </div>
+            <div data-testid="v2-assistant-next-canary-confirm-evaluators">
+              {t("v2.canary.eval.confirm", { evaluators: evaluators.names || "—", primary: evaluators.primaryName })}
+            </div>
+          </div>
+        }
         confirmLabel={t("assistantNext.canary.create")}
         onConfirm={() => { setConfirm(false); void create(); }}
         onClose={() => setConfirm(false)}

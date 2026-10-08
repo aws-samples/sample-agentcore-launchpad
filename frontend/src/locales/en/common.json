@@ -6467,6 +6467,23 @@
         "perQuestion": "Per question ({{n}})",
         "question": "Question",
         "prompt": "Prompt"
+      },
+      "eval": {
+        "title": "Evaluators",
+        "hint": "Both versions are scored by these evaluators (max {{max}}). Ground-truth evaluators are unavailable because online evaluation reads live traces, and a custom judge must rate on a numerical scale.",
+        "primary": "Primary evaluator",
+        "primaryHint": "The verdict's winner, significance and sample size come from this evaluator alone; the others are shown for reference.",
+        "summary": "Evaluators: {{evaluators}} · primary: {{primary}}",
+        "sep": ", ",
+        "primaryTag": "Primary",
+        "unscoredTag": "Unscored",
+        "unscored": "No score on both versions from: {{evaluators}}",
+        "decidedBy": "Decided by the primary evaluator {{primary}}",
+        "aggregate": "Decided by the aggregate of all evaluators",
+        "defaultPair": "{{evaluators}} (default)",
+        "change": "Change evaluators",
+        "confirm": "Both versions are scored by {{evaluators}}; the verdict is decided by {{primary}}.",
+        "none": "Pick at least one evaluator"
       }
     },
     "chat": {

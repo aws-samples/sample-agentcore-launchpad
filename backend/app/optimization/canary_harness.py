@@ -303,7 +303,11 @@ def paired_sign_flip_p(diffs: list[float]) -> float:
 
 
 def paired_scores_query(config_ids: list[str], session_ids: list[str]) -> str:
-    """Per-session mean score per evaluator from the two arms' online-eval results."""
+    """Per-session mean score per evaluator from the two arms' online-eval results.
+
+    The evaluator ARN rides along so :func:`parse_paired_scores` can key a custom
+    judge by its id (the ARN tail) — its ``gen_ai.evaluation.name`` is the judge's
+    NAME, which need not equal the id the canary was configured with."""
     from app.evaluation.agentcore_eval import ONLINE_EVAL_RESULTS_PREFIX
 
     configs = ", ".join(f'"{c}"' for c in config_ids)
@@ -311,21 +315,28 @@ def paired_scores_query(config_ids: list[str], session_ids: list[str]) -> str:
     return (
         f"SOURCE logGroups(namePrefix: ['{ONLINE_EVAL_RESULTS_PREFIX}'])\n"
         "| fields attributes.session.id as sid, attributes.gen_ai.evaluation.name as evaluator,"
+        " attributes.aws.bedrock_agentcore.evaluator.arn as arn,"
         " attributes.gen_ai.evaluation.score.value as score\n"
         f'| filter name = "gen_ai.evaluation.result" and onlineEvaluationConfigId in [{configs}]'
         f" and sid in [{sessions}] and ispresent(score)\n"
         # the aggregate needs its own name: reusing `score` is a MalformedQueryException
         # ("Ephemeral field is already defined") on the live service
-        "| stats avg(score) as mean by sid, evaluator\n"
+        "| stats avg(score) as mean by sid, evaluator, arn\n"
         "| limit 10000"
     )
 
 
 def parse_paired_scores(rows: list[dict[str, str]]) -> dict[str, dict[str, float]]:
-    """``{session_id: {evaluator: mean score}}`` from :func:`paired_scores_query` rows."""
+    """``{session_id: {evaluator id: mean score}}`` from :func:`paired_scores_query` rows.
+
+    The evaluator is keyed by the tail of its ARN (``…:evaluator/<id>``) when the row
+    carries one, else by its evaluation name — the same rule as
+    ``agentcore_eval._record_evaluator_id``, so configured ids match custom judges."""
     out: dict[str, dict[str, float]] = {}
     for row in rows:
-        sid, evaluator = row.get("sid"), row.get("evaluator")
+        sid = row.get("sid")
+        arn = row.get("arn") or ""
+        evaluator = arn.rsplit("/", 1)[-1] if "/" in arn else row.get("evaluator")
         try:
             score = float(row.get("mean") or "")
         except ValueError:

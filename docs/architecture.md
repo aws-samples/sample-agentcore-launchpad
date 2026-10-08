@@ -2605,7 +2605,16 @@ through the same backend routes and permission checks as the classic pages.
   means, the mean difference, better/worse/equal counts from the candidate's side
   (polarity-aware) and a two-sided paired sign-flip p-value (exact up to 16 non-zero
   pairs, seeded Monte Carlo beyond); the per-question rows are kept with the verdict.
-  The verdict rule is unchanged (`compute_verdict`). More evidence means more questions
+  Both canary kinds choose their evaluators at create (`online_evaluators`, default
+  GoalSuccessRate + Helpfulness; built-ins and numeric custom judges that need no ground
+  truth, at most 10, refused with a 400 before any row is written) and may name a
+  `primary_evaluator` that alone decides the verdict's winner, significance and sample
+  size — the V2 create flows always send one (the first chosen custom judge, else
+  GoalSuccessRate), the others stay on the page as reference. Paired scores are keyed by
+  the evaluator ARN's id tail (a custom judge's evaluation name is not its id), the 90 %
+  wait covers the configured evaluators, and one with no score by the cap is reported as
+  unscored (an unscored primary is `insufficient-data`). Without a primary the verdict
+  rule is unchanged (`compute_verdict`). More evidence means more questions
   in the dataset, not more passes. Complete is ledger-only (treatment is
   already `DEFAULT`) and, unlike a Runtime canary, may run straight from **50/50** on a
   `treatment-wins` or `tie` verdict (`canary_service.early_complete_allowed`; a tie or a

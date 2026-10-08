@@ -1396,8 +1396,19 @@ def send_gateway_traffic(
     }
 
 
-def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, Any]:
+def metric_evaluator_id(metric: dict[str, Any]) -> str:
+    """The evaluator id a normalized metric belongs to: the tail of its evaluator ARN
+    (``…:evaluator/<id>``) or its bare id / label."""
+    return str(metric.get("evaluatorId") or metric.get("label") or "").rsplit("/", 1)[-1]
+
+
+def compute_verdict(
+    metrics: list[dict[str, Any]], min_n: int = 3, *, primary: str | None = None,
+) -> dict[str, Any]:
     """Honest small-n verdict from normalized A/B metrics.
+
+    With ``primary`` set, that ONE evaluator decides (see :func:`_primary_verdict`);
+    every other metric is reference only. Without it, the aggregate below decides.
 
     Evaluators do not all point the same way: ``Builtin.Refusal`` and the other
     penalty scores are better *lower*, so each raw ``t_mean - c_mean`` is
@@ -1411,6 +1422,8 @@ def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, 
     scores no longer outvotes one that produced forty.
     """
     if not metrics:
+        if primary is not None:
+            return _primary_verdict(metrics, primary, min_n=min_n, avg_delta=None)
         return {"verdict": "insufficient-data", "reason": "no evaluator metrics yet"}
     weighted_delta = 0.0
     weight_total = 0.0
@@ -1434,6 +1447,9 @@ def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, 
                 weight_total += weight
             if variant.get("isSignificant"):
                 significant = True
+    if primary is not None:
+        avg = round(weighted_delta / weight_total, 4) if weight_total else None
+        return _primary_verdict(metrics, primary, min_n=min_n, avg_delta=avg)
     if not weight_total:
         return {"verdict": "insufficient-data", "reason": "arms have no means yet"}
     avg_delta = weighted_delta / weight_total
@@ -1446,6 +1462,39 @@ def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, 
         "avg_delta": round(avg_delta, 4),
         "n": total_n,
         "significant": significant,
+    }
+
+
+def _primary_verdict(
+    metrics: list[dict[str, Any]], primary: str, *, min_n: int, avg_delta: float | None,
+) -> dict[str, Any]:
+    """The verdict of the primary evaluator alone: winner = the sign of its
+    polarity-oriented delta, ``significant`` = its own test, ``n`` = its own samples.
+
+    ``avg_delta`` (the all-evaluator aggregate) is kept for display only. A primary
+    that produced no comparable means is ``insufficient-data`` — the other
+    evaluators never stand in for it."""
+    base: dict[str, Any] = {"primary": primary}
+    if avg_delta is not None:
+        base["avg_delta"] = avg_delta
+    metric = next((m for m in metrics if metric_evaluator_id(m) == primary), None)
+    control = (metric or {}).get("control") or {}
+    variant = next(iter((metric or {}).get("variants") or []), None) or {}
+    c_mean, t_mean = control.get("mean"), variant.get("mean")
+    if metric is None or c_mean is None or t_mean is None:
+        return {**base, "verdict": "insufficient-data", "reason": "primary evaluator unscored",
+                "n": 0}
+    n = int(control.get("sampleSize") or 0) + int(variant.get("sampleSize") or 0)
+    delta = ac.evaluator_polarity(primary) * (t_mean - c_mean)
+    base["primary_delta"] = round(delta, 4)
+    if n < min_n * 2:
+        return {**base, "verdict": "insufficient-n", "n": n}
+    winner = "treatment" if delta > 0 else ("control" if delta < 0 else "tie")
+    return {
+        **base,
+        "verdict": f"{winner}-wins" if winner != "tie" else "tie",
+        "n": n,
+        "significant": bool(variant.get("isSignificant")),
     }
 
 

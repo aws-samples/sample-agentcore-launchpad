@@ -160,3 +160,53 @@ def test_existing_rejections_unchanged():
         normalize_online_evaluators(["Builtin.NotAThing"], control)
     assert unknown_builtin.value.status_code == 400
     assert control.calls == []
+
+
+# ─── numeric-scale check (canary verdicts compare arm means) ─────────────────
+def _scaled_judge(scale):
+    return {"evaluatorConfig": {"llmAsAJudge": {
+        "instructions": "Rate {assistant_turn} against the store's rules.",
+        "ratingScale": scale,
+    }}}
+
+
+_CATEGORICAL = {"categorical": [{"label": "ok", "definition": "fine"},
+                                {"label": "bad", "definition": "not fine"}]}
+_NUMERICAL = {"numerical": [{"value": 1.0, "label": "pass", "definition": "meets"},
+                            {"value": 0.0, "label": "fail", "definition": "fails"}]}
+
+
+def test_categorical_judge_refused_when_numeric_required():
+    control = StubControl({"cat_judge": _scaled_judge(_CATEGORICAL)})
+    with pytest.raises(AppError) as excinfo:
+        normalize_online_evaluators(
+            ["Builtin.GoalSuccessRate", "cat_judge"], control,
+            code_prefix="canary", require_numeric=True,
+        )
+    assert excinfo.value.code == "canary.evaluator_categorical"
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == {"evaluator": "cat_judge"}
+    assert control.calls == ["cat_judge"]  # one read covers both checks
+
+
+def test_categorical_judge_still_fine_without_the_numeric_requirement():
+    control = StubControl({"cat_judge": _scaled_judge(_CATEGORICAL)})
+    assert normalize_online_evaluators(["cat_judge"], control) == ["cat_judge"]
+
+
+def test_numerical_judge_passes_the_numeric_requirement():
+    control = StubControl({"num_judge": _scaled_judge(_NUMERICAL)})
+    chosen = normalize_online_evaluators(
+        ["num_judge", "Builtin.GoalSuccessRate"], control,
+        code_prefix="canary", require_numeric=True,
+    )
+    assert chosen == ["num_judge", "Builtin.GoalSuccessRate"]
+
+
+def test_canary_prefix_keys_the_unsupported_code():
+    with pytest.raises(AppError) as excinfo:
+        normalize_online_evaluators(
+            ["Builtin.TrajectoryExactOrderMatch"], StubControl(),
+            code_prefix="canary", require_numeric=True,
+        )
+    assert excinfo.value.code == "canary.evaluator_unsupported"

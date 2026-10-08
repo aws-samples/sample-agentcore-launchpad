@@ -546,6 +546,8 @@ export interface RuntimeImportResult {
 }
 
 export interface RuntimeCanaryMetric {
+  /** evaluator id, or its ARN (AWS A/B results) — the tail after `/` is the id */
+  evaluatorId?: string;
   label: string;
   polarity?: number;  // +1 = higher mean wins, -1 = lower mean wins
   control: { mean: number | null; sampleSize: number | null };
@@ -609,6 +611,11 @@ export interface RuntimeCanaryInfo {
     /** Harness canaries A/B two existing versions */
     harness?: { control_version: string; treatment_version: string; start_stage?: number };
     edited_spec?: Record<string, unknown>;
+    /** the evaluators BOTH arms are scored by (chosen at create); absent on rows
+     *  created before the choice existed — those use the default pair */
+    online_evaluators?: string[];
+    /** the one evaluator that decides the verdict; absent ⇒ the aggregate decides */
+    primary_evaluator?: string;
     // ``setup`` is persisted as a PARTIAL artifact (the block below) as soon as the
     // gateway + stable endpoint are up, so invoke keeps serving v_current during
     // provisioning. Everything after it only exists once the A/B test is live —
@@ -631,6 +638,9 @@ export interface RuntimeCanaryInfo {
       // zip behind v_candidate; cleanup deletes it unless it is still live
       candidate_s3_key?: string;
       treatment_endpoint?: string;
+      // copied from the top-level choice by setup (default pair on old rows)
+      online_evaluators?: string[];
+      primary_evaluator?: string;
       champion?: {
         target_name: string;
         target_id: string;
@@ -649,6 +659,9 @@ export interface RuntimeCanaryInfo {
         sent: number;
         failed: number;
         baseline_n: number;
+        /** the primary evaluator's own sample count before this stage's traffic
+         *  (runtime canaries with a primary); the verdict waits for it to grow */
+        primary_baseline_n?: number;
         dataset_id?: string;
         dataset_name?: string;
         completed_at?: string;
@@ -672,6 +685,13 @@ export interface RuntimeCanaryInfo {
         pairs_sent?: number;
         pairs_complete?: number;
         pairs?: CanaryPairRow[];
+        /** the evaluator that decided this verdict (absent ⇒ the aggregate decided) */
+        primary?: string;
+        /** the primary's polarity-oriented delta (positive favours the candidate) */
+        primary_delta?: number;
+        /** the configured evaluators, and those with no score on both arms */
+        evaluators?: string[];
+        unscored?: string[];
       };
     }[];
     complete?: {
@@ -4814,7 +4834,8 @@ export const api = {
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
   /** Runtime agents send `candidate` (the edit to mint); a Harness sends
    *  `harness_versions` — control (an earlier version) vs treatment (the latest) —
-   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). */
+   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). Both kinds may choose
+   *  their evaluators and a primary evaluator that decides the verdict. */
   createRuntimeCanary: (input: {
     agent_id: string;
     candidate?: {
@@ -4825,6 +4846,10 @@ export const api = {
     harness_versions?: { control: string; treatment: string };
     start_stage?: 0 | 1;
     source_experiment_id?: string;
+    /** 1..10 ids scored on both arms; absent ⇒ the default pair */
+    online_evaluators?: string[];
+    /** must be one of `online_evaluators`; absent ⇒ the aggregate verdict */
+    primary_evaluator?: string;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {
       method: "POST",
