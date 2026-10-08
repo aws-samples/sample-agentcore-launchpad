@@ -37,6 +37,7 @@ def normalize_online_evaluators(
     control: Any,
     *,
     code_prefix: str = "experiment",
+    require_numeric: bool = False,
 ) -> list[str]:
     """Validate an operator-chosen evaluator set for online evaluation.
 
@@ -44,6 +45,11 @@ def normalize_online_evaluators(
     judge costs one ``GetEvaluator``, so it happens after dedup and the count cap
     and only for non-``Builtin.`` ids — a built-in-only selection, the common
     case, makes no AWS call at all.
+
+    ``require_numeric`` additionally refuses a custom LLM judge whose rating scale
+    is categorical (``{code_prefix}.evaluator_categorical``): a caller that compares
+    arm means (the canary verdict) needs a numeric score. It reuses the same
+    ``GetEvaluator`` read, so it costs no extra AWS call.
     """
     code = f"{code_prefix}.evaluator_unsupported"
     chosen: list[str] = []
@@ -78,13 +84,27 @@ def normalize_online_evaluators(
             status_code=400,
         )
     for evaluator in (e for e in chosen if not e.startswith("Builtin.")):
-        _assert_no_ground_truth(control, evaluator, code)
+        _assert_no_ground_truth(
+            control, evaluator, code,
+            categorical_code=f"{code_prefix}.evaluator_categorical" if require_numeric else None,
+        )
     return chosen
 
 
-def _assert_no_ground_truth(control: Any, evaluator: str, code: str) -> None:
+def is_categorical(detail: dict[str, Any] | None) -> bool:
+    """A custom LLM judge whose rating scale is categorical (no numeric score) —
+    the same rule as ``recommendations._evaluator_problem``."""
+    config = (detail or {}).get("evaluatorConfig") or {}
+    scale = (config.get("llmAsAJudge") or {}).get("ratingScale") or {}
+    return bool(scale.get("categorical"))
+
+
+def _assert_no_ground_truth(
+    control: Any, evaluator: str, code: str, *, categorical_code: str | None = None,
+) -> None:
     """Reject a custom judge — or a managed code evaluator whose rules read reference
-    inputs — that needs ground truth it will never get online."""
+    inputs — that needs ground truth it will never get online; with
+    ``categorical_code`` also a judge that scores on a categorical scale."""
     from app.assistant.evaluation_assets import managed_reference_gap
     from app.core.db import SessionLocal
 
@@ -123,5 +143,13 @@ def _assert_no_ground_truth(control: Any, evaluator: str, code: str) -> None:
             f"{evaluator} references {rendered}, which is ground truth online "
             "evaluation does not carry — use a batch evaluation run instead",
             {"evaluator": evaluator, "placeholders": placeholders},
+            status_code=400,
+        )
+    if categorical_code and is_categorical(detail):
+        raise AppError(
+            categorical_code,
+            f"{evaluator} rates on a categorical scale, which gives no numeric score to "
+            "compare the two versions by — use a judge with a numerical rating scale",
+            {"evaluator": evaluator},
             status_code=400,
         )

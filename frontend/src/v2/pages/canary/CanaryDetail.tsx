@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type CanaryPairRow, type RuntimeCanaryInfo } from "../../../lib/api";
+import { ONLINE_EVAL_DEFAULT } from "../../../lib/experiments";
 import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
@@ -16,6 +17,7 @@ import {
   versionsLabel,
   weightsLabel,
 } from "./common";
+import { evaluatorIdOf, evaluatorName } from "./evaluatorChoice";
 
 const POLL_MS = 8000;
 const FAST_POLL_MS = 2500;
@@ -38,6 +40,9 @@ export function CanaryDetail({ id }: { id: string }) {
   const datasetsLoad = useLoad(() => api.v2Datasets(), "datasets");
   const datasets = useMemo(() => (datasetsLoad.data?.datasets ?? []).filter((d) => d.kind !== "simulated"), [datasetsLoad.data]);
   const [dataset, setDataset] = useState("");
+  // custom judge names for the evaluator summary and the metric tables
+  const evaluatorsLoad = useLoad(() => api.v2Evaluators(), "evaluators");
+  const evaluatorRows = evaluatorsLoad.data?.evaluators;
 
   useEffect(() => {
     setDataset((prev) => (datasets.some((d) => d.id === prev) ? prev : (datasets[0]?.id ?? "")));
@@ -100,6 +105,25 @@ export function CanaryDetail({ id }: { id: string }) {
   const startStage = liveSetup?.start_stage ?? 0;
   const skippedAt = (i: number): "start" | "early" | null =>
     i < startStage ? "start" : isHarness && !!a.complete && i > completedStage ? "early" : null;
+  // the evaluators both arms are scored by; a row from before the choice used the default pair
+  const configured = a.online_evaluators ?? setup?.online_evaluators ?? null;
+  const primaryEvaluator = a.primary_evaluator ?? setup?.primary_evaluator ?? null;
+  // configured evaluators the most recent verdict got no score on both versions from
+  const latestUnscored = new Set([...rounds].reverse().find((r) => r.verdict)?.verdict?.unscored ?? []);
+  const nameOf = (id: string) => evaluatorName(t, evaluatorRows, id);
+  const namesOf = (ids: string[]) => ids.map(nameOf).join(t("v2.canary.eval.sep"));
+  const metricId = (m: Metric) => evaluatorIdOf(m.evaluatorId ?? m.label);
+  /** custom judges by name; built-ins keep their stored label */
+  const metricName = (m: Metric) => {
+    const row = evaluatorRows?.find((e) => e.id === metricId(m));
+    return row?.source === "custom" && row.name ? row.name : m.label;
+  };
+  const metricCell = (m: Metric, primary: string | undefined) => (
+    <span className="v2-row">
+      {metricName(m)}
+      {primary && metricId(m) === primary && <Tag tone="green">{t("v2.canary.eval.primaryTag")}</Tag>}
+    </span>
+  );
 
   /** Button while pending → progress line; a stored `<action>: …` error turns it into a retry. */
   const actionButton = (
@@ -129,11 +153,11 @@ export function CanaryDetail({ id }: { id: string }) {
 
   const signed = (v: number | undefined) => (v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}`);
   /** paired verdict: both versions answered the same questions — compare per question */
-  const pairedTable = (metrics: Metric[]) => (
+  const pairedTable = (metrics: Metric[], primary?: string) => (
     <Table
       testId="v2-canary-paired-metrics"
       columns={[
-        { key: "m", title: t("v2.evaluators.colName"), render: (m: Metric) => m.label },
+        { key: "m", title: t("v2.evaluators.colName"), render: (m: Metric) => metricCell(m, primary) },
         { key: "c", title: t("v2.canary.champion"), render: (m: Metric) => fmtScore(m.control.mean) },
         { key: "v", title: t("v2.canary.candidate"), render: (m: Metric) => fmtScore(m.variants[0]?.mean ?? null) },
         { key: "d", title: t("v2.canary.paired.meanDiff"), render: (m: Metric) => signed(m.variants[0]?.meanDiff) },
@@ -155,7 +179,7 @@ export function CanaryDetail({ id }: { id: string }) {
     />
   );
   const pairRowsTable = (rows: CanaryPairRow[], metrics: Metric[]) => {
-    const evaluators = metrics.map((m) => ({ id: (m as Metric & { evaluatorId?: string }).evaluatorId ?? m.label, label: m.label }));
+    const evaluators = metrics.map((m) => ({ id: m.evaluatorId ?? m.label, label: metricName(m) }));
     const cell = (scores: Record<string, number>, id: string) => (id in scores ? fmtScore(scores[id]) : "—");
     return (
       <Table
@@ -185,10 +209,10 @@ export function CanaryDetail({ id }: { id: string }) {
     );
   };
 
-  const metricsTable = (metrics: Metric[]) => (
+  const metricsTable = (metrics: Metric[], primary?: string) => (
     <Table
       columns={[
-        { key: "m", title: t("v2.evaluators.colName"), render: (m: Metric) => m.label },
+        { key: "m", title: t("v2.evaluators.colName"), render: (m: Metric) => metricCell(m, primary) },
         {
           key: "c",
           title: t("v2.canary.champion"),
@@ -285,8 +309,26 @@ export function CanaryDetail({ id }: { id: string }) {
                     <span className="v2-muted">n={verdict.n ?? 0}</span>
                   )}
                   {verdict.significant === false && <Tag tone="gray">{t("canaryPage.notSignificant")}</Tag>}
+                  {verdict.primary ? (
+                    <span className="v2-muted" data-testid="v2-canary-verdict-primary">
+                      {t("v2.canary.eval.decidedBy", { primary: nameOf(verdict.primary) })}
+                    </span>
+                  ) : (
+                    verdict.evaluators && <span className="v2-muted">{t("v2.canary.eval.aggregate")}</span>
+                  )}
+                  {verdict.reason && <span className="v2-muted">{verdict.reason}</span>}
                 </div>
-                {verdict.metrics?.length > 0 && (verdict.mode === "paired" ? pairedTable(verdict.metrics) : metricsTable(verdict.metrics))}
+                {(verdict.unscored?.length ?? 0) > 0 && (
+                  <div data-testid="v2-canary-unscored">
+                    <Alert tone="warn">
+                      {t("v2.canary.eval.unscored", { evaluators: namesOf(verdict.unscored ?? []) })}
+                    </Alert>
+                  </div>
+                )}
+                {verdict.metrics?.length > 0 &&
+                  (verdict.mode === "paired"
+                    ? pairedTable(verdict.metrics, verdict.primary)
+                    : metricsTable(verdict.metrics, verdict.primary))}
                 {verdict.mode === "paired" && (verdict.pairs?.length ?? 0) > 0 && (
                   <details data-testid="v2-canary-paired-details">
                     <summary className="v2-link">{t("v2.canary.paired.perQuestion", { n: verdict.pairs?.length ?? 0 })}</summary>
@@ -425,6 +467,25 @@ export function CanaryDetail({ id }: { id: string }) {
             { label: t("v2.canary.champion"), value: canary.champion_agent_name },
             { label: t("canaryPage.list.versions"), value: <span className="mono">{versionsLabel(setup)}</span> },
             { label: t("canaryPage.list.weights"), value: <span className="mono">{weightsLabel(setup)}</span> },
+            {
+              label: t("v2.canary.eval.title"),
+              value: configured ? (
+                <span className="v2-tags" data-testid="v2-canary-detail-evaluators">
+                  {configured.map((id) => (
+                    <Tag
+                      key={id}
+                      tone={latestUnscored.has(id) ? "orange" : id === primaryEvaluator ? "green" : "outline"}
+                    >
+                      {nameOf(id)}
+                      {id === primaryEvaluator && ` · ${t("v2.canary.eval.primaryTag")}`}
+                      {latestUnscored.has(id) && ` · ${t("v2.canary.eval.unscoredTag")}`}
+                    </Tag>
+                  ))}
+                </span>
+              ) : (
+                t("v2.canary.eval.defaultPair", { evaluators: namesOf(ONLINE_EVAL_DEFAULT) })
+              ),
+            },
             { label: t("v2.canary.sourceExp"), value: canary.source_experiment_id ? <span className="mono">{canary.source_experiment_id}</span> : "—" },
             { label: t("v2.tasks.colCreated"), value: fmtTime(canary.created_at) },
             {

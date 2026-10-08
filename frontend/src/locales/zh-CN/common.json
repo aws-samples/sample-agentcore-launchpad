@@ -6467,6 +6467,23 @@
         "perQuestion": "逐题明细（{{n}}）",
         "question": "题目",
         "prompt": "问题"
+      },
+      "eval": {
+        "title": "评估器",
+        "hint": "两个版本都用这些评估器打分（最多 {{max}} 个）。在线评估读取的是实时 trace，所以依赖标准答案的评估器不可用；自定义评审需使用数值评分。",
+        "primary": "主判定评估器",
+        "primaryHint": "判定的胜负、显著性和样本量只看这个评估器；其余评估器仅作参考。",
+        "summary": "评估器：{{evaluators}} · 主判定：{{primary}}",
+        "sep": "、",
+        "primaryTag": "主判定",
+        "unscoredTag": "未评分",
+        "unscored": "以下评估器未在两个版本上都给出评分：{{evaluators}}",
+        "decidedBy": "由主判定评估器 {{primary}} 判定",
+        "aggregate": "由全部评估器的综合结果判定",
+        "defaultPair": "{{evaluators}}（默认）",
+        "change": "修改评估器",
+        "confirm": "两个版本都由 {{evaluators}} 打分；判定由 {{primary}} 决定。",
+        "none": "请至少选择一个评估器"
       }
     },
     "chat": {

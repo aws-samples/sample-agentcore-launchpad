@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.models import EvalDataset
+from app.evaluation.online_evaluators import normalize_online_evaluators
 from app.models.ledger import Agent
 from app.optimization import canary_harness, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
@@ -98,6 +99,38 @@ class RuntimeCanaryCreate(BaseModel):
     # the ramp stage setup opens at: 0 = 90/10, 1 = 50/50 (skips 90/10; Harness only)
     start_stage: int = Field(default=0, ge=0, le=canary_service.EARLY_COMPLETE_STAGE)
     source_experiment_id: str | None = None
+    # the evaluators BOTH arms' online evaluations score with; absent/empty → the
+    # default pair. More than ONLINE_EVAL_MAX (after dedup) is a 400, not a 422.
+    online_evaluators: list[str] | None = Field(default=None, max_length=50)
+    # when set, the verdict's winner / significance / sample size come from this one
+    # evaluator (it must be among the selected); absent → the legacy aggregate verdict
+    primary_evaluator: str | None = None
+
+
+def _validate_evaluators(
+    req: RuntimeCanaryCreate, ws: WorkspaceScope,
+) -> tuple[list[str], str | None]:
+    """The canary's evaluator set + primary, refused before any row is written.
+
+    Same rules as every online evaluation config (no trajectory matchers, no
+    unknown built-ins, no ground-truth judges, ≤ 10), plus a numeric rating scale:
+    the verdict compares the two versions' mean scores."""
+    ids = [str(e).strip() for e in req.online_evaluators or ()]
+    # only a custom id is read back (GetEvaluator); a built-in-only set needs no client
+    custom = any(e and not e.startswith("Builtin.") for e in ids)
+    chosen = normalize_online_evaluators(
+        ids, control_client(ws.context) if custom else None,
+        code_prefix="canary", require_numeric=True,
+    )
+    primary = (req.primary_evaluator or "").strip() or None
+    if primary is not None and primary not in chosen:
+        raise AppError(
+            "canary.primary_not_selected",
+            f"primary evaluator {primary} is not one of the canary's evaluators",
+            {"primary_evaluator": primary, "online_evaluators": chosen},
+            status_code=400,
+        )
+    return chosen, primary
 
 
 def _validate_harness_versions(agent: Agent, versions: HarnessVersions, ws: WorkspaceScope) -> None:
@@ -221,12 +254,15 @@ def create_runtime_canary(
                 status_code=422,
             )
         _validate_harness_versions(agent, req.harness_versions, ws)
+        evaluators, primary = _validate_evaluators(req, ws)
         row = canary_service.start_harness_canary(
             agent,
             control_version=req.harness_versions.control,
             treatment_version=req.harness_versions.treatment,
             workspace=ws.context,
             start_stage=req.start_stage,
+            online_evaluators=evaluators,
+            primary_evaluator=primary,
         )
         return _out(row)
     if req.start_stage:
@@ -272,8 +308,10 @@ def create_runtime_canary(
                 status_code=400,
             )
     edited_spec = _resolve_edited_spec(agent, candidate)
+    evaluators, primary = _validate_evaluators(req, ws)
     row = canary_service.start_canary(
-        agent, edited_spec, ws.context, req.source_experiment_id
+        agent, edited_spec, ws.context, req.source_experiment_id,
+        online_evaluators=evaluators, primary_evaluator=primary,
     )
     return _out(row)
 
