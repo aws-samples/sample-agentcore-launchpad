@@ -488,7 +488,7 @@ export function AssistantDetail({
         onBack={back}
         end={
           <>
-            {isAdmin && (
+            {(isAdmin || conversation.mine) && (
               <Button disabled={sharing} onClick={() => void toggleShare()} testId="v2-assistant-share">
                 {t(conversation.shared ? "v2.assistant.unshare" : "v2.assistant.share")}
               </Button>

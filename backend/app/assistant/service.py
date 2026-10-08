@@ -888,14 +888,18 @@ def list_conversations(db: Session, workspace_id: str, principal: str) -> list[d
 def set_shared(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
 ) -> AssistantConversation:
-    """Admin-only publish/unpublish of a conversation to every workspace member. An
-    admin may share only what it can already reach (its own, or one already shared),
-    so sharing never becomes a way to discover another member's private one."""
-    if not identity.is_admin:
+    """Publish/unpublish a conversation to every workspace member — by its owner, or
+    by an administrator. Either may act only on what it can already reach (its own,
+    or one already shared), so sharing never becomes a way to discover another
+    member's private conversation; a collaborator on a shared one cannot toggle it."""
+    principal = principal_of(identity)
+    row = accessible_conversation(db, workspace_id, principal, conversation_id)
+    if not identity.is_admin and row.owner_principal != principal:
         raise AppError(
-            "auth.forbidden", "This action requires an administrator account", status_code=403
+            "assistant.share_forbidden",
+            "only the conversation's owner or an administrator can change its sharing",
+            status_code=403,
         )
-    row = accessible_conversation(db, workspace_id, principal_of(identity), conversation_id)
     if row.shared != shared:
         # Direct UPDATE: a share is not conversation activity, so it must not bump
         # ``updated_at`` (the history order) the way an ORM flush would.

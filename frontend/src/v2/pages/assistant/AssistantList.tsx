@@ -150,7 +150,7 @@ export function AssistantList({
       render: (c) => (
         <div className="v2-actions">
           <LinkButton onClick={() => open(c.id)}>{t("v2.assistant.continue")}</LinkButton>
-          {isAdmin && (
+          {(isAdmin || c.mine) && (
             <LinkButton
               disabled={sharing !== null}
               onClick={() => void toggleShare(c)}

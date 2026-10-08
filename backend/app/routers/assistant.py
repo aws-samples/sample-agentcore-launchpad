@@ -260,8 +260,8 @@ def set_sharing(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Admin-only: open (or close) one conversation to every member of the
-    workspace. Deleting it stays with the owner."""
+    """The owner or an administrator opens (or closes) one conversation to every
+    member of the workspace. Deleting it stays with the owner."""
     identity = _caller(request)
     row = service.set_shared(db, ws.id, identity, conversation_id, req.shared)
     return service.conversation_summary(db, row, viewer=principal_of(identity))
