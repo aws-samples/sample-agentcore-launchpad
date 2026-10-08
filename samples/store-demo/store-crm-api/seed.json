@@ -1,0 +1,2059 @@
+{
+ "as_of": "2026-10-08",
+ "customers": [
+  {
+   "customer_id": "C1001",
+   "name": "陈志远",
+   "phone": "138****1001",
+   "member_since": "2021-05-16",
+   "tier": "金卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1002",
+   "name": "林晓雯",
+   "phone": "139****1002",
+   "member_since": "2022-02-10",
+   "tier": "金卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1003",
+   "name": "周子轩",
+   "phone": "137****1003",
+   "member_since": "2025-04-03",
+   "tier": "普通",
+   "city": "广州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1004",
+   "name": "黄海燕",
+   "phone": "136****1004",
+   "member_since": "2023-01-08",
+   "tier": "银卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1005",
+   "name": "吴建华",
+   "phone": "135****1005",
+   "member_since": "2020-09-12",
+   "tier": "钻石卡",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1006",
+   "name": "马思远",
+   "phone": "133****1006",
+   "member_since": "2020-03-28",
+   "tier": "金卡",
+   "city": "成都",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1007",
+   "name": "赵雪梅",
+   "phone": "132****1007",
+   "member_since": "2022-07-01",
+   "tier": "普通",
+   "city": "杭州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1008",
+   "name": "孙晓东",
+   "phone": "131****1008",
+   "member_since": "2021-11-30",
+   "tier": "银卡",
+   "city": "北京",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1009",
+   "name": "孙洋",
+   "phone": "145****1009",
+   "member_since": "2022-02-18",
+   "tier": "银卡",
+   "city": "广州",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1010",
+   "name": "李伟",
+   "phone": "181****1010",
+   "member_since": "2021-06-01",
+   "tier": "银卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1011",
+   "name": "黄艳",
+   "phone": "180****1011",
+   "member_since": "2023-04-25",
+   "tier": "普通",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1012",
+   "name": "何思远",
+   "phone": "135****1012",
+   "member_since": "2025-10-25",
+   "tier": "金卡",
+   "city": "深圳",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1013",
+   "name": "赵嘉怡",
+   "phone": "179****1013",
+   "member_since": "2026-02-26",
+   "tier": "普通",
+   "city": "广州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1014",
+   "name": "刘海燕",
+   "phone": "148****1014",
+   "member_since": "2022-11-14",
+   "tier": "银卡",
+   "city": "成都",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1015",
+   "name": "陈明",
+   "phone": "184****1015",
+   "member_since": "2024-04-01",
+   "tier": "金卡",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1016",
+   "name": "李娜",
+   "phone": "164****1016",
+   "member_since": "2024-08-14",
+   "tier": "金卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1017",
+   "name": "胡超",
+   "phone": "134****1017",
+   "member_since": "2023-08-10",
+   "tier": "普通",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1018",
+   "name": "高磊",
+   "phone": "189****1018",
+   "member_since": "2021-04-07",
+   "tier": "金卡",
+   "city": "广州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1019",
+   "name": "马军",
+   "phone": "180****1019",
+   "member_since": "2024-10-23",
+   "tier": "银卡",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1020",
+   "name": "黄海燕",
+   "phone": "187****1020",
+   "member_since": "2023-08-21",
+   "tier": "普通",
+   "city": "成都",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1021",
+   "name": "孙娜",
+   "phone": "177****1021",
+   "member_since": "2021-06-23",
+   "tier": "银卡",
+   "city": "北京",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1022",
+   "name": "马敏",
+   "phone": "150****1022",
+   "member_since": "2021-11-25",
+   "tier": "金卡",
+   "city": "广州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1023",
+   "name": "郭静",
+   "phone": "143****1023",
+   "member_since": "2026-05-25",
+   "tier": "普通",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1024",
+   "name": "郭伟",
+   "phone": "134****1024",
+   "member_since": "2021-12-18",
+   "tier": "银卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1025",
+   "name": "孙娜",
+   "phone": "148****1025",
+   "member_since": "2023-05-31",
+   "tier": "普通",
+   "city": "杭州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1026",
+   "name": "李志强",
+   "phone": "168****1026",
+   "member_since": "2021-11-08",
+   "tier": "金卡",
+   "city": "成都",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1027",
+   "name": "杨军",
+   "phone": "178****1027",
+   "member_since": "2026-05-18",
+   "tier": "金卡",
+   "city": "成都",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1028",
+   "name": "林洋",
+   "phone": "165****1028",
+   "member_since": "2021-04-29",
+   "tier": "普通",
+   "city": "成都",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1029",
+   "name": "黄军",
+   "phone": "160****1029",
+   "member_since": "2025-03-12",
+   "tier": "银卡",
+   "city": "深圳",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1030",
+   "name": "马晓东",
+   "phone": "175****1030",
+   "member_since": "2024-11-11",
+   "tier": "普通",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1031",
+   "name": "孙志强",
+   "phone": "150****1031",
+   "member_since": "2021-04-02",
+   "tier": "金卡",
+   "city": "杭州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1032",
+   "name": "何强",
+   "phone": "161****1032",
+   "member_since": "2024-04-27",
+   "tier": "普通",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1033",
+   "name": "吴超",
+   "phone": "170****1033",
+   "member_since": "2021-06-11",
+   "tier": "普通",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1034",
+   "name": "赵子轩",
+   "phone": "178****1034",
+   "member_since": "2025-03-11",
+   "tier": "普通",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1035",
+   "name": "张志强",
+   "phone": "173****1035",
+   "member_since": "2024-07-31",
+   "tier": "普通",
+   "city": "北京",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1036",
+   "name": "胡伟",
+   "phone": "138****1036",
+   "member_since": "2020-07-26",
+   "tier": "普通",
+   "city": "北京",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1037",
+   "name": "刘静",
+   "phone": "156****1037",
+   "member_since": "2021-11-17",
+   "tier": "普通",
+   "city": "广州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1038",
+   "name": "张洋",
+   "phone": "140****1038",
+   "member_since": "2023-08-30",
+   "tier": "普通",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1039",
+   "name": "胡晓东",
+   "phone": "181****1039",
+   "member_since": "2021-04-07",
+   "tier": "银卡",
+   "city": "成都",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1040",
+   "name": "杨建华",
+   "phone": "133****1040",
+   "member_since": "2026-01-23",
+   "tier": "金卡",
+   "city": "成都",
+   "marketing_consent": false
+  },
+  {
+   "customer_id": "C1041",
+   "name": "王建国",
+   "phone": "139****6688",
+   "member_since": "2019-08-20",
+   "tier": "金卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1042",
+   "name": "王建军",
+   "phone": "186****6688",
+   "member_since": "2024-12-01",
+   "tier": "银卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1043",
+   "name": "李静",
+   "phone": "135****6688",
+   "member_since": "2022-03-15",
+   "tier": "普通",
+   "city": "上海",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1044",
+   "name": "刘晓峰",
+   "phone": "158****1044",
+   "member_since": "2024-10-08",
+   "tier": "银卡",
+   "city": "深圳",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1045",
+   "name": "郭雨欣",
+   "phone": "159****1045",
+   "member_since": "2024-10-09",
+   "tier": "普通",
+   "city": "广州",
+   "marketing_consent": true
+  },
+  {
+   "customer_id": "C1046",
+   "name": "何俊杰",
+   "phone": "150****1046",
+   "member_since": "2024-10-08",
+   "tier": "金卡",
+   "city": "杭州",
+   "marketing_consent": true
+  }
+ ],
+ "purchases": [
+  {
+   "customer_id": "C1001",
+   "order_id": "SO-50007",
+   "order_date": "2021-05-16",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1001",
+   "order_id": "SO-50010",
+   "order_date": "2024-03-02",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1001",
+   "order_id": "SO-50020",
+   "order_date": "2024-03-02",
+   "sku": "ACC-M3P-BAT",
+   "product_name": "Mavic 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 2,
+   "amount_cny": 2198,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1002",
+   "order_id": "SO-50025",
+   "order_date": "2022-02-10",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1002",
+   "order_id": "SO-50032",
+   "order_date": "2026-06-18",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1002",
+   "order_id": "SO-50036",
+   "order_date": "2026-06-18",
+   "sku": "SVC-M4P-CARE",
+   "product_name": "随心换 1 年版（Mavic 4 Pro）",
+   "category": "服务",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 1399,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1003",
+   "order_id": "SO-50043",
+   "order_date": "2025-04-03",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1004",
+   "order_id": "SO-50058",
+   "order_date": "2023-01-08",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1004",
+   "order_id": "SO-50071",
+   "order_date": "2024-11-11",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1004",
+   "order_id": "SO-50085",
+   "order_date": "2026-08-21",
+   "sku": "ACC-A3S-BAT",
+   "product_name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 799,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1005",
+   "order_id": "SO-50094",
+   "order_date": "2020-09-12",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1005",
+   "order_id": "SO-50098",
+   "order_date": "2025-10-20",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1006",
+   "order_id": "SO-50110",
+   "order_date": "2020-03-28",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1006",
+   "order_id": "SO-50124",
+   "order_date": "2025-05-06",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1008",
+   "order_id": "SO-50127",
+   "order_date": "2023-06-15",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1009",
+   "order_id": "SO-50140",
+   "order_date": "2022-11-28",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1010",
+   "order_id": "SO-50151",
+   "order_date": "2021-11-16",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1011",
+   "order_id": "SO-50154",
+   "order_date": "2023-08-01",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1012",
+   "order_id": "SO-50168",
+   "order_date": "2026-01-05",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1012",
+   "order_id": "SO-50179",
+   "order_date": "2026-06-02",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1012",
+   "order_id": "SO-50175",
+   "order_date": "2026-06-25",
+   "sku": "ACC-LX1-BAT",
+   "product_name": "Lito X1 智能飞行电池",
+   "category": "电池",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 399,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1013",
+   "order_id": "SO-50185",
+   "order_date": "2026-05-06",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1013",
+   "order_id": "SO-50188",
+   "order_date": "2026-06-25",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1014",
+   "order_id": "SO-50192",
+   "order_date": "2022-12-15",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1014",
+   "order_id": "SO-50202",
+   "order_date": "2023-01-09",
+   "sku": "ACC-MN4P-BAT",
+   "product_name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 549,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1014",
+   "order_id": "SO-50212",
+   "order_date": "2023-01-16",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1014",
+   "order_id": "SO-50219",
+   "order_date": "2023-04-20",
+   "sku": "ACC-A3S-BAT",
+   "product_name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 799,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1015",
+   "order_id": "SO-50233",
+   "order_date": "2025-03-16",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1015",
+   "order_id": "SO-50259",
+   "order_date": "2025-06-24",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1015",
+   "order_id": "SO-50246",
+   "order_date": "2025-09-11",
+   "sku": "ACC-MN4P-BAT",
+   "product_name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 549,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1016",
+   "order_id": "SO-50273",
+   "order_date": "2025-06-27",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1017",
+   "order_id": "SO-50286",
+   "order_date": "2024-06-16",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1017",
+   "order_id": "SO-50303",
+   "order_date": "2025-06-30",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1017",
+   "order_id": "SO-50306",
+   "order_date": "2026-01-05",
+   "sku": "ACC-M3P-BAT",
+   "product_name": "Mavic 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 1099,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1018",
+   "order_id": "SO-50319",
+   "order_date": "2022-05-19",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1018",
+   "order_id": "SO-50325",
+   "order_date": "2022-07-31",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1019",
+   "order_id": "SO-50335",
+   "order_date": "2025-12-26",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1020",
+   "order_id": "SO-50342",
+   "order_date": "2024-12-30",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1020",
+   "order_id": "SO-50349",
+   "order_date": "2025-04-14",
+   "sku": "ACC-A3S-BAT",
+   "product_name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 799,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1020",
+   "order_id": "SO-50352",
+   "order_date": "2026-03-01",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1020",
+   "order_id": "SO-50362",
+   "order_date": "2026-06-11",
+   "sku": "ACC-A3S-BAT",
+   "product_name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 799,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1021",
+   "order_id": "SO-50375",
+   "order_date": "2021-12-03",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1021",
+   "order_id": "SO-50388",
+   "order_date": "2022-04-19",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1021",
+   "order_id": "SO-50398",
+   "order_date": "2022-10-04",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1022",
+   "order_id": "SO-50401",
+   "order_date": "2021-12-17",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1022",
+   "order_id": "SO-50408",
+   "order_date": "2022-02-24",
+   "sku": "ACC-MN4P-BAT",
+   "product_name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 549,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1022",
+   "order_id": "SO-50422",
+   "order_date": "2022-05-08",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1022",
+   "order_id": "SO-50427",
+   "order_date": "2022-05-14",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1024",
+   "order_id": "SO-50436",
+   "order_date": "2022-01-19",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1025",
+   "order_id": "SO-50448",
+   "order_date": "2024-02-16",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1026",
+   "order_id": "SO-50452",
+   "order_date": "2022-03-05",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1028",
+   "order_id": "SO-50465",
+   "order_date": "2022-02-18",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1028",
+   "order_id": "SO-50470",
+   "order_date": "2022-10-17",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1028",
+   "order_id": "SO-50490",
+   "order_date": "2022-12-09",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1028",
+   "order_id": "SO-50477",
+   "order_date": "2023-01-19",
+   "sku": "ACC-LX1-HUB",
+   "product_name": "Lito X1 双向充电管家",
+   "category": "充电",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 299,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1029",
+   "order_id": "SO-50496",
+   "order_date": "2025-08-23",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1029",
+   "order_id": "SO-50499",
+   "order_date": "2025-10-27",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1029",
+   "order_id": "SO-50503",
+   "order_date": "2026-08-08",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1030",
+   "order_id": "SO-50508",
+   "order_date": "2025-09-22",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1030",
+   "order_id": "SO-50524",
+   "order_date": "2026-07-18",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1031",
+   "order_id": "SO-50531",
+   "order_date": "2022-02-17",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1031",
+   "order_id": "SO-50542",
+   "order_date": "2022-02-18",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1031",
+   "order_id": "SO-50547",
+   "order_date": "2022-06-09",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1032",
+   "order_id": "SO-50558",
+   "order_date": "2025-05-31",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1032",
+   "order_id": "SO-50573",
+   "order_date": "2025-08-05",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1032",
+   "order_id": "SO-50579",
+   "order_date": "2026-02-12",
+   "sku": "ACC-LX1-BAT",
+   "product_name": "Lito X1 智能飞行电池",
+   "category": "电池",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 399,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1033",
+   "order_id": "SO-50584",
+   "order_date": "2021-10-13",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1033",
+   "order_id": "SO-50596",
+   "order_date": "2022-03-06",
+   "sku": "ACC-A3S-BAT",
+   "product_name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 799,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1033",
+   "order_id": "SO-50605",
+   "order_date": "2022-05-18",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1033",
+   "order_id": "SO-50616",
+   "order_date": "2022-11-02",
+   "sku": "ACC-M3P-BAT",
+   "product_name": "Mavic 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 1099,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1033",
+   "order_id": "SO-50627",
+   "order_date": "2023-04-05",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1034",
+   "order_id": "SO-50635",
+   "order_date": "2026-05-26",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1034",
+   "order_id": "SO-50643",
+   "order_date": "2026-05-26",
+   "sku": "ACC-MN4P-BAT",
+   "product_name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 549,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1035",
+   "order_id": "SO-50657",
+   "order_date": "2025-06-28",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1036",
+   "order_id": "SO-50663",
+   "order_date": "2020-09-09",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1036",
+   "order_id": "SO-50666",
+   "order_date": "2021-06-06",
+   "sku": "DRN-M3P",
+   "product_name": "Mavic 3 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 15688,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1036",
+   "order_id": "SO-50675",
+   "order_date": "2021-06-07",
+   "sku": "ACC-M3P-BAT",
+   "product_name": "Mavic 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mavic 3 Pro",
+   "quantity": 1,
+   "amount_cny": 1099,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1036",
+   "order_id": "SO-50679",
+   "order_date": "2022-07-20",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1037",
+   "order_id": "SO-50686",
+   "order_date": "2022-07-07",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1037",
+   "order_id": "SO-50701",
+   "order_date": "2022-09-18",
+   "sku": "ACC-MN4P-BAT",
+   "product_name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 549,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1037",
+   "order_id": "SO-50713",
+   "order_date": "2023-10-06",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1038",
+   "order_id": "SO-50723",
+   "order_date": "2024-11-09",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1038",
+   "order_id": "SO-50727",
+   "order_date": "2025-05-28",
+   "sku": "ACC-A3S-BAT",
+   "product_name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 799,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1039",
+   "order_id": "SO-50741",
+   "order_date": "2021-09-30",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1039",
+   "order_id": "SO-50750",
+   "order_date": "2022-02-06",
+   "sku": "ACC-MN4P-BAT",
+   "product_name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 549,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1040",
+   "order_id": "SO-50753",
+   "order_date": "2026-05-27",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1040",
+   "order_id": "SO-50764",
+   "order_date": "2026-05-27",
+   "sku": "ACC-M4P-BAG",
+   "product_name": "Mavic 4 Pro 单肩包",
+   "category": "收纳",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 499,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1040",
+   "order_id": "SO-50776",
+   "order_date": "2026-06-22",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1041",
+   "order_id": "SO-50786",
+   "order_date": "2019-08-20",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1041",
+   "order_id": "SO-50803",
+   "order_date": "2023-05-01",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1042",
+   "order_id": "SO-50812",
+   "order_date": "2024-12-01",
+   "sku": "DRN-LX1",
+   "product_name": "Lito X1 标准版",
+   "category": "drone",
+   "drone_model": "Lito X1",
+   "quantity": 1,
+   "amount_cny": 3999,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1043",
+   "order_id": "SO-50828",
+   "order_date": "2025-12-20",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1044",
+   "order_id": "SO-50837",
+   "order_date": "2024-10-08",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1044",
+   "order_id": "SO-50841",
+   "order_date": "2025-10-08",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1045",
+   "order_id": "SO-50855",
+   "order_date": "2025-10-08",
+   "sku": "DRN-A3S",
+   "product_name": "Air 3S 畅飞套装",
+   "category": "drone",
+   "drone_model": "Air 3S",
+   "quantity": 1,
+   "amount_cny": 8788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1046",
+   "order_id": "SO-50863",
+   "order_date": "2024-10-08",
+   "sku": "DRN-MN4P",
+   "product_name": "Mini 4 Pro 带屏遥控器版",
+   "category": "drone",
+   "drone_model": "Mini 4 Pro",
+   "quantity": 1,
+   "amount_cny": 5788,
+   "store": "深圳欢乐海岸授权体验店"
+  },
+  {
+   "customer_id": "C1046",
+   "order_id": "SO-50866",
+   "order_date": "2025-10-09",
+   "sku": "DRN-M4P",
+   "product_name": "Mavic 4 Pro 畅飞套装",
+   "category": "drone",
+   "drone_model": "Mavic 4 Pro",
+   "quantity": 1,
+   "amount_cny": 16888,
+   "store": "深圳欢乐海岸授权体验店"
+  }
+ ],
+ "tickets": [
+  {
+   "ticket_id": "TK-8004",
+   "customer_id": "C1001",
+   "category": "保修维修",
+   "subject": "Mavic 3 Pro 云台抖动送修",
+   "status": "已关闭",
+   "priority": "中",
+   "related_order_id": null,
+   "created_at": "2025-11-20",
+   "updated_at": "2025-12-03",
+   "notes": [
+    {
+     "at": "2025-11-20",
+     "by": "店员-小林",
+     "text": "客户反馈云台抖动，已寄送官方维修"
+    },
+    {
+     "at": "2025-12-03",
+     "by": "店员-小林",
+     "text": "维修完成，客户已取回，工单关闭"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8008",
+   "customer_id": "C1002",
+   "category": "使用咨询",
+   "subject": "Mavic 4 Pro 图传偶发卡顿",
+   "status": "处理中",
+   "priority": "中",
+   "related_order_id": null,
+   "created_at": "2026-09-28",
+   "updated_at": "2026-10-02",
+   "notes": [
+    {
+     "at": "2026-09-28",
+     "by": "店员-阿杰",
+     "text": "客户反馈城区图传卡顿，已建议更新固件并避开强干扰环境"
+    },
+    {
+     "at": "2026-10-02",
+     "by": "店员-阿杰",
+     "text": "已约客户 10/10 到店检测"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8012",
+   "customer_id": "C1004",
+   "category": "退换货",
+   "subject": "Air 3 电池外壳划痕申请换货",
+   "status": "待客户回复",
+   "priority": "低",
+   "related_order_id": null,
+   "created_at": "2026-08-25",
+   "updated_at": "2026-08-26",
+   "notes": [
+    {
+     "at": "2026-08-25",
+     "by": "店员-小林",
+     "text": "客户反馈新电池外壳划痕，请客户补拍照片"
+    },
+    {
+     "at": "2026-08-26",
+     "by": "店员-小林",
+     "text": "已发短信提醒客户补充照片，等待回复"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8020",
+   "customer_id": "C1006",
+   "category": "保修维修",
+   "subject": "Lito X1 电池无法充电",
+   "status": "待处理",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-10-06",
+   "updated_at": "2026-10-06",
+   "notes": [
+    {
+     "at": "2026-10-06",
+     "by": "系统",
+     "text": "客户在线提交：电池插上充电管家指示灯不亮"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8022",
+   "customer_id": "C1010",
+   "category": "使用咨询",
+   "subject": "遥控器无法对频",
+   "status": "处理中",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-09-11",
+   "updated_at": "2026-09-11",
+   "notes": [
+    {
+     "at": "2026-09-11",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8027",
+   "customer_id": "C1015",
+   "category": "使用咨询",
+   "subject": "桨叶断裂咨询更换",
+   "status": "已解决",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-09-14",
+   "updated_at": "2026-09-14",
+   "notes": [
+    {
+     "at": "2026-09-14",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8034",
+   "customer_id": "C1023",
+   "category": "其他",
+   "subject": "发票重开",
+   "status": "已关闭",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-08-19",
+   "updated_at": "2026-08-19",
+   "notes": [
+    {
+     "at": "2026-08-19",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8037",
+   "customer_id": "C1024",
+   "category": "随心换",
+   "subject": "飞行器炸机申请随心换换新",
+   "status": "已解决",
+   "priority": "中",
+   "related_order_id": null,
+   "created_at": "2026-09-07",
+   "updated_at": "2026-09-07",
+   "notes": [
+    {
+     "at": "2026-09-07",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8038",
+   "customer_id": "C1026",
+   "category": "物流",
+   "subject": "包裹物流延迟",
+   "status": "处理中",
+   "priority": "低",
+   "related_order_id": null,
+   "created_at": "2025-12-16",
+   "updated_at": "2025-12-16",
+   "notes": [
+    {
+     "at": "2025-12-16",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8040",
+   "customer_id": "C1028",
+   "category": "使用咨询",
+   "subject": "遥控器无法对频",
+   "status": "待处理",
+   "priority": "中",
+   "related_order_id": null,
+   "created_at": "2026-03-09",
+   "updated_at": "2026-03-09",
+   "notes": [
+    {
+     "at": "2026-03-09",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8047",
+   "customer_id": "C1029",
+   "category": "其他",
+   "subject": "发票重开",
+   "status": "已解决",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-08-14",
+   "updated_at": "2026-08-14",
+   "notes": [
+    {
+     "at": "2026-08-14",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8048",
+   "customer_id": "C1030",
+   "category": "使用咨询",
+   "subject": "遥控器无法对频",
+   "status": "已关闭",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-01-14",
+   "updated_at": "2026-01-14",
+   "notes": [
+    {
+     "at": "2026-01-14",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8054",
+   "customer_id": "C1034",
+   "category": "其他",
+   "subject": "发票重开",
+   "status": "已解决",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-06-07",
+   "updated_at": "2026-06-07",
+   "notes": [
+    {
+     "at": "2026-06-07",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8059",
+   "customer_id": "C1035",
+   "category": "使用咨询",
+   "subject": "遥控器无法对频",
+   "status": "处理中",
+   "priority": "高",
+   "related_order_id": null,
+   "created_at": "2026-06-10",
+   "updated_at": "2026-06-10",
+   "notes": [
+    {
+     "at": "2026-06-10",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8061",
+   "customer_id": "C1038",
+   "category": "使用咨询",
+   "subject": "桨叶断裂咨询更换",
+   "status": "待处理",
+   "priority": "低",
+   "related_order_id": null,
+   "created_at": "2026-04-16",
+   "updated_at": "2026-04-16",
+   "notes": [
+    {
+     "at": "2026-04-16",
+     "by": "系统",
+     "text": "客户提交工单"
+    }
+   ]
+  },
+  {
+   "ticket_id": "TK-8062",
+   "customer_id": "C1042",
+   "category": "使用咨询",
+   "subject": "Lito X1 遥控器对频失败",
+   "status": "处理中",
+   "priority": "中",
+   "related_order_id": null,
+   "created_at": "2026-09-30",
+   "updated_at": "2026-09-30",
+   "notes": [
+    {
+     "at": "2026-09-30",
+     "by": "店员-阿杰",
+     "text": "客户反馈遥控器无法对频，已指导重新对频，待客户反馈"
+    }
+   ]
+  }
+ ],
+ "products": [
+  {
+   "sku": "ACC-M4P-BAT",
+   "name": "Mavic 4 Pro 智能飞行电池（BWXGP1-2788-7）",
+   "category": "电池",
+   "compatible_models": [
+    "Mavic 4 Pro"
+   ],
+   "price_cny": 1199,
+   "stock": 46,
+   "selling_point": "电池循环次数多、续航下降的老机主首选"
+  },
+  {
+   "sku": "ACC-M4P-HUB",
+   "name": "Mavic 4 Pro 充电管家（可作移动电源）",
+   "category": "充电",
+   "compatible_models": [
+    "Mavic 4 Pro"
+   ],
+   "price_cny": 699,
+   "stock": 20,
+   "selling_point": "多电池按电量高低依次充电"
+  },
+  {
+   "sku": "ACC-M4P-ND",
+   "name": "Mavic 4 Pro ND 镜套装（ND16/64/256）",
+   "category": "镜头配件",
+   "compatible_models": [
+    "Mavic 4 Pro"
+   ],
+   "price_cny": 899,
+   "stock": 15,
+   "selling_point": ""
+  },
+  {
+   "sku": "ACC-M4P-PROP",
+   "name": "Mavic 4 Pro 低噪音桨叶（6030F，对）",
+   "category": "桨叶",
+   "compatible_models": [
+    "Mavic 4 Pro"
+   ],
+   "price_cny": 89,
+   "stock": 120,
+   "selling_point": "桨叶属易耗件，有缺口或变形需更换"
+  },
+  {
+   "sku": "ACC-M4P-BAG",
+   "name": "Mavic 4 Pro 单肩包",
+   "category": "收纳",
+   "compatible_models": [
+    "Mavic 4 Pro"
+   ],
+   "price_cny": 499,
+   "stock": 12,
+   "selling_point": ""
+  },
+  {
+   "sku": "SVC-M4P-CARE",
+   "name": "随心换 1 年版（Mavic 4 Pro）",
+   "category": "服务",
+   "compatible_models": [
+    "Mavic 4 Pro"
+   ],
+   "price_cny": 1399,
+   "stock": 999,
+   "selling_point": "需在激活后指定天数内购买，以官方规则为准"
+  },
+  {
+   "sku": "ACC-LX1-BAT",
+   "name": "Lito X1 智能飞行电池",
+   "category": "电池",
+   "compatible_models": [
+    "Lito X1"
+   ],
+   "price_cny": 399,
+   "stock": 60,
+   "selling_point": ""
+  },
+  {
+   "sku": "ACC-LX1-HUB",
+   "name": "Lito X1 双向充电管家",
+   "category": "充电",
+   "compatible_models": [
+    "Lito X1"
+   ],
+   "price_cny": 299,
+   "stock": 25,
+   "selling_point": ""
+  },
+  {
+   "sku": "ACC-LX1-PROP",
+   "name": "Lito X1 桨叶（对）",
+   "category": "桨叶",
+   "compatible_models": [
+    "Lito X1"
+   ],
+   "price_cny": 39,
+   "stock": 200,
+   "selling_point": ""
+  },
+  {
+   "sku": "SVC-LX1-CARE",
+   "name": "随心换 1 年版（Lito X1）",
+   "category": "服务",
+   "compatible_models": [
+    "Lito X1"
+   ],
+   "price_cny": 399,
+   "stock": 999,
+   "selling_point": ""
+  },
+  {
+   "sku": "ACC-M3P-BAT",
+   "name": "Mavic 3 系列智能飞行电池",
+   "category": "电池",
+   "compatible_models": [
+    "Mavic 3 Pro"
+   ],
+   "price_cny": 1099,
+   "stock": 8,
+   "selling_point": "老机型电池，库存有限"
+  },
+  {
+   "sku": "ACC-A3S-BAT",
+   "name": "Air 3 系列智能飞行电池",
+   "category": "电池",
+   "compatible_models": [
+    "Air 3S"
+   ],
+   "price_cny": 799,
+   "stock": 30,
+   "selling_point": ""
+  },
+  {
+   "sku": "ACC-MN4P-BAT",
+   "name": "Mini 4 Pro 长续航智能飞行电池",
+   "category": "电池",
+   "compatible_models": [
+    "Mini 4 Pro"
+   ],
+   "price_cny": 549,
+   "stock": 40,
+   "selling_point": ""
+  },
+  {
+   "sku": "DRN-M4P",
+   "name": "Mavic 4 Pro 畅飞套装（以旧换新可抵扣）",
+   "category": "整机升级",
+   "compatible_models": [
+    "Mavic 3 Pro",
+    "Air 3S",
+    "Mini 4 Pro"
+   ],
+   "price_cny": 16888,
+   "stock": 10,
+   "selling_point": "老机型用户升级推荐；以旧换新抵扣金额以门店评估为准"
+  },
+  {
+   "sku": "DRN-LX1",
+   "name": "Lito X1 标准版",
+   "category": "整机升级",
+   "compatible_models": [
+    "Mini 4 Pro"
+   ],
+   "price_cny": 3999,
+   "stock": 18,
+   "selling_point": "入门轻量机型"
+  }
+ ]
+}
