@@ -1,8 +1,11 @@
 # Interactive requirement clarification — option library
 
-Do not send the whole questionnaire as one wall of text. Ask in two compact rounds of
-3–4 numbered questions; each question offers default options plus a free-text answer.
-Tell the customer both are acceptable.
+Do not send the whole questionnaire as one wall of text. Ask in at most two compact
+rounds of 3–4 numbered questions — ONE round when the opening message is a rich brief;
+each question offers default options plus a free-text answer. Tell the customer both are
+acceptable. Questions with a safe default (native sandbox tools, cross-session memory,
+access channel when none was named, log retention) are not asked: take the default and
+list it in the baseline as changeable.
 
 ## New-conversation boundary (mandatory)
 
@@ -12,8 +15,8 @@ memory, old documents, old design contracts and old test sets never prefill answ
 Even for an identical project name, rounds one, two and three are completed again here.
 
 Fields covered by the customer's opening message count as answered; ask only what is
-still open and would change architecture or cost. Usually two rounds of 3–4 questions,
-at most six options each. Mark multi-select questions. Option notes explain the impact,
+still open and would change architecture or cost. Usually one or two rounds of 3–4
+questions, at most six options each. Mark multi-select questions. Option notes explain the impact,
 not just restate the label.
 
 ## Round one: business scope and access

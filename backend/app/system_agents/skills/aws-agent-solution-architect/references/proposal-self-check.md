@@ -199,6 +199,9 @@ barrier was confirmed (never `{}` or assumed).
       suggested note with `confirmed: false, selected: false`; `explored_empty` only on
       the customer's explicit "nothing there" after the suggestions; ≥ 1 confirmed
       note in the whole fishbone.
+- [ ] A blanket acceptance of the express close ("默认", "按你的建议", "都适用", the
+      "these apply" option) made each of its suggestions `confirmed: true` — the
+      fishbone is present, not omitted as "only assumed".
 - [ ] `parking_lot` ≤ 40 of `{original (1–1,000), converted_to? (≤ 200)}`.
 
 ## 7. Last look

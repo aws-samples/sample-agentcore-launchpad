@@ -9,7 +9,9 @@ the customer re-confirmed in this conversation into verifiable acceptance criter
 
 ## A. Current state
 
-Ask, as a numbered list with a free-text option:
+Inside the intake, current state rides in the express fishbone message as one optional
+line (never a turn of its own). Ask it separately — as a numbered list with a free-text
+option — only in `standard` mode:
 - In production — real users, logs and operations feedback
 - Piloting — a small user group or PoC data
 - Legacy system only — no agent yet, but manual / search / process pain points
@@ -24,9 +26,9 @@ pain-point menu, conversion table or industry assumption. The fishbone asks what
 stop this agent from *launching*, not which failures already happened, so a greenfield
 project has as many barriers as a live one (an unclear scope is a cognition barrier, an
 unnamed owner of the medical-risk decision is a responsibility barrier, an unknown token
-budget is a cost barrier). Start with the scenario sentence and service target, ask one
-question at a time, read every note back, probe every dimension before it may be called
-empty, and let the customer select the barriers that matter most.
+budget is a cost barrier). Inside the intake run it in **express mode** — one message,
+one reply (its "Express mode inside the intake"); the one-question-at-a-time `standard`
+mode only on request or in a Workshop.
 
 Skip it only when the customer explicitly declines ("跳过鱼骨", "no fishbone", "just
 give me the design") — record the refusal in the reply and omit the `fishbone` member of
@@ -46,10 +48,13 @@ customer did not confirm.
 
 When the fishbone produced confirmed barriers, B does NOT present a category menu — the
 six categories below are the fishbone's dimensions under other names. Take the selected
-barriers as the pain-point list and ask only what the fishbone did not: for each barrier,
-one to three concrete failure cases (real or, for a greenfield project, the case the
-customer fears), and the evidence sources (production traces / logs, tickets, user
-feedback, monitoring, staff experience, none yet).
+barriers as the pain-point list. The express fishbone message already offered the
+optional line for real cases and current state; do NOT ask a separate round for failure
+cases or evidence sources. Use what the customer gave; for the rest, derive the cases
+from the barriers as `industry_assumption` and record the evidence source as "none yet".
+Ask for cases and evidence (production traces / logs, tickets, user feedback,
+monitoring, staff experience, none yet) as their own question only in `standard`
+mode.
 
 Only when the fishbone was declined or confirmed nothing, and an agent, a pilot or a
 legacy system exists, fall back to the multi-select list:
@@ -119,6 +124,14 @@ End the reply with the confirmation options as the last lines:
 Only a confirmation, or an explicit choice of industry assumptions, opens the AWS
 architecture and the formal document. Without a reply, never skip ahead to a "final
 design".
+
+**A request for the proposal skips this gate.** When the customer asks for it — "生成 /
+启动 proposal", "出方案", "直接给方案", "需求先到这里", "时间有限", "just give me the
+design", "you decide" — at any point of round three, that IS the choice of industry
+assumptions: in the same reply expand the table and every golden test (sources
+labelled) AND submit the proposal, with open items as manual tasks or pending
+assumptions. Do not end with confirmation options, do not answer with a summary that
+withholds the proposal; the member reviews and edits the proposal itself.
 
 ## E. When there is no live agent
 
