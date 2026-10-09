@@ -6,7 +6,7 @@ import { Markdown } from "../../../components";
 import type { AssistantCatalog, AssistantConversationDetail } from "../../../lib/api";
 import { type AssistantLiveMessage, retryableTurn, stripProposalBlock, TURN_RETRIED_NAME } from "../../../lib/assistant";
 import { Alert, Button, Descriptions, LinkButton, Tag } from "../../ui";
-import { SECTION_IDS } from "./common";
+import { SECTION_IDS, useReadOnly } from "./common";
 
 export const COMPOSER_ID = "v2-assistant-input";
 
@@ -31,6 +31,7 @@ export function DiscussionCard({
 }) {
   const { t } = useTranslation();
   const { username } = useAuth();
+  const readOnly = useReadOnly();
   // A shared conversation has several senders: name everyone but the caller.
   const sender = (author?: string | null) =>
     author && author !== username ? author : t("assistantPage.you");
@@ -92,7 +93,7 @@ export function DiscussionCard({
               <div key={i} data-testid="v2-assistant-turn-error">
                 <Alert
                   tone="error"
-                  action={i === lastErrorIndex && retryable && retryOf === null ? (
+                  action={!readOnly && i === lastErrorIndex && retryable && retryOf === null ? (
                     <button type="button" className="v2-link" onClick={() => onRetry(retryable)} data-testid="v2-assistant-retry">
                       {t("assistantPage.editRetry")}
                     </button>
@@ -113,7 +114,7 @@ export function DiscussionCard({
             ),
           )}
         </div>
-        <div className="v2-assistant-composer">
+        {!readOnly && <div className="v2-assistant-composer">
           <label className="v2-muted" style={{ fontSize: 12.5 }} htmlFor={COMPOSER_ID}>
             {t("assistantPage.composerLabel")}
           </label>
@@ -149,14 +150,14 @@ export function DiscussionCard({
               {busy ? t("assistantPage.sending") : t("assistantPage.send")}
             </Button>
           </div>
-        </div>
-        <CatalogSummary catalog={conversation.catalog} onRefresh={onRefreshCatalog} />
+        </div>}
+        <CatalogSummary catalog={conversation.catalog} onRefresh={readOnly ? undefined : onRefreshCatalog} />
       </div>
     </section>
   );
 }
 
-function CatalogSummary({ catalog, onRefresh }: { catalog: AssistantCatalog; onRefresh: () => void }) {
+function CatalogSummary({ catalog, onRefresh }: { catalog: AssistantCatalog; onRefresh?: () => void }) {
   const { t } = useTranslation();
   const names = (items: { key?: string; kb_id?: string; name?: string }[]) =>
     items.length ? items.map((i) => i.name || i.key || i.kb_id).join(", ") : t("assistantPage.catalogNone");
@@ -165,7 +166,7 @@ function CatalogSummary({ catalog, onRefresh }: { catalog: AssistantCatalog; onR
     <div className="v2-assistant-section" data-testid="v2-assistant-catalog">
       <h3 className="v2-row">
         {t("assistantPage.catalogTitle")}
-        <LinkButton onClick={onRefresh} testId="v2-assistant-catalog-refresh">{t("assistantPage.catalogRefresh")}</LinkButton>
+        {onRefresh && <LinkButton onClick={onRefresh} testId="v2-assistant-catalog-refresh">{t("assistantPage.catalogRefresh")}</LinkButton>}
       </h3>
       <Descriptions
         one

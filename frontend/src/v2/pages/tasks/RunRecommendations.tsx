@@ -92,13 +92,15 @@ interface ToolRow {
  * undefined it follows the run's agent: any Managed Harness run qualifies.
  */
 export function RunRecommendations({
-  run, acceptable: acceptableProp, onAccepted, embedded = false,
+  run, acceptable: acceptableProp, onAccepted, embedded = false, readOnly = false,
 }: {
   run: EvaluationRunInfo;
   acceptable?: boolean;
   onAccepted?: (accepted: AcceptedRecommendation) => void;
   /** render without the outer Card (inside another panel) */
   embedded?: boolean;
+  /** show the recommendations only: no new job, no edit, no accept */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
@@ -392,21 +394,22 @@ export function RunRecommendations({
     </div>
   );
 
-  const newButton = seed.eligible && !formOpen ? (
+  const newButton = seed.eligible && !formOpen && !readOnly ? (
     <Button size="sm" disabled={!mayRun} onClick={() => setOpen(true)} testId="v2-rec-new">
       {t("v2.rec.new")}
     </Button>
   ) : undefined;
   const body = (
     <div className="v2-form">
-      {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && form}
+      {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && !readOnly && form}
       {list.error && <Alert tone="error">{list.error}</Alert>}
       {[...shown.current, ...(showEarlier ? shown.earlier : [])].map((rec) => (
         <RecommendationResult
           key={rec.id}
           rec={rec}
           runId={run.id}
-          acceptable={acceptable}
+          acceptable={acceptable && !readOnly}
+          readOnly={readOnly}
           showToolNote={acceptable}
           onAccepted={(accepted) => {
             setTick((n) => n + 1);
@@ -440,11 +443,12 @@ export function RunRecommendations({
 }
 
 function RecommendationResult({
-  rec, runId, acceptable, showToolNote, onAccepted, onEdited,
+  rec, runId, acceptable, readOnly, showToolNote, onAccepted, onEdited,
 }: {
   rec: RunRecommendation;
   runId: string;
   acceptable: boolean;
+  readOnly: boolean;
   showToolNote: boolean;
   onAccepted: (accepted: AcceptedRecommendation) => void;
   onEdited: () => void;
@@ -464,7 +468,7 @@ function RecommendationResult({
   const recommended = rec.result.recommended_prompt ?? "";
   // what the card shows, copies and accepts: the saved revision, else the generated text
   const effective = rec.edit?.prompt ?? recommended;
-  const editable = done && rec.kind === "system_prompt" && !!recommended && !rec.accepted;
+  const editable = !readOnly && done && rec.kind === "system_prompt" && !!recommended && !rec.accepted;
   const saveEdit = async (text: string | null) => {
     setSaving(true);
     try {

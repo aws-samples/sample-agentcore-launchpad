@@ -1962,18 +1962,17 @@ def test_revocation_during_the_catalog_read_is_honoured_at_the_claim(gated, harn
         db.close()
 
 
-def test_conversations_are_private_to_their_principal_even_from_an_admin(gated, harness):
+def test_conversations_are_private_to_their_principal(gated, harness):
     admin, member, other, _ids, _preset = gated
     cid = _open(member)
     r1 = _propose(member, harness, cid)
-    for session in (other, admin):
-        assert session.get(f"{BASE}/conversations/{cid}").status_code == 404
-        assert session.post(f"{BASE}/conversations/{cid}/turns",
-                            json={"prompt": "x"}).status_code == 404
-        assert _approve(session, cid, r1).status_code == 404
-        assert session.put(f"{BASE}/conversations/{cid}/proposal",
-                           json={"content": VALID_PROPOSAL}).status_code == 404
-        assert session.get(f"{BASE}/conversations").json()["conversations"] == []
+    assert other.get(f"{BASE}/conversations/{cid}").status_code == 404
+    assert other.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "x"}).status_code == 404
+    assert _approve(other, cid, r1).status_code == 404
+    assert other.put(f"{BASE}/conversations/{cid}/proposal",
+                     json={"content": VALID_PROPOSAL}).status_code == 404
+    assert other.get(f"{BASE}/conversations/{cid}/evaluation-plan").status_code == 404
+    assert other.get(f"{BASE}/conversations").json()["conversations"] == []
     assert _count(Job) == 0
     assert member.get(f"{BASE}/conversations").json()["conversations"][0]["id"] == cid
     # the config admin is its own stable principal (not a user row)
@@ -1983,6 +1982,40 @@ def test_conversations_are_private_to_their_principal_even_from_an_admin(gated, 
         assert db.get(AssistantConversation, admin_cid).owner_principal == "config-admin"
     finally:
         db.close()
+
+
+def test_admin_reads_every_conversation_but_writes_none_it_was_not_shared(gated, harness):
+    """An administrator lists and opens every member's conversation, read-only: every
+    write still resolves through collaboration and answers 404 until it is shared."""
+    admin, member, _other, _ids, _preset = gated
+    cid = _open(member)
+    r1 = _propose(member, harness, cid)
+    listed = {c["id"]: c for c in admin.get(f"{BASE}/conversations").json()["conversations"]}
+    assert listed[cid]["mine"] is False and listed[cid]["read_only"] is True
+    assert listed[cid]["owner"] == MEMBER_CREDS["username"]
+    detail = admin.get(f"{BASE}/conversations/{cid}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["read_only"] is True
+    assert [m["role"] for m in detail.json()["messages"]][:1] == ["user"]
+    assert admin.get(f"{BASE}/conversations/{cid}/evaluation-plan").status_code == 200
+
+    writes = [
+        admin.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "x"}),
+        _approve(admin, cid, r1),
+        admin.put(f"{BASE}/conversations/{cid}/proposal", json={"content": VALID_PROPOSAL}),
+        admin.post(f"{BASE}/conversations/{cid}/proposal/reject",
+                   json={"revision": r1["revision"]}),
+        admin.post(f"{BASE}/conversations/{cid}/catalog"),
+        admin.post(f"{BASE}/conversations/{cid}/evaluation-plan/prepare",
+                   json={"revision": r1["revision"]}),
+        admin.get(f"{BASE}/conversations/{cid}/footprint"),
+        admin.delete(f"{BASE}/conversations/{cid}"),
+    ]
+    assert [w.status_code for w in writes] == [404] * len(writes)
+    assert _count(Job) == 0
+    # the owner's own view is unchanged
+    own = member.get(f"{BASE}/conversations").json()["conversations"][0]
+    assert own["id"] == cid and own["mine"] is True and own["read_only"] is False
 
 
 def test_admin_share_opens_a_conversation_to_every_member_except_delete(gated, harness):
@@ -2102,22 +2135,32 @@ def test_owner_member_shares_and_unshares_their_own_conversation(gated, harness)
     assert res.status_code == 200 and res.json()["shared"] is False
     assert other.get(f"{BASE}/conversations/{cid}").status_code == 404
 
-    # an administrator can close a conversation a member shared
+    # an administrator can close a conversation a member shared — and still reads
+    # it afterwards, read-only
     assert member.put(url, json={"shared": True}).status_code == 200
     res = admin.put(url, json={"shared": False})
     assert res.status_code == 200 and res.json()["shared"] is False
-    assert admin.get(f"{BASE}/conversations/{cid}").status_code == 404
+    after = admin.get(f"{BASE}/conversations/{cid}")
+    assert after.status_code == 200 and after.json()["read_only"] is True
 
 
-def test_admin_cannot_share_a_conversation_it_cannot_read(gated, harness):
-    """Sharing never becomes a way to reach another member's private conversation."""
+def test_admin_shares_a_member_conversation_to_collaborate(gated, harness):
+    """An administrator may share any conversation it reads: that is how a read-only
+    one becomes a collaboration — for the admin and every member."""
     admin, member, other, _ids, _preset = gated
     cid = _open(member)
+    assert admin.post(f"{BASE}/conversations/{cid}/catalog").status_code == 404
     res = admin.put(f"{BASE}/conversations/{cid}/sharing", json={"shared": True})
-    assert res.status_code == 404 and res.json()["code"] == "assistant.conversation_not_found"
-    assert other.get(f"{BASE}/conversations").json()["conversations"] == []
+    assert res.status_code == 200, res.text
+    assert res.json()["shared"] is True and res.json()["read_only"] is False
+    assert other.get(f"{BASE}/conversations/{cid}").json()["read_only"] is False
+    assert admin.get(f"{BASE}/conversations/{cid}").json()["read_only"] is False
     assert admin.put(f"{BASE}/conversations/{cid}/sharing",
                      json={"shared": True, "extra": 1}).status_code == 422
+    # a member still cannot share what it does not own (nor reach)
+    other_cid = _open(other)
+    res = member.put(f"{BASE}/conversations/{other_cid}/sharing", json={"shared": True})
+    assert res.status_code == 404 and res.json()["code"] == "assistant.conversation_not_found"
 
 
 def test_shared_conversation_stays_bound_to_its_workspace(client, ready):
