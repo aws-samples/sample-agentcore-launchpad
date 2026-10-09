@@ -4769,7 +4769,8 @@
       "oneAtATime": "A run of this agent on this Dataset is still active — wait for it to finish (or stop it on the Evaluation page) before starting another.",
       "tooManyEvaluators": "{{n}} evaluators are ready but one batch evaluation applies at most {{max}} — open New Run and deselect the ones that overlap (the run is otherwise identical).",
       "remove": "Remove this failed run from the history",
-      "removedToast": "Run {{id}} removed"
+      "removedToast": "Run {{id}} removed",
+      "meanScoreCoverage": "normalized mean {{mean}} over {{n}} evaluator(s), from {{scored}}/{{total}} sessions"
     },
     "iterate": {
       "title": "Read the scores and the traces, then iterate",
@@ -4820,15 +4821,22 @@
     "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS.",
     "recommend": {
       "title": "Generate AI-recommended improvements",
-      "body": "An AI recommendation reads the traces of the run you pick (the newest clean run by default — any of this agent's runs, on any dataset) and proposes a revised system prompt (and tool descriptions): AgentCore Recommendations aimed at the evaluator you pick by default, or GEPA-lite. Review the diff; you can still edit the prompt when accepting, and Launchpad re-publishes the Harness with the final text, so AWS creates a new Harness version (DEFAULT follows it).",
+      "body": "An AI recommendation reads the traces of the run you pick (the newest usable run by default — clean, or one that only lost fewer than half of its sessions to incomplete traces; any of this agent's runs, on any dataset) and proposes a revised system prompt (and tool descriptions): AgentCore Recommendations aimed at the evaluator you pick by default, or GEPA-lite. Review the diff; you can still edit the prompt when accepting, and Launchpad re-publishes the Harness with the final text, so AWS creates a new Harness version (DEFAULT follows it).",
       "source": "Traces from",
       "version": "Harness now on v{{v}}",
       "publishing": "Publishing the new Harness version of “{{name}}”… Step 4 lists it once the deploy finishes.",
-      "waiting": "Available after a run in step 2 completes without errors — its traces seed the recommendation.",
+      "waiting": "Available once step 2 has a usable run — its traces seed the recommendation.",
       "newest": "newest",
       "historyTitle": "Recommendations from other runs ({{n}})",
       "historyAccepted": "Accepted · published over v{{v}}",
-      "historyOpen": "Show here"
+      "historyOpen": "Show here",
+      "sourceCoverage": "{{scored}}/{{total}} sessions",
+      "blocked": {
+        "evaluator_error": "A run completed partially with evaluator errors (not just missing traces), so it cannot seed a recommendation. Review the errors and run again.",
+        "low_coverage": "A run completed partially but scored fewer than half of its sessions, so it cannot seed a recommendation. Run again.",
+        "legacy": "A run completed partially and predates the failure details. Click “Read failure details” in step 2 — if it only lost traces, the run can seed a recommendation.",
+        "unknown": "A run completed partially and AWS gave no reason for the unscored sessions, so it cannot seed a recommendation. Run again."
+      }
     },
     "canary": {
       "title": "Canary experiment",
@@ -7894,6 +7902,22 @@
       "confirmBody_one": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grant listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
       "confirmBody_other": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grants listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
       "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them."
+    },
+    "runCoverage": {
+      "tagTelemetry": "Completed · {{scored}}/{{total}} sessions",
+      "telemetry_incomplete": "{{failed}} session(s) have incomplete traces on AWS (some of their log events were never written) and were not scored; scores cover the other {{scored}}. Re-evaluating cannot recover them, and the excluded ones tend to be long, tool-heavy sessions, so the mean may read high.",
+      "evaluator_error": "{{failed}} session(s) hit evaluator errors and were not scored; scores cover the other {{scored}}. Review the errors and run again.",
+      "mixed": "{{failed}} session(s) were not scored — some have incomplete traces, some hit evaluator errors; scores cover the other {{scored}}.",
+      "unknown": "{{failed}} session(s) were not scored and AWS gave no reason; scores cover the other {{scored}}.",
+      "legacy": "{{failed}} of {{total}} sessions were not scored. This run predates the failure details — click “Read failure details” to fetch the reasons from AWS.",
+      "scenarios": "Unscored scenarios: {{list}}",
+      "scenarioSep": ", ",
+      "rawError": "Raw AWS error",
+      "viewFailed": "View unscored sessions",
+      "readDetail": "Read failure details",
+      "readDetailHint": "Read this batch evaluation's results from AWS again to fill in why sessions were not scored. Read-only: nothing is re-run or billed.",
+      "readDetailDone": "Failure details read",
+      "notComparable": "These runs left different scenarios unscored, so their means are not directly comparable."
     }
   },
   "identity": {

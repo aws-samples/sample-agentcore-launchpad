@@ -73,6 +73,10 @@ class EvalRun(Base):
     # Dataset scenarios the agent ran out of budget on ({scenario_id, session_id, code,
     # stop_reason}): scored as they are instead of failing the run; NULL on older rows.
     budget_stops: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # Sessions a COMPLETED_WITH_ERRORS batch skipped ({total, failed, kind, sessions:
+    # [{session_id, index, kind, error_type, message}]}, see
+    # ``agentcore_eval.summarize_session_failures``); NULL on clean or older rows.
+    session_failures: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(

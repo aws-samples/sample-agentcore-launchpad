@@ -129,6 +129,9 @@ export interface EvaluationRunInfo {
   /** dataset scenarios that ended on the agent's own budget (timeout after its
    *  replay, iteration / token limit) and are scored as they stand. Absent on older backends. */
   budget_stops?: EvaluationBudgetStop[];
+  /** Sessions a partially failed batch skipped, and why; null on a clean run.
+   *  Absent on older backends / rows finished before it existed. */
+  session_failures?: EvaluationSessionFailures | null;
   error: string | null;
   created_at?: string | null;
   /** operator-facing task name/description (console V2); null on unnamed runs */
@@ -142,6 +145,82 @@ export interface EvaluationBudgetStop {
   session_id: string;
   code: string;
   stop_reason: string;
+}
+
+/** `telemetry_incomplete`: every error on the session is a missing/incomplete-span
+ *  error (the session's traces never fully reached CloudWatch, so re-evaluating
+ *  cannot recover it); `evaluator_error`: anything else. */
+export type SessionFailureKind = "telemetry_incomplete" | "evaluator_error";
+
+export interface EvaluationSessionFailures {
+  total: number;
+  failed: number;
+  kind: SessionFailureKind | "mixed" | "unknown";
+  /** failed sessions in dataset order; `index` = 1-based scenario position */
+  sessions: { session_id: string; index: number | null; kind: SessionFailureKind; error_type: string; message: string }[];
+}
+
+export interface RunCoverage {
+  total: number;
+  scored: number;
+  failed: number;
+  kind: EvaluationSessionFailures["kind"];
+  /** 1-based scenario positions that were not scored (sorted) */
+  excluded: number[];
+  firstError: string | null;
+  /** finished before the summary existed: counts parsed from the AWS sentence */
+  legacy: boolean;
+}
+
+const FAILED_SENTENCE = /(\d+)\s+of\s+(\d+)\s+sessions?\s+failed/i;
+
+/** How much of a partially failed run was scored — null for a run with no error
+ *  (or one that is not a completed evaluator run). */
+export function runCoverage(run: Pick<EvaluationRunInfo, "status" | "error" | "session_failures" | "session_ids">): RunCoverage | null {
+  if (run.status !== "completed" || !run.error?.trim()) return null;
+  const f = run.session_failures;
+  if (f) {
+    const first = f.sessions[0];
+    return {
+      total: f.total,
+      failed: f.failed,
+      scored: Math.max(0, f.total - f.failed),
+      kind: f.kind,
+      excluded: f.sessions.map((s) => s.index).filter((i): i is number => i != null).sort((a, b) => a - b),
+      firstError: first ? `${first.error_type}: ${first.message}` : null,
+      legacy: false,
+    };
+  }
+  const m = FAILED_SENTENCE.exec(run.error);
+  if (!m) return null;
+  const failed = Number(m[1]);
+  const total = Number(m[2]) || run.session_ids.length;
+  return { total, failed, scored: Math.max(0, total - failed), kind: "unknown", excluded: [], firstError: null, legacy: true };
+}
+
+/** True when two or more partial runs left different scenario positions unscored. */
+export function coverageDiffers(coverages: (RunCoverage | null)[]): boolean {
+  const keys = new Set(
+    coverages.filter((c): c is RunCoverage => !!c && c.excluded.length > 0).map((c) => c.excluded.join(",")),
+  );
+  return keys.size > 1;
+}
+
+export type RecommendableReason = "evaluator_error" | "low_coverage" | "legacy" | "unknown" | "not_completed";
+
+/** Whether a run may seed AI recommendations in the console: a clean completed
+ *  batch, or one whose only losses are telemetry gaps and that still scored at
+ *  least half of its sessions. */
+export function runRecommendable(run: EvaluationRunInfo): { ok: boolean; reason?: RecommendableReason; coverage: RunCoverage | null } {
+  if (run.status !== "completed" || !run.batch_eval_id) return { ok: false, reason: "not_completed", coverage: null };
+  const coverage = runCoverage(run);
+  if (!run.error?.trim()) return { ok: true, coverage: null };
+  // a pre-summary row: "Read failure details" (re-check) can still qualify it
+  if (coverage?.legacy) return { ok: false, reason: "legacy", coverage };
+  if (!coverage || coverage.kind === "unknown") return { ok: false, reason: "unknown", coverage };
+  if (coverage.kind !== "telemetry_incomplete") return { ok: false, reason: "evaluator_error", coverage };
+  if (coverage.scored * 2 < coverage.total) return { ok: false, reason: "low_coverage", coverage };
+  return { ok: true, coverage };
 }
 
 type EvaluationRunDisplayStatus = EvaluationRunStatus | "completed_with_errors";

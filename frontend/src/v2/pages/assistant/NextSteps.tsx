@@ -12,9 +12,18 @@ import {
   errorMessage,
 } from "../../../lib/api";
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
-import { type EvaluationRunInfo, evaluationRunPresentation, RUN_TERMINAL_STATUSES, runMeanScore } from "../../../lib/evaluation";
+import {
+  coverageDiffers,
+  type EvaluationRunInfo,
+  evaluationRunPresentation,
+  RUN_TERMINAL_STATUSES,
+  runCoverage,
+  runMeanScore,
+  runRecommendable,
+} from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
+import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
 import { Alert, Button, Card, Confirm, LinkButton, Select, Tag } from "../../ui";
 import { RunRecommendations } from "../tasks/RunRecommendations";
 import { CHIP_TAG, shortId, useReadOnly } from "./common";
@@ -132,6 +141,7 @@ export function NextStepsCard({
           : runLive ? t("assistantNext.run.oneAtATime") : undefined;
 
   const [removing, setRemoving] = useState<string | null>(null);
+  const [reading, setReading] = useState<string | null>(null);
   const removeRun = async (run: EvaluationRunInfo) => {
     setRemoving(run.id);
     try {
@@ -197,16 +207,41 @@ export function NextStepsCard({
     }
   };
 
-  // Recommendations are seeded from one cleanly completed run with a batch — the newest
-  // by default; the operator may pick an earlier one, and the other runs' recommendations
+  // A partial run predating the skipped-session summary: re-checking the batch (reads
+  // only) backfills why its sessions were not scored.
+  const readDetail = async (run: EvaluationRunInfo) => {
+    setReading(run.id);
+    try {
+      await api.recheckEvaluationRun(run.id);
+      toast("success", t("v2.runCoverage.readDetailDone"));
+      await loadRuns();
+    } catch (err) {
+      toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
+    } finally {
+      setReading(null);
+    }
+  };
+
+  // Recommendations are seeded from one usable completed run with a batch — clean, or
+  // one that only lost a minority of sessions to incomplete telemetry — the newest by
+  // default; the operator may pick an earlier one, and the other runs' recommendations
   // (an accepted one included) stay listed instead of vanishing behind a newer run.
-  const completedRuns = (agentRuns ?? runs ?? []).filter(
-    (r) => evaluationRunPresentation(r).status === "completed" && !!r.batch_eval_id,
-  );
+  const candidateRuns = agentRuns ?? runs ?? [];
+  const completedRuns = candidateRuns.filter((r) => runRecommendable(r).ok);
+  // why no run qualifies yet, when a partial one exists (newest first)
+  const blockedReason = completedRuns.length === 0
+    ? candidateRuns.map((r) => runRecommendable(r).reason).find((r) => r && r !== "not_completed") ?? null
+    : null;
+  const historyCoverage = (runs ?? []).map(runCoverage);
   const [sourceRunId, setSourceRunId] = useState<string | null>(null);
   const baseline = completedRuns.find((r) => r.id === sourceRunId) ?? completedRuns[0] ?? null;
   const otherRuns = completedRuns.filter((r) => r.id !== baseline?.id);
   const baselineMean = baseline ? meanScore(baseline) : null;
+  const baselineCoverage = baseline ? runCoverage(baseline) : null;
+  const coverageLabel = (r: EvaluationRunInfo) => {
+    const c = runCoverage(r);
+    return c ? t("assistantNext.recommend.sourceCoverage", { scored: c.scored, total: c.total }) : null;
+  };
 
   let n = 0;
   return (
@@ -272,23 +307,37 @@ export function NextStepsCard({
           {runs && runs.length > 0 && (
             <div className="v2-assistant-sub-rows" data-testid="v2-assistant-next-runs" data-live={runLive ? "true" : "false"}>
               <div className="v2-muted" style={{ fontSize: 12.5 }}>{t("assistantNext.run.historyTitle", { n: runs.length })}</div>
-              {runs.map((run) => {
+              {coverageDiffers(historyCoverage) && (
+                <div className="v2-muted" style={{ fontSize: 12.5 }} data-testid="v2-assistant-next-not-comparable">
+                  {t("v2.runCoverage.notComparable")}
+                </div>
+              )}
+              {runs.map((run, index) => {
                 const live = !RUN_TERMINAL_STATUSES.has(run.status);
                 const presentation = evaluationRunPresentation(run);
+                const coverage = historyCoverage[index];
                 const mean = meanScore(run);
                 return (
                   <div key={run.id} className="v2-assistant-sub-row" data-run-status={run.status}>
                     <span className="mono">{t("assistantNext.run.runLine", { id: run.id.slice(0, 8) })}</span>
-                    <Tag tone={CHIP_TAG[presentation.tone] ?? "gray"}>
-                      {t(`expPage.readiness.runStatus.${presentation.status}`)}
-                    </Tag>
+                    {coverage ? (
+                      <RunCoverageTag coverage={coverage} />
+                    ) : (
+                      <Tag tone={CHIP_TAG[presentation.tone] ?? "gray"}>
+                        {t(`expPage.readiness.runStatus.${presentation.status}`)}
+                      </Tag>
+                    )}
                     {run.created_at && <span className="v2-muted">{fmtTime(run.created_at)}</span>}
                     {run.queue_position != null && live && (
                       <span className="v2-muted">{t("assistantNext.run.queued", { n: run.queue_position })}</span>
                     )}
                     {mean != null && (
                       <span className="v2-muted">
-                        {t("assistantNext.run.meanScore", { mean: mean.toFixed(2), n: run.scores.length })}
+                        {coverage
+                          ? t("assistantNext.run.meanScoreCoverage", {
+                            mean: mean.toFixed(2), n: run.scores.length, scored: coverage.scored, total: coverage.total,
+                          })
+                          : t("assistantNext.run.meanScore", { mean: mean.toFixed(2), n: run.scores.length })}
                       </span>
                     )}
                     <Link to={`/v2/eval/tasks?view=detail&id=${encodeURIComponent(run.id)}`}>{t("assistantNext.run.openRuns")} ›</Link>
@@ -297,7 +346,17 @@ export function NextStepsCard({
                         {t("assistantNext.run.remove")}
                       </LinkButton>
                     )}
-                    {run.error && (
+                    {coverage ? (
+                      <div className="err warn">
+                        <RunCoverageNote
+                          coverage={coverage}
+                          runId={run.id}
+                          rawError={run.error}
+                          onReadDetail={canRun ? () => void readDetail(run) : undefined}
+                          reading={reading === run.id}
+                        />
+                      </div>
+                    ) : run.error && (
                       <div className={presentation.status === "completed_with_errors" ? "err warn" : "err"}>{run.error}</div>
                     )}
                   </div>
@@ -326,16 +385,24 @@ export function NextStepsCard({
                         t("assistantNext.run.runLine", { id: shortId(r.id) }),
                         r.dataset_id && r.dataset_id !== datasetId ? (r.dataset_name ?? r.dataset_id) : null,
                         r.created_at ? fmtTime(r.created_at) : null,
+                        coverageLabel(r),
                         i === 0 ? t("assistantNext.recommend.newest") : null,
                       ].filter(Boolean).join(" · "),
                     }))}
                   />
                 ) : (
-                  <Tag tone="green">{t("assistantNext.run.runLine", { id: shortId(baseline.id) })}</Tag>
+                  <Tag tone={runCoverage(baseline) ? "orange" : "green"}>
+                    {[t("assistantNext.run.runLine", { id: shortId(baseline.id) }), coverageLabel(baseline)].filter(Boolean).join(" · ")}
+                  </Tag>
                 )}
                 {baselineMean != null && (
                   <span className="v2-muted">
-                    {t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
+                    {baselineCoverage
+                      ? t("assistantNext.run.meanScoreCoverage", {
+                        mean: baselineMean.toFixed(2), n: baseline.scores.length,
+                        scored: baselineCoverage.scored, total: baselineCoverage.total,
+                      })
+                      : t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
                   </span>
                 )}
                 {agent?.version && <span className="v2-muted">{t("assistantNext.recommend.version", { v: agent.version })}</span>}
@@ -356,7 +423,9 @@ export function NextStepsCard({
               {otherRuns.length > 0 && <RecommendationHistory runs={otherRuns} onOpen={setSourceRunId} />}
             </>
           ) : (
-            <div className="v2-muted" style={{ marginTop: 6 }}>{t("assistantNext.recommend.waiting")}</div>
+            <div className="v2-muted" style={{ marginTop: 6 }} data-testid="v2-assistant-next-rec-waiting">
+              {blockedReason ? t(`assistantNext.recommend.blocked.${blockedReason}`) : t("assistantNext.recommend.waiting")}
+            </div>
           )}
         </Step>
 

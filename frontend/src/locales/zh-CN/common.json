@@ -4769,7 +4769,8 @@
       "oneAtATime": "该 Agent 在此 Dataset 上仍有一次运行未结束——请等它完成（或在评估页停止），再启动新的运行。",
       "tooManyEvaluators": "已就绪 {{n}} 个评估器，但一次批量评估最多应用 {{max}} 个——请打开「新建运行」取消勾选重叠的评估器（其余参数完全相同）。",
       "remove": "从历史中移除这条失败的运行",
-      "removedToast": "已移除运行 {{id}}"
+      "removedToast": "已移除运行 {{id}}",
+      "meanScoreCoverage": "{{n}} 个评估器归一化均分 {{mean}}（基于 {{scored}}/{{total}} 个会话）"
     },
     "iterate": {
       "title": "查看分数与追踪，然后迭代",
@@ -4820,15 +4821,22 @@
     "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。",
     "recommend": {
       "title": "生成 AI 推荐的优化建议",
-      "body": "AI 推荐读取所选运行（默认最新一次无错误完成的运行；可以是这个 Agent 在任意数据集上的运行）的追踪，给出改写后的系统提示词（以及工具描述）：默认由 AgentCore Recommendations 围绕你选择的评估器生成，也可改用 GEPA-lite。先查看差异；接受时可以再修改，Launchpad 用最终的提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
+      "body": "AI 推荐读取所选运行（默认最新一次可用的运行：无错误完成，或只因追踪数据不完整漏评了不到一半的会话；可以是这个 Agent 在任意数据集上的运行）的追踪，给出改写后的系统提示词（以及工具描述）：默认由 AgentCore Recommendations 围绕你选择的评估器生成，也可改用 GEPA-lite。先查看差异；接受时可以再修改，Launchpad 用最终的提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
       "source": "追踪来源",
       "version": "Harness 当前为 v{{v}}",
       "publishing": "正在发布“{{name}}”的新 Harness 版本……部署完成后，第 4 步会列出该版本。",
-      "waiting": "第 2 步有一次运行无错误完成后可用——它的追踪用于生成建议。",
+      "waiting": "第 2 步有一次可用的运行后开放——它的追踪用于生成建议。",
       "newest": "最新",
       "historyTitle": "其他运行生成的优化建议（{{n}}）",
       "historyAccepted": "已接受 · 在 v{{v}} 之上发布",
-      "historyOpen": "在此查看"
+      "historyOpen": "在此查看",
+      "sourceCoverage": "{{scored}}/{{total}} 会话",
+      "blocked": {
+        "evaluator_error": "已有运行部分失败，且包含评估器错误（不只是追踪数据缺失），不能作为建议来源。请查看错误后再启动一次运行。",
+        "low_coverage": "已有运行部分失败，评分的会话不到一半，不能作为建议来源。请再启动一次运行。",
+        "legacy": "已有运行部分失败，且早于失败明细的记录。在第 2 步点击「读取失败明细」；如果只是追踪数据缺失，该运行就能作为建议来源。",
+        "unknown": "已有运行部分失败，AWS 没有给出未评分会话的原因，不能作为建议来源。请再启动一次运行。"
+      }
     },
     "canary": {
       "title": "金丝雀实验",
@@ -7894,6 +7902,22 @@
       "confirmBody_one": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
       "confirmBody_other": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
       "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。"
+    },
+    "runCoverage": {
+      "tagTelemetry": "已完成 · {{scored}}/{{total}} 会话",
+      "telemetry_incomplete": "{{failed}} 个会话的追踪数据不完整（AWS 未写入部分日志事件），未参与评分；分数基于其余 {{scored}} 个会话。重新评估无法恢复这些会话；被排除的多为工具调用较多的长会话，均分可能偏高。",
+      "evaluator_error": "{{failed}} 个会话在评估器调用时出错，未参与评分；分数基于其余 {{scored}} 个会话。请查看错误后重新运行。",
+      "mixed": "{{failed}} 个会话未参与评分：一部分因追踪数据不完整，一部分因评估器出错；分数基于其余 {{scored}} 个会话。",
+      "unknown": "{{failed}} 个会话未参与评分，AWS 没有给出具体原因；分数基于其余 {{scored}} 个会话。",
+      "legacy": "{{failed}}/{{total}} 个会话未参与评分。这次运行早于失败明细的记录，点击「读取失败明细」可从 AWS 补齐原因。",
+      "scenarios": "未评分的场景：{{list}}",
+      "scenarioSep": "、",
+      "rawError": "AWS 原始错误",
+      "viewFailed": "查看未评分的会话",
+      "readDetail": "读取失败明细",
+      "readDetailHint": "从 AWS 重新读取这次批量评估的结果，补齐未评分会话的原因。只读，不重新运行，也不产生费用。",
+      "readDetailDone": "已读取失败明细",
+      "notComparable": "各次运行未评分的场景不同，均分不能直接对比。"
     }
   },
   "identity": {
