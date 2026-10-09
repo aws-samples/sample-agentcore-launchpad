@@ -17,7 +17,7 @@ import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, Select, Tag } from "../../ui";
 import { RunRecommendations } from "../tasks/RunRecommendations";
-import { CHIP_TAG, shortId } from "./common";
+import { CHIP_TAG, shortId, useReadOnly } from "./common";
 import { HarnessCanary } from "./HarnessCanary";
 import { RecommendationHistory } from "./RecommendationHistory";
 
@@ -115,7 +115,8 @@ export function NextStepsCard({
   if (evaluators.length) runParams.set("evaluators", evaluators.map((e) => e.id).join(","));
   const runLink = `/v2/eval/tasks?${runParams.toString()}`;
 
-  const canRun = can("eval.run");
+  const readOnly = useReadOnly();
+  const canRun = can("eval.run") && !readOnly;
   // StartBatchEvaluation applies at most this many evaluators per run (service limit).
   const tooMany = evaluators.length > MAX_BATCH_EVALUATORS;
   const startable = agentReady && !!targetId && !!datasetId && evaluators.length > 0 && !tooMany;
@@ -239,13 +240,15 @@ export function NextStepsCard({
           title={t("assistantNext.run.title")}
           actions={
             <>
-              <Button kind="primary" size="sm" disabled={!startable || !canRun || starting || runLive}
-                title={startReason} onClick={() => setConfirmStart(true)} testId="v2-assistant-next-start-run">
-                {starting ? t("assistantNext.run.starting")
-                  : (runs?.length ?? 0) > 0 ? t("assistantNext.run.startAgain") : t("assistantNext.run.start")}
-              </Button>
-              <Link className="v2-btn sm" to={runLink}>{t("assistantNext.run.open")}</Link>
-              {startReason && <span className="v2-muted" style={{ fontSize: 12.5 }}>{startReason}</span>}
+              {!readOnly && (
+                <Button kind="primary" size="sm" disabled={!startable || !canRun || starting || runLive}
+                  title={startReason} onClick={() => setConfirmStart(true)} testId="v2-assistant-next-start-run">
+                  {starting ? t("assistantNext.run.starting")
+                    : (runs?.length ?? 0) > 0 ? t("assistantNext.run.startAgain") : t("assistantNext.run.start")}
+                </Button>
+              )}
+              {!readOnly && <Link className="v2-btn sm" to={runLink}>{t("assistantNext.run.open")}</Link>}
+              {!readOnly && startReason && <span className="v2-muted" style={{ fontSize: 12.5 }}>{startReason}</span>}
             </>
           }
         >
@@ -345,6 +348,7 @@ export function NextStepsCard({
                   key={baseline.id}
                   run={baseline}
                   embedded
+                  readOnly={readOnly}
                   acceptable={isHarness && agentReady}
                   onAccepted={() => setAgentTick((k) => k + 1)}
                 />

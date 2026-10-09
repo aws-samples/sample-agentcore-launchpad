@@ -9,7 +9,10 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
   the same workspace is open to every member for every action (``may_collaborate``
   — discussion, preparation, proposal review and approval, evaluation assets) under
   that action's usual permission, re-checked at each write; deleting it (and its
-  footprint preview) stays with the owner. Unsharing closes it again at once.
+  footprint preview) stays with the owner. Unsharing closes it again at once. An
+  administrator *reads* every conversation of the workspace (``may_view``: list,
+  detail, evaluation plan and operation status) but writes only where it
+  collaborates — an unshared one is read-only until the admin shares it.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
   (``InvokeHarness`` on the preset) and ledger writes. No proposal, valid or not,
   creates anything until a separate approval.
@@ -67,7 +70,7 @@ from sqlalchemy.orm import Session, object_session
 
 from app.assistant import preparation, submission
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import collaborator_clause, may_collaborate, principal_of
+from app.assistant.principal import may_collaborate, may_view, principal_of, viewer_clause
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import create_deployment
@@ -870,16 +873,38 @@ def accessible_conversation(
     return row
 
 
-def list_conversations(db: Session, workspace_id: str, principal: str) -> list[dict[str, Any]]:
-    """The caller's own conversations plus the ones shared with the workspace."""
+def viewable_conversation(
+    db: Session, workspace_id: str, identity: Identity, conversation_id: str
+) -> AssistantConversation:
+    """``accessible_conversation`` widened for reads: an administrator also resolves
+    any other member's conversation of the workspace (read-only). Only the read
+    routes — detail, evaluation plan, operation status — and sharing use this."""
+    row = db.get(AssistantConversation, conversation_id)
+    if (
+        row is None
+        or row.workspace_id != workspace_id
+        or not may_view(row, principal_of(identity), is_admin=identity.is_admin)
+    ):
+        raise NotFoundError("assistant.conversation_not_found", "conversation not found")
+    return row
+
+
+LIST_LIMIT = 50
+ADMIN_LIST_LIMIT = 200  # an administrator lists every member's conversations
+
+
+def list_conversations(db: Session, workspace_id: str, identity: Identity) -> list[dict[str, Any]]:
+    """The caller's own conversations plus the ones shared with the workspace; for an
+    administrator, every member's."""
+    principal = principal_of(identity)
     rows = (
         db.query(AssistantConversation)
         .filter(
             AssistantConversation.workspace_id == workspace_id,
-            collaborator_clause(principal),
+            viewer_clause(principal, is_admin=identity.is_admin),
         )
         .order_by(AssistantConversation.updated_at.desc())
-        .limit(50)
+        .limit(ADMIN_LIST_LIMIT if identity.is_admin else LIST_LIMIT)
         .all()
     )
     return [conversation_summary(db, r, viewer=principal) for r in rows]
@@ -889,11 +914,11 @@ def set_shared(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
 ) -> AssistantConversation:
     """Publish/unpublish a conversation to every workspace member — by its owner, or
-    by an administrator. Either may act only on what it can already reach (its own,
-    or one already shared), so sharing never becomes a way to discover another
-    member's private conversation; a collaborator on a shared one cannot toggle it."""
+    by an administrator, who reads every conversation and so may share any of them
+    (sharing is how an admin turns a read-only one into a collaboration); a
+    collaborator on a shared one cannot toggle it."""
     principal = principal_of(identity)
-    row = accessible_conversation(db, workspace_id, principal, conversation_id)
+    row = viewable_conversation(db, workspace_id, identity, conversation_id)
     if not identity.is_admin and row.owner_principal != principal:
         raise AppError(
             "assistant.share_forbidden",
@@ -1008,6 +1033,8 @@ def conversation_summary(
         "title": row.title,
         "owner": row.owner,
         "mine": viewer is None or row.owner_principal == viewer,
+        # an administrator viewing another member's unshared conversation
+        "read_only": viewer is not None and not may_collaborate(row, viewer),
         "shared": bool(row.shared),
         "shared_by": row.shared_by,
         "shared_at": row.shared_at.isoformat() if row.shared_at else None,

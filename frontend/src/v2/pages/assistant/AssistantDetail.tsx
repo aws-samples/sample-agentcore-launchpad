@@ -30,7 +30,7 @@ import {
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
-import { PROPOSAL_TONE, SECTION_IDS, shortId, useApiMessage } from "./common";
+import { PROPOSAL_TONE, ReadOnlyContext, SECTION_IDS, shortId, useApiMessage } from "./common";
 import { COMPOSER_ID, DiscussionCard } from "./Discussion";
 import { EvalAssetsCard } from "./EvalAssets";
 import { PreparationCard } from "./Preparation";
@@ -454,13 +454,17 @@ export function AssistantDetail({
   }
 
   const title = conversation.title || conversation.id.slice(0, 8);
+  // An administrator reading another member's unshared conversation: every panel
+  // shows its state, none offers a write; sharing it turns it into a collaboration.
+  const readOnly = conversation.read_only;
   // Another member's conversation an admin shared: every panel works as for the
   // owner; only CLEAR (deleting the conversation) stays with the owner.
-  const collaborating = !conversation.mine;
+  const collaborating = !conversation.mine && !readOnly;
   const approveDisabled = !canDeploy || approving || busy || preparing || resourcesDirty;
   const approveReason = resourcesDirty ? t("assistantProgress.hints.unsaved") : deployReason;
 
   return (
+    <ReadOnlyContext.Provider value={readOnly}>
     <div data-testid="v2-assistant-detail" data-conversation={conversation.id}>
       <FlowHeader
         title={
@@ -493,7 +497,7 @@ export function AssistantDetail({
                 {t(conversation.shared ? "v2.assistant.unshare" : "v2.assistant.share")}
               </Button>
             )}
-            {!collaborating && (
+            {conversation.mine && (
               <Button kind="danger" disabled={busy || clear.busy} title={t("assistantPage.clear.action")}
                 onClick={() => void clear.ask(conversation)} testId="v2-assistant-clear">
                 {t("v2.assistant.clear")}
@@ -509,6 +513,11 @@ export function AssistantDetail({
       {collaborating && (
         <div style={{ marginBottom: 12 }} data-testid="v2-assistant-collaborating">
           <Alert>{t("v2.assistant.collaborating", { owner: conversation.owner })}</Alert>
+        </div>
+      )}
+      {readOnly && (
+        <div style={{ marginBottom: 12 }} data-testid="v2-assistant-read-only">
+          <Alert>{t("v2.assistant.readOnlyNotice", { owner: conversation.owner })}</Alert>
         </div>
       )}
       <CreationProgressCard latest={latest} deployed={deployed} resourcesDirty={resourcesDirty} editing={editing !== null} />
@@ -543,7 +552,7 @@ export function AssistantDetail({
           key={`prep:${workspaceId}:${conversation.id}`}
           conversation={conversation}
           workspaceId={workspaceId}
-          disabled={busy || approving || editing !== null || conversation.turn_in_progress !== null}
+          disabled={readOnly || busy || approving || editing !== null || conversation.turn_in_progress !== null}
           onWorking={setPreparing}
           locked={resourcesLocked}
           onDirty={setResourcesDirty}
@@ -595,11 +604,11 @@ export function AssistantDetail({
               <>
                 <div style={{ marginTop: 16 }}>
                   <Alert>{t(resourcesLocked ? "assistantPreparation.reviewOnly" : "assistantPage.supportedHere")}</Alert>
-                  {latest.status === "draft" && !resourcesLocked && (
+                  {latest.status === "draft" && !resourcesLocked && !readOnly && (
                     <Alert tone="warn">{t("assistantPage.billable", { account: status.account_id, region: status.region })}</Alert>
                   )}
                 </div>
-                <div className="v2-assistant-actions">
+                {!readOnly && <div className="v2-assistant-actions">
                   {editing ? (
                     <>
                       <Button onClick={() => setEditing(null)}>{t("assistantPage.cancelEdit")}</Button>
@@ -648,7 +657,7 @@ export function AssistantDetail({
                       )}
                     </>
                   )}
-                </div>
+                </div>}
               </>
             )}
             {approval && shownApproved && (
@@ -684,7 +693,7 @@ export function AssistantDetail({
           key={`eval:${workspaceId}:${conversation.id}`}
           conversationId={conversation.id}
           proposals={conversation.proposals}
-          canMaterialize={status.can_materialize_evaluation_assets}
+          canMaterialize={status.can_materialize_evaluation_assets && !readOnly}
           workspaceId={workspaceId}
           apiMessage={apiMessage}
           onError={(m) => toast("error", m)}
@@ -723,5 +732,6 @@ export function AssistantDetail({
       />
       {clear.dialog}
     </div>
+    </ReadOnlyContext.Provider>
   );
 }

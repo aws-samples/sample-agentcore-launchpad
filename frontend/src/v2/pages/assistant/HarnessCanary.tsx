@@ -10,6 +10,7 @@ import { CanaryEvaluatorFields } from "../canary/CanaryEvaluators";
 import { useCanaryEvaluators } from "../canary/evaluatorChoice";
 import { CANARY_TONE, openingWeights, versionOptions, versionsLabel, weightsLabel } from "../canary/common";
 import { RampPlan } from "../canary/RampPlan";
+import { useReadOnly } from "./common";
 
 const POLL_MS = 8000;
 
@@ -68,6 +69,7 @@ export function HarnessCanary({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const evaluators = useCanaryEvaluators();
+  const readOnly = useReadOnly();
   const mayCreate = can("eval.run");
   const blocked = !mayCreate
     ? t("assistantNext.canary.noPermission")
@@ -125,7 +127,7 @@ export function HarnessCanary({
           <span className="v2-muted">—</span>
         )}
       </div>
-      {!live && (
+      {!live && !readOnly && (
         <div className="v2-assistant-sub-row">
           <label htmlFor="v2-canary-control">{t("assistantNext.canary.control")}</label>
           <Select

@@ -25,7 +25,7 @@ import {
 } from "../../../lib/assistant";
 import { Alert, Button, Confirm, LinkButton, Select, Table, Tag, type TagTone } from "../../ui";
 import { NextStepsCard } from "./NextSteps";
-import { SECTION_IDS } from "./common";
+import { SECTION_IDS, useReadOnly } from "./common";
 
 /**
  * SE-047 — the reviewed evaluation-assets plan of one assistant conversation.
@@ -90,6 +90,7 @@ export function EvalAssetsCard({
   repairDisabledReason?: string;
 }) {
   const { t } = useTranslation();
+  const readOnly = useReadOnly();
   const [state, setState] = useState<AssistantEvalPlanState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -315,7 +316,7 @@ export function EvalAssetsCard({
       ? reviewPending ? t("assistantEval.reviewPending", { n: reviewPending }) : t("assistantEval.fixErrors")
       : undefined;
   const opResources = asArray<AssistantEvalResource>(operation?.resources);
-  const rowEditable = !operation && jsonDraft === null;
+  const rowEditable = !readOnly && !operation && jsonDraft === null;
   const currentContent = asRecord(current?.content);
 
   // scenario rows and blocked golden tests share one table
@@ -347,6 +348,7 @@ export function EvalAssetsCard({
           )}
 
           <div className="v2-toolbar">
+            {!readOnly && <>
             <label className="v2-row" style={{ fontSize: 13, color: "var(--v2-ink-2)" }}>
               {t("assistantEval.sourceRevision")}
               <Select
@@ -377,6 +379,7 @@ export function EvalAssetsCard({
                 {t("assistantEval.confirmScenarios", { n: reviewPending })}
               </Button>
             )}
+            </>}
             {current && summary && (
               <div className="end">
                 <span className="v2-muted mono" style={{ fontSize: 12 }} data-testid="v2-assistant-eval-summary">
@@ -409,7 +412,7 @@ export function EvalAssetsCard({
                   <li key={i} className="mono" style={{ fontSize: 12, wordBreak: "break-word" }}>{e}</li>
                 ))}
               </ul>
-              {current?.status === "invalid" && (
+              {current?.status === "invalid" && !readOnly && (
                 <div style={{ marginTop: 10 }}>
                   <Button size="sm" disabled={!!repairReason} title={repairReason}
                     onClick={() => void repair()} testId="v2-assistant-eval-repair">
@@ -650,7 +653,7 @@ export function EvalAssetsCard({
                 </div>
               )}
 
-              {!operation && (
+              {!operation && !readOnly && (
                 <div className="v2-assistant-actions">
                   <Button kind="primary" disabled={!canCreate} title={createReason}
                     onClick={() => setConfirmPlan(current)} testId="v2-assistant-eval-create">
@@ -671,12 +674,12 @@ export function EvalAssetsCard({
             <div style={{ marginTop: 12 }}>
               <Alert
                 tone="warn"
-                action={
+                action={readOnly ? undefined : (
                   <Button size="sm" kind="primary" disabled={!!replacementReason} title={replacementReason}
                     onClick={prepareReplacement} testId="v2-assistant-eval-replacement">
                     {t("assistantEval.prepareReplacement")}
                   </Button>
-                }
+                )}
               >
                 <strong>{t("assistantEval.newPlanTitle")}</strong>
                 <div>{t("assistantEval.newPlanNotice")}</div>

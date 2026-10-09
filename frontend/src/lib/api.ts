@@ -1257,6 +1257,9 @@ export interface AssistantConversationSummary {
   /** the caller owns it; false = another member's conversation an admin shared —
    *  every action but CLEAR is open */
   mine: boolean;
+  /** an administrator reading another member's UNSHARED conversation: every write
+   *  answers 404 until it is shared */
+  read_only: boolean;
   /** an admin opened it to every member of the workspace */
   shared: boolean;
   shared_by: string | null;

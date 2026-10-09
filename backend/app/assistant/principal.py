@@ -9,6 +9,8 @@ matches nobody.
 
 Who may *work on* a conversation is wider than who owns it: while an admin shares
 it, every principal collaborates (``may_collaborate`` / ``collaborator_clause``).
+Who may *read* it is wider still: an administrator sees every conversation of the
+workspace, read-only unless it is shared (``may_view`` / ``viewer_clause``).
 """
 
 from typing import Any
@@ -49,3 +51,18 @@ def collaborator_clause(principal: str) -> Any:
         or_(AssistantConversation.owner_principal == principal,
             AssistantConversation.shared.is_(True)),
     )
+
+
+def may_view(row: AssistantConversation | None, principal: str, *, is_admin: bool) -> bool:
+    """A collaborator, or — read-only — an administrator on any conversation that has
+    an owner. A legacy row with no principal stays closed to everybody."""
+    if may_collaborate(row, principal):
+        return True
+    return is_admin and row is not None and row.owner_principal is not None
+
+
+def viewer_clause(principal: str, *, is_admin: bool) -> Any:
+    """``may_view`` as a SQL predicate on ``assistant_conversations``."""
+    if is_admin:
+        return AssistantConversation.owner_principal.is_not(None)
+    return collaborator_clause(principal)

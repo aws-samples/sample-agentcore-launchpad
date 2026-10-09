@@ -38,7 +38,7 @@ const STATUS_TONE: Record<V2Pipeline["status"], TagTone> = {
 function useDatasetNames() {
   const datasets = useLoad(() => api.v2Datasets(), "datasets");
   const names = useMemo(() => new Map((datasets.data?.datasets ?? []).map((d) => [d.id, d])), [datasets.data]);
-  return { names, reload: datasets.reload };
+  return { names, loaded: datasets.data !== null, reload: datasets.reload };
 }
 
 // ─── list ──────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ export function PipelinesTab() {
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
   const { data, loading, error, reload } = useLoad(() => api.v2Pipelines(), "pipelines");
-  const { names: datasets, reload: reloadDatasets } = useDatasetNames();
+  const { names: datasets, loaded: datasetsLoaded, reload: reloadDatasets } = useDatasetNames();
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [running, setRunning] = useState<string | null>(null);
@@ -106,10 +106,27 @@ export function PipelinesTab() {
     }
   };
 
-  const outputName = (p: V2Pipeline) => {
+  // the output dataset, linked once it exists (a first run creates a new one)
+  const outputCell = (p: V2Pipeline) => {
     const id = p.config.output.dataset_id;
-    if (id) return datasets.get(id)?.name ?? id;
-    return t("v2.pipelines.newDataset", { name: p.config.output.dataset_name ?? "" });
+    if (!id) return t("v2.pipelines.newDataset", { name: p.config.output.dataset_name ?? "" });
+    const ds = datasets.get(id);
+    if (ds) {
+      return (
+        <>
+          <LinkButton onClick={() => setParams({ tab: "datasets", view: "dataset", id })} testId={`v2-pipeline-dataset-${p.id}`}>
+            {ds.name}
+          </LinkButton>
+          <span className="sub">{t("v2.datasets.items", { count: ds.item_count })}</span>
+        </>
+      );
+    }
+    return (
+      <>
+        <span className="mono">{id}</span>
+        {datasetsLoaded && <span className="sub">{t("v2.pipelines.datasetGone")}</span>}
+      </>
+    );
   };
 
   const columns: Column<V2Pipeline>[] = [
@@ -135,7 +152,7 @@ export function PipelinesTab() {
         </>
       ),
     },
-    { key: "output", title: t("v2.pipelines.colOutput"), render: outputName },
+    { key: "output", title: t("v2.pipelines.colOutput"), render: outputCell },
     { key: "mode", title: t("v2.pipelines.colMode"), render: () => t("v2.pipelines.manual") },
     {
       key: "status",

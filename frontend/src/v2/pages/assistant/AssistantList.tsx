@@ -51,7 +51,9 @@ export function AssistantList({
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return conversations.filter((c) => {
-      if (scope === "mine" ? !c.mine : scope === "shared" && c.mine) return false;
+      if (scope === "mine" && !c.mine) return false;
+      if (scope === "shared" && (c.mine || c.read_only)) return false;
+      if (scope === "readOnly" && !c.read_only) return false;
       if (proposal === "none" ? c.proposal_status !== null : proposal && c.proposal_status !== proposal) return false;
       return !needle || `${c.title} ${c.id} ${c.owner}`.toLowerCase().includes(needle);
     });
@@ -99,6 +101,11 @@ export function AssistantList({
             <LinkButton onClick={() => open(c.id)} title={c.title || undefined} testId={`v2-assistant-open-${c.id}`}>
               <span className="v2-assistant-title">{c.title || c.id.slice(0, 8)}</span>
             </LinkButton>
+            {c.read_only && (
+              <span data-testid={`v2-assistant-read-only-${c.id}`}>
+                <Tag tone="outline" title={t("v2.assistant.readOnlyTip")}>{t("v2.assistant.readOnly")}</Tag>
+              </span>
+            )}
             {c.shared && (
               <span data-testid={`v2-assistant-shared-${c.id}`}>
                 <Tag tone="blue" title={t("v2.assistant.sharedTip", { by: c.shared_by ?? "", at: fmtTime(c.shared_at) })}>
@@ -149,7 +156,7 @@ export function AssistantList({
       className: "right",
       render: (c) => (
         <div className="v2-actions">
-          <LinkButton onClick={() => open(c.id)}>{t("v2.assistant.continue")}</LinkButton>
+          <LinkButton onClick={() => open(c.id)}>{t(c.read_only ? "v2.common.view" : "v2.assistant.continue")}</LinkButton>
           {(isAdmin || c.mine) && (
             <LinkButton
               disabled={sharing !== null}
@@ -213,6 +220,9 @@ export function AssistantList({
               options={[
                 { value: "mine", label: t("v2.assistant.scopeMine") },
                 { value: "shared", label: t("v2.assistant.scopeShared") },
+                ...(conversations.some((c) => c.read_only)
+                  ? [{ value: "readOnly", label: t("v2.assistant.scopeReadOnly") }]
+                  : []),
               ]}
             />
           )}

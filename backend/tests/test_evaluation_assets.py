@@ -2065,7 +2065,8 @@ def test_member_without_deploy_permission_prepares_and_edits_but_cannot_material
     res = member.post(_url(cid, "/materialize"), json=body)
     assert res.status_code == 403 and res.json()["code"] == "auth.permission_required"
     assert not SessionLocal().query(EvaluationAssetOperation).count()
-    assert admin.get(_url(cid)).status_code == 404
+    # an administrator reads the member's plan (read-only) but cannot materialize it
+    assert admin.get(_url(cid)).status_code == 200
     assert admin.post(_url(cid, "/materialize"), json=body).status_code == 404
     snap = _snapshot_proposal(cid)
     assert snap["status"] == "approved" and snap["hash"] == h
@@ -2163,7 +2164,9 @@ def test_plan_prepare_refuses_invalid_revision_and_foreign_conversation(app_read
         assert res.status_code == 409 and res.json()["code"] == "assistant.proposal_stale"
     other, _ = _conversation("user:someone-else")
     with TestClient(app_ready) as client:
-        assert client.get(_url(other)).status_code == 404
+        # the open console's operator is an administrator: it reads another
+        # principal's plan, read-only, and still cannot prepare one there
+        assert client.get(_url(other)).status_code == 200
         assert client.post(_url(other, "/prepare"), json={"revision": 1}).status_code == 404
 
 

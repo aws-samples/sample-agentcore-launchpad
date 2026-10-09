@@ -1,8 +1,14 @@
-import { useCallback } from "react";
+import { createContext, useCallback, useContext } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError, type AssistantProposalStatus, errorMessage } from "../../../lib/api";
 import type { TagTone } from "../../ui";
+
+/** True while an administrator reads another member's unshared conversation: the
+ *  detail page's panels show their state but offer no write (the server refuses
+ *  them anyway). Provided by the detail page. */
+export const ReadOnlyContext = createContext(false);
+export const useReadOnly = () => useContext(ReadOnlyContext);
 
 export const PROPOSAL_TONE: Record<AssistantProposalStatus, TagTone> = {
   draft: "orange",

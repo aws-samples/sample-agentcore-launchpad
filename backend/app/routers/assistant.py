@@ -218,7 +218,7 @@ def list_conversations(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return {"conversations": service.list_conversations(db, ws.id, principal_of(_caller(request)))}
+    return {"conversations": service.list_conversations(db, ws.id, _caller(request))}
 
 
 @router.post("/conversations", status_code=201)
@@ -242,9 +242,9 @@ def get_conversation(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    principal = principal_of(_caller(request))
-    row = service.accessible_conversation(db, ws.id, principal, conversation_id)
-    return service.conversation_detail(db, row, viewer=principal)
+    identity = _caller(request)
+    row = service.viewable_conversation(db, ws.id, identity, conversation_id)
+    return service.conversation_detail(db, row, viewer=principal_of(identity))
 
 
 class ShareRequest(BaseModel):
@@ -505,7 +505,7 @@ def get_evaluation_plan(
     """Ledger-only: every plan revision of the caller's conversation and the recorded
     materialization operations (no AWS read, no AWS write)."""
     identity = _caller(request)
-    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.viewable_conversation(db, ws.id, identity, conversation_id)
     return _plan_state(db, row)
 
 
@@ -612,7 +612,7 @@ def get_evaluation_operation(
 ) -> dict[str, Any]:
     """Ledger-only status (no AWS call, no mutation)."""
     identity = _caller(request)
-    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.viewable_conversation(db, ws.id, identity, conversation_id)
     return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id))}
 
 
