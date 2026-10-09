@@ -30,8 +30,11 @@ primary dimension; cross-dimension impact goes into its `evidence`, never a dupl
 
 ## Non-negotiable rules
 
-1. **One question at a time.** This is guided discovery, not a questionnaire. Ask, wait,
-   then decide the follow-up from the answer.
+1. **Pick the mode, then keep its rhythm.** Inside the intake, `express` is the default:
+   the whole discovery is ONE message (see "Express mode inside the intake" below) and
+   the customer answers it in one reply. `standard` — one question at a time, ask, wait,
+   decide the follow-up from the answer — is for a Workshop, or when the customer asks
+   for an in-depth discovery. Either way it is guided discovery, not a questionnaire.
 2. **Business language.** Do not expose the framework ("the cognition dimension") unless
    the customer asks what the framework is; the labels bias how people describe problems.
 3. **Confirm every note.** Rewrite each barrier as one sticky note, read it back, and
@@ -84,10 +87,32 @@ not ask any of that again. Before the first fishbone message:
    the dimension they belong to, as `unresolved` candidates. Do not add anything the
    customer did not say.
 
-Your FIRST fishbone message then contains exactly two things: the scenario sentence
-("这句话是否准确？") and the candidate notes as a short read-back list per dimension,
-asking the customer to confirm, reword or strike each. A confirmed candidate is a
-confirmed barrier; nothing here is asked as an open question.
+In `standard` mode your FIRST fishbone message contains exactly two things: the
+scenario sentence ("这句话是否准确？") and the candidate notes as a short read-back list
+per dimension, asking the customer to confirm, reword or strike each. A confirmed
+candidate is a confirmed barrier; nothing here is asked as an open question.
+
+### Express mode inside the intake (default)
+
+ONE message, in this order:
+
+1. the scenario sentence;
+2. the candidate notes harvested from the baseline, per dimension;
+3. for every dimension still empty, ONE suggested barrier derived from this scenario
+   (rule 4), marked as a suggestion;
+4. the single opener — "which one mistake would make you stop the launch at once?" —
+   with the candidates as lettered options plus a free-text answer;
+5. one optional line: current state (not built / pilot / live / manual today) and one
+   real or feared case, "没有就按行业假设".
+
+End with short reply options whose first one says the listed barriers apply ("默认：以上
+都适用"). The customer's single reply settles everything: confirmed, reworded or struck
+notes, the top barrier, current state and cases. Then the discovery is closed —
+**no drill-down follow-ups**: sub-paths or sub-causes of a confirmed barrier (e.g.
+which leak channels count under "privacy leak") become golden tests and assumptions,
+not new questions. Ask ONE follow-up only when the reply is ambiguous or contradicts the
+baseline; dimensions the reply did not touch stay as the customer left them (accepted
+with a blanket "默认", otherwise `unresolved` with their suggestion).
 
 ### 1. Define the scenario (only outside the intake)
 
@@ -98,7 +123,7 @@ consult before it answers or acts; whether it only answers or also queries / cre
 changes / approves / notifies. Summarise the scenario in one sentence and get it
 confirmed. Record `use_case`, `service_target` and `customer` as above.
 
-### 2. Discover barriers, dimension by dimension
+### 2. Discover barriers, dimension by dimension (`standard` mode)
 
 Open with the one question no baseline answers and the pain-point workflow shares:
 **"If this agent made only one kind of mistake, which one would make you stop the launch
@@ -218,10 +243,19 @@ what was already confirmed. Do this, once:
    numbered list, each with its opening question in the customer's context AND one
    suggested barrier derived from this scenario, so the customer can confirm ("1、3 对"),
    reword or strike any of them in a single reply, or write "none" / "nothing else".
+   When you end it with reply options, the first option says outright that the listed
+   barriers apply ("这些障碍都适用"), so a short answer maps to one meaning.
 3. If the customer answers, record and confirm the notes as usual — a confirmed
    suggestion is a confirmed barrier; a struck one leaves the dimension
-   `explored_empty` only when the customer said nothing else applies. If the customer
-   declines again or does not engage, close the discovery: what was confirmed stays
+   `explored_empty` only when the customer said nothing else applies. A **blanket
+   acceptance** of the list — "默认", "按你的建议", "都对", "都适用", "可以", "default",
+   "as suggested", or picking the option that says the listed barriers apply — confirms
+   EVERY suggestion in that list as worded: record each as `confirmed: true` with
+   `evidence` saying it was suggested in the express close and accepted by the
+   customer's reply (quote it), and do not ask again. Authorizing industry assumptions
+   in the same reply labels the pain-point evidence and golden tests, not the barriers:
+   the accepted barriers are still confirmed. Only notes the customer struck or reworded
+   differ. If the customer declines again or does not engage, close the discovery: what was confirmed stays
    `confirmed`; every other dimension is `unresolved` and keeps the suggestion from the
    express close as an unconfirmed note; you say in the reply which dimensions remain
    open and that they should be revisited before a real launch.

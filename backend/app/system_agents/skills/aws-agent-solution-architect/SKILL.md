@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.5.7
+version: 1.5.8
 ---
 
 # AWS Agent Solution Architect
@@ -80,17 +80,30 @@ Read `references/intake-options.md` for the standard option library. Extract wha
 customer already said, then ask only the questions that are still open **and** would
 change architecture, risk or cost.
 
-- Ask in two compact rounds of 3–4 numbered questions each; continue to round two after
-  round one is answered.
+- Ask in at most two compact rounds of 3–4 numbered questions. When the opening message
+  is a **rich brief** (it already states scope, users, tools, boundaries and pilot
+  constraints), rounds one and two are ONE message of at most 4 questions — only what
+  would still change architecture, risk or cost.
+- Never ask what has a safe library default: native sandbox tools, cross-session memory
+  (disabled), the access channel when none was named (Launchpad first), log retention
+  (platform default, flagged for the admin). Take the default, list it in the baseline
+  as "default — say if you want it changed", and move on.
+- Acknowledge each answer in at most one line; do not restate the whole baseline every
+  turn — the full baseline appears once, in the design contract.
 - Give each question 4–6 default options with a one-line consequence, and say that the
   customer may pick an option or type a custom answer.
 - Multi-select questions say so explicitly.
 - "Not sure yet" takes the library default and is recorded as an assumption pending
   validation in the design contract.
 
-After the two baseline rounds, read `references/painpoint-workflow.md` and run round
+After the baseline rounds, read `references/painpoint-workflow.md` and run round
 three. Round three is a hard gate: it is not skipped because the earlier answers were
-rich.
+rich — but it is compact: ONE express fishbone message (see below), then the conversion
+table and golden tests.
+
+**Target pace:** a rich brief reaches a reviewable proposal in about four member turns
+(baseline questions → express fishbone → table and tests → proposal), a sparse one in
+about five. Every extra turn must be a question whose answer changes the design.
 
 ## 2. Design contract and pain-point conversion
 
@@ -116,7 +129,13 @@ tests above". End that reply with the confirmation options as a short numbered l
 wait for the answer.
 
 Until the customer confirms the table, or explicitly authorizes industry assumptions, do
-not start the AWS architecture, the cost estimate or the final document. Without a live
+not start the AWS architecture, the cost estimate or the final document. **A request to
+produce the proposal is that authorization** — "生成 / 启动 proposal", "出方案",
+"直接给方案", "需求先到这里", "时间有限", "just give me the design", "you decide":
+in that same reply expand the table and golden tests (assumptions labelled) AND submit
+the proposal, with every open item as a manual task or pending assumption. Never answer
+it with a summary that withholds the proposal, and never ask for the table to be
+confirmed first — the member reviews and edits the proposal itself. Without a live
 system or concrete cases, use industry assumptions marked `industry_assumption`; never
 present them as customer facts.
 
@@ -131,9 +150,15 @@ derived from rounds one and two and only read back for confirmation (forbidden a
 sensitive data, scale, integrations and constraints the customer already named are
 barriers in disguise, not new questions); the one question rounds one and two never
 answer — "which single mistake would stop the launch?" — is asked once and shared with
-the pain-point round; then one question at a time only for dimensions still empty,
-business language, every note read back and confirmed, no solutions and no invented
-barriers. **Every dimension ends with content**: a dimension the customer did not raise
+the pain-point round. Inside the intake the discovery runs in **express mode by
+default**: ONE message carries the scenario sentence, the harvested candidate notes,
+that question, one suggested barrier for each dimension still empty, and an optional
+line for current state and real cases — the customer confirms, rewords or strikes in a
+single reply. No drill-down follow-ups (sub-paths, sub-causes): those become golden
+tests, not questions; ask one follow-up only when the answer is ambiguous or
+contradicts the baseline. The one-question-at-a-time `standard` mode is for a Workshop
+or when the customer asks for an in-depth discovery. Business language, no solutions
+and no invented barriers. **Every dimension ends with content**: a dimension the customer did not raise
 is probed, then offered one or two suggested barriers derived from this scenario for
 the customer to confirm, reword or strike — it is `explored_empty` only on the
 customer's explicit "nothing there", and an `unresolved` dimension keeps its suggestion
@@ -142,7 +167,9 @@ also ask for it directly ("生成鱼骨图", "fishbone", "上线障碍分析") o
 it — the only way it is skipped. When the customer delegates or loses patience
 ("你自己看着办", "you decide"), offer one express close (all remaining dimensions in a
 single message, each remaining dimension with its question and one suggested barrier),
-then stop asking. The confirmed result travels as the `fishbone` member
+then stop asking. A **blanket acceptance** of that list ("默认", "按你的建议", "都适用",
+or the option saying the barriers apply) confirms every suggestion in it as worded —
+record them `confirmed: true` and emit the fishbone; "default" is not a decline. The confirmed result travels as the `fishbone` member
 of the proposal block, where the console renders the diagram; the pain-point table, the
 golden tests and the design that follow must trace back to those barriers. **One
 confirmed barrier is enough to emit it** — dimensions the customer did not confirm are

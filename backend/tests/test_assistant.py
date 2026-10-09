@@ -789,6 +789,45 @@ def test_partial_fishbone_is_emitted_not_dropped():
     assert content is not None, errors
 
 
+def test_blanket_acceptance_of_the_express_close_confirms_its_suggestions():
+    """Live prod conversation (2026-10-08): the express close listed one suggested barrier
+    per dimension, the member answered "默认", and every revision dropped the fishbone as
+    merely assumed. A blanket acceptance confirms the listed suggestions; the methodology,
+    the skill, its self-check and the protocol all say so."""
+    method = (ARCHITECT.skill_path() / "references" / "fishbone-methodology.md").read_text(
+        encoding="utf-8")
+    skill = (ARCHITECT.skill_path() / "SKILL.md").read_text(encoding="utf-8")
+    check = (ARCHITECT.skill_path() / "references" / "proposal-self-check.md").read_text(
+        encoding="utf-8")
+    method, skill, check, preamble = (" ".join(t.split()) for t in (
+        method, skill, check, service.PROTOCOL_PREAMBLE))
+    for text in (method, skill, check, preamble):
+        assert "blanket acceptance" in text and "默认" in text
+    assert "confirms EVERY suggestion in that list" in method
+    assert '"default" is not a decline' in skill
+
+
+def test_intake_reaches_a_proposal_in_few_turns():
+    """Live prod conversation (2026-10-09): a rich brief took 11 member turns — two
+    question rounds, a one-question-at-a-time fishbone with drill-downs, a summary that
+    withheld the proposal at "需求先到这里", then a table confirmation after "启动
+    proposal". The skill now asks one round for a rich brief, defaults safe questions,
+    runs the fishbone as one express message and treats a proposal request as the
+    authorization to submit."""
+    ref = ARCHITECT.skill_path() / "references"
+    skill, intake, method, pain = (" ".join(p.read_text(encoding="utf-8").split()) for p in (
+        ARCHITECT.skill_path() / "SKILL.md", ref / "intake-options.md",
+        ref / "fishbone-methodology.md", ref / "painpoint-workflow.md"))
+    assert "rich brief" in skill and "rich brief" in intake
+    assert "Never ask what has a safe library default" in skill
+    assert "express mode by default" in skill and "Express mode inside the intake" in method
+    assert "no drill-down follow-ups" in method and "No drill-down follow-ups" in skill
+    for text in (skill, pain):
+        assert "需求先到这里" in text and "启动 proposal" in text
+    assert "A request for the proposal skips this gate" in pain
+    assert "never ask for the table to be confirmed first" in skill
+
+
 def test_fishbone_dimensions_are_never_left_blank():
     """Live proposals left two or three bones blank (``unresolved`` with no notes) —
     the dimension was simply never asked about. The methodology now owes every
