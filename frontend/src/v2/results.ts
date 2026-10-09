@@ -119,3 +119,73 @@ export function summarize(rows: ResultRow[]): ResultSummary {
       .sort((a, b) => (a.mean ?? 2) - (b.mean ?? 2)),
   };
 }
+
+/** Normalized-score bands of the result filters (`high` includes a perfect 1). */
+export const SCORE_BANDS = {
+  low: [0, 0.4],
+  mid: [0.4, 0.7],
+  high: [0.7, 1.0001],
+} as const;
+export type ScoreBand = keyof typeof SCORE_BANDS;
+
+export interface ResultFilter {
+  evaluator?: string;
+  outcome?: string;
+  band?: string;
+  /** case-insensitive substring of label · explanation / error · session · task */
+  q?: string;
+}
+
+export function filterResults(rows: ResultRow[], f: ResultFilter): ResultRow[] {
+  const needle = (f.q ?? "").trim().toLowerCase();
+  return rows.filter((r) => {
+    if (f.evaluator && r.evaluatorId !== f.evaluator) return false;
+    if (f.outcome && r.outcome !== f.outcome) return false;
+    if (f.band) {
+      const [lo, hi] = SCORE_BANDS[f.band as ScoreBand];
+      if (r.normalized == null || r.normalized < lo || r.normalized >= hi) return false;
+    }
+    if (!needle) return true;
+    return `${r.label ?? ""} ${r.explanation ?? ""} ${r.error ?? ""} ${r.sessionId ?? ""} ${r.taskName}`
+      .toLowerCase()
+      .includes(needle);
+  });
+}
+
+export type ResultSortKey = "outcome" | "time" | "raw" | "norm" | "evaluator";
+export interface ResultSort {
+  key: ResultSortKey;
+  dir: "asc" | "desc";
+}
+
+// failed first ascending: the Bad Cases are what a reader sorts to find
+const OUTCOME_RANK: Record<ResultRow["outcome"], number> = { failed: 0, error: 1, passed: 2 };
+
+function sortValue(r: ResultRow, key: ResultSortKey): string | number | null {
+  switch (key) {
+    case "outcome":
+      return OUTCOME_RANK[r.outcome];
+    case "time":
+      return r.time;
+    case "raw":
+      return r.score;
+    case "norm":
+      return r.normalized;
+    case "evaluator":
+      return r.evaluatorId;
+  }
+}
+
+/** A stable sort on one column; rows without a value stay last either way. */
+export function sortResults(rows: ResultRow[], sort: ResultSort | null): ResultRow[] {
+  if (!sort) return rows;
+  const sign = sort.dir === "asc" ? 1 : -1;
+  return rows
+    .map((row, i) => ({ row, i, v: sortValue(row, sort.key) }))
+    .sort((a, b) => {
+      if (a.v == null || b.v == null) return a.v == null ? (b.v == null ? a.i - b.i : 1) : -1;
+      const c = typeof a.v === "number" && typeof b.v === "number" ? a.v - b.v : String(a.v).localeCompare(String(b.v));
+      return c === 0 ? a.i - b.i : sign * c;
+    })
+    .map((x) => x.row);
+}

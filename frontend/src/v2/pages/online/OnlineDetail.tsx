@@ -170,6 +170,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
           onRetry={results.reload}
           range={range}
           showTask={false}
+          filterable
           exportName={`online-${row.config_id}`}
         />
       </Card>

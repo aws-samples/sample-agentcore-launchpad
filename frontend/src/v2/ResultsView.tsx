@@ -8,16 +8,25 @@ import { evaluatorLabel } from "../lib/evaluators";
 import { downloadCsv, fmtScore, fmtTime, scoreTone } from "./format";
 import { useLoad, usePaged } from "./hooks";
 import { AddToDatasetModal } from "./pages/data/AddToDataset";
-import type { ResultRow, ResultSummary } from "./results";
+import {
+  filterResults,
+  type ResultRow,
+  type ResultSort,
+  type ResultSortKey,
+  type ResultSummary,
+  sortResults,
+} from "./results";
 import {
   Button,
   Card,
   type Column,
   Descriptions,
   Drawer,
+  FilterSelect,
   Kpi,
   LinkButton,
   Pager,
+  SearchInput,
   Segmented,
   Spin,
   Table,
@@ -181,8 +190,11 @@ function ResultDrawer({ row, range, onClose }: { row: ResultRow; range: V2Range;
 
 /**
  * The per-result table: outcome · time · raw / normalized score · label ·
- * evaluator · task · agent · source · session, with density switch, CSV export
- * and a detail drawer (judge explanation + the session's input/output).
+ * evaluator · task · agent · source · session, with sortable columns, density
+ * switch, CSV export and a detail drawer (judge explanation + the session's
+ * input/output). `filterable` adds evaluator / outcome / score-band filters and
+ * a search, for a page that has no filters of its own; export and "Bad Case →
+ * dataset" act on what the filters leave.
  */
 export function ResultsTable({
   rows,
@@ -191,6 +203,7 @@ export function ResultsTable({
   onRetry,
   range,
   showTask = true,
+  filterable = false,
   exportName,
 }: {
   rows: ResultRow[];
@@ -199,17 +212,40 @@ export function ResultsTable({
   onRetry?: () => void;
   range: V2Range;
   showTask?: boolean;
+  filterable?: boolean;
   exportName: string;
 }) {
   const { t } = useTranslation();
   const [density, setDensity] = useState<"dense" | "default" | "loose">("default");
   const [open, setOpen] = useState<ResultRow | null>(null);
   const [adding, setAdding] = useState(false);
-  const paged = usePaged(rows, 15);
+  const [evaluator, setEvaluator] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [band, setBand] = useState("");
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<ResultSort | null>(null);
+  const evaluators = useMemo(() => [...new Set(rows.map((r) => r.evaluatorId))], [rows]);
+  const shown = useMemo(
+    () => sortResults(filterable ? filterResults(rows, { evaluator, outcome, band, q }) : rows, sort),
+    [rows, filterable, evaluator, outcome, band, q, sort],
+  );
+  const paged = usePaged(shown, 15);
+  const narrowed = shown.length !== rows.length;
+  // any change of filter or order starts again from the first page
+  const refine =
+    <V,>(set: (value: V) => void) =>
+    (value: V) => {
+      set(value);
+      paged.setPage(1);
+    };
+  // asc → desc → the incoming order
+  const toggleSort = refine((key: string) =>
+    setSort((cur) => (cur?.key !== key ? { key: key as ResultSortKey, dir: "asc" } : cur.dir === "asc" ? { ...cur, dir: "desc" } : null)),
+  );
   const badSessions = useMemo(
     // newest first, capped at what one from-sessions call accepts
-    () => [...new Set(rows.filter((r) => r.outcome === "failed" && r.sessionId).map((r) => r.sessionId as string))].slice(0, 50),
-    [rows],
+    () => [...new Set(shown.filter((r) => r.outcome === "failed" && r.sessionId).map((r) => r.sessionId as string))].slice(0, 50),
+    [shown],
   );
 
   const exportCsv = () =>
@@ -227,7 +263,7 @@ export function ResultsTable({
         t("v2.traces.colSession"),
         t("v2.insights.explanation"),
       ],
-      rows.map((r) => [
+      shown.map((r) => [
         t(`v2.outcome.${r.outcome}`),
         fmtTime(r.time),
         r.score,
@@ -242,13 +278,13 @@ export function ResultsTable({
     );
 
   const columns: Column<ResultRow>[] = [
-    { key: "outcome", title: t("v2.insights.colOutcome"), render: (r) => <OutcomeTag outcome={r.outcome} /> },
-    { key: "time", title: t("v2.insights.colTime"), className: "nowrap", render: (r) => fmtTime(r.time) },
-    { key: "raw", title: t("v2.insights.colRaw"), className: "num", render: (r) => (r.score == null ? "—" : r.score) },
-    { key: "norm", title: t("v2.insights.colNormalized"), render: (r) => <Score value={r.normalized} /> },
+    { key: "outcome", title: t("v2.insights.colOutcome"), sortable: true, render: (r) => <OutcomeTag outcome={r.outcome} /> },
+    { key: "time", title: t("v2.insights.colTime"), className: "nowrap", sortable: true, render: (r) => fmtTime(r.time) },
+    { key: "raw", title: t("v2.insights.colRaw"), className: "num", sortable: true, render: (r) => (r.score == null ? "—" : r.score) },
+    { key: "norm", title: t("v2.insights.colNormalized"), sortable: true, render: (r) => <Score value={r.normalized} /> },
     { key: "label", title: t("v2.insights.colLabel"), render: (r) => (r.label ? <Tag tone="outline">{r.label}</Tag> : "—") },
     { key: "explanation", title: t("v2.insights.explanation"), render: (r) => <span className="clip" title={r.error ?? r.explanation ?? ""}>{r.error ?? r.explanation ?? "—"}</span> },
-    { key: "evaluator", title: t("v2.insights.colEvaluator"), render: (r) => evaluatorLabel(t, r.evaluatorId) },
+    { key: "evaluator", title: t("v2.insights.colEvaluator"), sortable: true, render: (r) => evaluatorLabel(t, r.evaluatorId) },
     ...(showTask
       ? [
           { key: "task", title: t("v2.insights.colTask"), render: (r: ResultRow) => r.taskName },
@@ -266,8 +302,39 @@ export function ResultsTable({
 
   return (
     <>
+      {filterable && (
+        <div className="v2-toolbar">
+          <FilterSelect
+            label={t("v2.insights.colEvaluator")}
+            value={evaluator}
+            allLabel={t("v2.common.all")}
+            onChange={refine(setEvaluator)}
+            options={evaluators.map((id) => ({ value: id, label: evaluatorLabel(t, id) }))}
+            testId="v2-results-filter-evaluator"
+          />
+          <FilterSelect
+            label={t("v2.insights.colOutcome")}
+            value={outcome}
+            allLabel={t("v2.common.all")}
+            onChange={refine(setOutcome)}
+            options={(["passed", "failed", "error"] as const).map((o) => ({ value: o, label: t(`v2.outcome.${o}`) }))}
+            testId="v2-results-filter-outcome"
+          />
+          <FilterSelect
+            label={t("v2.insights.scoreBand")}
+            value={band}
+            allLabel={t("v2.common.all")}
+            onChange={refine(setBand)}
+            options={(["low", "mid", "high"] as const).map((b) => ({ value: b, label: t(`v2.insights.band.${b}`) }))}
+            testId="v2-results-filter-band"
+          />
+          <div className="end">
+            <SearchInput value={q} onChange={refine(setQ)} placeholder={t("v2.insights.search")} testId="v2-results-search" />
+          </div>
+        </div>
+      )}
       <div className="v2-toolbar">
-        <Button disabled={rows.length === 0} onClick={exportCsv} testId="v2-results-export">
+        <Button disabled={shown.length === 0} onClick={exportCsv} testId="v2-results-export">
           <Download size={14} aria-hidden="true" />
           {t("v2.insights.export")}
         </Button>
@@ -276,7 +343,9 @@ export function ResultsTable({
           {t("v2.insights.badToDataset", { count: badSessions.length })}
         </Button>
         <div className="end">
-          <span className="v2-count">{t("v2.common.total", { count: rows.length })}</span>
+          <span className="v2-count">
+            {narrowed ? t("v2.insights.filteredCount", { count: shown.length, total: rows.length }) : t("v2.common.total", { count: rows.length })}
+          </span>
           <Segmented
             value={density}
             onChange={setDensity}
@@ -296,7 +365,9 @@ export function ResultsTable({
         error={error}
         onRetry={onRetry}
         density={density}
-        empty={t("v2.insights.empty")}
+        sort={sort}
+        onSort={toggleSort}
+        empty={narrowed ? t("v2.insights.emptyFiltered") : t("v2.insights.empty")}
         testId="v2-results-table"
       />
       <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />

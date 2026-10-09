@@ -244,6 +244,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
               onRetry={results.reload}
               range={data.kind === "online" ? range : "7d"}
               showTask={false}
+              filterable
               exportName={`task-${data.id}`}
             />
           </Card>
