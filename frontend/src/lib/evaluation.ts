@@ -198,6 +198,12 @@ export function runCoverage(run: Pick<EvaluationRunInfo, "status" | "error" | "s
   return { total, failed, scored: Math.max(0, total - failed), kind: "unknown", excluded: [], firstError: null, legacy: true };
 }
 
+/** Telemetry-only losses are informational (nothing to fix on the platform side):
+ *  shown in the info (blue) tone instead of the warning tone. */
+export function coverageInfo(coverage: RunCoverage | null): boolean {
+  return coverage?.kind === "telemetry_incomplete";
+}
+
 /** True when two or more partial runs left different scenario positions unscored. */
 export function coverageDiffers(coverages: (RunCoverage | null)[]): boolean {
   const keys = new Set(

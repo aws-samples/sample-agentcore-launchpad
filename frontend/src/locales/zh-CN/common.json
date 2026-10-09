@@ -7905,7 +7905,7 @@
     },
     "runCoverage": {
       "tagTelemetry": "已完成 · {{scored}}/{{total}} 会话",
-      "telemetry_incomplete": "{{failed}} 个会话的追踪数据不完整（AWS 未写入部分日志事件），未参与评分；分数基于其余 {{scored}} 个会话。重新评估无法恢复这些会话；被排除的多为工具调用较多的长会话，均分可能偏高。",
+      "telemetry_incomplete": "{{failed}} 个会话的追踪数据不完整，未参与评分。",
       "evaluator_error": "{{failed}} 个会话在评估器调用时出错，未参与评分；分数基于其余 {{scored}} 个会话。请查看错误后重新运行。",
       "mixed": "{{failed}} 个会话未参与评分：一部分因追踪数据不完整，一部分因评估器出错；分数基于其余 {{scored}} 个会话。",
       "unknown": "{{failed}} 个会话未参与评分，AWS 没有给出具体原因；分数基于其余 {{scored}} 个会话。",

@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { type RunCoverage } from "../lib/evaluation";
+import { coverageInfo, type RunCoverage } from "../lib/evaluation";
 import { LinkButton, Tag } from "./ui";
 
 /**
@@ -15,7 +15,7 @@ import { LinkButton, Tag } from "./ui";
 export function RunCoverageTag({ coverage }: { coverage: RunCoverage }) {
   const { t } = useTranslation();
   return (
-    <Tag tone="orange" testId="v2-run-coverage-tag">
+    <Tag tone={coverageInfo(coverage) ? "blue" : "orange"} testId="v2-run-coverage-tag">
       {coverage.kind === "telemetry_incomplete"
         ? t("v2.runCoverage.tagTelemetry", { scored: coverage.scored, total: coverage.total })
         : t("expPage.readiness.runStatus.completed_with_errors")}
