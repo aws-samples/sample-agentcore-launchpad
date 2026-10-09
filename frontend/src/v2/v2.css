@@ -339,6 +339,10 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-alert.success { background: var(--v2-success-soft); color: #008026; }
 .v2-alert .v2-link { margin-left: auto; }
 .v2-desc + .v2-alert { margin-top: 12px; }
+/* partially failed batch run: reason, unscored scenarios, raw AWS error (RunCoverage.tsx) */
+.v2-run-coverage { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.v2-run-coverage details summary { cursor: pointer; font-size: 12px; }
+.v2-run-coverage details .mono { margin-top: 4px; font-size: 12px; color: var(--v2-ink-2); white-space: pre-wrap; }
 .v2-muted { color: var(--v2-ink-3); }
 .v2-pre {
   background: var(--v2-fill); border: 1px solid var(--v2-line); border-radius: 6px; padding: 12px 14px; font-family: var(--v2-mono);

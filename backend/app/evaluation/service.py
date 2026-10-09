@@ -558,18 +558,47 @@ def _finish_from_result(
         _update(run_id, status="completed", insights=ac.parse_insights(result),
                 error=error)
     else:
-        scores = ac.parse_eval_scores(
-            result, records_reader=_records_reader(workspace, result))
-        _update(run_id, status="completed", scores=scores, error=error)
+        reader = _records_reader(workspace, result)
+        scores = ac.parse_eval_scores(result, records_reader=reader)
+        failures = (
+            _session_failures(run_id, result, reader)
+            if status == "COMPLETED_WITH_ERRORS" else None
+        )
+        _update(run_id, status="completed", scores=scores, error=error,
+                session_failures=failures)
+
+
+def _session_failures(run_id: str, result: dict[str, Any], reader: Any) -> dict[str, Any] | None:
+    """The partial batch's skipped sessions, best-effort: an unreadable stream still
+    records AWS's counters (kind ``unknown``) so the console can say how many."""
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        session_ids = list(run.session_ids or []) if run is not None else []
+    finally:
+        db.close()
+    try:
+        records = (reader() or []) if reader is not None else []
+    except Exception:
+        records = []
+    return ac.summarize_session_failures(result, records, session_ids)
 
 
 def _records_reader(workspace: WorkspaceContext | None, result: dict[str, Any]) -> Any:
-    """Lazy reader of a finished batch's results-stream records, for the
-    evaluators AWS summarises without an average (``parse_eval_scores``)."""
+    """Lazy, memoized reader of a finished batch's results-stream records — for the
+    evaluators AWS summarises without an average (``parse_eval_scores``) and for the
+    skipped-session summary, which then share one read."""
     location = ac.results_stream(result)
     if workspace is None or location is None:
         return None
-    return lambda: ac.read_result_records(workspace.client("logs"), *location)
+    cache: list[list[dict[str, Any]]] = []
+
+    def read() -> list[dict[str, Any]]:
+        if not cache:
+            cache.append(ac.read_result_records(workspace.client("logs"), *location))
+        return cache[0]
+
+    return read
 
 
 def reconcile_run(
@@ -634,17 +663,24 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
     keep running (and finish) on AWS. A terminal batch settles the row exactly
     as the poller would have; one still running puts the row back to
     ``evaluating`` with a fresh poller. Only ``failed`` runs that started a batch
-    qualify (409 ``run.not_recheckable`` otherwise). Reads only — no new
+    qualify, plus partially failed ``completed`` runs that predate
+    ``session_failures`` (re-finishing backfills it); 409 ``run.not_recheckable``
+    otherwise. Reads only — no new
     evaluation is started, nothing is billed."""
     db = SessionLocal()
     try:
         run = db.get(EvalRun, run_id)
         if run is None:
             raise AppError("run.not_found", "run not found", status_code=404)
-        if run.status != "failed" or not run.batch_eval_id:
+        # also a partially failed run finished before ``session_failures`` existed:
+        # re-finishing it from the batch result backfills which sessions were skipped
+        legacy_partial = (run.status == "completed" and bool(run.error)
+                          and run.session_failures is None and run.mode == "evaluators")
+        if (run.status != "failed" and not legacy_partial) or not run.batch_eval_id:
             raise AppError(
                 "run.not_recheckable",
-                "only a failed run that started a batch evaluation can be re-checked",
+                "only a failed run that started a batch evaluation (or a partially "
+                "failed run without its skipped-session summary) can be re-checked",
                 status_code=409,
             )
         mode, batch_id = run.mode, run.batch_eval_id
@@ -652,6 +688,11 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
         db.close()
     data = data_client(workspace)
     result = data.get_batch_evaluation(batchEvaluationId=batch_id)
+    if legacy_partial and result.get("status") not in ac.EVAL_TERMINAL:
+        # a finished run never goes back to polling; nothing to backfill from yet
+        raise AppError("run.not_recheckable",
+                       f"batch evaluation is {result.get('status')}, not terminal",
+                       status_code=409)
     if result.get("status") in ac.EVAL_TERMINAL:
         try:
             _finish_from_result(run_id, mode, result, workspace=workspace)
@@ -712,6 +753,12 @@ def run_results(run: EvalRun, *, workspace: WorkspaceContext) -> dict[str, Any]:
     except Exception as exc:  # ClientError, network, malformed stream — all degrade
         return {**base, "reason": "unreadable", "detail": f"{type(exc).__name__}: {exc}"[:300]}
 
+    if (run.status == "completed" and run.error and run.session_failures is None
+            and detail.get("status") == "COMPLETED_WITH_ERRORS"):
+        # a partial run finished before the summary existed: backfill it from the
+        # records just read (no extra AWS call)
+        _update(run.id, session_failures=ac.summarize_session_failures(
+            detail, records, list(run.session_ids or [])))
     by_session: dict[str, list[dict[str, Any]]] = {}
     for attrs in records:
         sid = attrs.get("session.id")

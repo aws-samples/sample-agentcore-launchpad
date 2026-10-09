@@ -73,3 +73,6 @@ docs/.threatmodel/
 docs/threat-model-summary.md
 # Scanner exports (Bandit/SAST) name every finding with file:line.
 docs/*_findings.json
+# Local working material, not part of the public repo.
+docs/brd/
+.kiro/

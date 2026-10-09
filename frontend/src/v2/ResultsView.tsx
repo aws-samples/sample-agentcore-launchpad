@@ -204,6 +204,7 @@ export function ResultsTable({
   range,
   showTask = true,
   filterable = false,
+  initialOutcome = "",
   exportName,
 }: {
   rows: ResultRow[];
@@ -213,6 +214,8 @@ export function ResultsTable({
   range: V2Range;
   showTask?: boolean;
   filterable?: boolean;
+  /** pre-selected outcome filter (`filterable` only), e.g. "error" from a deep link */
+  initialOutcome?: string;
   exportName: string;
 }) {
   const { t } = useTranslation();
@@ -220,7 +223,7 @@ export function ResultsTable({
   const [open, setOpen] = useState<ResultRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [evaluator, setEvaluator] = useState("");
-  const [outcome, setOutcome] = useState("");
+  const [outcome, setOutcome] = useState(initialOutcome);
   const [band, setBand] = useState("");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<ResultSort | null>(null);

@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
-import { hasInsightTrees } from "../../../lib/evaluation";
+import { hasInsightTrees, runCoverage } from "../../../lib/evaluation";
 import { fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../../ResultsView";
 import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
+import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
 import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
 import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
 import { RunRecommendations } from "./RunRecommendations";
@@ -29,12 +30,14 @@ function useTask(kind: TaskKind, id: string) {
     const timer = window.setInterval(() => setTick((n) => n + 1), POLL_MS);
     return () => window.clearInterval(timer);
   }, [kind, active]);
-  return { ...task, reload: () => setTick((n) => n + 1) };
+  const reload = useCallback(() => setTick((n) => n + 1), []);
+  return { ...task, reload };
 }
 
 export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const { t } = useTranslation();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const initialOutcome = params.get("outcome") === "error" ? "error" : "";
   const toast = useV2Toast();
   const { can } = useAuth();
   const task = useTask(kind, id);
@@ -48,21 +51,34 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const results = useLoad(
     async () => {
       // an insights run carries its clusters on the run row — no judged records to read
-      if (!data || insightsRun) return { rows: [], note: null as string | null };
+      if (!data || insightsRun) return { rows: [], note: null as string | null, available: false };
       if (data.kind === "run") {
-        if (!terminal) return { rows: [], note: t("v2.taskDetail.waitResults") };
+        if (!terminal) return { rows: [], note: t("v2.taskDetail.waitResults"), available: false };
         const res = await api.evaluationRunResults(data.id);
         return {
           rows: rowsFromRun(data, res),
           note: res.available ? (res.truncated ? t("v2.taskDetail.truncated") : null) : t(`v2.taskDetail.reason.${res.reason ?? "unreadable"}`),
+          available: res.available,
         };
       }
       const res = await api.v2OnlineResults(data.id, range);
-      return { rows: rowsFromOnline(data, res.recent), note: res.errors.count ? t("v2.taskDetail.onlineErrors", { count: res.errors.count }) : null };
+      return {
+        rows: rowsFromOnline(data, res.recent),
+        note: res.errors.count ? t("v2.taskDetail.onlineErrors", { count: res.errors.count }) : null,
+        available: true,
+      };
     },
     `task-results:${kind}:${id}:${data ? `${data.status}` : "none"}:${range}`,
   );
   const rows = useMemo(() => results.data?.rows ?? [], [results.data]);
+  // reading a pre-summary partial run's results backfills why its sessions were not
+  // scored (server side): re-read the row once so the reason replaces the bare count
+  const legacyPartial = !!(data?.kind === "run" && data.run && runCoverage(data.run)?.legacy);
+  const resultsRead = !!results.data?.available;
+  const reloadTask = task.reload;
+  useEffect(() => {
+    if (legacyPartial && resultsRead) reloadTask();
+  }, [legacyPartial, resultsRead, reloadTask]);
   const summary = useMemo(() => summarize(rows), [rows]);
 
   const act = async () => {
@@ -86,6 +102,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   if (!data) return null;
 
   const mayRun = can("eval.run");
+  const coverage = data.kind === "run" && data.run ? runCoverage(data.run) : null;
   const recheck = async () => {
     if (data.kind !== "run") return;
     setBusy(true);
@@ -132,13 +149,18 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
         title={
           <span className="v2-row">
             {data.name}
-            <Tag tone={STATUS_TONE[data.status]}>{statusLabel(t, data.status)}</Tag>
+            {coverage ? <RunCoverageTag coverage={coverage} /> : <Tag tone={STATUS_TONE[data.status]}>{statusLabel(t, data.status)}</Tag>}
           </span>
         }
         onBack={() => setParams({})}
         end={actions}
       />
-      {data.run?.error && <Alert tone={data.status === "failed" ? "error" : "warn"}>{data.run.error}</Alert>}
+      {coverage && data.run ? (
+        <Alert tone="warn">
+          <RunCoverageNote coverage={coverage} runId={data.id} rawError={data.run.error} showLink={false}
+            onReadDetail={mayRun ? () => void recheck() : undefined} reading={busy} />
+        </Alert>
+      ) : data.run?.error && <Alert tone={data.status === "failed" ? "error" : "warn"}>{data.run.error}</Alert>}
       {!!data.run?.budget_stops?.length && (
         <div data-testid="v2-task-budget-stops">
           <Alert tone="warn">
@@ -245,6 +267,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
               range={data.kind === "online" ? range : "7d"}
               showTask={false}
               filterable
+              initialOutcome={initialOutcome}
               exportName={`task-${data.id}`}
             />
           </Card>

@@ -362,6 +362,72 @@ def batch_failure_reason(logs_factory: Any, result: dict[str, Any]) -> str | Non
     return None
 
 
+# Per-trace error types meaning the session's telemetry never fully arrived (live
+# 2026-10-09, Harness: whole event-loop cycles of `otel-rt-logs` events missing while
+# their spans are in aws/spans; a code evaluator then sees no spans at all). AWS skips
+# such a session, and re-evaluating the same batch cannot recover it.
+TELEMETRY_ERROR_TYPES = frozenset({"LogEventMissingException", "NO_SPANS"})
+_TELEMETRY_MESSAGE = "span data is incomplete"
+FAILED_SESSIONS_MAX = 50
+
+
+def _telemetry_error(error_type: Any, message: Any) -> bool:
+    return (str(error_type or "") in TELEMETRY_ERROR_TYPES
+            or _TELEMETRY_MESSAGE in str(message or "").lower())
+
+
+def summarize_session_failures(
+    result: dict[str, Any], records: list[dict[str, Any]], session_ids: list[str]
+) -> dict[str, Any] | None:
+    """Which sessions a COMPLETED_WITH_ERRORS batch skipped, and why.
+
+    ``errorDetails`` only counts the casualties; each failed judgement is a results-
+    stream record carrying ``error.type`` / ``error.message``. A session is
+    ``telemetry_incomplete`` when every error on it is a missing/incomplete-span
+    error, ``evaluator_error`` otherwise. The run-level ``kind`` folds the sessions
+    (``mixed`` when both occur, ``unknown`` when AWS counts failures the stream does
+    not show). ``index`` is the 1-based position in the run's ``session_ids`` — the
+    dataset scenario order — so runs on one dataset can be compared. None when
+    nothing failed."""
+    er = result.get("evaluationResults") or {}
+    errors: dict[str, list[tuple[Any, Any]]] = {}
+    for attrs in records:
+        message = attrs.get("error.message")
+        sid = attrs.get("session.id")
+        if message and sid:
+            errors.setdefault(str(sid), []).append((attrs.get("error.type"), message))
+    failed_count = er.get("numberOfSessionsFailed")
+    if not isinstance(failed_count, int):
+        failed_count = len(errors)
+    if failed_count <= 0 and not errors:
+        return None
+    total = er.get("totalNumberOfSessions")
+    if not isinstance(total, int) or total <= 0:
+        total = len(session_ids) or failed_count
+    position = {sid: i + 1 for i, sid in enumerate(session_ids)}
+    ordered = sorted(errors, key=lambda sid: position.get(sid, len(position) + 1))
+    sessions = []
+    for sid in ordered:
+        found = errors[sid]
+        telemetry = all(_telemetry_error(kind, msg) for kind, msg in found)
+        first_type, first_message = found[0]
+        sessions.append({
+            "session_id": sid,
+            "index": position.get(sid),
+            "kind": "telemetry_incomplete" if telemetry else "evaluator_error",
+            "error_type": str(first_type or "error"),
+            "message": str(first_message)[:300],
+        })
+    kinds = {s["kind"] for s in sessions}
+    kind = ("unknown" if not kinds else kinds.pop() if len(kinds) == 1 else "mixed")
+    return {
+        "total": total,
+        "failed": max(failed_count, len(sessions)),
+        "kind": kind,
+        "sessions": sessions[:FAILED_SESSIONS_MAX],
+    }
+
+
 # Hard stop on one results-stream read (≈ 30 evaluators × 150 sessions). Shared
 # by the run-results view and the optimizer's evidence reader.
 RESULT_RECORDS_MAX = 5000
