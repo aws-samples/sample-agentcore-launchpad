@@ -3,6 +3,16 @@
 > 依据 2026-10-08 生产环境录制（上集 `architect-assistant-store-prod-20261008`，中集 `architect-assistant-store-part2-prod-20261008`，下集 `architect-assistant-store-part3-prod-20261008`）。  
 > 代码块里的内容照原文粘贴，不要改写。
 
+### 演示视频
+
+每集都是生产环境的真实录制（原生 1080p，云扬中文讲解）。预览页和 MP4 链接无需登录；视频库链接需要先登录控制台。
+
+| 集 | 时长 | 在线预览 | MP4 | 视频库 |
+|---|---|---|---|---|
+| 上集 | 4:39 | [打开](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-store-prod/20261008-v2-1080p/index.html) | [下载](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-store-prod/20261008-v2-1080p/architect-assistant-store-prod.zh-CN.mp4) | [打开](https://launchpad.jugglehub.top/v2/videos?video=a0ec8402adfe451b9420b134a4f2c4c8) |
+| 中集 | 6:04 | [打开](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-store-prod-part2/20261008-v2-1080p/index.html) | [下载](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-store-prod-part2/20261008-v2-1080p/architect-assistant-store-prod-part2.zh-CN.mp4) | [打开](https://launchpad.jugglehub.top/v2/videos?video=6c972e08ab4c4e6695f8c1be1c8450bd) |
+| 下集 | 4:47 | [打开](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-store-prod-part3/20261008-v2-1080p/index.html) | [下载](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-store-prod-part3/20261008-v2-1080p/architect-assistant-store-prod-part3.zh-CN.mp4) | [打开](https://launchpad.jugglehub.top/v2/videos?video=206d43c049d74cc8b35c93d8f2c283d0) |
+
 ## 1. 演示目标与时长
 
 - **目标**：用普通成员账号，在 V2 控制台里与架构助手一对一，基于已有的说明书知识库和门店 CRM，做出门店客服助手（产品问答、老客户推荐、工单处理），部署、试问、建立评估基线（上集）；再用 AgentCore 优化建议加人工补规则迭代两轮，在同一数据集上复评（中集）；最后用金丝雀实验成对比较 v1 和 v3，以业务规则评估器为主判定，完成上线并清理（下集）。
