@@ -218,7 +218,7 @@ export function CreateAgentStudio() {
           setEdges(Array.isArray(flow.edges) ? flow.edges : []);
           setGraphMode(!!flow.graphMode);
         } else {
-          // Studio agent published by the standalone app: no canvas graph stored.
+          // Studio agent published by the former standalone app: no canvas graph stored.
           setNoFlowNotice(true);
           if (typeof spec.code === "string") {
             setReadonlyCode(spec.code);

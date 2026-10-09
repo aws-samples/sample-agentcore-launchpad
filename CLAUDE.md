@@ -48,9 +48,9 @@ credentials — they are not part of the verify gate.
 ## Repo layout
 
 `backend/` FastAPI control plane · `frontend/` React (Vite) console · `infra/` CDK app
-(`launchpad-base` stack) · `apps/studio/` vendored Strands Studio sub-app (方式C) ·
-`scripts/` bootstrap/teardown/dev/verify · `config/` generated `launchpad.yaml` ·
-`docs/` architecture/api/setup/troubleshooting (all bilingual). See the table in
+(`launchpad-base` stack) · `scripts/` bootstrap/teardown/dev/verify · `config/`
+generated `launchpad.yaml` · `docs/` architecture/api/setup/troubleshooting (all
+bilingual). See the table in
 [README.md](README.md#repo-layout).
 
 ## Architecture — the load-bearing patterns
@@ -150,7 +150,7 @@ lessons learned. Load this guide only when working on videos.
   errors go through `app/core/errors.register_error_handlers`.
 - `bedrock-agentcore` is a **preview SDK pinned to `1.17.*`** — treat API shapes as
   volatile and keep the volatility inside the `agentcore/` wrappers.
-- `apps/studio/`, `vendor-src/*`, and `backend/samples/frontdesk_agent` are vendored /
+- `vendor-src/*` and `backend/samples/frontdesk_agent` are vendored /
   demo assets with their **own `CLAUDE.md` and conventions** — don't apply this file's
   rules to them blindly, and prefer editing the platform-side integration over the
   vendored code.

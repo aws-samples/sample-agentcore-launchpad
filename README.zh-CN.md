@@ -9,8 +9,7 @@ AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的**企业 Agent O
 
 ## 它是什么
 
-Launchpad 由 React 控制台、FastAPI 后端和一套 CDK 共享基础设施组成，另带一个
-vendored Strands Studio 子应用。主要能力包括：
+Launchpad 由 React 控制台、FastAPI 后端和一套 CDK 共享基础设施组成。主要能力包括：
 
 - **四种创建方式，共用一条部署流水线。** 用户可以选择**方式B（Managed Harness）**，
   通过模型、提示词、工具、技能和记忆创建 Harness，无需编写代码或构建产物；
@@ -146,8 +145,8 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 
 ## 启动与停止
 
-根目录的生命周期脚本把平台后端和前端作为一套本地服务管理。独立的
-vendored Studio 不由这组脚本启动；平台内置的 Studio 位于 `/create/studio`。
+根目录的生命周期脚本把平台后端和前端作为一套本地服务管理。Strands Studio
+画布内置在平台控制台的 `/create/studio`。
 
 ### 后台开发模式
 
@@ -225,7 +224,6 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 | `backend/app/deployer/` | 统一流水线 + 各方式的阶段实现（harness、zip_runtime、container、studio、byoc） |
 | `frontend/` | React 控制台（Vite）：Overview、Create Agent、Registry、Chat、Governance、Evaluation |
 | `infra/` | AWS CDK 应用：`launchpad-base` 共享栈 |
-| `apps/studio/` | vendored Strands Studio 子应用（方式C），已接入平台流水线 |
 | `start.py`、`stop.sh` | 后台本地服务生命周期、健康检查、PID 归属与日志 |
 | `scripts/` | `bootstrap.py`、`teardown.py`、`dev.sh`、`verify.sh`、`i18n_check.py`、`i18n_zh_punct.py` |
 | `config/` | `launchpad.example.yaml`（已提交）；`launchpad.yaml`（生成、gitignored） |

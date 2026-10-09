@@ -122,9 +122,8 @@ entry below was observed during implementation — none is speculative.
   pin it. The backend stays on `8000`. This applies to `make dev`;
   `start.py` uses strict ports and fails before starting if any configured
   port is occupied.
-- **Standalone Studio is not root-started.** The root lifecycle serves the
-  native bilingual canvas at `/create/studio`; the vendored `apps/studio/`
-  application must be run separately when explicitly needed.
+- **Studio is part of the console.** The Strands Studio canvas is served at
+  `/create/studio`; there is no separate Studio process or port.
 
 ## Governance
 

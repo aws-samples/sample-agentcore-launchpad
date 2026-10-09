@@ -11,19 +11,20 @@ English: [architecture.md](architecture.md)
 
 ```
  Browser
- ┌─────────────────────────────┐        ┌──────────────────────────┐
- │ Platform console  :5173     │        │ Strands Studio UI  :5273 │
- │  Overview · Create · Chat   │        │  drag-and-drop canvas    │
- │  Registry · Governance ·    │        │  (方式C, vendored)       │
- │  Evaluation                 │        └────────────┬─────────────┘
- └──────────────┬──────────────┘            /api,/ws │  /launchpad-api
-                │ /api  /v1                           │  (→ platform /api)
-                ▼                                     ▼
- ┌─────────────────────────────┐        ┌──────────────────────────┐
- │ Platform backend  :8000     │◀───────│ Studio backend    :8100  │
- │  FastAPI                    │ deploy  │  FastAPI (local run,     │
- │  · deploy pipeline          │ via     │  chat, exec history)     │
- │  · invoke chain (/api,/v1)  │ pipeline└──────────────────────────┘
+ ┌─────────────────────────────┐
+ │ Platform console  :5173     │
+ │  Overview · Create (incl.   │
+ │  Studio canvas) · Chat ·    │
+ │  Registry · Governance ·    │
+ │  Evaluation                 │
+ └──────────────┬──────────────┘
+                │ /api  /v1
+                ▼
+ ┌─────────────────────────────┐
+ │ Platform backend  :8000     │
+ │  FastAPI                    │
+ │  · deploy pipeline          │
+ │  · invoke chain (/api,/v1)  │
  │  · SQLite ledger (data/)    │
  └──────────────┬──────────────┘
                 │ boto3 (bedrock-agentcore control + data planes)
@@ -2067,5 +2068,6 @@ Strands Studio(`▲ Publish` — 无节点;发布对话框中的名称规则)、
 生产模式把 UI 与 API 服务都绑定到 `0.0.0.0`。可通过 `LAUNCHPAD_HOST` 和
 `LAUNCHPAD_API_HOST` 覆盖绑定地址。
 
-根目录生命周期不再启动 `apps/studio/` 下的独立应用。平台控制台在
-`/create/studio` 提供受支持的原生画布。见 [studio-integration.md](studio-integration.md)。
+Strands Studio 画布内置在平台控制台的 `/create/studio`。原先 vendored 的独立应用
+（`apps/studio/`）已删除，因为其后端会在未鉴权的情况下执行调用方提交的代码。见
+[studio-integration.md](studio-integration.md)。

@@ -135,9 +135,9 @@ def _requested_row(db: Session, workspace_id: str) -> Workspace:
 def _fallback_row(db: Session, identity: Identity) -> Workspace:
     """The workspace an omitted `X-Workspace` header means.
 
-    Kept unambiguous rather than convenient: curl and the vendored studio
-    sub-app send no header, so an admin lands on `default` and a member with a
-    single grant on that one; anything else has to say which.
+    Kept unambiguous rather than convenient: curl sends no header, so an admin
+    lands on `default` and a member with a single grant on that one; anything
+    else has to say which.
     """
     if identity.is_admin:
         return _requested_row(db, DEFAULT_WORKSPACE_ID)
