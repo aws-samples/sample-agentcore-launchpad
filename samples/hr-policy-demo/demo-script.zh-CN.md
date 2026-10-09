@@ -3,6 +3,16 @@
 > 依据 2026-10-09 生产环境录制（上集 `architect-assistant-hr-prod-20261009`，中集 `architect-assistant-hr-part2-prod-20261009`，下集 `architect-assistant-hr-part3-prod-20261009`）。  
 > 代码块里的内容照原文粘贴，不要改写。
 
+### 演示视频
+
+每集都是生产环境的真实录制（原生 1080p，云扬中文讲解）。预览页和 MP4 链接无需登录；视频库链接需要先登录控制台。
+
+| 集 | 时长 | 在线预览 | MP4 | 视频库 |
+|---|---|---|---|---|
+| 上集 | 4:45 | [打开](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-hr-policy-prod-v3/20261009-v2-1080p/index.html) | [下载](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-hr-policy-prod-v3/20261009-v2-1080p/architect-assistant-hr-policy-prod-v3.zh-CN.mp4) | [打开](https://launchpad.jugglehub.top/v2/videos?video=7302b4d7ce6547ae932d1316822b60ec) |
+| 中集 | 6:15 | [打开](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-hr-policy-prod-v3-part2/20261009-v2-1080p/index.html) | [下载](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-hr-policy-prod-v3-part2/20261009-v2-1080p/architect-assistant-hr-policy-prod-v3-part2.zh-CN.mp4) | [打开](https://launchpad.jugglehub.top/v2/videos?video=4014f580cbff4029bb9d9530683c4881) |
+| 下集 | 3:48 | [打开](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-hr-policy-prod-v3-part3/20261009-v2-1080p/index.html) | [下载](https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-hr-policy-prod-v3-part3/20261009-v2-1080p/architect-assistant-hr-policy-prod-v3-part3.zh-CN.mp4) | [打开](https://launchpad.jugglehub.top/v2/videos?video=5c9a1cf5456f45faaa1a619b9ac57a87) |
+
 ## 1. 演示目标与时长
 
 - **目标**：在 V2 控制台里与架构助手一对一，基于已有的 HR 制度手册知识库和 AnyHR 只读假期接口，做出面向员工的「HR 政策助手」（年假余额与可申请天数、制度解释、办理指引），部署、试问、建立评估基线（上集）；再用 AgentCore 优化建议加人工修订迭代两轮，在同一数据集上复评（中集）；最后新建业务规则评估器，用金丝雀实验成对比较 v1 和 v3，以该评估器为主判定，完成上线并清理（下集）。
