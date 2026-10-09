@@ -7905,7 +7905,7 @@
     },
     "runCoverage": {
       "tagTelemetry": "Completed · {{scored}}/{{total}} sessions",
-      "telemetry_incomplete": "{{failed}} session(s) have incomplete traces on AWS (some of their log events were never written) and were not scored; scores cover the other {{scored}}. Re-evaluating cannot recover them, and the excluded ones tend to be long, tool-heavy sessions, so the mean may read high.",
+      "telemetry_incomplete": "{{failed}} session(s) have incomplete traces and were not scored.",
       "evaluator_error": "{{failed}} session(s) hit evaluator errors and were not scored; scores cover the other {{scored}}. Review the errors and run again.",
       "mixed": "{{failed}} session(s) were not scored — some have incomplete traces, some hit evaluator errors; scores cover the other {{scored}}.",
       "unknown": "{{failed}} session(s) were not scored and AWS gave no reason; scores cover the other {{scored}}.",

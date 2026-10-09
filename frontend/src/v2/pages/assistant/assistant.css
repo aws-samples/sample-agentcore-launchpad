@@ -122,6 +122,7 @@
 .v2 .v2-assistant-sub-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 10px; background: var(--v2-fill); border-radius: 6px; }
 .v2 .v2-assistant-sub-row .err { flex-basis: 100%; color: var(--v2-danger); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
 .v2 .v2-assistant-sub-row .err.warn { color: var(--v2-warning); }
+.v2 .v2-assistant-sub-row .err.info { color: var(--v2-primary); }
 
 @media (max-width: 1100px) {
   .v2 .v2-assistant-adlc-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }

@@ -14,6 +14,7 @@ import {
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
 import {
   coverageDiffers,
+  coverageInfo,
   type EvaluationRunInfo,
   evaluationRunPresentation,
   RUN_TERMINAL_STATUSES,
@@ -347,7 +348,7 @@ export function NextStepsCard({
                       </LinkButton>
                     )}
                     {coverage ? (
-                      <div className="err warn">
+                      <div className={coverageInfo(coverage) ? "err info" : "err warn"}>
                         <RunCoverageNote
                           coverage={coverage}
                           runId={run.id}
@@ -391,7 +392,7 @@ export function NextStepsCard({
                     }))}
                   />
                 ) : (
-                  <Tag tone={runCoverage(baseline) ? "orange" : "green"}>
+                  <Tag tone={!baselineCoverage ? "green" : coverageInfo(baselineCoverage) ? "blue" : "orange"}>
                     {[t("assistantNext.run.runLine", { id: shortId(baseline.id) }), coverageLabel(baseline)].filter(Boolean).join(" · ")}
                   </Tag>
                 )}

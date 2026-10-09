@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
-import { hasInsightTrees, runCoverage } from "../../../lib/evaluation";
+import { coverageInfo, hasInsightTrees, runCoverage } from "../../../lib/evaluation";
 import { fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
@@ -156,7 +156,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
         end={actions}
       />
       {coverage && data.run ? (
-        <Alert tone="warn">
+        <Alert tone={coverageInfo(coverage) ? "info" : "warn"}>
           <RunCoverageNote coverage={coverage} runId={data.id} rawError={data.run.error} showLink={false}
             onReadDetail={mayRun ? () => void recheck() : undefined} reading={busy} />
         </Alert>
