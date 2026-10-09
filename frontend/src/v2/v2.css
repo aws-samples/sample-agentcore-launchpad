@@ -269,6 +269,9 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   background: var(--v2-fill); color: var(--v2-ink-2); font-weight: 500; text-align: left; padding: 11px 16px;
   border-bottom: 1px solid var(--v2-line); white-space: nowrap; font-size: 14px; letter-spacing: 0; font-family: inherit;
 }
+.v2-th-sort { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.v2-th-sort svg { color: var(--v2-ink-4); }
+.v2-th-sort:hover, .v2-th-sort.on, .v2-th-sort.on svg { color: var(--v2-primary); }
 .v2-table th:first-child { border-top-left-radius: var(--v2-radius); }
 .v2-table th:last-child { border-top-right-radius: var(--v2-radius); }
 .v2-table td { padding: 12px 16px; border-bottom: 1px solid var(--v2-line-2); color: var(--v2-ink); vertical-align: middle; }

@@ -7,7 +7,7 @@ import { RANGE_HOURS, RANGES, rangeLabel } from "../format";
 import { useLoad } from "../hooks";
 import { InsightsPanel } from "../InsightsPanel";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../ResultsView";
-import { type ResultRow, rowsFromOnline, rowsFromRun, summarize } from "../results";
+import { type ResultRow, rowsFromOnline, rowsFromRun, SCORE_BANDS, summarize } from "../results";
 import { loadTasks, TASK_SOURCES, type V2Task } from "../tasks";
 import { Alert, Card, FilterSelect, PageHeader, SearchInput } from "../ui";
 
@@ -68,12 +68,6 @@ async function loadInsights(range: V2Range): Promise<InsightData> {
   const rows = [...runRows.flat(), ...onlineRows.flat()].sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
   return { rows, tasks: [...runs, ...online], insightTasks, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
 }
-
-const SCORE_BANDS = {
-  low: [0, 0.4],
-  mid: [0.4, 0.7],
-  high: [0.7, 1.0001],
-} as const;
 
 /**
  * 评估总览 — every judged result of the recent evaluation tasks in one place:

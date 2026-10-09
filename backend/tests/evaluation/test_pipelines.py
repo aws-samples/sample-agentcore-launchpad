@@ -60,7 +60,16 @@ def fake_sessions(monkeypatch):
 
     monkeypatch.setattr(pipeline_routers.observability, "get_session", get_session)
     monkeypatch.setattr(pipeline_routers.observability, "list_sessions", list_sessions)
+    monkeypatch.setattr(pipeline_routers, "_spawn", lambda fn: fn())  # run inline
     return calls
+
+
+def _run(client, pid):
+    """Start a run (inline under `fake_sessions`) and read its outcome back."""
+    res = client.post(f"/api/eval/pipelines/{pid}/run")
+    assert res.status_code == 202, res.text
+    assert res.json()["status"] == "running"  # the request never waits for the run
+    return client.get(f"/api/eval/pipelines/{pid}").json()
 
 
 def _dataset(items, kind):
@@ -173,7 +182,7 @@ def test_pipeline_crud_and_runs_append_once(client, fake_sessions):
     assert res.json()["status"] == "idle"
     assert [p["id"] for p in client.get("/api/eval/pipelines").json()["pipelines"]] == [pid]
 
-    first = client.post(f"/api/eval/pipelines/{pid}/run").json()
+    first = _run(client, pid)
     assert first["status"] == "succeeded", first["last_run"]
     run = first["last_run"]
     assert (run["scanned"], run["matched"], run["added"]) == (4, 3, 2)
@@ -181,7 +190,7 @@ def test_pipeline_crud_and_runs_append_once(client, fake_sessions):
     # the first run created the dataset; the pipeline now targets it
     assert first["config"]["output"] == {"dataset_id": dataset_id}
 
-    second = client.post(f"/api/eval/pipelines/{pid}/run").json()
+    second = _run(client, pid)
     assert second["status"] == "succeeded"
     assert second["last_run"]["added"] == 0 and second["last_run"]["dataset_id"] == dataset_id
     db = SessionLocal()
@@ -216,6 +225,50 @@ def test_pipeline_run_failure_is_recorded(client, fake_sessions, monkeypatch):
         raise RuntimeError("logs unavailable")
 
     monkeypatch.setattr(pipeline_routers.observability, "list_sessions", boom)
-    out = client.post(f"/api/eval/pipelines/{pid}/run").json()
+    out = _run(client, pid)
     assert out["status"] == "failed"
     assert "logs unavailable" in out["last_run"]["error"]
+
+
+def test_pipeline_run_is_background_and_refuses_overlap(client, fake_sessions, monkeypatch):
+    pid = client.post("/api/eval/pipelines", json={
+        "name": "p", "output": {"dataset_name": "d"},
+    }).json()["id"]
+    started = []
+    monkeypatch.setattr(pipeline_routers, "_spawn", started.append)  # never runs
+    res = client.post(f"/api/eval/pipelines/{pid}/run")
+    assert res.status_code == 202 and res.json()["status"] == "running"
+    assert len(started) == 1 and fake_sessions["get"] == []
+    # still live: reads keep it running, a second run and an edit are refused
+    assert client.get(f"/api/eval/pipelines/{pid}").json()["status"] == "running"
+    assert client.post(f"/api/eval/pipelines/{pid}/run").status_code == 409
+    assert client.put(f"/api/eval/pipelines/{pid}", json={
+        "name": "p", "output": {"dataset_name": "d"}}).status_code == 409
+    started[0]()  # the thread finishes
+    out = client.get(f"/api/eval/pipelines/{pid}").json()
+    assert out["status"] == "succeeded" and out["last_run"]["added"] == 2
+
+
+def test_pipeline_orphaned_run_is_reaped(client, fake_sessions, monkeypatch):
+    pid = client.post("/api/eval/pipelines", json={
+        "name": "p", "output": {"dataset_name": "d"},
+    }).json()["id"]
+    monkeypatch.setattr(pipeline_routers, "_spawn", lambda fn: None)
+    client.post(f"/api/eval/pipelines/{pid}/run")
+    pipeline_routers._live_runs.discard(pid)  # its thread died with the old process
+    [row] = client.get("/api/eval/pipelines").json()["pipelines"]
+    assert row["status"] == "failed" and "interrupted" in row["last_run"]["error"]
+    monkeypatch.setattr(pipeline_routers, "_spawn", lambda fn: fn())
+    assert _run(client, pid)["status"] == "succeeded"
+
+
+def test_pipeline_deleted_mid_run_records_nothing(client, fake_sessions, monkeypatch):
+    pid = client.post("/api/eval/pipelines", json={
+        "name": "p", "output": {"dataset_name": "d"},
+    }).json()["id"]
+    started = []
+    monkeypatch.setattr(pipeline_routers, "_spawn", started.append)
+    client.post(f"/api/eval/pipelines/{pid}/run")
+    assert client.delete(f"/api/eval/pipelines/{pid}").json() == {"deleted": True}
+    started[0]()  # must not raise on the vanished row
+    assert pid not in pipeline_routers._live_runs

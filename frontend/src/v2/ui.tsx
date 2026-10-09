@@ -3,6 +3,9 @@
 // Styling lives in v2.css under the `.v2` scope.
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -821,6 +824,13 @@ export interface Column<T> {
   render: (row: T) => ReactNode;
   className?: string;
   width?: number | string;
+  /** the header toggles `sort` through `onSort` (the caller sorts before paging) */
+  sortable?: boolean;
+}
+
+export interface TableSort {
+  key: string;
+  dir: "asc" | "desc";
 }
 
 export function Table<T>({
@@ -833,6 +843,8 @@ export function Table<T>({
   empty,
   density,
   selectedKey,
+  sort,
+  onSort,
   testId,
 }: {
   columns: Column<T>[];
@@ -844,6 +856,8 @@ export function Table<T>({
   empty?: ReactNode;
   density?: "dense" | "default" | "loose";
   selectedKey?: string | null;
+  sort?: TableSort | null;
+  onSort?: (key: string) => void;
   testId?: string;
 }) {
   const { t } = useTranslation();
@@ -853,11 +867,27 @@ export function Table<T>({
       <table className={cls} data-testid={testId}>
         <thead>
           <tr>
-            {columns.map((c) => (
-              <th key={c.key} className={c.className} style={c.width ? { width: c.width } : undefined}>
-                {c.title}
-              </th>
-            ))}
+            {columns.map((c) => {
+              const on = sort?.key === c.key ? sort.dir : null;
+              const Icon = on === "asc" ? ArrowUp : on === "desc" ? ArrowDown : ArrowUpDown;
+              return (
+                <th
+                  key={c.key}
+                  className={c.className}
+                  style={c.width ? { width: c.width } : undefined}
+                  aria-sort={c.sortable && onSort ? (on === "asc" ? "ascending" : on === "desc" ? "descending" : "none") : undefined}
+                >
+                  {c.sortable && onSort ? (
+                    <button type="button" className={`v2-th-sort${on ? " on" : ""}`} onClick={() => onSort(c.key)} data-testid={testId ? `${testId}-sort-${c.key}` : undefined}>
+                      {c.title}
+                      <Icon size={12} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    c.title
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>

@@ -1,5 +1,5 @@
 import { ArrowDown, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -37,7 +37,8 @@ const STATUS_TONE: Record<V2Pipeline["status"], TagTone> = {
 
 function useDatasetNames() {
   const datasets = useLoad(() => api.v2Datasets(), "datasets");
-  return useMemo(() => new Map((datasets.data?.datasets ?? []).map((d) => [d.id, d])), [datasets.data]);
+  const names = useMemo(() => new Map((datasets.data?.datasets ?? []).map((d) => [d.id, d])), [datasets.data]);
+  return { names, reload: datasets.reload };
 }
 
 // ─── list ──────────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ export function PipelinesTab() {
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
   const { data, loading, error, reload } = useLoad(() => api.v2Pipelines(), "pipelines");
-  const datasets = useDatasetNames();
+  const { names: datasets, reload: reloadDatasets } = useDatasetNames();
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [running, setRunning] = useState<string | null>(null);
@@ -60,12 +61,31 @@ export function PipelinesTab() {
   }, [data, status, q]);
   const paged = usePaged(rows, 12);
 
+  // a run proceeds in the background: refresh until it settles, then say how it went
+  const inFlight = (data?.pipelines ?? []).some((p) => p.status === "running");
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = window.setInterval(reload, 4000);
+    return () => window.clearInterval(timer);
+  }, [inFlight, reload]);
+  const seenRunning = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const now = new Set(data.pipelines.filter((p) => p.status === "running").map((p) => p.id));
+    const settled = data.pipelines.filter((p) => seenRunning.current?.has(p.id) && !now.has(p.id));
+    if (settled.length) reloadDatasets(); // a first run creates its output dataset
+    for (const p of settled) {
+      if (p.status === "failed") toast("error", p.last_run?.error ?? t("v2.pipelines.failed"));
+      else if (p.status === "succeeded") toast("success", t("v2.pipelines.ran", { count: p.last_run?.added ?? 0 }));
+    }
+    seenRunning.current = now;
+  }, [data, toast, t, reloadDatasets]);
+
   const run = async (p: V2Pipeline) => {
     setRunning(p.id);
     try {
-      const out = await api.v2RunPipeline(p.id);
-      if (out.status === "failed") toast("error", out.last_run?.error ?? t("v2.pipelines.failed"));
-      else toast("success", t("v2.pipelines.ran", { count: out.last_run?.added ?? 0 }));
+      await api.v2RunPipeline(p.id);
+      toast("success", t("v2.pipelines.started"));
       reload();
     } catch (err) {
       toast("error", errorMessage(err));
@@ -144,8 +164,8 @@ export function PipelinesTab() {
       className: "right",
       render: (p) => (
         <div className="v2-actions">
-          <LinkButton disabled={running !== null} onClick={() => void run(p)} testId={`v2-pipeline-run-${p.id}`}>
-            {running === p.id ? t("v2.pipelines.running") : t("v2.pipelines.run")}
+          <LinkButton disabled={running !== null || p.status === "running"} onClick={() => void run(p)} testId={`v2-pipeline-run-${p.id}`}>
+            {running === p.id || p.status === "running" ? t("v2.pipelines.running") : t("v2.pipelines.run")}
           </LinkButton>
           <LinkButton onClick={() => setParams({ tab: "pipelines", view: "pipeline", id: p.id })}>{t("v2.common.edit")}</LinkButton>
           <LinkButton danger onClick={() => setDeleting(p)}>
@@ -251,9 +271,9 @@ export function PipelineEditor({ id }: { id: string | null }) {
     try {
       const saved = id ? await api.v2UpdatePipeline(id, body) : await api.v2CreatePipeline(body);
       if (runAfter) {
-        const ran = await api.v2RunPipeline(saved.id);
-        if (ran.status === "failed") toast("error", ran.last_run?.error ?? t("v2.pipelines.failed"));
-        else toast("success", t("v2.pipelines.ran", { count: ran.last_run?.added ?? 0 }));
+        // the run proceeds in the background; the list follows it to the end
+        await api.v2RunPipeline(saved.id);
+        toast("success", t("v2.pipelines.started"));
       } else {
         toast("success", t("v2.pipelines.saved"));
       }

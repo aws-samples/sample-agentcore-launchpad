@@ -3,7 +3,7 @@
 * `POST /api/eval/datasets/from-sessions` — add chosen trajectories (sessions) to
   an existing dataset or a new one (the trajectory list/detail "加入数据集").
 * `/api/eval/pipelines` — saved processing tasks (source filter → extraction →
-  output dataset) that run on demand.
+  output dataset) that run on demand, in the background.
 * `GET /api/eval/agents/{agent_id}/log-streams` — the log streams of an agent's
   runtime log group, keyword-filtered (the task wizard's 日志 data source).
 * `GET /api/eval/log-services` · `/log-groups` · `/log-sessions` — service-name,
@@ -17,6 +17,7 @@ session is never read, and a session that is not visible is skipped, not leaked.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -27,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.assistant.principal import principal_of
 from app.assistant.sessions import PrivateSessions
-from app.core.db import get_db
+from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation import log_streams, pipelines
 from app.evaluation.models import EvalDataset, EvalPipeline
@@ -268,6 +269,8 @@ def list_pipelines(
         .where(EvalPipeline.workspace_id == ws.id)
         .order_by(EvalPipeline.created_at.desc())
     ).all()
+    for row in rows:
+        _reap(db, row)
     return {"pipelines": [_pipeline_out(r) for r in rows]}
 
 
@@ -295,7 +298,9 @@ def get_pipeline(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return _pipeline_out(_pipeline_in(db, ws, pipeline_id))
+    row = _pipeline_in(db, ws, pipeline_id)
+    _reap(db, row)
+    return _pipeline_out(row)
 
 
 @router.put("/pipelines/{pipeline_id}")
@@ -306,6 +311,7 @@ def update_pipeline(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     row = _pipeline_in(db, ws, pipeline_id)
+    _reap(db, row)
     if row.status == "running":
         raise AppError("pipeline.running", "the pipeline is running", status_code=409)
     _check_output(db, ws, body.output)
@@ -328,65 +334,116 @@ def delete_pipeline(
     return {"deleted": True}
 
 
-@router.post("/pipelines/{pipeline_id}/run")
+@router.post("/pipelines/{pipeline_id}/run", status_code=202)
 def run_pipeline(
     pipeline_id: str,
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Run once, synchronously (bounded: at most `max_sessions` session reads)."""
+    """Start one run in the background and return the row as `running` — a run
+    reads up to `max_sessions` session details (seconds each), far too long to
+    hold the request open; the outcome lands on `status` + `last_run`."""
     row = _pipeline_in(db, ws, pipeline_id)
+    _reap(db, row)
     if row.status == "running":
         raise AppError("pipeline.running", "the pipeline is already running", status_code=409)
     config = PipelineBody.model_validate({"name": row.name, **row.config})
+    private = _private(request, ws, db)  # snapshot under the caller's principal
     row.status = "running"
     db.commit()
-
-    private = _private(request, ws, db)
-    outcome: dict[str, Any] = {"at": _now().isoformat(), "scanned": 0, "matched": 0,
-                               "added": 0, "skipped": [], "dataset_id": None, "error": None}
-    try:
-        src, proc, out = config.source, config.processing, config.output
-        listing = observability.list_sessions(src.range, db, ws.context)
-        rows = [r for r in listing.get("sessions", []) if private.visible(r.get("session_id"))]
-        outcome["scanned"] = len(rows)
-        picked = pipelines.select_sessions(
-            rows, agent=src.agent, status=src.status, limit=src.max_sessions
-        )
-        outcome["matched"] = len(picked)
-        kind = "predefined"
-        if out.dataset_id:
-            target = _dataset_in(db, ws, out.dataset_id)
-            _require_receivable(target)
-            kind = target.kind
-        items, skipped = _read_items(
-            db, ws, private, [str(r["session_id"]) for r in picked], src.range,
-            kind=kind, first_turn_only=proc.first_turn_only,
-            min_input_chars=proc.min_input_chars,
-        )
-        outcome["skipped"] = skipped
-        if items or out.dataset_id:
-            dataset, added = _write(
-                db, ws, dataset_id=out.dataset_id, dataset_name=out.dataset_name,
-                description=config.description, items=items, skipped=skipped,
-                dedupe=proc.dedupe,
-            )
-            outcome["added"] = added
-            outcome["dataset_id"] = dataset.id
-            if not out.dataset_id:
-                # the first run created the dataset: later runs append to it
-                row.config = {**row.config, "output": {"dataset_id": dataset.id}}
-        row.status = "succeeded"
-    except AppError as exc:
-        outcome["error"] = f"{exc.code}: {exc.message}"
-        row.status = "failed"
-    except Exception as exc:  # noqa: BLE001 — surfaced on the row, never swallowed silently
-        outcome["error"] = f"{type(exc).__name__}: {exc}"[:500]
-        row.status = "failed"
-    row.last_run = outcome
-    db.commit()
+    with _live_lock:
+        _live_runs.add(row.id)
+    _spawn(lambda: _run_pipeline(row.id, config, ws, private))
     return _pipeline_out(row)
+
+
+_live_runs: set[str] = set()
+_live_lock = threading.Lock()
+
+
+def _spawn(fn: Any) -> None:
+    """Run ``fn`` on a daemon thread (tests replace this to run inline)."""
+    threading.Thread(target=fn, name="run-pipeline", daemon=True).start()
+
+
+def _reap(db: Session, row: EvalPipeline) -> None:
+    """A `running` row whose thread died with a previous server process fails."""
+    if row.status != "running":
+        return
+    with _live_lock:
+        if row.id in _live_runs:
+            return
+    row.status = "failed"
+    row.last_run = {**(row.last_run or {}), "at": _now().isoformat(),
+                    "error": "the run was interrupted (the server restarted while it ran)"}
+    db.commit()
+
+
+def _run_pipeline(
+    pipeline_id: str, config: PipelineBody, ws: WorkspaceScope, private: PrivateSessions
+) -> None:
+    """One run, start to finish, on its own DB session; the row always reaches a
+    terminal status."""
+    db = SessionLocal()
+    try:
+        outcome: dict[str, Any] = {"at": _now().isoformat(), "scanned": 0, "matched": 0,
+                                   "added": 0, "skipped": [], "dataset_id": None,
+                                   "error": None}
+        new_output: dict[str, Any] | None = None
+        try:
+            src, proc, out = config.source, config.processing, config.output
+            listing = observability.list_sessions(src.range, db, ws.context)
+            rows = [r for r in listing.get("sessions", [])
+                    if private.visible(r.get("session_id"))]
+            outcome["scanned"] = len(rows)
+            picked = pipelines.select_sessions(
+                rows, agent=src.agent, status=src.status, limit=src.max_sessions
+            )
+            outcome["matched"] = len(picked)
+            kind = "predefined"
+            if out.dataset_id:
+                target = _dataset_in(db, ws, out.dataset_id)
+                _require_receivable(target)
+                kind = target.kind
+            items, skipped = _read_items(
+                db, ws, private, [str(r["session_id"]) for r in picked], src.range,
+                kind=kind, first_turn_only=proc.first_turn_only,
+                min_input_chars=proc.min_input_chars,
+            )
+            outcome["skipped"] = skipped
+            if items or out.dataset_id:
+                dataset, added = _write(
+                    db, ws, dataset_id=out.dataset_id, dataset_name=out.dataset_name,
+                    description=config.description, items=items, skipped=skipped,
+                    dedupe=proc.dedupe,
+                )
+                outcome["added"] = added
+                outcome["dataset_id"] = dataset.id
+                if not out.dataset_id:
+                    # the first run created the dataset: later runs append to it
+                    new_output = {"dataset_id": dataset.id}
+            status = "succeeded"
+        except AppError as exc:
+            db.rollback()
+            outcome["error"] = f"{exc.code}: {exc.message}"
+            status = "failed"
+        except Exception as exc:  # noqa: BLE001 — surfaced on the row, never swallowed silently
+            db.rollback()
+            outcome["error"] = f"{type(exc).__name__}: {exc}"[:500]
+            status = "failed"
+        row = db.get(EvalPipeline, pipeline_id)
+        if row is not None:  # deleted while it ran: nothing to record
+            if new_output is not None:
+                row.config = {**row.config, "output": new_output}
+            row.status = status
+            row.last_run = outcome
+            db.commit()
+    finally:
+        db.close()
+        # only once the outcome is durable — a read in between must not reap it
+        with _live_lock:
+            _live_runs.discard(pipeline_id)
 
 
 # ─── runtime log streams (task wizard · 日志) ────────────────────────────────
