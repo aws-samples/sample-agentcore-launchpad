@@ -15,6 +15,7 @@
 /design/
 /samples/*
 !/samples/store-demo/
+!/samples/hr-policy-demo/
 /docs/issues/
 .playwright-cli/
 # --- python ---
