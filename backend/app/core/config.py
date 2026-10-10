@@ -162,11 +162,10 @@ class Settings(BaseSettings):
     traffic_concurrency: int = Field(default=10, ge=1)
 
     # How many evaluation runs (batch evaluations / insights analyses) execute
-    # concurrently. AgentCore allows 5 active batch evaluations per account
-    # (hard quota); the default of 3 leaves headroom for other batch-eval
-    # consumers in the same account, and the upper bound refuses configs that
-    # could never fit the quota anyway.
-    eval_max_concurrent_runs: int = Field(default=3, ge=1, le=5)
+    # concurrently. The default and upper bound match AgentCore's hard quota of
+    # 5 active batch evaluations per account. Lower this setting when other
+    # batch-eval consumers in the same account need reserved headroom.
+    eval_max_concurrent_runs: int = Field(default=5, ge=1, le=5)
 
     # How long one evaluation run waits for its AWS batch evaluation (evaluator,
     # insights and online-report runs alike). Measured 2026-09-27: a 16-session x

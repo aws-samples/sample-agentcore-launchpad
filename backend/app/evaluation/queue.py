@@ -1,10 +1,10 @@
 """Bounded-concurrency queue for batch evaluations / insights analyses.
 
 AgentCore allows 5 active batch evaluations per account (hard quota), so runs
-beyond the configured cap (`eval_max_concurrent_runs`, default 3 — headroom is
-deliberate, other consumers in the account share the quota) QUEUE instead of
-failing. Worker threads are persistent daemons created lazily up to the cap;
-positions are exposed for the UI ("QUEUED · waiting for a slot").
+beyond the configured cap (`eval_max_concurrent_runs`, default 5) QUEUE instead
+of failing. Lower the cap to leave headroom for other consumers in the account.
+Worker threads are persistent daemons created lazily up to the cap; positions
+are exposed for the UI ("QUEUED · waiting for a slot").
 """
 
 import queue

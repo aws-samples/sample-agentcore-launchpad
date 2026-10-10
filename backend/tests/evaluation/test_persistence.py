@@ -4,6 +4,7 @@ A "restart" is simulated by reading through a brand-new session/app instance:
 completed runs must still be there (SQLite is the source of truth).
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
@@ -74,36 +75,39 @@ def test_queue_excess_run_queues_not_fails(client, monkeypatch):
     assert run_queue.state()["locked"] is False
 
 
-def test_queue_runs_up_to_cap_concurrently(client, monkeypatch):
-    """Three runs execute at once; the fourth waits for a slot, then executes."""
+@pytest.mark.parametrize("max_concurrency", [3, 5])
+def test_queue_runs_up_to_cap_concurrently(client, max_concurrency):
+    """Runs fill the configured cap; the next waits for a slot, then executes."""
     import threading
 
     from app.evaluation.queue import EvalRunQueue
 
-    run_queue = EvalRunQueue(max_concurrency=3)
+    run_queue = EvalRunQueue(max_concurrency=max_concurrency)
     release = threading.Event()
-    started: list[threading.Event] = [threading.Event() for _ in range(3)]
+    started: list[threading.Event] = [threading.Event() for _ in range(max_concurrency)]
 
     def slow_job(idx: int):
         started[idx].set()
         release.wait(timeout=5)
 
-    for idx in range(3):
-        run_queue.submit(f"run-{idx}", lambda i=idx: slow_job(i))
-    assert all(event.wait(timeout=2) for event in started)  # truly concurrent
+    next_ran = threading.Event()
+    next_id = f"run-{max_concurrency}"
+    try:
+        for idx in range(max_concurrency):
+            run_queue.submit(f"run-{idx}", lambda i=idx: slow_job(i))
+        assert all(event.wait(timeout=2) for event in started)  # truly concurrent
 
-    fourth_ran = threading.Event()
-    position = run_queue.submit("run-3", fourth_ran.set)
-    assert position >= 1
-    state = run_queue.state()
-    assert state["locked"] is True and state["max_concurrency"] == 3
-    assert sorted(state["running"]) == ["run-0", "run-1", "run-2"]
-    assert "run-3" in state["queued"]
-    assert run_queue.position("run-3") == 1
-    assert not fourth_ran.is_set()  # no free slot yet
-
-    release.set()
-    assert fourth_ran.wait(timeout=2)
+        position = run_queue.submit(next_id, next_ran.set)
+        assert position >= 1
+        state = run_queue.state()
+        assert state["locked"] is True and state["max_concurrency"] == max_concurrency
+        assert sorted(state["running"]) == [f"run-{idx}" for idx in range(max_concurrency)]
+        assert next_id in state["queued"]
+        assert run_queue.position(next_id) == 1
+        assert not next_ran.is_set()  # no free slot yet
+    finally:
+        release.set()
+    assert next_ran.wait(timeout=2)
     assert _wait_until(
         lambda: not run_queue.state()["running"] and not run_queue.state()["queued"]
     )

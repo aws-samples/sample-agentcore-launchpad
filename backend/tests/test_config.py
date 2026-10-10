@@ -3,6 +3,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 import app.core.config as config_mod
 from app.core.config import Settings, load_yaml_config
 
@@ -15,6 +18,7 @@ def test_defaults(tmp_path, monkeypatch):
         "LAUNCHPAD_AUTH_PASSWORD",
         "LAUNCHPAD_AUTH_COOKIE_SECURE",
         "LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S",
+        "LAUNCHPAD_EVAL_MAX_CONCURRENT_RUNS",
     ):
         monkeypatch.delenv(name, raising=False)
     s = Settings()
@@ -25,6 +29,20 @@ def test_defaults(tmp_path, monkeypatch):
     assert s.auth_password is None
     assert s.auth_cookie_secure is False
     assert s.agentcore_read_timeout_s == 1000
+    assert s.eval_max_concurrent_runs == 5
+
+
+@pytest.mark.parametrize("limit", [1, 3, 5])
+def test_eval_concurrency_from_environment(monkeypatch, limit):
+    monkeypatch.setenv("LAUNCHPAD_EVAL_MAX_CONCURRENT_RUNS", str(limit))
+    assert Settings().eval_max_concurrent_runs == limit
+
+
+@pytest.mark.parametrize("limit", [0, 6])
+def test_eval_concurrency_rejects_out_of_range(monkeypatch, limit):
+    monkeypatch.setenv("LAUNCHPAD_EVAL_MAX_CONCURRENT_RUNS", str(limit))
+    with pytest.raises(ValidationError, match="eval_max_concurrent_runs"):
+        Settings()
 
 
 def test_yaml_source_feeds_settings(tmp_path, monkeypatch):
