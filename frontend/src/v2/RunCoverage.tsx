@@ -1,5 +1,4 @@
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
 import { coverageInfo, type RunCoverage } from "../lib/evaluation";
 import { LinkButton, Tag } from "./ui";
@@ -25,17 +24,15 @@ export function RunCoverageTag({ coverage }: { coverage: RunCoverage }) {
 
 export function RunCoverageNote({
   coverage,
-  runId,
   rawError,
-  showLink = true,
+  showRawError = true,
   onReadDetail,
   reading,
 }: {
   coverage: RunCoverage;
-  runId: string;
   rawError: string | null;
-  /** hidden on the task detail page itself */
-  showLink?: boolean;
+  /** the collapsed raw AWS error; the architect's run list leaves it to the task detail */
+  showRawError?: boolean;
   /** legacy rows: re-check the batch to backfill the reasons */
   onReadDetail?: () => void;
   reading?: boolean;
@@ -53,20 +50,15 @@ export function RunCoverageNote({
           })}
         </div>
       )}
-      <div className="v2-row" style={{ gap: 12 }}>
-        {showLink && !coverage.legacy && (
-          <Link to={`/v2/eval/tasks?view=detail&id=${encodeURIComponent(runId)}&outcome=error`}>
-            {t("v2.runCoverage.viewFailed")} ›
-          </Link>
-        )}
-        {coverage.legacy && onReadDetail && (
+      {coverage.legacy && onReadDetail && (
+        <div>
           <LinkButton disabled={reading} title={t("v2.runCoverage.readDetailHint")} onClick={onReadDetail}
             testId="v2-run-coverage-read">
             {t("v2.runCoverage.readDetail")}
           </LinkButton>
-        )}
-      </div>
-      {raw && (
+        </div>
+      )}
+      {showRawError && raw && (
         <details>
           <summary className="v2-muted">{t("v2.runCoverage.rawError")}</summary>
           <div className="mono">{raw}</div>

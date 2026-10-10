@@ -351,8 +351,8 @@ export function NextStepsCard({
                       <div className={coverageInfo(coverage) ? "err info" : "err warn"}>
                         <RunCoverageNote
                           coverage={coverage}
-                          runId={run.id}
                           rawError={run.error}
+                          showRawError={false}
                           onReadDetail={canRun ? () => void readDetail(run) : undefined}
                           reading={reading === run.id}
                         />
