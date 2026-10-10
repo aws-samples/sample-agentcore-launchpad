@@ -253,7 +253,7 @@ export function DatasetDetail({ id }: { id: string }) {
         onBack={() => setParams({ tab: "datasets" })}
         end={
           <>
-            <Button disabled={ds.kind === "simulated"} onClick={() => navigate(`/v2/eval/tasks?view=new&dataset=${ds.id}`)}>
+            <Button onClick={() => navigate(`/v2/eval/tasks?view=new&dataset=${ds.id}`)}>
               {t("v2.datasets.useInTask")}
             </Button>
             <Button

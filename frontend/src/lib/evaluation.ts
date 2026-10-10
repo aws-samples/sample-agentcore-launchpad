@@ -129,6 +129,9 @@ export interface EvaluationRunInfo {
   /** dataset scenarios that ended on the agent's own budget (timeout after its
    *  replay, iteration / token limit) and are scored as they stand. Absent on older backends. */
   budget_stops?: EvaluationBudgetStop[];
+  /** simulated persona scenarios skipped after their retries — the run went on
+   *  with the rest. Absent on older backends. */
+  scenario_failures?: EvaluationScenarioFailure[];
   /** Sessions a partially failed batch skipped, and why; null on a clean run.
    *  Absent on older backends / rows finished before it existed. */
   session_failures?: EvaluationSessionFailures | null;
@@ -138,6 +141,14 @@ export interface EvaluationRunInfo {
   name?: string | null;
   description?: string | null;
   updated_at?: string | null;
+}
+
+export interface EvaluationScenarioFailure {
+  scenario_id: string;
+  /** retries spent before the scenario was skipped, as a string ("0", "1") */
+  retries: string;
+  code: string;
+  error: string;
 }
 
 export interface EvaluationBudgetStop {

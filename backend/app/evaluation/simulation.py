@@ -42,8 +42,11 @@ def run_simulated_scenario(
 ) -> str:
     """Drive one persona scenario to completion; returns the runtime session id.
 
-    Raises RuntimeError when the executor reports FAILED (it swallows its own
-    exceptions into the result) so execute_run fails the run honestly.
+    The executor swallows every exception into its result, so when it reports
+    FAILED the agent call's own exception (e.g. AppError
+    ``harness.execution_timeout``) is re-raised as is — the caller's transient
+    retry and its error codes see the real failure. A failure that never came
+    from the agent call (the actor model, the executor) raises RuntimeError.
     ``invoke_text(prompt, session_id) -> {text, session_id}`` overrides the
     default SigV4 runtime call for HTTP runtimes — the JWT-inbound bearer path
     rides through it (harness/A2A keep their own dispatch).
@@ -53,9 +56,16 @@ def run_simulated_scenario(
             "simulated persona scenarios need an actor_model_id (the Bedrock "
             "model that plays the user)"
         )
-    state: dict[str, str | None] = {"session_id": None}
+    state: dict[str, Any] = {"session_id": None, "error": None}
 
     def invoker(inp: AgentInvokerInput) -> AgentInvokerOutput:
+        try:
+            return _invoke(inp)
+        except Exception as exc:
+            state["error"] = exc  # the executor keeps only str(exc)
+            raise
+
+    def _invoke(inp: AgentInvokerInput) -> AgentInvokerOutput:
         prompt = inp.payload if isinstance(inp.payload, str) else str(inp.payload)
         if method == "harness":
             result = hc.invoke_harness_text(
@@ -98,6 +108,8 @@ def run_simulated_scenario(
         )
     )
     if result.status != "COMPLETED" or not state["session_id"]:
+        if state["error"] is not None:
+            raise state["error"]
         raise RuntimeError(
             f"simulated scenario '{scenario['scenario_id']}' failed: "
             f"{result.error or 'agent was never invoked'}"

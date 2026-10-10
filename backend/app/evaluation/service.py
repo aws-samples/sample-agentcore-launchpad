@@ -211,6 +211,17 @@ TIMEOUT_SCENARIO_RETRIES = 1
 # token limit): that is the scenario's result — its session is scored as it stands and
 # recorded in ``EvalRun.budget_stops`` instead of failing the whole run.
 BUDGET_STOP_CODES = frozenset({"harness.execution_timeout", "harness.execution_limit"})
+SCENARIO_ERROR_CHARS = 300
+
+
+def _scenario_error(exc: BaseException) -> dict[str, str]:
+    """A failed scenario's ``code`` + one-line ``error`` for ``EvalRun.scenario_failures``."""
+    code = getattr(exc, "code", None)
+    if code:
+        return {"code": str(code), "error": f"{code}: {getattr(exc, 'message', exc)}"[
+            :SCENARIO_ERROR_CHARS]}
+    return {"code": type(exc).__name__, "error": f"{type(exc).__name__}: {exc}"[
+        :SCENARIO_ERROR_CHARS]}
 # ``runtimeClientError`` is the mid-stream event; ``RuntimeClientError`` the same failure
 # raised by the InvokeHarness call itself, with a 4xx status (live 2026-10-08: "Runtime
 # health check failed or timed out" failed a whole 19-scenario run at one scenario)
@@ -357,12 +368,19 @@ def execute_run(
                 )
 
             budget_stops: list[dict[str, str]] = []
+            # A simulated persona that still fails after its retries is skipped,
+            # not fatal: the LLM actor's conversation is not reproducible, and one
+            # stalled model call (live 2026-10-10: a Harness GPT-6 call returned
+            # 0 tokens for 600 s) must not discard the other personas' sessions.
+            # The run fails only when no scenario produced a session.
+            scenario_failures: list[dict[str, str]] = []
             _update(run_id, status="invoking")
             for scenario in scenarios:
                 _check_stop(run_id)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
                 sid: str | None = None
+                skipped = False
                 for retry in range(TRANSIENT_SCENARIO_RETRIES + 1):
                     try:
                         sid = None  # a replay starts the whole scenario in a fresh session
@@ -392,7 +410,15 @@ def execute_run(
                                 or (timed_out and retry >= TIMEOUT_SCENARIO_RETRIES)):
                             code = getattr(exc, "code", None)
                             if code not in BUDGET_STOP_CODES or not attempt.get("session_id"):
-                                raise
+                                if not simulation.is_simulated(scenario):
+                                    raise
+                                scenario_failures.append({
+                                    "scenario_id": attempt["scenario_id"],
+                                    "retries": attempt.get("retried", "0"),
+                                    **_scenario_error(exc),
+                                })
+                                skipped = True
+                                break
                             sid = attempt["session_id"]
                             detail = getattr(exc, "detail", None)
                             budget_stops.append({
@@ -404,11 +430,20 @@ def execute_run(
                             break
                         _check_stop(run_id)
                         attempt["retried"] = str(retry + 1)
+                if skipped:
+                    _update(run_id, scenario_failures=list(scenario_failures))
+                    continue
                 session_ids.append(sid)
                 watermark_sid = sid
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
                 _update(run_id, session_ids=list(session_ids),
                         budget_stops=list(budget_stops) or None)
+            if not session_ids:
+                first = scenario_failures[0] if scenario_failures else {}
+                raise RuntimeError(
+                    f"all {len(scenarios)} scenarios failed — first: "
+                    f"{first.get('scenario_id')}: {first.get('error')}"
+                )
             if session_metadata is None:
                 session_metadata = metadata_entries or None
             _check_stop(run_id)

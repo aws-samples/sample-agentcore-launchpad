@@ -4085,6 +4085,8 @@ export interface V2RunCreate {
   session_source?: "logs";
   lookback_hours?: number;
   wait_seconds?: number;
+  /** the Bedrock model that plays the user — required for a simulated-persona dataset */
+  actor_model_id?: string;
 }
 
 /** One stream of an agent's runtime log group (`GET /api/eval/agents/{id}/log-streams`). */
