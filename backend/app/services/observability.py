@@ -1663,17 +1663,23 @@ def eval_turns_from_content_logs(
     workspace: WorkspaceContext,
     logs: Any = None,
 ) -> list[dict[str, Any]]:
-    """USER/ASSISTANT turns for an eval session, rebuilt from content logs.
-
-    One invocation = one traceId. Its USER turn is the trace's latest input
-    user message (later records carry the full history — last one is the
-    current turn); its ASSISTANT turn is the ``end_turn`` output, falling back
-    to the last assistant text. filter_log_events scans oldest-first, so
+    """USER/ASSISTANT turns for an eval session, rebuilt from content logs
+    (`content_records_turns`). filter_log_events scans oldest-first, so
     startTime (the run's creation time) is load-bearing — without it the scan
     exhausts its page budget on old log data and returns nothing.
     """
-    records = _content_records(log_group, session_id, started_at, workspace, logs)
+    return content_records_turns(
+        _content_records(log_group, session_id, started_at, workspace, logs)
+    )
 
+
+def content_records_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """USER/ASSISTANT turns from one session's gen_ai content records (any order).
+
+    One invocation = one traceId: its USER turn is the latest input user message
+    (records repeat the history so far), its ASSISTANT turn the ``end_turn``
+    output, falling back to the last assistant text. Also the 运行日志 pipeline
+    source's ``genai`` preset."""
     invocations: dict[str, dict[str, Any]] = {}
     for rec in sorted(records, key=lambda r: r.get("timeUnixNano") or 0):
         ts = rec.get("timeUnixNano") or 0

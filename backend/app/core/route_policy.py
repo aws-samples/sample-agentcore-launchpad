@@ -341,6 +341,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("PUT", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
     ("DELETE", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
     ("POST", "/api/eval/pipelines/{pipeline_id}/run"): MEMBER,
+    ("POST", "/api/eval/pipelines/preview-logs"): MEMBER,
     ("GET", "/api/eval/agents/{agent_id}/log-streams"): MEMBER,
     ("GET", "/api/eval/log-sessions"): MEMBER,
     ("GET", "/api/eval/log-groups"): MEMBER,
