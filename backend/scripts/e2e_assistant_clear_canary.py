@@ -205,6 +205,13 @@ def main() -> int:
     if ws.resources.get("kb_gateway_id"):
         shared["KB gateway"] = not _gone(ctl.get_gateway,
                                          gatewayIdentifier=ws.resources["kb_gateway_id"])
+    record = agent.get("registry_record_id")
+    if record:
+        from app.services import registry_console as rc
+
+        checks[f"A2A registry record {record}"] = _gone(
+            rc.registry_control_client(ws).get_registry_record,
+            registryId=ws.resources["registry_id"], recordId=record)
     ok = True
     for label, gone in checks.items():
         print(f"   {'gone ' if gone else 'LEFT '} {label}")
@@ -212,9 +219,6 @@ def main() -> int:
     for label, present in shared.items():
         print(f"   {'kept ' if present else 'LOST '} {label}")
         ok &= present
-    record = agent.get("registry_record_id")
-    if record:
-        print(f"   note: A2A registry record {record} — the agent delete path does not remove it")
     print("PASS" if ok else "FAILED")
     return 0 if ok else 1
 

@@ -3474,7 +3474,7 @@ def test_conversation_purge_removes_assets_datasets_agents_then_rows(app_ready, 
     assert result["operations_cleaned"] == [op_id]
     assert [d["id"] for d in result["datasets"]] == [dataset_id]
     assert result["agents"] == [{"id": agent_id, "name": "kid-companion-poc",
-                                 "aws_resource_deleted": True}]
+                                 "aws_resource_deleted": True, "registry_record": "none"}]
     assert torn_down == [agent_id]
     # cloud: only the operation's own resources are gone, the foreign evaluator stays
     assert set(fakes.iam.roles) == {"launchpad-agent-execution-role"}

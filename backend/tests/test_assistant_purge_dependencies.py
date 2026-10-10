@@ -194,11 +194,11 @@ def cloud(monkeypatch, tmp_path):
     return c
 
 
-def _purge(cid: str):
+def _purge(cid: str, resources: dict | None = None):
     db = SessionLocal()
     try:
         row = db.get(AssistantConversation, cid)
-        return purge.purge(db, row, ws_ctx(), can=lambda _p: True)
+        return purge.purge(db, row, ws_ctx(resources), can=lambda _p: True)
     finally:
         db.close()
 
@@ -277,7 +277,8 @@ def test_clear_stops_the_canary_waits_for_its_endpoints_then_deletes_the_agent(c
     assert result["deleted"] is True and result["status"] == "succeeded"
     assert result["canaries"] == [{"id": c, "name": "CANARY-kid-companion"}]
     assert result["experiments"] == [{"id": e, "name": "EXP-kid"}]
-    assert result["agents"] == [{"id": a, "name": "kid-companion", "aws_resource_deleted": True}]
+    assert result["agents"] == [{"id": a, "name": "kid-companion", "aws_resource_deleted": True,
+                                 "registry_record": "none"}]
     assert _get(AssistantConversation, ids["cid"]) is None
     assert _get(Agent, a).status == "deleted"
     # canary / experiment history is retained; the canary's own claim was released
@@ -664,3 +665,135 @@ def test_canary_cleanup_rerun_tolerates_its_dedicated_gateway_already_gone(monke
     gateway_id, targets, _evals, abs_ = real._owned_resources(
         row, _Control(endpoints=[]), _Data())
     assert gateway_id == "gw-rrHarness" and targets == [] and abs_ == ["ab-1"]
+
+
+# ---------------------------------------------------------------------------
+# the agent's own A2A Registry record (deploy ``register`` stage)
+# ---------------------------------------------------------------------------
+
+
+class _Registry:
+    """GetRegistryRecord / DeleteRegistryRecord over an in-memory record map."""
+
+    def __init__(self, records: dict[str, dict], *, deleting_reads: int = 0,
+                 error: Exception | None = None):
+        self.records, self.deleted, self.error = records, [], error
+        self.deleting_reads = deleting_reads
+
+    def get_registry_record(self, registryId, recordId):
+        if self.error is not None:
+            raise self.error
+        if recordId in self.deleted:
+            if self.deleting_reads > 0:
+                self.deleting_reads -= 1
+                return {**self.records[recordId], "status": "DELETING"}
+            raise ResourceNotFoundException(recordId)
+        if recordId not in self.records:
+            raise ResourceNotFoundException(recordId)
+        return self.records[recordId]
+
+    def delete_registry_record(self, registryId, recordId):
+        self.deleted.append(recordId)
+
+
+def _a2a(name: str) -> dict:
+    from app.services.agentcore import registry as reg
+
+    return {"name": name, "recordType": reg.ga_record_type("A2A"), "status": "APPROVED"}
+
+
+def _with_record(agent_id: str, record_id: str) -> None:
+    db = SessionLocal()
+    try:
+        db.get(Agent, agent_id).registry_record_id = record_id
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_agent_record_state_tells_own_foreign_absent_and_none(monkeypatch):
+    from app.services import registry_console
+
+    fake = _Registry({"own": _a2a("kid"), "renamed": _a2a("someone-else"),
+                      "mcp": {**_a2a("kid"), "recordType": "MCP"}})
+    monkeypatch.setattr(registry_console, "registry_control_client", lambda _ws: fake)
+    ws = ws_ctx({"registry_id": "reg1"})
+
+    def agent(record_id):
+        return Agent(name="kid", registry_record_id=record_id)
+
+    assert registry_console.agent_record_state(agent("own"), ws) == "APPROVED"
+    assert registry_console.agent_record_state(agent("renamed"), ws) == "foreign"
+    assert registry_console.agent_record_state(agent("mcp"), ws) == "foreign"
+    assert registry_console.agent_record_state(agent("missing"), ws) == "absent"
+    assert registry_console.agent_record_state(agent(None), ws) == "none"
+    assert registry_console.agent_record_state(agent("own"), ws_ctx()) == "none"  # no registry
+    # only the agent's own record is ever deleted
+    for record_id in ("renamed", "mcp", "missing"):
+        registry_console.delete_agent_record(agent(record_id), ws)
+    assert fake.deleted == []
+    assert registry_console.delete_agent_record(agent("own"), ws) == "APPROVED"
+    assert fake.deleted == ["own"]
+
+
+def test_clear_deletes_the_agents_registry_record_and_reads_it_back(cloud, monkeypatch):
+    from app.services import registry_console
+
+    ids = _world()
+    _with_record(ids["agent"], "rec-kid")
+    fake = _Registry({"rec-kid": _a2a("kid-companion")}, deleting_reads=1)
+    monkeypatch.setattr(registry_console, "registry_control_client", lambda _ws: fake)
+    result = _purge(ids["cid"], {"registry_id": "reg1"})
+    assert fake.deleted == ["rec-kid"]
+    assert result["agents"][0]["registry_record"] == "deleted"
+    assert _get(Agent, ids["agent"]).status == "deleted"
+
+
+def test_a_foreign_registry_record_is_kept_and_does_not_block_the_clear(cloud, monkeypatch):
+    from app.services import registry_console
+
+    ids = _world()
+    _with_record(ids["agent"], "rec-other")
+    fake = _Registry({"rec-other": _a2a("another-agent")})
+    monkeypatch.setattr(registry_console, "registry_control_client", lambda _ws: fake)
+    result = _purge(ids["cid"], {"registry_id": "reg1"})
+    assert fake.deleted == [] and result["deleted"] is True
+    assert result["agents"][0]["registry_record"] == "kept (not this agent's)"
+
+
+def test_a_registry_error_stops_the_clear_before_the_ledger_flips(cloud, monkeypatch):
+    from app.services import registry_console
+
+    class AccessDeniedException(Exception):
+        pass
+
+    ids = _world()
+    _with_record(ids["agent"], "rec-kid")
+    fake = _Registry({}, error=AccessDeniedException("no registry permission"))
+    monkeypatch.setattr(registry_console, "registry_control_client", lambda _ws: fake)
+    with pytest.raises(AppError) as exc:
+        _purge(ids["cid"], {"registry_id": "reg1"})
+    assert exc.value.code == "assistant.purge_step_failed"
+    assert "AccessDeniedException" in exc.value.message
+    assert _get(Agent, ids["agent"]).status == "active"  # retryable: evidence kept
+    assert _get(AssistantConversation, ids["cid"]) is not None
+
+
+def test_an_ordinary_agent_delete_removes_its_record_best_effort(cloud, monkeypatch):
+    """DELETE /api/agents/{id} shares the teardown: its own record goes, and a Registry
+    failure is logged but never blocks deleting the agent."""
+    from app.services import registry_console
+
+    ids = _world()
+    _with_record(ids["other"], "rec-other")
+    fake = _Registry({"rec-other": _a2a("unrelated")})
+    monkeypatch.setattr(registry_console, "registry_control_client", lambda _ws: fake)
+    ws = ws_ctx({"registry_id": "reg1"})
+    assert agents_router._delete_agent_resources(_get(Agent, ids["other"]), ws) is True
+    assert fake.deleted == ["rec-other"]
+
+    class ThrottlingException(Exception):
+        pass
+
+    fake.error = ThrottlingException("slow down")
+    assert agents_router.delete_agent_registry_record(_get(Agent, ids["other"]), ws) is False

@@ -43,6 +43,7 @@ from app.services import (
     identity_providers,
     memory_ownership,
     oauth_sessions,
+    registry_console,
 )
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
@@ -147,6 +148,7 @@ def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
     # role delete must not block deleting the agent, so this returns rather than
     # raises and logs the role name for a later sweep.
     delete_agent_role(agent, workspace)
+    delete_agent_registry_record(agent, workspace)
     return True
 
 
@@ -165,6 +167,19 @@ def delete_agent_cloud_resource(agent: Agent, workspace: WorkspaceContext) -> bo
     elif agent.method == "byoc":
         byoc_method.delete_agent_resources(agent, workspace)
     return True
+
+
+def delete_agent_registry_record(agent: Agent, workspace: WorkspaceContext) -> bool:
+    """Best-effort removal of the A2A record the deploy ``register`` stage created for
+    this agent (a record the id no longer names as this agent's stays); never raises —
+    ``False`` logs the record id for a later sweep."""
+    try:
+        registry_console.delete_agent_record(agent, workspace)
+        return True
+    except Exception as exc:  # noqa: BLE001 — a registry hiccup must not block the delete
+        logger.warning("agent %s: could not delete registry record %s: %s", agent.id,
+                       agent.registry_record_id, f"{type(exc).__name__}: {exc}")
+        return False
 
 
 def delete_agent_role(agent: Agent, workspace: WorkspaceContext) -> bool:

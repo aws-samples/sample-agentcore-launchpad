@@ -890,12 +890,34 @@ def _step_agents(run: _Run) -> None:
             raise Blocked("assistant.purge_role_remains",
                           f"the execution role of agent {agent.name} could not be deleted — "
                           "retry the clear", {"agent_id": agent_id})
+        record = _clean_registry_record(run, key, agent)
         run.db.expire_all()
         agent = run.db.get(Agent, agent_id)
         if agent.status != "deleted":
             agents_router.mark_agent_deleted(run.db, agent)
-        run.mark(key, "done", "resource read back gone, role deleted, ledger marked deleted")
-        run.record("agents", {"id": agent.id, "name": agent.name, "aws_resource_deleted": True})
+        run.mark(key, "done", "resource read back gone, role deleted, "
+                 f"registry record {record}, ledger marked deleted")
+        run.record("agents", {"id": agent.id, "name": agent.name, "aws_resource_deleted": True,
+                              "registry_record": record})
+
+
+def _clean_registry_record(run: _Run, key: str, agent: Agent) -> str:
+    """The agent's own A2A Registry record (created by the deploy ``register`` stage),
+    deleted and read back gone. A record id that now names something else is not this
+    agent's and is kept (``foreign``); a Registry error is a retryable failure."""
+    from app.services import registry_console
+
+    state = registry_console.delete_agent_record(agent, run.workspace)
+    if state in ("none", "foreign"):
+        return {"none": "none", "foreign": "kept (not this agent's)"}[state]
+
+    def probe(row: Agent = agent) -> list[dict[str, str]]:
+        found = registry_console.agent_record_state(row, run.workspace)
+        return [] if found in ("absent", "none", "foreign") else [
+            {"category": f"registry-record:{row.registry_record_id}", "status": found}]
+
+    _wait_gone(run, key, f"registry record of agent {agent.name}", probe, AGENT_GONE_TIMEOUT_S)
+    return "deleted"
 
 
 def _step_canary_artifacts(run: _Run) -> None:

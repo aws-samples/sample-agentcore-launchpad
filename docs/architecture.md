@@ -1335,7 +1335,9 @@ read back); each experiment's `act_cleanup`; the fenced `cleanup_operation` per
 operation; the local Dataset rows (an AWS copy a member synced by hand stays); per Agent
 the method-specific resource delete (refused up front when its Harness carries a named
 endpoint no canary of the conversation owns), a bounded wait until `GetHarness` /
-`GetAgentRuntime` is not found, then its own execution role and the ledger; the
+`GetAgentRuntime` is not found, then its own execution role, the A2A Registry record its
+deploy registered (deleted and read back gone; a record id that now names another
+record is kept) and the ledger; the
 canaries' retained candidate zips; and only then the ledger rows. A `skipped` cleanup
 result, a resource still `DELETING` after the wait, a `DELETE_FAILED`, a conflict, an
 unowned dependency or a refusal stops the job as `failed` with an actionable

@@ -810,7 +810,8 @@ Agent、**在这些 Agent 上运行的金丝雀与实验**（含每个金丝雀�
 `DeleteHarness` 返回 `ConflictException`——issue #246；状态已为 `cleaned` 的金丝雀同样回读）；每个实验执行
 `act_cleanup`；对每次操作执行带围栏的 `cleanup_operation`；删除本地 Dataset 行（成员手动同步到 AWS 的副本保留）；
 对每个 Agent 执行按方式的资源删除（若其 Harness 上存在不属于本会话金丝雀的命名端点，则事先拒绝），有界等待
-`GetHarness` / `GetAgentRuntime` 返回不存在后再删除其专属执行角色与账本；删除金丝雀保留的候选包；最后才删账本行。
+`GetHarness` / `GetAgentRuntime` 返回不存在后再删除其专属执行角色、部署时登记的 A2A Registry 记录（删除并回读确认；若该记录 id
+已指向其他记录则保留）与账本；删除金丝雀保留的候选包；最后才删账本行。
 `skipped` 的清理结果、等待结束仍为 `DELETING` 的资源、`DELETE_FAILED`、冲突、不属于本会话的依赖或拒绝，都会使任务以
 `failed` 结束并给出可操作的 `payload.blocker`——会话及其证据保留，再次「清除」会新建任务并继承清单、已确认的检查点与
 已受理的删除请求。任务进行期间，会话的所有写入返回 `409 assistant.conversation_clearing`，其 Agent 拒绝金丝雀 /
