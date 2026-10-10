@@ -71,6 +71,32 @@ function LogGroupAdder({ taken, onAdd }: { taken: string[]; onAdd: (name: string
   );
 }
 
+/** Chosen log groups as removable tags + the search box that adds one (at most
+ *  MAX_LOG_GROUPS) — shared by the task wizard and the 数据处理 运行日志 source. */
+export function LogGroupsInput({ value, onChange }: { value: string[]; onChange: (groups: string[]) => void }) {
+  const { t } = useTranslation();
+  const add = (name: string) => {
+    if (!value.includes(name) && value.length < MAX_LOG_GROUPS) onChange([...value, name]);
+  };
+  return (
+    <div className="v2-stack" style={{ gap: 8 }}>
+      {value.length > 0 && (
+        <div className="v2-tags">
+          {value.map((g) => (
+            <Tag key={g} tone="outline">
+              <span className="mono">{g}</span>
+              <button type="button" className="v2-tag-x" aria-label={t("v2.common.delete")} onClick={() => onChange(value.filter((x) => x !== g))}>
+                <X size={12} />
+              </button>
+            </Tag>
+          ))}
+        </div>
+      )}
+      {value.length < MAX_LOG_GROUPS && <LogGroupAdder taken={value} onAdd={add} />}
+    </div>
+  );
+}
+
 /**
  * 遥测数据源 of a task with no platform agent: the span `service.name` and the
  * input log groups (1–10) `StartBatchEvaluation` reads — spans (usually
@@ -99,9 +125,6 @@ export function LogSourceFields({
   const paged = usePaged(rows, 5);
   const chosen = (services.data?.services ?? []).find((s) => s.service_name === serviceName) ?? null;
   const owned = chosen?.agent ?? null;
-  const addGroup = (name: string) => {
-    if (!logGroups.includes(name) && logGroups.length < MAX_LOG_GROUPS) onChange({ logGroups: [...logGroups, name] });
-  };
   const use = (s: V2LogService) => onChange({ serviceName: s.service_name, logGroups: s.log_group_names.slice(0, MAX_LOG_GROUPS) });
   const badName = serviceName.trim() !== "" && !SERVICE_NAME_RE.test(serviceName.trim());
 
@@ -119,26 +142,7 @@ export function LogSourceFields({
           />
         </Field>
         <Field label={t("v2.tasks.cw.groups", { count: logGroups.length, max: MAX_LOG_GROUPS })} required hint={t("v2.tasks.cw.groupsHint")}>
-          <div className="v2-stack" style={{ gap: 8 }}>
-            {logGroups.length > 0 && (
-              <div className="v2-tags">
-                {logGroups.map((g) => (
-                  <Tag key={g} tone="outline">
-                    <span className="mono">{g}</span>
-                    <button
-                      type="button"
-                      className="v2-tag-x"
-                      aria-label={t("v2.common.delete")}
-                      onClick={() => onChange({ logGroups: logGroups.filter((x) => x !== g) })}
-                    >
-                      <X size={12} />
-                    </button>
-                  </Tag>
-                ))}
-              </div>
-            )}
-            {logGroups.length < MAX_LOG_GROUPS && <LogGroupAdder taken={logGroups} onAdd={addGroup} />}
-          </div>
+          <LogGroupsInput value={logGroups} onChange={(groups) => onChange({ logGroups: groups })} />
         </Field>
       </div>
       {chosen?.evaluable === false && (

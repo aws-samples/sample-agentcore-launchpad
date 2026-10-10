@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type V2Pipeline, type V2PipelineBody, type V2Range } from "../../../lib/api";
+import { cleanSource, defaultLogFormat, logSourceProblem, PROBLEM_KEY } from "../../../lib/pipelineLogs";
 import { fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -27,6 +28,7 @@ import {
   Tag,
   type TagTone,
 } from "../../ui";
+import { LogFormatStep, LogSourceFields } from "./LogSource";
 
 const STATUS_TONE: Record<V2Pipeline["status"], TagTone> = {
   idle: "gray",
@@ -143,14 +145,32 @@ export function PipelinesTab() {
     {
       key: "input",
       title: t("v2.pipelines.colInput"),
-      render: (p) => (
-        <>
-          {t("v2.pipelines.inputTraces")}
-          <span className="sub">
-            {[p.config.source.agent ?? t("v2.pipelines.allAgents"), rangeLabel(t, p.config.source.range), t(`v2.pipelines.status.${p.config.source.status}`)].join(" · ")}
-          </span>
-        </>
-      ),
+      render: (p) => {
+        const src = p.config.source;
+        if (src.type === "logs") {
+          const groups = src.log_groups ?? [];
+          return (
+            <>
+              {t("v2.pipelines.srcLogs")}
+              <span className="sub clip" title={groups.join("\n")}>
+                {[
+                  groups.length > 1 ? `${groups[0]} +${groups.length - 1}` : (groups[0] ?? "—"),
+                  rangeLabel(t, src.range),
+                  t(`v2.pipelines.logs.preset.${src.format?.preset ?? "genai"}`),
+                ].join(" · ")}
+              </span>
+            </>
+          );
+        }
+        return (
+          <>
+            {t("v2.pipelines.inputTraces")}
+            <span className="sub">
+              {[src.agent ?? t("v2.pipelines.allAgents"), rangeLabel(t, src.range), t(`v2.pipelines.status.${src.status}`)].join(" · ")}
+            </span>
+          </>
+        );
+      },
     },
     { key: "output", title: t("v2.pipelines.colOutput"), render: outputCell },
     { key: "mode", title: t("v2.pipelines.colMode"), render: () => t("v2.pipelines.manual") },
@@ -233,10 +253,12 @@ export function PipelinesTab() {
 const EMPTY: V2PipelineBody = {
   name: "",
   description: "",
-  source: { agent: null, range: "24h", status: "all", max_sessions: 20 },
-  processing: { first_turn_only: false, dedupe: true, min_input_chars: 0 },
+  source: { type: "traces", agent: null, range: "24h", status: "all", max_sessions: 20, log_groups: [], keyword: "", format: defaultLogFormat() },
+  processing: { first_turn_only: false, dedupe: true, min_input_chars: 0, keep_replies: true },
   output: { dataset_name: "" },
 };
+
+type StepKey = "source" | "format" | "logic" | "output";
 
 export function PipelineEditor({ id }: { id: string | null }) {
   const { t } = useTranslation();
@@ -249,11 +271,25 @@ export function PipelineEditor({ id }: { id: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const range: V2Range = draft?.source.range ?? "24h";
-  const sessions = useLoad(() => api.obsSessions(range), `sessions:${range}`);
+  const isLogs = draft?.source.type === "logs";
+  // the trajectory preview only — a logs source previews in its format step
+  const sessions = useLoad(() => (isLogs ? Promise.resolve(null) : api.obsSessions(range)), `sessions:${isLogs ? "logs" : range}`);
 
   if (id && draft === null && existing.data) {
     const p = existing.data;
-    setDraft({ name: p.name, description: p.description, source: p.config.source, processing: p.config.processing, output: p.config.output });
+    // rows saved before log sources existed carry no type / log fields
+    setDraft({
+      name: p.name,
+      description: p.description,
+      source: {
+        ...EMPTY.source,
+        ...p.config.source,
+        type: p.config.source.type ?? "traces",
+        format: { ...defaultLogFormat(), ...(p.config.source.format ?? {}) },
+      },
+      processing: { ...EMPTY.processing, ...p.config.processing },
+      output: p.config.output,
+    });
   }
 
   const matching = useMemo(() => {
@@ -278,8 +314,11 @@ export function PipelineEditor({ id }: { id: string | null }) {
   const save = async (runAfter: boolean) => {
     if (!draft.name.trim()) return setError(t("v2.pipelines.errName"));
     if (!draft.output.dataset_id && !draft.output.dataset_name?.trim()) return setError(t("v2.pipelines.errOutput"));
+    const problem = isLogs ? logSourceProblem(draft.source) : null;
+    if (problem) return setError(t(PROBLEM_KEY[problem]));
     const body: V2PipelineBody = {
       ...draft,
+      source: cleanSource(draft.source),
       name: draft.name.trim(),
       output: draft.output.dataset_id ? { dataset_id: draft.output.dataset_id } : { dataset_name: draft.output.dataset_name?.trim() },
     };
@@ -302,7 +341,15 @@ export function PipelineEditor({ id }: { id: string | null }) {
     }
   };
 
-  const stepsLabels = [t("v2.pipelines.step1"), t("v2.pipelines.step2"), t("v2.pipelines.step3")];
+  const stepKeys: StepKey[] = isLogs ? ["source", "format", "logic", "output"] : ["source", "logic", "output"];
+  const stepLabel: Record<StepKey, string> = {
+    source: t("v2.pipelines.step1"),
+    format: t("v2.pipelines.logs.stepFormat"),
+    logic: t("v2.pipelines.step2"),
+    output: t("v2.pipelines.step3"),
+  };
+  const current = stepKeys[Math.min(step, stepKeys.length - 1)];
+  const lastStep = stepKeys.length - 1;
   const last = existing.data?.last_run;
 
   return (
@@ -310,13 +357,13 @@ export function PipelineEditor({ id }: { id: string | null }) {
       <FlowHeader
         title={id ? t("v2.pipelines.editTitle") : t("v2.pipelines.newTitle")}
         onBack={() => setParams({ tab: "pipelines" })}
-        steps={<Steps steps={stepsLabels} current={step} onSelect={setStep} />}
+        steps={<Steps steps={stepKeys.map((k) => stepLabel[k])} current={step} onSelect={setStep} />}
         end={
           <>
             <Button disabled={step === 0} onClick={() => setStep(step - 1)}>
               {t("v2.common.prev")}
             </Button>
-            {step < 2 ? (
+            {step < lastStep ? (
               <Button kind="primary" onClick={() => setStep(step + 1)} testId="v2-pipeline-next">
                 {t("v2.common.next")}
               </Button>
@@ -336,13 +383,23 @@ export function PipelineEditor({ id }: { id: string | null }) {
       {error && <Alert tone="error">{error}</Alert>}
       {last?.error && <Alert tone="error">{t("v2.pipelines.lastFailed", { error: last.error })}</Alert>}
 
-      {step === 0 && (
+      {last?.log && (last.log.truncated || Object.keys(last.log.failed).length > 0) && (
+        <Alert tone="warn">
+          {t("v2.pipelines.logs.lastRunStats", { events: last.log.events, parsed: last.log.parsed })}
+          {last.log.truncated && ` ${t("v2.pipelines.logs.truncated")}`}
+        </Alert>
+      )}
+
+      {current === "source" && (
         <>
           <Card title={t("v2.pipelines.sourceTitle")}>
             <div className="v2-options" style={{ marginBottom: 20 }}>
-              <OptionCard title={t("v2.pipelines.srcTraces")} desc={t("v2.pipelines.srcTracesDesc")} on onClick={() => undefined} />
-              <OptionCard title={t("v2.pipelines.srcLogs")} desc={t("v2.pipelines.srcLogsDesc")} on={false} disabled onClick={() => undefined} badge={<Tag tone="gray">{t("v2.common.soon")}</Tag>} />
+              <OptionCard title={t("v2.pipelines.srcTraces")} desc={t("v2.pipelines.srcTracesDesc")} on={!isLogs} onClick={() => setSource({ type: "traces" })} testId="v2-pipeline-src-traces" />
+              <OptionCard title={t("v2.pipelines.srcLogs")} desc={t("v2.pipelines.srcLogsDesc")} on={isLogs} onClick={() => setSource({ type: "logs" })} testId="v2-pipeline-src-logs" />
             </div>
+            {isLogs ? (
+              <LogSourceFields source={draft.source} onChange={setSource} />
+            ) : (
             <div className="v2-form cols-2">
               <Field label="Agent" hint={t("v2.pipelines.agentHint")}>
                 <Select
@@ -377,7 +434,9 @@ export function PipelineEditor({ id }: { id: string | null }) {
                 />
               </Field>
             </div>
+            )}
           </Card>
+          {!isLogs && (
           <Card title={t("v2.pipelines.preview")} sub={sessions.loading ? undefined : t("v2.pipelines.previewSub", { count: matching.length, take: Math.min(matching.length, draft.source.max_sessions) })}>
             <Table
               columns={[
@@ -398,13 +457,16 @@ export function PipelineEditor({ id }: { id: string | null }) {
               empty={t("v2.pipelines.previewEmpty")}
             />
           </Card>
+          )}
         </>
       )}
 
-      {step === 1 && (
+      {current === "format" && <LogFormatStep source={draft.source} onChange={setSource} />}
+
+      {current === "logic" && (
         <div className="v2-grid-2" style={{ gridTemplateColumns: "minmax(0, 360px) minmax(0, 1fr)" }}>
           <Card title={t("v2.pipelines.flow")}>
-            {[t("v2.pipelines.node1"), t("v2.pipelines.node2"), t("v2.pipelines.node3"), t("v2.pipelines.node4"), t("v2.pipelines.node5")].map((label, i, all) => (
+            {[isLogs ? t("v2.pipelines.logs.node1") : t("v2.pipelines.node1"), t("v2.pipelines.node2"), t("v2.pipelines.node3"), t("v2.pipelines.node4"), t("v2.pipelines.node5")].map((label, i, all) => (
               <div key={label}>
                 <div className="v2-option" style={{ cursor: "default" }}>
                   <span className="t">
@@ -447,13 +509,26 @@ export function PipelineEditor({ id }: { id: string | null }) {
                 <input type="checkbox" checked={draft.processing.dedupe} onChange={(e) => setProc({ dedupe: e.target.checked })} />
                 {t("v2.pipelines.dedupe")}
               </label>
-              <Alert tone="warn">{t("v2.pipelines.logicNote")}</Alert>
+              <label className="v2-check">
+                <input
+                  type="checkbox"
+                  checked={draft.processing.keep_replies !== false}
+                  onChange={(e) => setProc({ keep_replies: e.target.checked })}
+                  data-testid="v2-pipeline-keep-replies"
+                />
+                {t("v2.pipelines.keepReplies")}
+              </label>
+              {draft.processing.keep_replies !== false ? (
+                <Alert tone="warn">{t("v2.pipelines.logicNote")}</Alert>
+              ) : (
+                <Alert>{t("v2.pipelines.inputsOnlyNote")}</Alert>
+              )}
             </div>
           </Card>
         </div>
       )}
 
-      {step === 2 && (
+      {current === "output" && (
         <Card title={t("v2.pipelines.outputTitle")}>
           <div className="v2-form cols-2">
             <Field label={t("v2.pipelines.colName")} required>

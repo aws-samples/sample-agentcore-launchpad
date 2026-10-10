@@ -27,9 +27,11 @@ import {
 
 type Item = Record<string, unknown>;
 
-/** "trace" when the items came from observed trajectories, else "manual". */
-function datasetOrigin(ds: V2Dataset): "trace" | "manual" {
-  return ds.items.some((i) => (i.metadata as { source?: string } | undefined)?.source === "trace") ? "trace" : "manual";
+/** "trace" / "logs" when the items came from observed trajectories / runtime
+ *  logs (a 数据处理 pipeline or 加入数据集), else "manual". */
+function datasetOrigin(ds: V2Dataset): "trace" | "logs" | "manual" {
+  const sources = new Set(ds.items.map((i) => (i.metadata as { source?: string } | undefined)?.source));
+  return sources.has("trace") ? "trace" : sources.has("logs") ? "logs" : "manual";
 }
 
 interface Row {
@@ -170,7 +172,7 @@ export function DatasetsTab() {
           value={origin}
           allLabel={t("v2.common.all")}
           onChange={setOrigin}
-          options={["trace", "manual"].map((o) => ({ value: o, label: t(`v2.datasets.origin.${o}`) }))}
+          options={["trace", "logs", "manual"].map((o) => ({ value: o, label: t(`v2.datasets.origin.${o}`) }))}
         />
         <Button onClick={reload}>{t("v2.common.refresh")}</Button>
         <div className="end">
