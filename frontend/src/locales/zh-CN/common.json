@@ -7913,7 +7913,6 @@
       "scenarios": "未评分的场景：{{list}}",
       "scenarioSep": "、",
       "rawError": "AWS 原始错误",
-      "viewFailed": "查看未评分的会话",
       "readDetail": "读取失败明细",
       "readDetailHint": "从 AWS 重新读取这次批量评估的结果，补齐未评分会话的原因。只读，不重新运行，也不产生费用。",
       "readDetailDone": "已读取失败明细",

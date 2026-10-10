@@ -157,7 +157,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       />
       {coverage && data.run ? (
         <Alert tone={coverageInfo(coverage) ? "info" : "warn"}>
-          <RunCoverageNote coverage={coverage} runId={data.id} rawError={data.run.error} showLink={false}
+          <RunCoverageNote coverage={coverage} rawError={data.run.error}
             onReadDetail={mayRun ? () => void recheck() : undefined} reading={busy} />
         </Alert>
       ) : data.run?.error && <Alert tone={data.status === "failed" ? "error" : "warn"}>{data.run.error}</Alert>}

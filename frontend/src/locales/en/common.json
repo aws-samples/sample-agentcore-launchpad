@@ -7913,7 +7913,6 @@
       "scenarios": "Unscored scenarios: {{list}}",
       "scenarioSep": ", ",
       "rawError": "Raw AWS error",
-      "viewFailed": "View unscored sessions",
       "readDetail": "Read failure details",
       "readDetailHint": "Read this batch evaluation's results from AWS again to fill in why sessions were not scored. Read-only: nothing is re-run or billed.",
       "readDetailDone": "Failure details read",
