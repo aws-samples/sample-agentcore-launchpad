@@ -25,11 +25,14 @@ export function RunCoverageTag({ coverage }: { coverage: RunCoverage }) {
 export function RunCoverageNote({
   coverage,
   rawError,
+  showRawError = true,
   onReadDetail,
   reading,
 }: {
   coverage: RunCoverage;
   rawError: string | null;
+  /** the collapsed raw AWS error; the architect's run list leaves it to the task detail */
+  showRawError?: boolean;
   /** legacy rows: re-check the batch to backfill the reasons */
   onReadDetail?: () => void;
   reading?: boolean;
@@ -55,7 +58,7 @@ export function RunCoverageNote({
           </LinkButton>
         </div>
       )}
-      {raw && (
+      {showRawError && raw && (
         <details>
           <summary className="v2-muted">{t("v2.runCoverage.rawError")}</summary>
           <div className="mono">{raw}</div>

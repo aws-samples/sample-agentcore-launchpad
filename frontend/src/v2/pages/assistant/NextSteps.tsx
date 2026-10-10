@@ -352,6 +352,7 @@ export function NextStepsCard({
                         <RunCoverageNote
                           coverage={coverage}
                           rawError={run.error}
+                          showRawError={false}
                           onReadDetail={canRun ? () => void readDetail(run) : undefined}
                           reading={reading === run.id}
                         />
