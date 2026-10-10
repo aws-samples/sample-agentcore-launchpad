@@ -728,6 +728,8 @@ export interface JobInfo {
   status: "queued" | "running" | "succeeded" | "failed";
   error: string | null;
   events: JobEvent[];
+  /** job-type specific state (e.g. a conversation clear's step, blocker and result) */
+  payload?: Record<string, unknown> | null;
 }
 
 export interface ByoMountInput {
@@ -1327,19 +1329,70 @@ export interface AssistantConversationFootprint {
     cloud_resources: number;
   }[];
   datasets: { id: string; name: string; item_count: number; cloud: boolean }[];
-  blockers: { kind: "turn" | "operation" | "job"; id: string; reason: string }[];
+  /** canaries on the conversation's Agents — stopped and removed before the Agent */
+  canaries: {
+    id: string;
+    name: string;
+    kind: "harness" | "runtime";
+    status: string;
+    agent_id: string;
+    running_action: string | null;
+    /** cleanup has not run, or ran and left resources behind */
+    pending: boolean;
+    resources: {
+      ab_test: boolean;
+      gateway: string | null;
+      endpoints: string[];
+      online_evaluations: number;
+    };
+  }[];
+  experiments: { id: string; name: string; agent_id: string; status: string; pending: boolean }[];
+  blockers: {
+    kind: "turn" | "preparation" | "operation" | "job" | "canary" | "experiment";
+    id: string;
+    reason: string;
+  }[];
   /** permissions clearing needs: agents.deploy for cloud assets, agents.delete for an Agent */
   required_permissions: string[];
   /** the caller holds every required permission */
   can_clear: boolean;
+  /** the newest clear attempt (a durable job), if any */
+  purge: AssistantPurgeJobState | null;
 }
 
+export interface AssistantPurgeBlocker {
+  code: string;
+  message: string;
+  detail: Record<string, unknown>;
+  status_code: number;
+}
+
+export interface AssistantPurgeJobState {
+  job_id: string;
+  status: JobInfo["status"];
+  error: string | null;
+  blocker: AssistantPurgeBlocker | null;
+  step: { key: string; state: string; detail: string } | null;
+  updated_at: string | null;
+}
+
+/**
+ * `DELETE …/conversations/{id}`: a transcript-only conversation is deleted inline
+ * (`deleted: true`); anything with cloud resources answers 202 with a durable clear
+ * job (`job_id`, `deleted: false`) — poll `GET /api/jobs/{job_id}` until it is terminal.
+ */
 export interface AssistantConversationPurgeResult {
-  deleted: true;
+  deleted: boolean;
   conversation_id: string;
+  job_id?: string;
+  status?: JobInfo["status"];
+  error?: string | null;
+  blocker?: AssistantPurgeBlocker | null;
   operations_cleaned: string[];
   datasets: { id: string; name: string }[];
   agents: { id: string; name: string; aws_resource_deleted: boolean }[];
+  canaries?: { id: string; name: string }[];
+  experiments?: { id: string; name: string }[];
 }
 
 export interface AssistantApproveResult {

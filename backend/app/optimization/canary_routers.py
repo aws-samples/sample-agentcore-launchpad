@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.assistant import purge as assistant_purge
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.models import EvalDataset
@@ -171,6 +172,7 @@ def _eligible_agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
             {"agent_id": agent_id},
             status_code=400,
         )
+    assistant_purge.refuse_while_clearing(agent.id, "canary")
     capability = service.canary_capability(agent)
     if not capability["eligible"]:
         raise AppError(
@@ -335,6 +337,8 @@ def runtime_canary_action(
     row = _canary_in(db, ws, canary_id)
     system_agents.assert_not_system_agent(db, row.champion_agent_id, "canary")
     system_agents.assert_not_system_agent(db, row.challenger_agent_id, "canary")
+    # a conversation CLEAR owns this canary's cleanup while it runs
+    assistant_purge.refuse_while_clearing(row.champion_agent_id, f"canary {req.action}")
     if row.running_action:
         raise AppError(
             "canary.action_in_flight",

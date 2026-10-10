@@ -16,6 +16,7 @@ from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import harness as hc
+from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 from app.services.memory import scoped_actor
 from app.services.workspace import WorkspaceContext, context_for_workspace
@@ -1364,9 +1365,13 @@ def _owned_resources(
         if target.get("target_id")
     }
     if gateway_id:
-        for target in control.list_gateway_targets(
-            gatewayIdentifier=gateway_id
-        ).get("items", []):
+        try:
+            listed = control.list_gateway_targets(gatewayIdentifier=gateway_id).get("items", [])
+        except Exception as exc:
+            if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                raise
+            listed = []  # a re-run after the dedicated gateway is gone
+        for target in listed:
             if target.get("name") in target_names and target.get("targetId"):
                 target_ids.add(target["targetId"])
 
@@ -1551,3 +1556,87 @@ def act_cleanup(
         artifact={"cleanup": results},
     )
     return results
+
+
+def cleanup_blockers(results: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The cleanup results that leave a canary-owned resource behind. ``skipped`` is
+    never success; the one exception is a candidate zip kept because it backs the live
+    version (``s3:`` — not a dependency of anything, removed once the agent is gone)."""
+    return [r for r in results
+            if r.get("status") == "skipped" and not str(r.get("category", "")).startswith("s3:")]
+
+
+def retained_artifact_keys(row: RuntimeCanary) -> list[str]:
+    """The S3 keys this canary uploaded (candidate at setup, restore at rollback)."""
+    artifacts = row.artifacts or {}
+    keys = [(artifacts.get("setup") or {}).get("candidate_s3_key"),
+            (artifacts.get("rollback") or {}).get("restored_s3_key")]
+    return [k for k in keys if k]
+
+
+def remaining_resources(row: RuntimeCanary, workspace: WorkspaceContext) -> list[dict[str, str]]:
+    """AWS readback of every resource this canary owns that still exists — empty only
+    when the A/B test, online-evaluation configs, dedicated gateway and BOTH named
+    endpoints are verifiably gone. ``act_cleanup`` returning is not that evidence:
+    endpoint, A/B test and gateway deletion are asynchronous (``DELETING`` for minutes).
+    Every entry is ``{category, status}``; a lookup error propagates (unknown ≠ gone)."""
+    artifacts = row.artifacts or {}
+    setup = artifacts.get("setup") or {}
+    control = control_client(workspace)
+    data = data_client(workspace)
+    out: list[dict[str, str]] = []
+
+    ab_ids = {setup.get("ab_test_id")} - {None}
+    for test in experiment_service.list_ab_tests(data):
+        if test.get("abTestId") in ab_ids or (
+                str(test.get("name", "")).lower() == _test_name(row.id).lower()):
+            out.append({"category": f"abtest:{test.get('abTestId')}",
+                        "status": str(test.get("status") or test.get("executionStatus") or "")})
+
+    eval_prefix = f"can_{row.id[:8]}_"
+    recorded = {t.get("online_eval_id") for t in (setup.get("champion") or {},
+                                                  setup.get("challenger") or {})} - {None}
+    for config in control.list_online_evaluation_configs().get("onlineEvaluationConfigs", []):
+        if (config.get("onlineEvaluationConfigId") in recorded
+                or str(config.get("onlineEvaluationConfigName", "")).startswith(eval_prefix)):
+            out.append({"category": f"online-eval:{config.get('onlineEvaluationConfigId')}",
+                        "status": str(config.get("status") or "")})
+
+    gateway_id = setup.get("gateway_id")
+    if gateway_id:
+        try:
+            gateway = control.get_gateway(gatewayIdentifier=gateway_id)
+            out.append({"category": f"gateway:{gateway_id}",
+                        "status": str(gateway.get("status") or "")})
+        except Exception as exc:
+            if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                raise
+
+    if is_harness(row):
+        harness_id = setup.get("runtime_id") or (artifacts.get("agent_meta") or {}).get(
+            "resource_id")
+        names = {canary_harness.control_endpoint(row.id), canary_harness.treatment_endpoint(row.id)}
+        if harness_id:
+            try:
+                endpoints = hc.list_harness_endpoints(control, harness_id)
+            except Exception as exc:
+                if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                    raise
+                endpoints = []  # the harness itself is gone, and its endpoints with it
+            out.extend({"category": f"endpoint:{e.get('endpointName')}",
+                        "status": str(e.get("status") or "")}
+                       for e in endpoints if e.get("endpointName") in names)
+    else:
+        runtime_id = setup.get("runtime_id")
+        for name in (setup.get("stable_endpoint"), setup.get("treatment_endpoint")):
+            if not (runtime_id and name):
+                continue
+            try:
+                endpoint = rt.get_runtime_endpoint(
+                    control, runtime_id=runtime_id, endpoint_name=name)
+                out.append({"category": f"endpoint:{name}",
+                            "status": str(endpoint.get("status") or "")})
+            except Exception as exc:
+                if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                    raise
+    return out

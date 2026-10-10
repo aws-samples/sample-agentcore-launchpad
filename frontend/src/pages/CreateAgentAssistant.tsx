@@ -41,6 +41,11 @@ import {
 import {
   ASSISTANT_JOB_POLL_MS,
   type AssistantLiveMessage,
+  clearCanaryList,
+  clearExperimentList,
+  clearInProgress,
+  clearStepText,
+  runConversationClear,
   isAssistantUnauthorized,
   isFishbone,
   openAssistantTurn,
@@ -129,13 +134,16 @@ export function CreateAgentAssistant() {
     | null
   >(null);
   // CLEAR on a history row: the footprint is read first and shown in the confirm;
-  // `deleting` while the purge runs (it may take a while — fenced cleanups + teardown)
+  // `deleting` while the durable clear job runs (canaries, assets, Agents — each read
+  // back gone); closing the dialog only stops following it (`clearDetached`)
   const [clearing, setClearing] = useState<{
     id: string;
     title: string;
     footprint: AssistantConversationFootprint | null;
     deleting: boolean;
+    progress: string;
   } | null>(null);
+  const clearDetached = useRef(false);
   // outcome state is keyed by the approval it was polled for
   const [polled, setPolled] = useState<{
     jobId: string;
@@ -454,7 +462,7 @@ export function CreateAgentAssistant() {
   /** CLEAR (history row): read the footprint, then open the confirm dialog with it. */
   const askClear = async (c: AssistantConversationSummary) => {
     const title = c.title || c.id.slice(0, 8);
-    setClearing({ id: c.id, title, footprint: null, deleting: false });
+    setClearing({ id: c.id, title, footprint: null, deleting: false, progress: "" });
     try {
       const footprint = await api.assistantConversationFootprint(c.id);
       setClearing((cur) => (cur?.id === c.id ? { ...cur, footprint } : cur));
@@ -467,30 +475,40 @@ export function CreateAgentAssistant() {
   const doClear = async () => {
     if (!clearing || clearing.deleting) return;
     const { id, title } = clearing;
-    setClearing({ ...clearing, deleting: true });
+    clearDetached.current = false;
+    setClearing({ ...clearing, deleting: true, progress: t("assistantPage.clear.starting") });
     try {
-      const res = await api.assistantDeleteConversation(id);
-      toast(
-        t("assistantPage.clear.doneToast", {
-          title,
-          agents: res.agents.length,
-          operations: res.operations_cleaned.length,
-          datasets: res.datasets.length,
-        }),
-        "good",
-      );
-      if (conversation?.id === id) {
-        setLinked(null);
-        setConversation(null);
-        setMessages([]);
-        setEditing(null);
-        setConfirm(null);
+      const outcome = await runConversationClear(id, {
+        detached: () => clearDetached.current,
+        onProgress: (text) =>
+          setClearing((cur) => (cur?.id === id ? { ...cur, progress: text } : cur)),
+      });
+      if (outcome.kind === "failed") {
+        toast(t("assistantPage.clear.failedToast", { reason: outcome.reason }));
+      } else if (outcome.kind === "done") {
+        const res = outcome.result;
+        toast(
+          t("assistantPage.clear.doneToast", {
+            title,
+            agents: res.agents.length,
+            operations: res.operations_cleaned.length,
+            datasets: res.datasets.length,
+          }),
+          "good",
+        );
+        if (conversation?.id === id) {
+          setLinked(null);
+          setConversation(null);
+          setMessages([]);
+          setEditing(null);
+          setConfirm(null);
+        }
+        loadConversations();
       }
-      loadConversations();
     } catch (err) {
       toast(apiMessage(err));
     } finally {
-      setClearing(null);
+      if (!clearDetached.current) setClearing(null);
     }
   };
 
@@ -505,6 +523,14 @@ export function CreateAgentAssistant() {
           list: fp.agents.map((a) => `${a.name} (${a.status})`).join(", "),
         }),
       );
+    }
+    if (fp.canaries.length) {
+      lines.push(t("assistantPage.clear.canaries", { list: clearCanaryList(fp) }));
+    }
+    const experiments = clearExperimentList(fp);
+    if (experiments) lines.push(t("assistantPage.clear.experiments", { list: experiments }));
+    if (fp.canaries.length || fp.experiments.length) {
+      lines.push(t("assistantPage.clear.historyKept"));
     }
     const cloud = fp.operations.filter((o) => o.status !== "cleaned");
     if (cloud.length) {
@@ -525,10 +551,25 @@ export function CreateAgentAssistant() {
       );
       if (fp.datasets.some((d) => d.cloud)) lines.push(t("assistantPage.clear.datasetCloud"));
     }
-    if (!fp.agents.length && !cloud.length && !fp.datasets.length) {
+    if (!fp.agents.length && !cloud.length && !fp.datasets.length && !fp.canaries.length) {
       lines.push(t("assistantPage.clear.onlyTranscript"));
     }
-    if (fp.blockers.length) {
+    if (fp.purge?.status === "failed" && !clearing?.deleting) {
+      lines.push(
+        t("assistantPage.clear.lastFailed", {
+          reason: fp.purge.blocker?.message || fp.purge.error || "",
+        }),
+      );
+    }
+    if (clearing?.deleting) {
+      lines.push(t("assistantPage.clear.progress", { step: clearing.progress }));
+    } else if (clearInProgress(fp)) {
+      lines.push(
+        t("assistantPage.clear.inProgress", {
+          step: clearStepText(fp.purge?.step) || fp.purge?.status,
+        }),
+      );
+    } else if (fp.blockers.length) {
       lines.push(
         t("assistantPage.clear.blockers", {
           list: fp.blockers.map((b) => b.reason).join("; "),
@@ -536,7 +577,7 @@ export function CreateAgentAssistant() {
       );
     } else if (!fp.can_clear) {
       lines.push(t("assistantPage.clear.noPermission"));
-    } else if (fp.agents.length || cloud.length) {
+    } else if (fp.agents.length || cloud.length || fp.canaries.length) {
       lines.push(t("assistantPage.clear.irreversible"));
     } else {
       lines.push(t("assistantPage.clear.irreversibleLocal"));
@@ -1376,18 +1417,24 @@ export function CreateAgentAssistant() {
         onConfirm={() => {
           const fp = clearing?.footprint;
           if (!fp || clearing?.deleting) return;
-          if (fp.blockers.length > 0) {
+          const following = clearInProgress(fp); // a live job is followed, not re-checked
+          if (!following && fp.blockers.length > 0) {
             toast(t("assistantPage.clear.blocked"));
             return;
           }
-          if (!fp.can_clear) {
+          if (!following && !fp.can_clear) {
             toast(t("assistantPage.clear.noPermission"));
             return;
           }
           void doClear();
         }}
         onCancel={() => {
-          if (!clearing?.deleting) setClearing(null);
+          if (clearing?.deleting) {
+            // the job keeps running server-side; only the polling stops
+            clearDetached.current = true;
+            toast(t("assistantPage.clear.background"), "good");
+          }
+          setClearing(null);
         }}
       />
     </section>

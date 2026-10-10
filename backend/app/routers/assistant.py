@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -27,7 +27,7 @@ from app.assistant import proposal as proposal_contract
 from app.assistant.principal import principal_of
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError
-from app.models.ledger import Workspace
+from app.models.ledger import Job, Workspace
 from app.routers.agents import _agent_out
 from app.routers.auth import Identity, require_identity, require_permission, resolve_identity
 from app.routers.auth import enabled as auth_enabled
@@ -718,8 +718,9 @@ def conversation_footprint(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """What CLEAR would remove for this conversation (Agents deployed from its
-    approvals, evaluation-assets operations with their cloud resources, the local
-    Datasets they created) and what currently blocks it. Ledger read only; owner-bound."""
+    approvals, the canaries and experiments run on them, evaluation-assets operations
+    with their cloud resources, the local Datasets they created), what currently blocks
+    it, and the newest clear attempt (``purge``). Ledger read only; owner-bound."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
     fp = purge_mod.footprint(db, row)
@@ -730,15 +731,27 @@ def conversation_footprint(
 def delete_conversation(
     conversation_id: str,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Delete the conversation and everything it created: fenced cleanup of every
-    evaluation-assets operation, the local Datasets, every deployed Agent (the same
-    teardown as DELETE /api/agents/{id}), then the ledger rows. Owner-bound; the caller
-    also needs ``agents.deploy`` for cloud assets and ``agents.delete`` for an Agent.
-    Refuses (409, nothing deleted) while a turn, an operation or a deployment job is
-    still running, and stops (409) if an operation cannot be fully cleaned."""
+    """Delete the conversation and everything it created. Owner-bound; the caller also
+    needs ``agents.deploy`` for cloud assets and ``agents.delete`` for an Agent. Refuses
+    (409, nothing deleted) while a turn, an operation, a deployment job or a canary /
+    experiment action is still running.
+
+    A transcript-only conversation is deleted inline (200, ``deleted: true``). Anything
+    with cloud resources becomes a durable clear job (202, ``job_id``; poll
+    ``GET /api/jobs/{job_id}``): canaries and experiments first, then evaluation assets,
+    Datasets and Agents, each read back gone before the next — see ``assistant.purge``.
+    A repeated DELETE while that job is live returns the same job; after a failed job it
+    starts a new attempt that resumes from the verified checkpoints."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
-    return purge_mod.purge(db, row, ws.context, can=identity.can)
+    job, done = purge_mod.request_purge(db, row, can=identity.can)
+    if done is not None:
+        return done
+    purge_mod.start_purge_async(job.id)
+    response.status_code = 202
+    db.expire_all()
+    return purge_mod.job_result(db.get(Job, job.id))

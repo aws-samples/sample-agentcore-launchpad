@@ -1315,20 +1315,40 @@ draw.io template dependency.
 **Clearing a conversation clears what it created.** The History panel's CLEAR
 (`GET …/footprint` → confirm → `DELETE …/conversations/{id}`, `app/assistant/purge.py`)
 never deletes only the transcript: the footprint lists every Agent an approval deployed,
-every evaluation-assets operation with its live cloud resources and the local Datasets
-those operations created, plus what blocks the purge (a streaming turn, a queued /
-running / cleaning operation, a live deployment job). The purge refuses on any blocker
-with nothing deleted, then composes the existing single-resource paths in dependency
-order — the fenced `cleanup_operation` per operation (an operation that does not reach
-`cleaned` stops the purge with `409 assistant.conversation_assets_remain`; the
-conversation stays so the remaining resources stay attributable), the local Dataset
-rows (an AWS copy a member synced by hand is that member's asset and stays), the
-shared `delete_agent_row` teardown per Agent (preset refusal, resource, role, ledger,
-name claim), and only then the ledger rows. Owner-bound; a member may clear a bare
-transcript, while cloud assets additionally need `perm:agents.deploy` and an Agent
+the **canaries and experiments run on those Agents** (with the A/B test, online
+evaluations, dedicated gateway and named endpoints each canary owns), every
+evaluation-assets operation with its live cloud resources and the local Datasets those
+operations created, plus what blocks the purge (a streaming turn or Skill import, a
+queued / running / cleaning operation, a live deployment job, a canary or experiment
+action still running) and the newest clear attempt (`purge`). A transcript-only
+conversation is deleted inline; anything else becomes a **durable clear job**
+(`purge_assistant_conversation`, `202 {job_id}`, polled via `GET /api/jobs/{id}`,
+resumed on startup by `resume_pending_jobs`) claimed by `assistant_conversations.
+purge_job_id`. The job pins the ownership evidence (Agent / canary / experiment /
+Dataset ids) and composes the existing single-resource paths in dependency order,
+fenced before every step and **verified by AWS readback**, never by a delete response:
+each canary's `act_cleanup` under its own `running_action` claim, then a bounded wait
+until `remaining_resources` reads the A/B test, online-eval configs, gateway and BOTH
+named endpoints back gone (`DeleteHarness` answers `ConflictException` while a named
+endpoint exists — issue #246; a canary whose status already says `cleaned` is still
+read back); each experiment's `act_cleanup`; the fenced `cleanup_operation` per
+operation; the local Dataset rows (an AWS copy a member synced by hand stays); per Agent
+the method-specific resource delete (refused up front when its Harness carries a named
+endpoint no canary of the conversation owns), a bounded wait until `GetHarness` /
+`GetAgentRuntime` is not found, then its own execution role and the ledger; the
+canaries' retained candidate zips; and only then the ledger rows. A `skipped` cleanup
+result, a resource still `DELETING` after the wait, a `DELETE_FAILED`, a conflict, an
+unowned dependency or a refusal stops the job as `failed` with an actionable
+`payload.blocker` — the conversation and its evidence stay, and the next CLEAR starts a
+new job that carries the inventory, verified checkpoints and accepted delete requests
+forward. While the job is live every conversation write answers `409
+assistant.conversation_clearing` and its Agents refuse canary / experiment / redeploy /
+convert / delete (`409 assistant.agent_clearing`). Owner-bound; a member may clear a
+bare transcript, while cloud assets additionally need `perm:agents.deploy` and an Agent
 `perm:agents.delete` (`403 auth.permission_required`; the footprint reports
 `required_permissions` and the caller's `can_clear`) — the same bar as the individual
-cleanup / agent-delete routes. Evaluation runs already recorded keep their rows.
+cleanup / agent-delete routes. Evaluation runs and canary / experiment rows already
+recorded keep their rows.
 
 **Approval — the only executor.** `POST …/proposal/approve` (`perm:agents.deploy`,
 the same permission as `POST /api/agents`, re-asserted in the handler) names

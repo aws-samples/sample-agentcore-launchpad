@@ -3440,8 +3440,12 @@ def test_conversation_purge_removes_assets_datasets_agents_then_rows(app_ready, 
     _run(op_id, fakes)
     dataset_id = _op(op_id).dataset_id
     torn_down: list[str] = []
-    monkeypatch.setattr(agents_router, "_delete_agent_resources",
+    monkeypatch.setattr(agents_router, "delete_agent_cloud_resource",
                         lambda agent, ws: torn_down.append(agent.id) or True)
+    monkeypatch.setattr(agents_router, "delete_agent_role", lambda agent, ws: True)
+    # AWS readback: no named endpoints, and the Harness reads back gone once deleted
+    monkeypatch.setattr(purge, "foreign_endpoints", lambda agent, ws: [])
+    monkeypatch.setattr(purge, "agent_remaining", lambda agent, ws: [])
 
     db = SessionLocal()
     try:

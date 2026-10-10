@@ -496,6 +496,9 @@ def _migrate_assistant_columns(bind) -> None:
             ),
             "shared_by": "ALTER TABLE assistant_conversations ADD COLUMN shared_by VARCHAR(64)",
             "shared_at": "ALTER TABLE assistant_conversations ADD COLUMN shared_at DATETIME",
+            "purge_job_id": (
+                "ALTER TABLE assistant_conversations ADD COLUMN purge_job_id VARCHAR(32)"
+            ),
         },
         "assistant_proposals": {
             "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",
