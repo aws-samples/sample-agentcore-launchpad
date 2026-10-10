@@ -79,6 +79,17 @@ generate → package → provision → deploy → register
 `Deployment` 行上,并作为 JSONL 事件镜像进 `Job` 日志,因此重启后的后端会从第一个
 未成功的阶段继续(启动时执行 `resume_pending_jobs()`)。
 
+`resume_pending_jobs()` 只是 `create_app` 里九个启动钩子之一，它们对在途工作的处理各不相同：
+部署 / 引导 / 卸载 / 清除类任务和评估资产操作会**恢复**；已启动批量评估的评估运行与 Policy
+变更会从 AWS **对账**；尚未启动批量评估的评估运行、Skill Lab 任务和进行中的架构助手回合会被
+**标记为中断失败**；实验 / 金丝雀的 `running_action` 标记会被**清除**，需用户重试；数据管道和
+第三方 provider 的优化建议任务会在**下次读取时失败**，因此启动日志里不会出现它们；没有恢复
+入口的 `Job.type` 则会**滞留**。`backend/scripts/inflight.py`（基于 `app/services/inflight.py`）
+以只读方式读取台账——不构建应用、不调用 AWS——列出每一条在途记录及其 `restart_outcome`；
+其退出码（`0` 无在途、`2` 仅恢复 / 对账、`3` 有记录会失败、被清除或滞留）就是生产环境更新
+流程中重启前的检查步骤。一个防漂移测试会解析 `create_app` 与 `starters` 字典，新增启动钩子
+或可恢复任务类型在清单完成分类之前都会让测试失败。
+
 | 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — 自带代码 |
 |---|---|---|---|---|
 | **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) | *不生成代码。* 校验已暂存的上传(或 ECR 镜像),并把服务端核验的溯源信息(sha256、上传者、时间)写入 spec |

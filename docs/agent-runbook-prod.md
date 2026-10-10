@@ -108,8 +108,39 @@ git merge --ff-only origin/main
 # only if the delta touched **/pyproject.toml or uv.lock:      cd backend && uv sync
 # only if the delta touched package*.json:                     cd frontend && npm ci
 # only if the delta touched frontend/:                         cd frontend && npm run build
+(cd backend && /home/ubuntu/.local/bin/uv run python scripts/inflight.py); echo "inflight exit=$?"
 sudo systemctl restart launchpad-backend   # + launchpad-frontend if rebuilt
 ```
+
+**The in-flight probe (run right before every restart).** `scripts/inflight.py`
+lists every background item in the ledger and what the restart will do to it. It is
+read-only — no `create_app`/`init_db`, no row written, no AWS call — needs no
+`sqlite3` CLI, and tolerates a checkout that is ahead of the ledger schema (a table
+or column the restart has not migrated yet is reported as `note: skipped …`, not an
+error). Add `--json` for a machine-readable answer. It reads `settings.database_url`:
+if the systemd unit sets `LAUNCHPAD_DATABASE_URL`, pass the same value to the probe
+(an ad-hoc shell does not inherit the unit's environment). Branch on the exit code:
+
+| Exit | Meaning | Do |
+|---|---|---|
+| `0` | nothing in flight, or only `restart_safe` rows | restart |
+| `2` | only `resumes` / `reconciles` rows | restart is fine; expect the `resumed …` / `reconciling …` / `reconciled …` lines in the journal and watch the resumed jobs finish |
+| `3` | at least one `fails_interrupted`, `fails_on_read`, `cleared_retry` or `unhandled` row | wait and re-run the probe until it drops to `0`/`2`; restart anyway only knowingly, and tell the owners which rows to re-submit or retry |
+| `1` | the ledger could not be read (e.g. no file at the configured path) | fix the path; do not read "no output" as "nothing in flight" |
+| `64` | bad command-line usage | fix the invocation |
+
+Per outcome: `resumes` — a startup hook re-runs it from its checkpoint (deploy,
+workspace bootstrap, preset uninstall, architect CLEAR jobs; evaluation-asset
+operations). `reconciles` — settled from AWS, never replayed (eval runs whose batch
+already started; Policy changes). `fails_interrupted` — failed at startup (eval runs
+with no batch yet, Skill Lab jobs — a `train` job can be resumed on request — and
+open architect turns, whose streams die). `fails_on_read` — failed the next time the
+row is read, so the journal is silent about it (running data pipelines, provider
+recommendation jobs). `cleared_retry` — an experiment/canary `running_action` or an
+architect preparation claim is cleared and the user must retry. `restart_safe` — the
+work lives on AWS (AgentCore recommendation jobs, refreshed from GetRecommendation).
+`unhandled` — a queued/running `Job.type` with no resume starter: the restart strands
+it; report it as a bug.
 
 Run `env -u AWS_REGION -u AWS_DEFAULT_REGION -u LAUNCHPAD_REGION make verify`
 before restarting. The backend test bootstrap isolates both SQLite and YAML reads
@@ -226,8 +257,8 @@ box the same way as dev, with these prod-specific readings:
   that already host foreign Launchpad resources.
 - **A service restart resumes interrupted `bootstrap_workspace` jobs**
   (real AWS provisioning in the target account/region) in addition to deploy
-  jobs — check `GET /api/workspaces` for a workspace stuck in `bootstrapping`
-  before restarting, and expect the resumed job to continue after.
+  jobs — the in-flight probe (`scripts/inflight.py`, §3 update recipe) lists
+  them as `resumes`; expect the resumed job to continue after the restart.
 - **Startup refuses to boot on any NULL `workspace_id` ledger row** (the
   journal names the table). That indicates a write-path bug introduced by an
   update; roll back the update rather than hand-patching rows.
