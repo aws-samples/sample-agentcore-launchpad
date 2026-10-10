@@ -171,6 +171,16 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           </Alert>
         </div>
       )}
+      {!!data.run?.scenario_failures?.length && (
+        <div data-testid="v2-task-scenario-failures">
+          <Alert tone="warn">
+            {t("v2.taskDetail.scenarioFailures", {
+              count: data.run.scenario_failures.length,
+              list: data.run.scenario_failures.map((f) => `${f.scenario_id} (${f.code})`).join(", "),
+            })}
+          </Alert>
+        </div>
+      )}
       {data.online?.failure_reason && <Alert tone="error">{data.online.failure_reason}</Alert>}
       <Card title={t("v2.taskDetail.overview")}>
         <Descriptions

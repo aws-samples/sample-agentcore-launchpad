@@ -6133,7 +6133,9 @@
         "scopeOk": "可评估",
         "scopeUnsupported": "不支持",
         "notEvaluable": "该服务的 span 只来自 AgentCore Evaluation 不会作为 Agent span 读取的插桩 scope（{{scopes}}），每个会话都会以「No evaluable agent spans found」失败。请用受支持的框架插桩库为 Agent 埋点（例如 Strands，或 opentelemetry.instrumentation.* / openinference.instrumentation.* 的 GenAI 插桩库）。"
-      }
+      },
+      "actorModel": "扮演用户的模型",
+      "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。"
     },
     "taskStatus": {
       "queued": "排队中",
@@ -6178,7 +6180,8 @@
       },
       "insightsTitle": "洞察结果",
       "insightsWait": "任务完成后展示洞察聚类。",
-      "insightsEmpty": "该任务未产出洞察聚类。"
+      "insightsEmpty": "该任务未产出洞察聚类。",
+      "scenarioFailures": "{{count}} 个模拟用户场景重试后仍失败，已跳过（不计分），其余场景照常评估：{{list}}"
     },
     "outcome": {
       "passed": "通过",

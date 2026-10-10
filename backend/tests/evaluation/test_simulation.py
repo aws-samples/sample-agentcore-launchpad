@@ -29,9 +29,12 @@ def stub_executor(monkeypatch, *, turns=2, status="COMPLETED", captured=None):
         def run_scenario(self, scenario):
             if captured is not None:
                 captured["scenario"] = scenario
-            for turn in range(turns):
-                self.agent_invoker(AgentInvokerInput(
-                    payload=f"turn-{turn}", session_id="framework-key"))
+            try:
+                for turn in range(turns):
+                    self.agent_invoker(AgentInvokerInput(
+                        payload=f"turn-{turn}", session_id="framework-key"))
+            except Exception as exc:  # the real executor swallows into the result too
+                return FakeResult(status="FAILED", error=str(exc))
             return FakeResult(status=status,
                               error="boom" if status == "FAILED" else None)
 
@@ -97,6 +100,28 @@ def test_adapter_raises_on_failed_scenario(monkeypatch):
         )
 
 
+def test_adapter_reraises_the_agent_calls_own_error(monkeypatch):
+    """The executor keeps only str(exc); the adapter hands the caller the agent
+    call's real exception so its code drives the retry / skip decision."""
+    from app.core.errors import AppError
+
+    stub_executor(monkeypatch, turns=2)
+    timeout = AppError("harness.execution_timeout", "Harness execution timed out")
+
+    def invoke(client, arn, prompt, session_id=None, actor_id="default"):
+        if session_id:  # the second turn stalls
+            raise timeout
+        return {"text": "ok", "session_id": "harness-sess-" + "x" * 30}
+
+    monkeypatch.setattr(simulation.hc, "invoke_harness_text", invoke)
+    with pytest.raises(AppError) as err:
+        simulation.run_simulated_scenario(
+            object(), agent_arn="arn:h", method="harness", scenario=PERSONA,
+            actor_model_id="m",
+        )
+    assert err.value is timeout
+
+
 def test_adapter_requires_actor_model():
     with pytest.raises(RuntimeError, match="actor_model_id"):
         simulation.run_simulated_scenario(
@@ -133,3 +158,99 @@ def test_persona_normalize_passthrough_and_ground_truth():
     assert meta[0]["groundTruth"]["inline"] == {
         "assertions": [{"text": "Agent submits a PTO request"}]
     }
+
+
+# ─── execute_run: a failed persona is skipped, not fatal ─────────────────────
+def _personas(*ids):
+    return [{**PERSONA, "scenario_id": sid} for sid in ids]
+
+
+def _execute(monkeypatch, outcomes, items):
+    """Run ``items`` through execute_run with ``run_simulated_scenario`` replaced:
+    ``outcomes[scenario_id]`` is a list consumed per attempt (a session id, or an
+    exception to raise)."""
+    from unittest.mock import MagicMock
+
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+    from app.evaluation import service as evaluation
+    from app.evaluation.models import EvalRun
+    from tests.conftest import ws_ctx
+
+    attempts: list[str] = []
+
+    def fake_run(_data, *, scenario, **_kw):
+        attempts.append(scenario["scenario_id"])
+        outcome = outcomes[scenario["scenario_id"]].pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    client = MagicMock()
+    client.start_batch_evaluation.return_value = {"batchEvaluationId": "batch-1"}
+    monkeypatch.setattr(evaluation, "data_client", lambda _ws: client)
+    monkeypatch.setattr(evaluation.simulation, "run_simulated_scenario", fake_run)
+    monkeypatch.setattr(evaluation, "_wait_for_fresh_telemetry", lambda **_kw: None)
+    monkeypatch.setattr(evaluation, "_poll_batch", lambda *_a, **_kw: {})
+    monkeypatch.setattr(evaluation, "_finish_from_result", lambda *_a, **_kw: None)
+    with SessionLocal() as db:
+        row = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id="agent-harness",
+                      agent_name="test-harness", status="queued", evaluators=[])
+        db.add(row)
+        db.commit()
+        run_id = row.id
+    evaluation.execute_run(
+        run_id, workspace=ws_ctx(), agent_arn="arn:h", method="harness",
+        service_name="harness_test.DEFAULT", log_group="/test", items=items,
+        evaluators=["Builtin.GoalSuccessRate"], mode="evaluators", wait_seconds=0,
+        actor_model_id="m",
+    )
+    batch = client.start_batch_evaluation.call_args
+    with SessionLocal() as db:
+        return db.get(EvalRun, run_id), attempts, batch
+
+
+def test_a_stalled_persona_is_retried_once_then_skipped_and_the_run_goes_on(monkeypatch):
+    from app.core.errors import AppError
+
+    def stall():
+        return AppError("harness.execution_timeout", "Harness execution timed out")
+
+    row, attempts, batch = _execute(
+        monkeypatch, {"p1": [stall(), stall()], "p2": ["sess-p2-" + "x" * 30]},
+        _personas("p1", "p2"),
+    )
+    assert attempts == ["p1", "p1", "p2"]  # one timeout retry, then skipped
+    assert row.session_ids == ["sess-p2-" + "x" * 30] and row.batch_eval_id == "batch-1"
+    assert row.error is None and batch is not None  # the surviving session is scored
+    assert row.scenario_failures == [{
+        "scenario_id": "p1", "retries": "1", "code": "harness.execution_timeout",
+        "error": "harness.execution_timeout: Harness execution timed out",
+    }]
+
+
+def test_a_final_persona_error_is_skipped_without_retry(monkeypatch):
+    row, attempts, _batch = _execute(
+        monkeypatch,
+        {"p1": ["sess-p1-" + "x" * 30], "p2": [RuntimeError("actor model refused")]},
+        _personas("p1", "p2"),
+    )
+    assert attempts == ["p1", "p2"]
+    assert row.session_ids == ["sess-p1-" + "x" * 30]
+    assert row.scenario_failures == [{"scenario_id": "p2", "retries": "0", "code": "RuntimeError",
+                                      "error": "RuntimeError: actor model refused"}]
+
+
+def test_the_run_fails_only_when_every_persona_failed(monkeypatch):
+    row, _attempts, batch = _execute(
+        monkeypatch, {"p1": [RuntimeError("a")], "p2": [RuntimeError("b")]},
+        _personas("p1", "p2"),
+    )
+    assert row.status == "failed" and batch is None
+    assert "all 2 scenarios failed" in row.error and "p1: RuntimeError: a" in row.error
+    assert [f["scenario_id"] for f in row.scenario_failures] == ["p1", "p2"]
+
+
+def test_an_ordinary_run_records_no_scenario_failures(monkeypatch):
+    row, _attempts, _batch = _execute(
+        monkeypatch, {"p1": ["sess-p1-" + "x" * 30]}, _personas("p1"))
+    assert row.scenario_failures is None and row.session_ids == ["sess-p1-" + "x" * 30]

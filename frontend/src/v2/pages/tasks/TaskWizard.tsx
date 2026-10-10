@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
-import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
+import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -56,6 +56,8 @@ interface Draft {
   logHours: number;
   /** local dataset id, or `cloud:<datasetId>` */
   dataset: string;
+  /** the model that plays the user of a simulated-persona dataset */
+  actorModelId: string;
   sampling: number;
   sessionTimeout: number;
   evaluators: string[];
@@ -78,6 +80,7 @@ const EMPTY: Draft = {
   logSessionIds: [],
   logHours: 168,
   dataset: "",
+  actorModelId: ACTOR_MODELS[0],
   sampling: 10,
   sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
@@ -178,8 +181,10 @@ export function TaskWizard() {
   if (!draft) return <Spin />;
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
 
-  const localDatasets = (datasets.data?.datasets ?? []).filter((d) => d.kind !== "simulated");
+  const localDatasets = datasets.data?.datasets ?? [];
   const selectedDataset = localDatasets.find((d) => d.id === draft.dataset) ?? null;
+  // persona scenarios: an LLM actor plays the user, so the run needs its model
+  const simulated = selectedDataset?.kind === "simulated";
   const windowSessions = agentSessions.filter(
     (s) => !s.last || Date.now() - new Date(s.last).getTime() <= draft.lookbackHours * 3_600_000,
   );
@@ -243,7 +248,7 @@ export function TaskWizard() {
                 ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
                 : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
                 ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
-                : { dataset_id: draft.dataset };
+                : { dataset_id: draft.dataset, ...(simulated ? { actor_model_id: draft.actorModelId } : {}) };
         const run = await api.v2CreateRun({
           ...(draft.target === "cloudwatch"
             ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
@@ -474,12 +479,28 @@ export function TaskWizard() {
                       placeholder={t("v2.common.choose")}
                       options={[
                         ...(draft.dataset && !selectedDataset ? [{ value: draft.dataset, label: draft.dataset }] : []),
-                        ...localDatasets.map((d) => ({ value: d.id, label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}` })),
+                        ...localDatasets.map((d) => ({
+                          value: d.id,
+                          label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}${d.kind === "simulated" ? ` · ${t("v2.datasets.kind.simulated")}` : ""}`,
+                        })),
                       ]}
                     />
                   </Field>
                 ) : (
                   <p className="v2-muted">{t("v2.tasks.sessionsPicked", { count: draft.sessionIds.length })}</p>
+                )}
+                {draft.source === "dataset" && simulated && (
+                  <div style={{ marginTop: 16 }}>
+                    <Field label={t("v2.tasks.actorModel")} required hint={t("v2.tasks.actorModelHint")}>
+                      <Select
+                        value={draft.actorModelId}
+                        onChange={(v) => set({ actorModelId: v })}
+                        testId="v2-task-actor-model"
+                        mono
+                        options={ACTOR_MODELS.map((m) => ({ value: m, label: m }))}
+                      />
+                    </Field>
+                  </div>
                 )}
               </div>
             </div>
@@ -550,15 +571,20 @@ export function TaskWizard() {
                 <Table
                   columns={[
                     { key: "n", title: "#", width: 48, render: (r: { i: number }) => r.i + 1 },
-                    { key: "input", title: "Input", render: (r: { input: string }) => <span className="clip">{r.input}</span> },
-                    { key: "expected", title: t("v2.datasets.expected"), render: (r: { expected: string }) => (r.expected ? <span className="clip">{r.expected}</span> : "—") },
+                    { key: "input", title: simulated ? t("v2.datasets.simInput") : "Input", render: (r: { input: string }) => <span className="clip">{r.input}</span> },
+                    {
+                      key: "expected",
+                      title: simulated ? t("v2.datasets.simGoal") : t("v2.datasets.expected"),
+                      render: (r: { expected: string }) => (r.expected ? <span className="clip">{r.expected}</span> : "—"),
+                    },
                   ]}
                   rows={selectedDataset.items.slice(0, 5).map((item, i) => {
                     const turns = item.turns as { input?: unknown; expected_response?: unknown }[] | undefined;
+                    const goal = (item.actor_profile as { goal?: unknown } | undefined)?.goal;
                     return {
                       i,
                       input: String(turns?.[0]?.input ?? item.prompt ?? item.input ?? ""),
-                      expected: String(turns?.[0]?.expected_response ?? item.expected ?? ""),
+                      expected: String(turns?.[0]?.expected_response ?? item.expected ?? goal ?? ""),
                     };
                   })}
                   rowKey={(r) => String(r.i)}

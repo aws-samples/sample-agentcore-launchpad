@@ -1228,6 +1228,7 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "insights": run.insights,
         # dataset scenarios that ended on the agent's budget and are scored as they are
         "budget_stops": run.budget_stops or [],
+        "scenario_failures": run.scenario_failures or [],
         # sessions a partially failed batch skipped, and why (null when none / older row)
         "session_failures": run.session_failures,
         "error": run.error,
