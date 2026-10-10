@@ -65,7 +65,9 @@ export function HarnessCanary({
   }, [live]);
 
   const [confirm, setConfirm] = useState(false);
-  const [runFirst, setRunFirst] = useState(true);
+  // unticked by default: the treatment is already the production default version, so a
+  // 90/10 stage only starves the treatment arm of samples (the hint below says so)
+  const [runFirst, setRunFirst] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const evaluators = useCanaryEvaluators();

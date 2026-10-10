@@ -6098,7 +6098,7 @@
         "target": "评估对象",
         "targetAgent": "平台 Agent",
         "targetAgentDesc": "在本控制台管理的 Agent",
-        "targetCw": "CloudWatch 遥测（无需 Agent）",
+        "targetCw": "遥测日志（无需 Agent）",
         "targetCwDesc": "Agent 的 span 与日志已在 CloudWatch 中，例如未托管在 AgentCore Runtime 上的 Agent",
         "title": "遥测数据源",
         "sub": "span 中的服务名称，以及批量评估读取的日志组",
