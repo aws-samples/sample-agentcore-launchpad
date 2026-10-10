@@ -22,6 +22,7 @@ the precondition probes and restart side-effect traps the table below does not.
 |---|---|
 | Full verify gate (**run before reporting done**) | `make verify` |
 | Run local stack (backend :8000, frontend :5173) | `make dev` |
+| Same stack in the background (PID-owned, logs under `.run/`) / stop it | `./start.py` (`--prod` = local prod preview) / `./stop.sh` |
 | One-time infra + AgentCore bootstrap (idempotent) | `make bootstrap` |
 | Backend only / frontend only | `make backend` / `make frontend` |
 | Backend lint + tests (parallel, as the gate runs them) | `cd backend && uv run ruff check . && uv run pytest -q -n auto` |
@@ -31,10 +32,11 @@ the precondition probes and restart side-effect traps the table below does not.
 | zh-CN full-width punctuation (`--fix` to convert) | `python3 scripts/i18n_zh_punct.py --check` |
 
 `scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, infra
-ruff+pytest, frontend eslint+tsc+vitest+vite-build, i18n parity, and zh-CN full-width
-punctuation. It must pass before any change is considered complete. The gate runs the
-backend suite in parallel via `pytest-xdist` (`-n auto`, ~1 min on 8 cores instead of
-~6.4 min); `-n` is deliberately **not** in `addopts`, so one named test stays serial.
+ruff+pytest, a `start.py`/`stop.sh` lint + syntax check, frontend
+eslint+tsc+vitest+vite-build, i18n parity, and zh-CN full-width punctuation. It must
+pass before any change is considered complete. The gate runs the backend suite in
+parallel via `pytest-xdist` (`-n auto`, ~1 min on 8 cores instead of ~6.4 min);
+`-n` is deliberately **not** in `addopts`, so one named test stays serial.
 
 **`backend/tests/` vs `backend/scripts/e2e_*.py`:** `tests/` are hermetic unit tests
 (SQLite is redirected to a temp DB in `conftest.py`; AWS is stubbed) and run in
@@ -46,7 +48,8 @@ credentials — they are not part of the verify gate.
 `backend/` FastAPI control plane · `frontend/` React (Vite) console · `infra/` CDK app
 (`launchpad-base` stack) · `scripts/` bootstrap/teardown/dev/verify · `config/`
 generated `launchpad.yaml` · `docs/` architecture/api/setup/troubleshooting (all
-bilingual). See the table in
+bilingual) · `vendor/skillopt/` vendored Skill Lab engine · `samples/` demo assets
+(BYOC, datasets, policies, per-demo seed/presenter scripts). See the table in
 [README.md](README.md#repo-layout).
 
 ## Architecture — the load-bearing patterns
@@ -106,6 +109,12 @@ under `.trellis/spec/launchpad/`.
   workspace *manages* it (bootstrap memory or a `managed_memories` row —
   `services/memory_ownership.py`): the AWS account is not the workspace boundary.
 
+- **Console authorization is one default-deny table.** Every `/api` route must be
+  classified (`ADMIN` / `MEMBER` / `PUBLIC` / `perm:<key>`) in
+  `app/core/route_policy.py`; an unclassified route raises, and
+  `tests/test_route_policy.py` fails on drift in both directions — so a new endpoint
+  needs a row there in the same change.
+
 - **System-managed presets are server-owned.** `Agent.system_key` (never settable via
   `AgentSpec`) marks a platform preset (`backend/app/system_agents/`); the ordinary
   redeploy/delete/convert routes refuse such rows before any AWS call, and admins
@@ -115,12 +124,24 @@ under `.trellis/spec/launchpad/`.
 
 ## Frontend conventions
 
-React + Vite + `react-router-dom`, TypeScript strict. Top-level routes are in
-`src/App.tsx` (Overview, Create incl. `create/studio`, Registry, Knowledge Bases, Memory,
-Chat, Observability, Evaluation, Skill Lab, Governance, Users, Workspaces). Complex pages
-expose **sub-pages via a `?view=` query param** (e.g. Evaluation's
-`?view=experiment|evaluators|datasets`, Registry's register/edit) rather than nested
-routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
+React + Vite + `react-router-dom`, TypeScript strict. There are **two consoles** over
+the same backend, both routed in `src/App.tsx`:
+
+- **V2 (the default)** — `/v2/*` under `src/v2/` (`V2Shell.tsx`, its own component kit
+  in `v2/ui.tsx`, styles scoped under `.v2` / `body.v2-body` in `v2/v2.css`): Home,
+  Agents, Eval (data / tasks / insights / evaluators / online / experiments), Assistant
+  (the architect), Registry, Knowledge Bases, Skill Lab, Chat, Observability, Memory,
+  Governance, Users, Workspaces, Connections, Announcements, Videos. New UI work lands
+  here.
+- **Classic** — the original routes (`/agents`, `/create/studio`, `/registry`, `/chat`,
+  `/evaluation`, …). Once V2 is chosen (`lib/ui-version.ts` / `useUiVersion()`), they
+  render inside `<V2Shell classic />`, and classic URLs that have a native V2 page
+  redirect to it, so cross-module links work in both consoles.
+
+The "Console V2" section of `docs/architecture.md` covers the switch and which flows
+are still classic. Complex pages expose **sub-pages via a `?view=` query param** (e.g.
+`/v2/agents?view=detail&id=`, Evaluation's `?view=experiment|evaluators|datasets`)
+rather than nested routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
 is the single typed client for the backend; keep its interfaces in sync with the FastAPI
 schemas. All user-facing strings are i18n keys with **en + zh-CN parity enforced** by
 `scripts/i18n_check.py`. Chinese copy uses **full-width punctuation** (`，：；？！（）`)
@@ -146,10 +167,14 @@ lessons learned. Load this guide only when working on videos.
   errors go through `app/core/errors.register_error_handlers`.
 - `bedrock-agentcore` is a **preview SDK pinned to `1.17.*`** — treat API shapes as
   volatile and keep the volatility inside the `agentcore/` wrappers.
-- `vendor-src/*` and `backend/samples/frontdesk_agent` are vendored /
-  demo assets with their **own `CLAUDE.md` and conventions** — don't apply this file's
-  rules to them blindly, and prefer editing the platform-side integration over the
-  vendored code.
+- `vendor/skillopt/` is a trimmed, vendored SkillOpt subset that the platform runs
+  **only as a subprocess**. Its pin and patches are recorded in
+  `vendor/skillopt/LAUNCHPAD_DEVIATIONS.md`; add any new patch there, and prefer editing
+  the platform-side integration over the vendored code. `vendor-src/*` holds
+  gitignored upstream clones (each with its own `CLAUDE.md`) kept for reference only.
+  `backend/samples/frontdesk_agent` is a demo agent deployed by
+  `backend/scripts/deploy_frontdesk_agent.py`. Don't apply this file's rules to any of
+  them blindly.
 
 <!-- TRELLIS:START -->
 # Trellis Instructions
