@@ -419,10 +419,20 @@ export const CLOUD_VALUE_PREFIX = "cloud:";
 export const SIMULATED_SCHEMA = "AGENTCORE_EVALUATION_SIMULATED_V1";
 export const DEFAULT_EVALUATORS = ["Builtin.Correctness", "Builtin.Helpfulness"];
 
+/**
+ * Models that can play a simulated persona's user — shared by the classic New Run
+ * and the V2 task wizard; the first is the default in both. The SDK actor answers
+ * through Strands structured output, which FORCES a tool call, so a model must
+ * accept Converse `tool_choice` any/tool. Live-checked on the real
+ * SimulatedScenarioExecutor 2026-10-10: GPT-6 Luna and Haiku 5.5 complete the
+ * loop; Sonnet 5.5 rejects forced tool choice ("tool_choice: type tool and any
+ * are not supported for this model").
+ */
 export const ACTOR_MODELS = [
-  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "global.openai.gpt-6-luna",
+  "global.anthropic.claude-haiku-5-5",
   "global.anthropic.claude-sonnet-5",
-  "global.anthropic.claude-sonnet-4-6",
+  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
   "global.amazon.nova-2-lite-v1:0",
 ];
 
