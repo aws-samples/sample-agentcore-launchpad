@@ -6098,7 +6098,7 @@
         "target": "Evaluation target",
         "targetAgent": "Platform agent",
         "targetAgentDesc": "An agent managed in this console",
-        "targetCw": "CloudWatch telemetry (no agent)",
+        "targetCw": "Telemetry logs (no agent)",
         "targetCwDesc": "An agent's spans and logs already in CloudWatch — e.g. an agent not hosted on AgentCore Runtime",
         "title": "Telemetry source",
         "sub": "The service name in the spans and the log groups the batch evaluation reads",

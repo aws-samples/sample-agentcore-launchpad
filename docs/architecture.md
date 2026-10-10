@@ -2623,7 +2623,8 @@ through the same backend routes and permission checks as the classic pages.
   stay blocked): the architect's canary is fed by Dataset replay, so 1/99 would only
   replay into the treatment without new comparative evidence. Its 90/10 stage is
   optional too: the create request's `start_stage: 1` (the 放量计划 checkbox on
-  `canary=new` and in the architect's step 4, ticked = run 90/10 by default) opens the A/B
+  `canary=new` and in the architect's step 4; ticked = run 90/10, the default on
+  `canary=new`, while the architect's step 4 starts unticked, i.e. at 50/50) opens the A/B
   test at 50/50, since with `DEFAULT` already on the treatment 90/10 caps no exposure and
   only starves the treatment of samples; a Runtime canary refuses it
   (`canary.start_stage_harness_only`). `setup.start_stage` and
