@@ -32,6 +32,11 @@ from app.services import observability
 
 MAX_EVENTS = 10_000  # the Logs Insights result cap
 MAX_SAMPLES = 5
+# field suggestions come from more records than the samples shown: a group that
+# mixes formats (several services, or app + framework logs) would otherwise only
+# suggest the newest format's fields (measured in the dev e2e)
+MAX_PATH_RECORDS = 50
+MAX_LEAVES_PER_RECORD = 200
 MAX_PREVIEW_SESSIONS = 8
 MAX_PATHS = 60
 SAMPLE_CHARS = 2000
@@ -183,25 +188,30 @@ def _scalar_key(value: Any) -> str | None:
 
 def record_paths(records: list[dict[str, Any]]) -> list[str]:
     """Dotted paths of the scalar / text leaves of sample records (list items by
-    their first index) — the field suggestions of the format editor."""
-    seen: dict[str, None] = {}
-
-    def walk(node: Any, prefix: str, depth: int) -> None:
-        if len(seen) >= MAX_PATHS or depth > 5:
-            return
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if re.fullmatch(r"[A-Za-z0-9_$\-.]+", str(key)):
-                    walk(value, f"{prefix}.{key}" if prefix else str(key), depth + 1)
-        elif isinstance(node, list):
-            if node:
-                walk(node[0], f"{prefix}.0" if prefix else "0", depth + 1)
-        elif prefix:
-            seen.setdefault(prefix, None)
+    their first index) — the field suggestions of the format editor. Ranked by
+    how many records carry them (ties: first seen), so every format present in
+    the sample is represented, the most common first."""
+    counts: Counter[str] = Counter()
 
     for record in records:
+        seen: dict[str, None] = {}
+
+        def walk(node: Any, prefix: str, depth: int, seen: dict[str, None] = seen) -> None:
+            if len(seen) >= MAX_LEAVES_PER_RECORD or depth > 5:
+                return
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if re.fullmatch(r"[A-Za-z0-9_$\-.]+", str(key)):
+                        walk(value, f"{prefix}.{key}" if prefix else str(key), depth + 1)
+            elif isinstance(node, list):
+                if node:
+                    walk(node[0], f"{prefix}.0" if prefix else "0", depth + 1)
+            elif prefix:
+                seen.setdefault(prefix, None)
+
         walk(record, "", 0)
-    return list(seen)[:MAX_PATHS]
+        counts.update(seen.keys())
+    return [path for path, _n in counts.most_common(MAX_PATHS)]
 
 
 def _role(value: Any, fmt: LogFormat) -> str | None:
@@ -248,7 +258,7 @@ def convert(
         if record is None:
             failed["not_json"] += 1
             continue
-        if len(sampled) < MAX_SAMPLES:
+        if len(sampled) < MAX_PATH_RECORDS:
             sampled.append(record)
         entries: list[dict[str, Any]]
         if fmt.preset == "genai":

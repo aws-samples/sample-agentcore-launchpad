@@ -73,6 +73,16 @@ def test_message_preset_groups_orders_and_counts_failures():
     assert {"conv", "role", "content", "content.0.text"} <= set(out["paths"])
 
 
+def test_paths_cover_every_format_in_a_mixed_group():
+    # the newest records are another service's format: the older chat fields
+    # must still be suggested, the most common paths first
+    rows = [_row({"request_id": f"r{i}", "payload": {"query": "q"}}) for i in range(8)]
+    rows += MESSAGE_ROWS
+    paths = pipeline_logs.convert(rows, MESSAGE_FMT, max_sessions=10)["paths"]
+    assert {"conv", "role", "content", "request_id", "payload.query"} <= set(paths)
+    assert paths[:2] == ["request_id", "payload.query"]  # 8 records each
+
+
 def test_max_sessions_keeps_the_newest_and_visibility_hides():
     out = pipeline_logs.convert(MESSAGE_ROWS, MESSAGE_FMT, max_sessions=1)
     assert [s["session_id"] for s in out["sessions"]] == ["c1"]
