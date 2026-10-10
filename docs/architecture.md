@@ -2666,6 +2666,21 @@ through the same backend routes and permission checks as the classic pages.
   within eight columns the run strategy rides under the data source and the
   update time under the creation time, and the operations column is pinned to
   the right edge.
+- **数据处理 · 运行日志 source** (`v2/pages/data/LogSource.tsx`, backend
+  `app/evaluation/pipeline_logs.py`): a pipeline can read 1–10 CloudWatch log groups
+  instead of observed traces, which brings in agents that emit no OTel spans (or only
+  their own JSON logs). Its wizard gains a 格式转换 step: a format rule embedded in the
+  pipeline — `genai` (OTel GenAI content records, read like the session transcript),
+  `message` (session / role / text fields) or `exchange` (input / output fields), all as
+  JSON dot paths with no user regex — next to a live preview from
+  `POST /api/eval/pipelines/preview-logs` (raw records beside the converted sessions,
+  parse failures by reason, field-path suggestions), produced by the converter a run
+  uses. Converted turns go through the trace extractor unchanged (`log-<session>`
+  scenarios, `metadata.source = "logs"`, the datasets list's 运行日志 origin). Logs
+  feed datasets only: AgentCore Evaluation reads OTel spans, so custom-format logs are
+  never evaluated directly — they become questions and reference replies to replay
+  against a platform agent. Either source can store inputs only
+  (`processing.keep_replies: false`).
 - **日志 data source** (`v2/pages/tasks/LogStreamPicker.tsx`): the wizard lists the
   agent's runtime log streams in a window (default 7 days) through
   `GET /api/eval/agents/{id}/log-streams` and filters them by keyword — stream name

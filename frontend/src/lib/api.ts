@@ -3994,10 +3994,47 @@ export interface V2FromSessionsResult {
   skipped: V2SkippedSession[];
 }
 
+/** How a 运行日志 record becomes turns (`pipeline_logs.LogFormat`): fields are JSON
+ *  dot paths, `@logStream` makes one stream one session. */
+export interface V2LogFormat {
+  preset: "genai" | "message" | "exchange";
+  session_field?: string | null;
+  role_field?: string | null;
+  text_field?: string | null;
+  user_roles?: string[];
+  assistant_roles?: string[];
+  input_field?: string | null;
+  output_field?: string | null;
+}
+
+export interface V2PipelineSource {
+  /** absent on rows saved before log sources existed = "traces" */
+  type?: "traces" | "logs";
+  agent: string | null;
+  range: V2Range;
+  status: "all" | "ok" | "error";
+  max_sessions: number;
+  log_groups?: string[];
+  keyword?: string | null;
+  format?: V2LogFormat | null;
+}
+
 export interface V2PipelineConfig {
-  source: { agent: string | null; range: V2Range; status: "all" | "ok" | "error"; max_sessions: number };
-  processing: { first_turn_only: boolean; dedupe: boolean; min_input_chars: number };
+  source: V2PipelineSource;
+  processing: { first_turn_only: boolean; dedupe: boolean; min_input_chars: number; keep_replies?: boolean };
   output: { dataset_id?: string | null; dataset_name?: string | null };
+}
+
+/** `POST /api/eval/pipelines/preview-logs` — what a logs source extracts now. */
+export interface V2LogsPreview {
+  events: number;
+  truncated: boolean;
+  parsed: number;
+  failed: Record<string, number>;
+  sessions_found: number;
+  sessions: { session_id: string; stream: string; log_group: string; last: string | null; records: number; turns: { role: string; text: string }[] }[];
+  samples: { stream: string; timestamp: string | null; message: string }[];
+  paths: string[];
 }
 
 export interface V2PipelineRun {
@@ -4008,6 +4045,8 @@ export interface V2PipelineRun {
   skipped: V2SkippedSession[];
   dataset_id: string | null;
   error: string | null;
+  /** a logs source's parse stats */
+  log?: { events: number; parsed: number; failed: Record<string, number>; truncated: boolean };
 }
 
 export interface V2Pipeline {
@@ -5339,6 +5378,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   v2Pipelines: () => request<{ pipelines: V2Pipeline[] }>("/api/eval/pipelines"),
+  v2PreviewPipelineLogs: (source: V2PipelineSource) =>
+    request<V2LogsPreview>("/api/eval/pipelines/preview-logs", { method: "POST", body: JSON.stringify({ source }) }),
   v2Pipeline: (id: string) =>
     request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}`),
   v2CreatePipeline: (body: V2PipelineBody) =>
