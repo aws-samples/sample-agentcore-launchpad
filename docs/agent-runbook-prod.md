@@ -102,7 +102,7 @@ The frontend unit needs nothing.
 
 ```bash
 cd /home/ubuntu/workspace/agentcore_launchpad
-cp -a data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M%S)   # ALWAYS first
+(cd backend && /home/ubuntu/.local/bin/uv run python scripts/ledger_backup.py); echo "backup exit=$?"   # ALWAYS first; stop unless 0
 git fetch origin main && git diff --name-only HEAD..origin/main        # scope the delta
 git merge --ff-only origin/main
 # only if the delta touched **/pyproject.toml or uv.lock:      cd backend && uv sync
@@ -111,6 +111,27 @@ git merge --ff-only origin/main
 (cd backend && /home/ubuntu/.local/bin/uv run python scripts/inflight.py); echo "inflight exit=$?"
 sudo systemctl restart launchpad-backend   # + launchpad-frontend if rebuilt
 ```
+
+**The ledger backup (always the first step).** `scripts/ledger_backup.py` copies the
+live ledger with SQLite's online backup API, so a request committing during the copy
+cannot tear it the way `cp` of the running service's file can (the engine runs SQLite's
+default rollback journal). It writes `data/launchpad.db.bak-<UTC YYYYmmdd-HHMMSS>`, runs
+`PRAGMA integrity_check` on the copy, and prints its path, size and the `agents` / `jobs`
+/ `eval_runs` row counts — eyeball them against what the console shows. It opens the
+ledger read-only, makes no AWS call and needs no `sqlite3` CLI; like the probe below it
+reads `settings.database_url`, or name the file with `--db data/launchpad.db` (then it is
+stdlib-only and plain `python3 backend/scripts/ledger_backup.py --db data/launchpad.db`
+works without the venv). It prunes nothing by default. Retention is an optional, explicit
+operator step: `--keep N` deletes the oldest `launchpad.db.bak-<stamp>` copies beyond the
+newest N (the new one included) — preview it first with `--keep N --dry-run`, which takes
+the backup and only lists what would be deleted.
+Hand-named copies — `launchpad.db.bak-pre-pr191-*`, `launchpad.db.pre-registry-ga-*` —
+never match and are never pruned. Exit `0` = written and verified; `1` = no backup (bad
+path/URL, ledger locked past `--timeout`, disk error); `2` = the copy failed
+`integrity_check` — it is kept as `….corrupt`, nothing is pruned, and the update must
+stop until that is understood; `64` = bad usage. On a checkout that predates the script,
+run the fetched copy: `git fetch origin main && git show
+origin/main:backend/scripts/ledger_backup.py | python3 - --db data/launchpad.db`.
 
 **The in-flight probe (run right before every restart).** `scripts/inflight.py`
 lists every background item in the ledger and what the restart will do to it. It is
@@ -160,6 +181,10 @@ or Docker execution settings, and never requires changing production configurati
   `run_mode=dev` while the service is prod. Confirm posture from
   `systemctl show launchpad-backend -p Environment` or the `auth.required`
   answer — never from an ad-hoc process.
+- Never back the ledger up with `cp` while `launchpad-backend` runs — a commit
+  landing mid-copy leaves a torn file that nothing checks. Use
+  `scripts/ledger_backup.py` (update recipe); `cp` is only safe with the service
+  stopped.
 - Infra changes need an explicit `cdk deploy` with the region pinned
   (`CDK_DEFAULT_REGION=...`); `make bootstrap` skips CDK on an existing stack
   and `infra/app.py` defaults to us-west-2 when unset.

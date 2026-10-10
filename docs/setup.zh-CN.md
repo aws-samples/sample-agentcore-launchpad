@@ -518,7 +518,7 @@ proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
 **3. 更新已有主机。**
 
 ```bash
-cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)
+(cd backend && uv run python scripts/ledger_backup.py)   # 在线备份并校验；服务运行时不要 cp 台账
 git merge --ff-only origin/main
 cd backend && uv sync && cd ..
 cd frontend && npm run build && cd ..          # 必须:preview 只吃 dist/

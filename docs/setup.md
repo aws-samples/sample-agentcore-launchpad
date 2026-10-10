@@ -614,7 +614,7 @@ over plain HTTP the browser would drop the session cookie.
 **3. Update an existing host.**
 
 ```bash
-cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)
+(cd backend && uv run python scripts/ledger_backup.py)   # online + verified; never cp a live ledger
 git merge --ff-only origin/main
 cd backend && uv sync && cd ..
 cd frontend && npm run build && cd ..          # required: preview serves dist/
