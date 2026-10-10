@@ -70,6 +70,10 @@ class AssistantConversation(Base):
     # a revision row (unique index below), so two concurrent writers never share one.
     revision_seq: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open | archived
+    # The newest CLEAR attempt (a ``purge_assistant_conversation`` job): while it is
+    # queued/running every write is refused; a failed one keeps the ownership evidence
+    # and checkpoints the next attempt resumes from (``assistant.purge``).
+    purge_job_id: Mapped[str | None] = mapped_column(String(32), default=None)
     # Admin-published collaboration: every member of the workspace may read AND work
     # on a shared conversation (``may_collaborate``); only deleting it stays bound to
     # ``owner_principal``. Stamped with the admin who toggled it (display username).

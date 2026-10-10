@@ -4458,7 +4458,16 @@
       "confirm": "清除会话与资产",
       "working": "清除中……",
       "blocked": "该会话仍有任务在进行 — 未删除任何内容。",
-      "doneToast": "已清除“{{title}}” — 移除了 {{agents}} 个 Agent、{{operations}} 次资产操作、{{datasets}} 个 Dataset。"
+      "doneToast": "已清除“{{title}}” — 移除了 {{agents}} 个 Agent、{{operations}} 次资产操作、{{datasets}} 个 Dataset。",
+      "canaries": "这些 Agent 上的金丝雀会先被停止并移除（A/B 测试、在线评估、专属网关及其目标与追踪投递、命名端点），确认 AWS 上已不存在后才删除 Agent：{{list}}。",
+      "experiments": "这些 Agent 上的实验会被清理（A/B 测试、在线评估、配置包、网关目标）：{{list}}。",
+      "historyKept": "金丝雀与实验记录仍作为历史保留在各自列表中。",
+      "inProgress": "该会话的清除任务正在进行（{{step}}）。确认后可查看进度。",
+      "lastFailed": "上一次清除已停止：{{reason}} 再次清除会从已确认完成的步骤继续。",
+      "progress": "清除中 — {{step}}",
+      "starting": "正在开始",
+      "failedToast": "清除已停止，会话已保留：{{reason}}",
+      "background": "清除会在后台继续 — 再次打开“清除”即可查看进度。"
     },
     "noConversation": "先新建一个会话，再把 Workshop 产出粘贴到下方。",
     "emptyThread": "粘贴 Workshop 产出 — 助手会确认需求基线，只追问缺失且影响架构的问题",

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
+from app.assistant import purge as assistant_purge
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
@@ -42,6 +43,7 @@ from app.services import (
     identity_providers,
     memory_ownership,
     oauth_sessions,
+    registry_console,
 )
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
@@ -139,6 +141,21 @@ def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
 
 def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
     """Tear down the method-specific AWS resource for an agent (idempotent)."""
+    if not delete_agent_cloud_resource(agent, workspace):
+        return False
+    # After the resource, never before: deleting the execution role while the
+    # runtime still references it can wedge the runtime's own deletion. A failed
+    # role delete must not block deleting the agent, so this returns rather than
+    # raises and logs the role name for a later sweep.
+    delete_agent_role(agent, workspace)
+    delete_agent_registry_record(agent, workspace)
+    return True
+
+
+def delete_agent_cloud_resource(agent: Agent, workspace: WorkspaceContext) -> bool:
+    """Request deletion of the method-specific AWS resource only (no role, no ledger);
+    ``False`` for a discovered runtime, which is never ours to delete. Deletion is
+    asynchronous: the conversation purge reads it back before the role goes."""
     if agent.method == DISCOVERED_METHOD:
         return False
     if agent.method == "harness":
@@ -149,17 +166,31 @@ def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
         container_method.delete_agent_resources(agent, workspace)
     elif agent.method == "byoc":
         byoc_method.delete_agent_resources(agent, workspace)
-    # After the resource, never before: deleting the execution role while the
-    # runtime still references it can wedge the runtime's own deletion. A failed
-    # role delete must not block deleting the agent, so this returns rather than
-    # raises and logs the role name for a later sweep.
-    agent_iam.delete_execution_role(
+    return True
+
+
+def delete_agent_registry_record(agent: Agent, workspace: WorkspaceContext) -> bool:
+    """Best-effort removal of the A2A record the deploy ``register`` stage created for
+    this agent (a record the id no longer names as this agent's stays); never raises —
+    ``False`` logs the record id for a later sweep."""
+    try:
+        registry_console.delete_agent_record(agent, workspace)
+        return True
+    except Exception as exc:  # noqa: BLE001 — a registry hiccup must not block the delete
+        logger.warning("agent %s: could not delete registry record %s: %s", agent.id,
+                       agent.registry_record_id, f"{type(exc).__name__}: {exc}")
+        return False
+
+
+def delete_agent_role(agent: Agent, workspace: WorkspaceContext) -> bool:
+    """Delete the agent's own execution role (the shared role is never touched);
+    never raises — ``False`` leaves the role findable for a later sweep."""
+    return agent_iam.delete_execution_role(
         agent,
         get_settings(),
         workspace,
         lambda msg: logger.info("agent %s: %s", agent.id, msg),
     )
-    return True
 
 
 def _validate_tool_auth(spec: AgentSpec, ws: WorkspaceScope) -> None:
@@ -519,6 +550,7 @@ def _redeployable(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
 def _refuse_redeploy(agent: Agent) -> None:
     """Refuse a re-publish of a system preset, a discovered runtime or a busy agent."""
     system_agents.refuse_system_mutation(agent, "redeploy")
+    assistant_purge.refuse_while_clearing(agent.id, "redeploy")
     if agent.method == DISCOVERED_METHOD:
         raise AppError(
             "agent.redeploy_external",
@@ -623,6 +655,7 @@ def convert_agent(
     if source is None or source.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     system_agents.refuse_system_mutation(source, "convert")
+    assistant_purge.refuse_while_clearing(source.id, "convert")
     if source.method != "harness" or source.status != "active":
         raise AppError(
             "agent.convert_unsupported",
@@ -729,6 +762,8 @@ def delete_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
+    # the conversation purge owns this agent's teardown while it runs
+    assistant_purge.refuse_while_clearing(agent.id, "delete")
     aws_resource_deleted = delete_agent_row(db, agent, ws.context)
     return {
         "deleted": True,
@@ -745,13 +780,18 @@ def delete_agent_row(db: Session, agent: Agent, workspace: WorkspaceContext) -> 
     # Before the AWS teardown: a refused delete must leave the harness untouched.
     system_agents.refuse_system_mutation(agent, "delete")
     aws_resource_deleted = _delete_agent_resources(agent, workspace)
-    # its workload identity (and every 3LO token keyed by it) went with the runtime
+    mark_agent_deleted(db, agent)
+    return aws_resource_deleted
+
+
+def mark_agent_deleted(db: Session, agent: Agent) -> None:
+    """The ledger half of an agent delete: forget its workload identity (and every 3LO
+    token keyed by it, which went with the runtime), mark it deleted, release its name."""
     oauth_sessions.forget_agent(db, agent.workspace_id, agent.id)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
     agent_names.release_agent_name(db, agent.workspace_id, agent.name, agent.id)
     db.commit()
-    return aws_resource_deleted
 
 
 @router.get("/jobs/{job_id}")

@@ -4458,7 +4458,16 @@
       "confirm": "CLEAR CONVERSATION & ASSETS",
       "working": "CLEARING…",
       "blocked": "The conversation still has work in flight — nothing was deleted.",
-      "doneToast": "Cleared “{{title}}” — {{agents}} Agent(s), {{operations}} asset operation(s), {{datasets}} Dataset(s) removed."
+      "doneToast": "Cleared “{{title}}” — {{agents}} Agent(s), {{operations}} asset operation(s), {{datasets}} Dataset(s) removed.",
+      "canaries": "Canaries on these Agents are stopped and removed first — their A/B test, online evaluations, dedicated gateway with its targets and trace delivery, and named endpoints — and read back gone before the Agent is deleted: {{list}}.",
+      "experiments": "Experiments on these Agents are cleaned (A/B tests, online evaluations, configuration bundles, gateway targets): {{list}}.",
+      "historyKept": "Canary and experiment records stay in their lists as history.",
+      "inProgress": "A clear of this conversation is already running ({{step}}). Confirm to follow its progress.",
+      "lastFailed": "The previous clear stopped: {{reason}} Clearing again resumes from what was already verified.",
+      "progress": "Clearing — {{step}}",
+      "starting": "starting",
+      "failedToast": "Clear stopped — the conversation was kept: {{reason}}",
+      "background": "The clear continues in the background — open CLEAR again to check on it."
     },
     "noConversation": "Start a conversation, then paste your Workshop output below.",
     "emptyThread": "PASTE YOUR WORKSHOP OUTPUT — THE ASSISTANT CONFIRMS THE BASELINE AND ASKS ONLY WHAT IS MISSING",

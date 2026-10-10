@@ -388,6 +388,7 @@ def resume_pending_jobs() -> list[str]:
     """
     # Lazy: the uninstall worker imports the agents router (teardown helper), which
     # imports the system-agents service, which imports this module.
+    from app.assistant import purge as assistant_purge
     from app.system_agents import uninstall as system_uninstall
 
     starters: dict[str, Callable[[str], threading.Thread]] = {
@@ -396,6 +397,8 @@ def resume_pending_jobs() -> list[str]:
         # a crashed uninstall is still `running` in the ledger; the resume starter
         # is the only caller allowed to pick such a job up again
         system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_resume,
+        # an architect-conversation CLEAR resumes from its verified checkpoints
+        assistant_purge.JOB_TYPE: assistant_purge.start_purge_resume,
     }
     db = SessionLocal()
     try:

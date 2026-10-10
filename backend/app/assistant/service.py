@@ -869,10 +869,20 @@ def accessible_conversation(
     db: Session, workspace_id: str, principal: str, conversation_id: str
 ) -> AssistantConversation:
     """The owner's conversation, or one an admin shared with the workspace — every
-    route but delete (and its footprint) resolves through this."""
+    route but delete (and its footprint) resolves through this. A conversation whose
+    CLEAR is queued or running refuses every write (409): a turn, approval or new asset
+    started now would race the teardown (``assistant.purge``)."""
     row = db.get(AssistantConversation, conversation_id)
     if row is None or row.workspace_id != workspace_id or not may_collaborate(row, principal):
         raise NotFoundError("assistant.conversation_not_found", "conversation not found")
+    if row.purge_job_id:
+        job = db.get(Job, row.purge_job_id)
+        if job is not None and job.status in ("queued", "running"):
+            raise AppError(
+                "assistant.conversation_clearing",
+                "this conversation is being cleared — wait for the clear to finish",
+                {"job_id": job.id}, status_code=409,
+            )
     return row
 
 

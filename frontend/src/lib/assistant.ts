@@ -12,7 +12,11 @@ import {
   AUTH_UNAUTHORIZED_EVENT,
   HARNESS_NATIVE_TOOLS,
   type AssistantConversationDetail,
+  type AssistantConversationFootprint,
+  type AssistantConversationPurgeResult,
   type AssistantFishbone,
+  type AssistantPurgeBlocker,
+  type AssistantPurgeJobState,
   type AssistantMessage,
   type AssistantProposal,
   type AssistantProposalContent,
@@ -429,4 +433,95 @@ export function kbReadiness(detail: AssistantKbDetail | null, failed: boolean) {
     : indexError ? "indexFailed" : completed ? "indexComplete"
       : pending ? "indexPending" : "indexNotStarted";
   return { key, pending: Boolean(pending) };
+}
+
+// ─── CLEAR a conversation (durable clear job) ─────────────────────────────
+
+/** The canaries a CLEAR will stop and remove (cleanup not run, or ran incomplete) and
+ * the already-cleaned ones it only re-reads — both are listed so nothing is hidden. */
+export function clearCanaryList(fp: AssistantConversationFootprint): string {
+  return fp.canaries
+    .map((c) => {
+      const res = c.resources;
+      const parts = [
+        res.ab_test ? "A/B test" : "",
+        res.online_evaluations ? `${res.online_evaluations} online eval` : "",
+        res.gateway ? `gateway ${res.gateway}` : "",
+        res.endpoints.length ? `endpoints ${res.endpoints.join(", ")}` : "",
+      ].filter(Boolean);
+      return `${c.name} (${c.status}${parts.length ? " · " + parts.join(" · ") : ""})`;
+    })
+    .join("; ");
+}
+
+export function clearExperimentList(fp: AssistantConversationFootprint): string {
+  return fp.experiments
+    .filter((e) => e.pending)
+    .map((e) => `${e.name} (${e.status})`)
+    .join(", ");
+}
+
+/** A clear job is still live (a repeated DELETE follows it instead of starting one). */
+export function clearInProgress(fp: AssistantConversationFootprint): boolean {
+  return fp.purge?.status === "queued" || fp.purge?.status === "running";
+}
+
+/** Human text for a clear job's current step (`canary:<id> · waiting · endpoint:x (DELETING)`). */
+export function clearStepText(step: AssistantPurgeJobState["step"] | undefined | null): string {
+  if (!step) return "";
+  return [step.key, step.state, step.detail].filter(Boolean).join(" · ");
+}
+
+export type ClearOutcome =
+  | { kind: "done"; result: AssistantConversationPurgeResult }
+  | { kind: "failed"; reason: string }
+  | { kind: "detached" };
+
+/**
+ * DELETE the conversation; a cloud clear answers with a durable job, which is polled
+ * until it is terminal. `onProgress` receives each step's text; `detached()` returning
+ * true stops polling (the job keeps running server-side).
+ */
+export async function runConversationClear(
+  id: string,
+  opts: {
+    onProgress?: (text: string) => void;
+    detached?: () => boolean;
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<ClearOutcome> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const res = await api.assistantDeleteConversation(id);
+  if (res.deleted || !res.job_id) return { kind: "done", result: res };
+  const jobId = res.job_id;
+  for (;;) {
+    if (opts.detached?.()) return { kind: "detached" };
+    const job = await api.getJob(jobId);
+    const payload = (job.payload ?? {}) as {
+      step?: AssistantPurgeJobState["step"];
+      blocker?: AssistantPurgeBlocker | null;
+      result?: Partial<AssistantConversationPurgeResult>;
+    };
+    if (job.status === "succeeded") {
+      return {
+        kind: "done",
+        result: {
+          operations_cleaned: [],
+          datasets: [],
+          agents: [],
+          ...payload.result,
+          deleted: true,
+          conversation_id: id,
+          job_id: jobId,
+          status: job.status,
+        },
+      };
+    }
+    if (job.status === "failed") {
+      return { kind: "failed", reason: payload.blocker?.message || job.error || job.status };
+    }
+    opts.onProgress?.(clearStepText(payload.step) || job.status);
+    await sleep(opts.pollMs ?? ASSISTANT_JOB_POLL_MS);
+  }
 }

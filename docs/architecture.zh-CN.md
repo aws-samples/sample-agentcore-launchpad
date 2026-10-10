@@ -799,14 +799,26 @@ skill 的 `fishbone-data.json` 同构），成员编辑原样携带它，AWS 侧
 
 **清除会话即清除它创建的一切。** 历史会话面板的「清除」（`GET …/footprint` → 二次确认 →
 `DELETE …/conversations/{id}`，`app/assistant/purge.py`）从不只删对话记录：footprint 列出每个由批准部署的
-Agent、每次评估资产操作及其仍存活的云端资源、这些操作创建的本地 Dataset，以及阻塞项（正在流式的轮次、排队 /
-运行 / 清理中的操作、进行中的部署任务）。有任一阻塞项则拒绝且不删除任何内容；否则按依赖顺序复用已有的单资源路径——
-对每次操作执行带围栏的 `cleanup_operation`（未达到 `cleaned` 的操作以 `409 assistant.conversation_assets_remain`
-中止清除，会话保留以便剩余资源仍可归属）、删除本地 Dataset 行（成员手动同步到 AWS 的副本属于该成员，保留）、
-对每个 Agent 执行共享的 `delete_agent_row` 拆除（预置拒绝、资源、角色、账本、名称占用），最后才删账本行。
-按所有者绑定；成员可以清除只有对话记录的会话，涉及云端资产时还需要 `perm:agents.deploy`，涉及 Agent
-时还需要 `perm:agents.delete`（`403 auth.permission_required`；footprint 返回 `required_permissions` 与调用者的
-`can_clear`）——与单独的清理 / 删除 Agent 路由同一门槛。已记录的评估运行保留。
+Agent、**在这些 Agent 上运行的金丝雀与实验**（含每个金丝雀拥有的 A/B 测试、在线评估、专属网关与命名端点）、
+每次评估资产操作及其仍存活的云端资源、这些操作创建的本地 Dataset，以及阻塞项（正在流式的轮次或 Skill 导入、排队 /
+运行 / 清理中的操作、进行中的部署任务、仍在执行动作的金丝雀或实验）和最近一次清除尝试（`purge`）。只有对话记录的
+会话直接删除；其余情况成为**持久化清除任务**（`purge_assistant_conversation`，`202 {job_id}`，通过
+`GET /api/jobs/{id}` 轮询，启动时由 `resume_pending_jobs` 恢复），由 `assistant_conversations.purge_job_id`
+认领。任务钉住归属证据（Agent / 金丝雀 / 实验 / Dataset id），按依赖顺序复用已有的单资源路径，每步之前做围栏校验，
+并以 **AWS 回读**而非删除响应确认完成：每个金丝雀在自身 `running_action` 认领下执行 `act_cleanup`，再有界等待
+`remaining_resources` 回读确认 A/B 测试、在线评估配置、网关与两个命名端点均已不存在（命名端点存在时
+`DeleteHarness` 返回 `ConflictException`——issue #246；状态已为 `cleaned` 的金丝雀同样回读）；每个实验执行
+`act_cleanup`；对每次操作执行带围栏的 `cleanup_operation`；删除本地 Dataset 行（成员手动同步到 AWS 的副本保留）；
+对每个 Agent 执行按方式的资源删除（若其 Harness 上存在不属于本会话金丝雀的命名端点，则事先拒绝），有界等待
+`GetHarness` / `GetAgentRuntime` 返回不存在后再删除其专属执行角色、部署时登记的 A2A Registry 记录（删除并回读确认；若该记录 id
+已指向其他记录则保留）与账本；删除金丝雀保留的候选包；最后才删账本行。
+`skipped` 的清理结果、等待结束仍为 `DELETING` 的资源、`DELETE_FAILED`、冲突、不属于本会话的依赖或拒绝，都会使任务以
+`failed` 结束并给出可操作的 `payload.blocker`——会话及其证据保留，再次「清除」会新建任务并继承清单、已确认的检查点与
+已受理的删除请求。任务进行期间，会话的所有写入返回 `409 assistant.conversation_clearing`，其 Agent 拒绝金丝雀 /
+实验 / 重新发布 / 转换 / 删除（`409 assistant.agent_clearing`）。按所有者绑定；成员可以清除只有对话记录的会话，
+涉及云端资产时还需要 `perm:agents.deploy`，涉及 Agent 时还需要 `perm:agents.delete`
+（`403 auth.permission_required`；footprint 返回 `required_permissions` 与调用者的 `can_clear`）——与单独的
+清理 / 删除 Agent 路由同一门槛。已记录的评估运行与金丝雀 / 实验记录保留。
 
 **批准——唯一的执行者。** `POST …/proposal/approve`（`perm:agents.deploy`，与 `POST /api/agents`
 同一权限，处理器内再次断言）指定 `{revision, content_hash}`。首先解析**请求的确切修订**：已批准的

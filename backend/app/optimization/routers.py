@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.assistant import purge as assistant_purge
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.models import EvalDataset
@@ -68,6 +69,7 @@ def _eligible_agent(agent_id: str, db: Session, ws: WorkspaceScope) -> Agent:
         agent = None
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
+    assistant_purge.refuse_while_clearing(agent.id, "experiment")
     capability = service.experiment_capability(agent)
     if not capability["eligible"]:
         code = "experiment.agent_unsupported"
@@ -247,6 +249,7 @@ def experiment_action(
     # A stale row that references a system-managed preset must not drive any
     # action — checked before running_action or any other state is written.
     system_agents.assert_not_system_agent(db, exp.agent_id, "experiment")
+    assistant_purge.refuse_while_clearing(exp.agent_id, f"experiment {req.action}")
     if exp.running_action:
         raise AppError(
             "experiment.action_in_flight",

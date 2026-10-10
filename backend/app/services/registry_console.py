@@ -128,6 +128,46 @@ def register_agent_record(
     return {"record_id": record_id, "created": created}
 
 
+def agent_record_state(agent: Agent, workspace: WorkspaceContext) -> str:
+    """Where the A2A record the deploy ``register`` stage created for ``agent`` stands:
+    ``none`` (never registered, or Registry not configured), ``absent`` (read back
+    gone), ``foreign`` (the id now names a record that is not this agent's — a
+    different name or type — so it is never ours to delete) or the record's status.
+    Lookup errors other than not-found propagate (unknown ≠ gone)."""
+    record_id = agent.registry_record_id
+    registry_id = workspace.resources.get("registry_id")
+    if not record_id or not registry_id:
+        return "none"
+    try:
+        record = registry_control_client(workspace).get_registry_record(
+            registryId=registry_id, recordId=record_id)
+    except Exception as exc:
+        if type(exc).__name__ in {"ResourceNotFoundException", "NotFoundException"}:
+            return "absent"
+        raise
+    if record.get("name") != agent.name or record.get("recordType") != reg.ga_record_type("A2A"):
+        return "foreign"
+    return str(record.get("status") or "PRESENT")
+
+
+def delete_agent_record(agent: Agent, workspace: WorkspaceContext) -> str:
+    """Delete the agent's own A2A record (see ``agent_record_state``); returns the state
+    it found. A ``foreign`` record, a protected one or ``none`` is left untouched."""
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    state = agent_record_state(agent, workspace)
+    if state in ("none", "absent", "foreign"):
+        return state
+    refuse_protected_mutation(workspace, agent.registry_record_id, "delete")
+    try:
+        reg.delete_record(registry_control_client(workspace), _registry_id(workspace),
+                          agent.registry_record_id)
+    except Exception as exc:
+        if type(exc).__name__ not in {"ResourceNotFoundException", "NotFoundException"}:
+            raise
+    return state
+
+
 def upload_skill_bundle(
     workspace: WorkspaceContext, skill_name: str = SKILL_NAME
 ) -> dict[str, Any]:
