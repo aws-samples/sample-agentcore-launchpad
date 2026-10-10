@@ -102,7 +102,7 @@ The frontend unit needs nothing.
 
 ```bash
 cd /home/ubuntu/workspace/agentcore_launchpad
-(cd backend && /home/ubuntu/.local/bin/uv run python scripts/ledger_backup.py --keep 20); echo "backup exit=$?"   # ALWAYS first; stop unless 0
+(cd backend && /home/ubuntu/.local/bin/uv run python scripts/ledger_backup.py); echo "backup exit=$?"   # ALWAYS first; stop unless 0
 git fetch origin main && git diff --name-only HEAD..origin/main        # scope the delta
 git merge --ff-only origin/main
 # only if the delta touched **/pyproject.toml or uv.lock:      cd backend && uv sync
@@ -121,8 +121,10 @@ default rollback journal). It writes `data/launchpad.db.bak-<UTC YYYYmmdd-HHMMSS
 ledger read-only, makes no AWS call and needs no `sqlite3` CLI; like the probe below it
 reads `settings.database_url`, or name the file with `--db data/launchpad.db` (then it is
 stdlib-only and plain `python3 backend/scripts/ledger_backup.py --db data/launchpad.db`
-works without the venv). `--keep N` then deletes the oldest `launchpad.db.bak-<stamp>`
-copies beyond the newest N (the new one included; add `--dry-run` to only list them).
+works without the venv). It prunes nothing by default. Retention is an optional, explicit
+operator step: `--keep N` deletes the oldest `launchpad.db.bak-<stamp>` copies beyond the
+newest N (the new one included) — preview it first with `--keep N --dry-run`, which takes
+the backup and only lists what would be deleted.
 Hand-named copies — `launchpad.db.bak-pre-pr191-*`, `launchpad.db.pre-registry-ga-*` —
 never match and are never pruned. Exit `0` = written and verified; `1` = no backup (bad
 path/URL, ledger locked past `--timeout`, disk error); `2` = the copy failed
