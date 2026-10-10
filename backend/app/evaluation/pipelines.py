@@ -24,9 +24,10 @@ MAX_TEXT = 8000  # DatasetCreate caps a prompt at 8000 characters
 _SCENARIO_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
-def scenario_id_for(session_id: str) -> str:
-    """Stable, dataset-safe scenario id for an observed session."""
-    return "trace-" + _SCENARIO_UNSAFE.sub("-", session_id)[:48]
+def scenario_id_for(session_id: str, source: str = "trace") -> str:
+    """Stable, dataset-safe scenario id for an observed (or logged) session."""
+    prefix = "log-" if source == "logs" else "trace-"
+    return prefix + _SCENARIO_UNSAFE.sub("-", session_id)[:48]
 
 
 def _clip(text: str) -> str:
@@ -63,10 +64,18 @@ def items_from_transcript(
     first_turn_only: bool = False,
     min_input_chars: int = 0,
     agent: str | None = None,
+    keep_replies: bool = True,
+    source: str = "trace",
+    metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Dataset items for one session (empty when nothing usable was said)."""
+    """Dataset items for one session (empty when nothing usable was said).
+
+    ``keep_replies=False`` drops the observed replies (an inputs-only dataset);
+    ``source`` ("trace" | "logs") names the scenario id prefix and
+    ``metadata.source``, with any ``metadata`` merged into the scenario's."""
     pairs = [
-        (_clip(q), _clip(a)) for q, a in exchanges(turns) if len(q) >= max(1, min_input_chars)
+        (_clip(q), _clip(a) if keep_replies else "")
+        for q, a in exchanges(turns) if len(q) >= max(1, min_input_chars)
     ]
     if not pairs:
         return []
@@ -84,11 +93,12 @@ def items_from_transcript(
         if expected:
             turn["expected_response"] = expected
         scenario_turns.append(turn)
-    metadata: dict[str, Any] = {"source": "trace", "session_id": session_id}
+    meta: dict[str, Any] = {"source": source, "session_id": session_id}
     if agent:
-        metadata["agent"] = agent
-    return [{"scenario_id": scenario_id_for(session_id), "turns": scenario_turns,
-             "metadata": metadata}]
+        meta["agent"] = agent
+    meta.update(metadata or {})
+    return [{"scenario_id": scenario_id_for(session_id, source), "turns": scenario_turns,
+             "metadata": meta}]
 
 
 def _first_input(item: dict[str, Any]) -> str:

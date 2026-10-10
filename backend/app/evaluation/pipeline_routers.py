@@ -3,7 +3,10 @@
 * `POST /api/eval/datasets/from-sessions` — add chosen trajectories (sessions) to
   an existing dataset or a new one (the trajectory list/detail "加入数据集").
 * `/api/eval/pipelines` — saved processing tasks (source filter → extraction →
-  output dataset) that run on demand, in the background.
+  output dataset) that run on demand, in the background. A source reads observed
+  traces or (`type="logs"`) CloudWatch log groups through a format rule
+  (`pipeline_logs`); `POST /api/eval/pipelines/preview-logs` shows what a logs
+  source would extract.
 * `GET /api/eval/agents/{agent_id}/log-streams` — the log streams of an agent's
   runtime log group, keyword-filtered (the task wizard's 日志 data source).
 * `GET /api/eval/log-services` · `/log-groups` · `/log-sessions` — service-name,
@@ -30,7 +33,7 @@ from app.assistant.principal import principal_of
 from app.assistant.sessions import PrivateSessions
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError
-from app.evaluation import log_streams, pipelines
+from app.evaluation import log_streams, pipeline_logs, pipelines
 from app.evaluation.models import EvalDataset, EvalPipeline
 from app.evaluation.online_routers import _agent_in
 from app.evaluation.routers import (
@@ -50,6 +53,7 @@ router = APIRouter(prefix="/api/eval", tags=["evaluation"])
 
 RangeKey = Literal["1h", "6h", "24h", "7d"]
 SessionId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_\-#:.@]{8,256}$")]
+LogGroupName = Annotated[str, Field(pattern=LOG_GROUP_NAME_RE)]
 
 
 def _now() -> datetime:
@@ -66,6 +70,7 @@ def _read_items(
     kind: str,
     first_turn_only: bool,
     min_input_chars: int,
+    keep_replies: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Items extracted from each visible session + a skip reason per miss."""
     items: list[dict[str, Any]] = []
@@ -93,6 +98,7 @@ def _read_items(
             first_turn_only=first_turn_only,
             min_input_chars=min_input_chars,
             agent=(detail.get("summary") or {}).get("agent"),
+            keep_replies=keep_replies,
         )
         if not found:
             skipped.append({"session_id": session_id, "reason": "no_exchange"})
@@ -204,16 +210,35 @@ def datasets_from_sessions(
 
 # ─── saved pipelines ────────────────────────────────────────────────────────
 class PipelineSource(BaseModel):
+    """Observed traces (`agent` / `status` filters) or, with `type="logs"`, the
+    records of `log_groups` converted by `format`. A row saved before log
+    sources existed has no `type` — it reads as traces."""
+
+    type: Literal["traces", "logs"] = "traces"
     agent: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     range: RangeKey = "24h"
     status: Literal["all", "ok", "error"] = "all"
     max_sessions: int = Field(default=20, ge=1, le=pipelines.MAX_SESSIONS_PER_CALL)
+    log_groups: list[LogGroupName] = Field(default_factory=list, max_length=10)
+    keyword: str | None = Field(default=None, max_length=128)
+    format: pipeline_logs.LogFormat | None = None
+
+    @model_validator(mode="after")
+    def _logs_fields(self) -> PipelineSource:
+        if self.type == "logs":
+            if not self.log_groups:
+                raise ValueError("a logs source needs at least one log group")
+            if self.format is None:
+                self.format = pipeline_logs.LogFormat()
+        return self
 
 
 class PipelineProcessing(BaseModel):
     first_turn_only: bool = False
     dedupe: bool = True
     min_input_chars: int = Field(default=0, ge=0, le=500)
+    # false: inputs only — the observed replies are not stored as expected output
+    keep_replies: bool = True
 
 
 class PipelineOutput(BaseModel):
@@ -393,24 +418,30 @@ def _run_pipeline(
         new_output: dict[str, Any] | None = None
         try:
             src, proc, out = config.source, config.processing, config.output
-            listing = observability.list_sessions(src.range, db, ws.context)
-            rows = [r for r in listing.get("sessions", [])
-                    if private.visible(r.get("session_id"))]
-            outcome["scanned"] = len(rows)
-            picked = pipelines.select_sessions(
-                rows, agent=src.agent, status=src.status, limit=src.max_sessions
-            )
-            outcome["matched"] = len(picked)
             kind = "predefined"
             if out.dataset_id:
                 target = _dataset_in(db, ws, out.dataset_id)
                 _require_receivable(target)
                 kind = target.kind
-            items, skipped = _read_items(
-                db, ws, private, [str(r["session_id"]) for r in picked], src.range,
-                kind=kind, first_turn_only=proc.first_turn_only,
-                min_input_chars=proc.min_input_chars,
-            )
+            if src.type == "logs":
+                items, skipped, log_stats = _read_log_items(ws, private, src, proc, kind=kind)
+                outcome["scanned"] = log_stats.pop("sessions_found")
+                outcome["matched"] = log_stats.pop("sessions_taken")
+                outcome["log"] = log_stats
+            else:
+                listing = observability.list_sessions(src.range, db, ws.context)
+                rows = [r for r in listing.get("sessions", [])
+                        if private.visible(r.get("session_id"))]
+                outcome["scanned"] = len(rows)
+                picked = pipelines.select_sessions(
+                    rows, agent=src.agent, status=src.status, limit=src.max_sessions
+                )
+                outcome["matched"] = len(picked)
+                items, skipped = _read_items(
+                    db, ws, private, [str(r["session_id"]) for r in picked], src.range,
+                    kind=kind, first_turn_only=proc.first_turn_only,
+                    min_input_chars=proc.min_input_chars, keep_replies=proc.keep_replies,
+                )
             outcome["skipped"] = skipped
             if items or out.dataset_id:
                 dataset, added = _write(
@@ -446,6 +477,89 @@ def _run_pipeline(
             _live_runs.discard(pipeline_id)
 
 
+# ─── log sources (数据处理 · 运行日志) ─────────────────────────────────────────
+def _convert_logs(
+    ws: WorkspaceScope, private: PrivateSessions, src: PipelineSource
+) -> tuple[list[dict[str, str]], bool, dict[str, Any]]:
+    """(raw rows, truncated, converted sessions) for a logs source."""
+    assert src.format is not None  # the model fills the default preset
+    rows, truncated = pipeline_logs.fetch_events(
+        ws.context.client("logs"), list(dict.fromkeys(src.log_groups)),
+        observability.RANGE_HOURS[src.range], src.keyword, src.format.preset,
+    )
+    converted = pipeline_logs.convert(
+        rows, src.format, max_sessions=src.max_sessions, visible=private.visible
+    )
+    # a transcript naming another principal's private session is not read either
+    converted["sessions"] = [
+        s for s in converted["sessions"] if not private.mentions_hidden(s["turns"])
+    ]
+    return rows, truncated, converted
+
+
+def _read_log_items(
+    ws: WorkspaceScope,
+    private: PrivateSessions,
+    src: PipelineSource,
+    proc: PipelineProcessing,
+    *,
+    kind: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, Any]]:
+    """Items from a logs source + a skip reason per session + the parse stats."""
+    _rows, truncated, converted = _convert_logs(ws, private, src)
+    items: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for session in converted["sessions"]:
+        found = pipelines.items_from_transcript(
+            session["session_id"], session["turns"], kind=kind,
+            first_turn_only=proc.first_turn_only, min_input_chars=proc.min_input_chars,
+            keep_replies=proc.keep_replies, source="logs",
+            metadata={"log_group": session["log_group"]} if session["log_group"] else None,
+        )
+        if not found:
+            skipped.append({"session_id": session["session_id"], "reason": "no_exchange"})
+            continue
+        items.extend(found)
+    stats = {
+        "events": converted["events"], "parsed": converted["parsed"],
+        "failed": converted["failed"], "truncated": truncated,
+        "sessions_found": converted["sessions_found"],
+        "sessions_taken": len(converted["sessions"]),
+    }
+    return items, skipped, stats
+
+
+class LogsPreview(BaseModel):
+    source: PipelineSource
+
+
+PREVIEW_TURN_CHARS = 1000
+
+
+@router.post("/pipelines/preview-logs")
+def preview_logs(
+    body: LogsPreview,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """What a logs source reads and extracts right now — the raw newest records
+    beside the sessions the format rule turns them into (the converter a run
+    uses), with per-reason parse failures and the field paths seen in records."""
+    src = body.source
+    if src.type != "logs":
+        raise AppError("pipeline.not_logs", "only a logs source can be previewed",
+                       status_code=422)
+    rows, truncated, converted = _convert_logs(ws, _private(request, ws, db), src)
+    sessions = [
+        {**s, "turns": [{**t, "text": str(t.get("text") or "")[:PREVIEW_TURN_CHARS]}
+                        for t in s["turns"]]}
+        for s in converted["sessions"][:pipeline_logs.MAX_PREVIEW_SESSIONS]
+    ]
+    return {**converted, "sessions": sessions, "truncated": truncated,
+            "samples": pipeline_logs.samples(rows)}
+
+
 # ─── runtime log streams (task wizard · 日志) ────────────────────────────────
 @router.get("/agents/{agent_id}/log-streams")
 def agent_log_streams(
@@ -471,7 +585,6 @@ def agent_log_streams(
 
 
 # ─── CloudWatch-only sources (task wizard · no platform agent) ───────────────
-LogGroupName = Annotated[str, Field(pattern=LOG_GROUP_NAME_RE)]
 
 
 @router.get("/log-sessions")
