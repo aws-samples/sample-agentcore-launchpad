@@ -2,7 +2,8 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { PageHeader, SubTabs } from "../ui";
-import { DatasetDetail, DatasetEditor, DatasetsTab } from "./data/Datasets";
+import { DatasetEditor } from "./data/DatasetEditor";
+import { DatasetDetail, DatasetsTab } from "./data/Datasets";
 import { PipelineEditor, PipelinesTab } from "./data/Pipelines";
 import { TraceDetail, TracesTab } from "./data/Traces";
 

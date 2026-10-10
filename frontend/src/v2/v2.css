@@ -362,6 +362,11 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-stack { display: flex; flex-direction: column; gap: 8px; }
 .v2-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+/* dataset editor: one scenario / simulated-user persona */
+.v2-scenario { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.v2-scenario-head { display: flex; gap: 8px; align-items: center; }
+.v2-scenario-head .end { margin-left: auto; display: flex; gap: 8px; }
+
 /* deploy pipeline (agent detail): generate → package → provision → deploy → register */
 .v2-stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .v2-stage { display: flex; gap: 10px; border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px; min-width: 0; }
