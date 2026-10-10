@@ -65,7 +65,11 @@ deploy the agent from that stack: the IdP consent redirect returns to
 `{public_base_url}/auth/return`, which defaults to `:5173` — the user-owned
 stack, not yours. Backend restarts re-run `resume_pending_jobs()` (real AWS side
 effects if interrupted deploy jobs exist in the ledger) — prefer the throwaway
-stack over restarting a stack you did not start.
+stack over restarting a stack you did not start. Before restarting a backend, run
+`cd backend && uv run python scripts/inflight.py` (read-only, no AWS call): it lists
+every in-flight row and what the restart does to it — exit `0` nothing in flight,
+`2` only resumes/reconciles, `3` something would be failed, cleared or stranded
+(see the prod runbook's update recipe for the outcome table).
 
 ## 3. Verify it is up
 

@@ -120,6 +120,21 @@ progress is persisted on the `Deployment` row and mirrored as JSONL events into
 the `Job` log, so a restarted backend resumes from the first non-succeeded
 stage (`resume_pending_jobs()` runs on startup).
 
+`resume_pending_jobs()` is one of nine startup hooks in `create_app`, and they give
+in-flight work different fates: deploy/bootstrap/uninstall/purge jobs and
+evaluation-asset operations **resume**; eval runs with a started batch and Policy
+changes **reconcile** from AWS; eval runs without a batch, Skill Lab jobs and open
+architect turns **fail as interrupted**; experiment/canary `running_action` flags
+are **cleared** for the user to retry; data pipelines and provider recommendation
+jobs **fail on their next read**, so the startup journal never mentions them; and a
+`Job.type` with no resume starter is **stranded**. `backend/scripts/inflight.py`
+(over `app/services/inflight.py`) reads the ledger read-only — no app build, no AWS
+call — and lists every in-flight row with its `restart_outcome`; its exit code
+(`0` nothing, `2` only resumes/reconciles, `3` something is failed, cleared or
+stranded) is the pre-restart step of the prod update recipe. A drift-guard test
+parses `create_app` and the `starters` dict, so a new startup hook or resumable job
+type fails the suite until the inventory classifies it.
+
 | Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — bring your own code |
 |---|---|---|---|---|
 | **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) | *No code generated.* Verify the staged upload (or the ECR image) and stamp server-verified provenance (sha256, uploader, timestamp) onto the spec |
