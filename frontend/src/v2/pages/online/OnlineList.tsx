@@ -6,7 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type OnlineEvalConfigRow } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   agentLabel,
@@ -152,7 +152,17 @@ export function OnlineList() {
         )
       ),
     },
-    { key: "updated", title: t("v2.tasks.colUpdated"), className: "nowrap", render: (row) => fmtTime(row.updated_at ?? row.created_at) },
+    {
+      key: "updated",
+      title: t("v2.tasks.colUpdated"),
+      className: "nowrap",
+      render: (row) => (
+        <>
+          {fmtTime(row.updated_at ?? row.created_at)}
+          <span className="sub" title={t("v2.common.creator")}>{creatorLabel(row)}</span>
+        </>
+      ),
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),

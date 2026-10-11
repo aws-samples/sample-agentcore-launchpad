@@ -41,6 +41,7 @@ from app.evaluation.scenarios import (
     scenario_prompts,
 )
 from app.models.ledger import Agent
+from app.services import creators
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -864,6 +865,7 @@ def submit_run(
     name: str | None = None,
     description: str | None = None,
     log_source: dict[str, Any] | None = None,
+    creator: creators.Creator | None = None,
 ) -> EvalRun:
     """Queue one run. The telemetry comes from the platform ``agent`` — or, with
     ``agent=None``, from ``log_source`` {service_name, log_group_names}: an agent
@@ -908,6 +910,7 @@ def submit_run(
             status="queued",
             session_ids=session_ids or [],
         )
+        creators.stamp(run, creator)
         db.add(run)
         db.commit()
         run_id = run.id

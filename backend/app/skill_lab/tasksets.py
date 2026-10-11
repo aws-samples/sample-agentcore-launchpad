@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, make_transient
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
+from app.services import creators
 from app.skill_lab import task_assets
 from app.skill_lab.models import SkillLabTaskset
 from app.skill_lab.worker_build import VENDOR_ROOT
@@ -401,6 +402,7 @@ def taskset_info(row: SkillLabTaskset) -> dict[str, Any]:
         "counts": row.counts,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        **creators.fields(row),
     }
 
 
@@ -445,11 +447,13 @@ def create_taskset(
     sample: bool = False,
     run_validator: bool = True,
     extra_sources: dict[str, Path] | None = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     """`sample`/`run_validator` are seeding-only knobs (app/skill_lab/samples.py):
     the router never passes them. Skipping the validator subprocess is safe only
     for the vendored demo files — a hermetic test runs the real validator over
-    them, and seeding must not depend on the skill-lab venv existing yet."""
+    them, and seeding must not depend on the skill-lab venv existing yet. Seeded
+    samples carry no `creator` (no human principal)."""
     name = (name or "").strip()
     if not name:
         raise _invalid([{"split": "name", "message": "name is required"}])
@@ -471,6 +475,7 @@ def create_taskset(
             sample=sample,
             counts=_counts(canonical, keys),
         )
+        creators.stamp(row, creator)
         db.add(row)
         db.flush()  # allocate the id before the content claims its directory
         live = taskset_dir(row.id)

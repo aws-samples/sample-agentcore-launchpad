@@ -33,7 +33,7 @@ from app.models.assistant import (
     AssistantProposal,
     EvaluationAssetOperation,
 )
-from app.models.ledger import Agent, User, Workspace
+from app.models.ledger import Agent, ResourceCreator, User, Workspace
 from app.services import aws_clients
 from app.services import users as users_service
 from app.system_agents.presets import ARCHITECT
@@ -1902,6 +1902,45 @@ def test_cleanup_is_dependency_safe_checkpointed_and_honest(app_ready):
         assert db.query(EvalDataset).count() == 1  # the dataset is the member's
         op = assets.cleanup_operation(db, op, ws_ctx(RESOURCES), clients=fakes)  # idempotent
         assert op.status == "cleaned"
+    finally:
+        db.close()
+
+
+def test_materialized_dataset_and_evaluators_carry_the_plan_approver(app_ready):
+    """The worker acts for the approver: the dataset and every evaluator it creates
+    record the approver's users.id + name, and cleanup drops the evaluator rows."""
+    db = SessionLocal()
+    try:
+        user = User(username="ada", username_key="ada", email="ada@example.com",
+                    password_hash=users_service.hash_password("x" * 16), role="admin",
+                    status="active")
+        db.add(user)
+        db.commit()
+        uid = user.id
+    finally:
+        db.close()
+    cid, h = _conversation(f"user:{uid}", owner="ada")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, approver_user_id=uid, approved_by="ada", fakes=fakes)
+    assert _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    created = {r["result"]["evaluator_id"] for r in op.resources
+               if r["kind"] == "evaluator" and (r.get("result") or {}).get("evaluator_id")}
+    assert created
+    db = SessionLocal()
+    try:
+        ds = db.get(EvalDataset, op.dataset_id)
+        assert (ds.created_by, ds.created_by_name) == (uid, "ada")
+        rows = db.query(ResourceCreator).filter_by(kind="evaluator").all()
+        assert {r.resource_id for r in rows} == created
+        assert {(r.created_by, r.created_by_name) for r in rows} == {(uid, "ada")}
+        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
+                                      ws_ctx(RESOURCES), clients=fakes)
+        assert op.status == "cleaned", op.error
+        assert db.query(ResourceCreator).count() == 0
+        # the dataset stays (it is the member's) and keeps its creator
+        assert db.get(EvalDataset, ds.id).created_by == uid
     finally:
         db.close()
 

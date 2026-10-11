@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJobInfo } from "../../../lib/api";
 import { isLiveJob, jobSkillName } from "../../../lib/skillLab";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged, useV2Toast } from "../../hooks";
 import {
   Button,
@@ -91,6 +91,7 @@ export function TaskgenList() {
       ),
     },
     { key: "status", title: t("skillLab.eval.col.status"), render: (job) => <JobStatusTag job={job} /> },
+    { key: "creator", title: t("v2.common.creator"), render: (job) => creatorLabel(job) },
     { key: "created", title: t("skillLab.eval.col.created"), className: "nowrap", render: (job) => fmtTime(job.created_at) },
     {
       key: "ops",

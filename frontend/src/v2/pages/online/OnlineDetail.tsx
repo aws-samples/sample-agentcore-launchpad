@@ -14,7 +14,7 @@ import {
 } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
 import { evaluatorLabel } from "../../../lib/evaluators";
-import { fmtTime, normalizedScore, RANGES, rangeLabel, scoreTone } from "../../format";
+import { creatorLabel, fmtTime, normalizedScore, RANGES, rangeLabel, scoreTone } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
 import {
@@ -499,6 +499,7 @@ export function OnlineDetail({ id }: { id: string }) {
             { label: t("v2.online.resultsLogGroup"), value: <span className="mono">{row.results_log_group}</span> },
             { label: t("v2.tasks.colCreated"), value: fmtTime(row.created_at) },
             { label: t("v2.tasks.colUpdated"), value: fmtTime(row.updated_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(row) },
             { label: t("v2.tasks.description"), value: row.description || "—" },
           ]}
         />

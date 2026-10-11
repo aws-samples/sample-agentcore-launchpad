@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type CanaryPairRow, type RuntimeCanaryInfo } from "../../../lib/api";
 import { ONLINE_EVAL_DEFAULT } from "../../../lib/experiments";
-import { fmtScore, fmtTime } from "../../format";
+import { creatorLabel, fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
 import { StageCard } from "../experiments/StageCard";
@@ -488,6 +488,7 @@ export function CanaryDetail({ id }: { id: string }) {
             },
             { label: t("v2.canary.sourceExp"), value: canary.source_experiment_id ? <span className="mono">{canary.source_experiment_id}</span> : "—" },
             { label: t("v2.tasks.colCreated"), value: fmtTime(canary.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(canary) },
             {
               label: t("v2.experiments.colStage"),
               value: canary.running_action

@@ -47,7 +47,8 @@ from app.evaluation.routers import (
 from app.evaluation.service import resolve_telemetry
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import observability
+from app.services import creators, observability
+from app.services.creators import Creator
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
 
@@ -126,9 +127,11 @@ def _write(
     items: list[dict[str, Any]],
     skipped: list[dict[str, str]],
     dedupe: bool,
+    creator: Creator | None = None,
 ) -> tuple[EvalDataset, int]:
     """Append to `dataset_id`, or create `dataset_name` — only when there is
-    something to write (a dataset cannot be empty)."""
+    something to write (a dataset cannot be empty). A created dataset records
+    `creator`; an append leaves the existing creator alone."""
     if dataset_id:
         dataset = _dataset_in(db, ws, dataset_id)
         merged, added, reasons = pipelines.merge_items(dataset.items, items, dedupe=dedupe)
@@ -156,6 +159,7 @@ def _write(
         items=merged,
         kind=_infer_kind(merged),
     )
+    creators.stamp(dataset, creator)
     db.add(dataset)
     db.commit()
     return dataset, added
@@ -204,6 +208,7 @@ def datasets_from_sessions(
     dataset, added = _write(
         db, ws, dataset_id=body.dataset_id, dataset_name=body.name,
         description=body.description, items=items, skipped=skipped, dedupe=body.dedupe,
+        creator=Creator.of_request(request),
     )
     return {"dataset": _dataset_out(dataset), "added": added, "skipped": skipped}
 
@@ -270,6 +275,7 @@ def _pipeline_out(row: EvalPipeline) -> dict[str, Any]:
         "last_run": row.last_run,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        **creators.fields(row),
     }
 
 
@@ -302,6 +308,7 @@ def list_pipelines(
 @router.post("/pipelines", status_code=201)
 def create_pipeline(
     body: PipelineBody,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -312,6 +319,7 @@ def create_pipeline(
         description=body.description,
         config=body.model_dump(include={"source", "processing", "output"}),
     )
+    creators.stamp(row, Creator.of_request(request))
     db.add(row)
     db.commit()
     return _pipeline_out(row)
@@ -375,11 +383,14 @@ def run_pipeline(
         raise AppError("pipeline.running", "the pipeline is already running", status_code=409)
     config = PipelineBody.model_validate({"name": row.name, **row.config})
     private = _private(request, ws, db)  # snapshot under the caller's principal
+    # whoever starts the run creates its output dataset (not necessarily the
+    # pipeline's own creator)
+    creator = Creator.of_request(request)
     row.status = "running"
     db.commit()
     with _live_lock:
         _live_runs.add(row.id)
-    _spawn(lambda: _run_pipeline(row.id, config, ws, private))
+    _spawn(lambda: _run_pipeline(row.id, config, ws, private, creator=creator))
     return _pipeline_out(row)
 
 
@@ -406,7 +417,12 @@ def _reap(db: Session, row: EvalPipeline) -> None:
 
 
 def _run_pipeline(
-    pipeline_id: str, config: PipelineBody, ws: WorkspaceScope, private: PrivateSessions
+    pipeline_id: str,
+    config: PipelineBody,
+    ws: WorkspaceScope,
+    private: PrivateSessions,
+    *,
+    creator: Creator | None = None,
 ) -> None:
     """One run, start to finish, on its own DB session; the row always reaches a
     terminal status."""
@@ -447,7 +463,7 @@ def _run_pipeline(
                 dataset, added = _write(
                     db, ws, dataset_id=out.dataset_id, dataset_name=out.dataset_name,
                     description=config.description, items=items, skipped=skipped,
-                    dedupe=proc.dedupe,
+                    dedupe=proc.dedupe, creator=creator,
                 )
                 outcome["added"] = added
                 outcome["dataset_id"] = dataset.id

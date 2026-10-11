@@ -158,6 +158,7 @@ export function TaskList() {
         <>
           {fmtTime(task.createdAt)}
           <span className="sub" title={t("v2.tasks.colUpdated")}>{fmtTime(task.updatedAt)}</span>
+          <span className="sub" title={t("v2.common.creator")}>{task.createdByName || "—"}</span>
         </>
       ),
     },

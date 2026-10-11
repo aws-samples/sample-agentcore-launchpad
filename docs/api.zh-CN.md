@@ -353,12 +353,37 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 与 `status = "DELETED"` 报告该引用；策略变更返回 `409 governance.policy_engine_deleted`；`POST .../engine`
 把该引用视为未挂接：创建一个新的 Engine，以所选模式挂接，并把被替换的 ARN 记录在 operation 上。
 
+## 控制台资源创建者 / Console resource creators
+
+每个用户管理资源的列表与详情响应都带两个可为空的字段，记录是谁通过控制台创建了它：
+
+```json
+{"created_by": "3f2a…", "created_by_name": "ada"}
+```
+
+`created_by` 是创建者的 `users.id`——配置 admin 与关闭认证时的本地操作员没有 `users` 行，记为 NULL；
+`created_by_name` 是创建时的用户名，仅用于展示。早于该字段的旧行、在控制台之外创建的资源，以及没有人类主体的
+路径（Skill Lab 示例任务集、bootstrap 记忆、实验/灰度持有的在线评估配置、内置与第三方评估器）两者均为 NULL。
+它们总由服务端写入：请求体里的 `created_by` / `created_by_name` 会被忽略。
+
+| 资源 | 带这两个字段的路由 |
+|---|---|
+| 知识库 | `GET` / `POST /api/knowledge-bases`、`GET` / `PATCH /api/knowledge-bases/{kb_id}` |
+| 记忆资源 | `GET` / `POST /api/memory/resources`、`GET` / `PUT /{memory_id}`、`POST /{memory_id}/adopt`——被纳管的记忆带纳管者的名字，`created_by` 为 null |
+| 数据集 | `GET` / `POST /api/eval/datasets`（以及 `upload`、`from-sessions`、`PUT`）——pipeline 运行新建的数据集记录发起运行的人；架构助手物化的数据集记录计划审批人 |
+| 数据处理 pipeline | `GET` / `POST /api/eval/pipelines`、`GET` / `PUT /{id}`、`POST /{id}/run` |
+| 评估运行 | `GET` / `POST /api/eval/runs`、`GET /api/eval/runs/{id}`；在线报告行（`GET /api/eval/online/{id}/reports`） |
+| 在线评估配置 | `GET` / `POST /api/eval/online`、`GET /api/eval/online/{config_id}` |
+| 评估器 | `GET /api/eval/evaluators`、`GET /{id}`、`POST`（创建响应）——架构助手物化的评估器记录计划审批人 |
+| 实验 / 灰度 | `GET` / `POST /api/experiments`、`GET /{id}`；`GET` / `POST /api/runtime-canaries`、`GET /{id}` |
+| Skill Lab | 任务与任务集的列表 / 详情 / 创建、`POST /jobs/{id}/import-taskset`（由导入者创建该任务集） |
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库
 ——控制面走 `bedrock-agent`，检索走 `bedrock-agent-runtime`。只有
 `type == "MANAGED"` 的知识库可寻址：同一账号内的 VECTOR 知识库会返回
-`kb.not_found`。本地不存任何状态，因此每条路由都是一次实时 AWS 调用。详见
+`kb.not_found`。本地只存控制台所建知识库的创建者（见下文「资源创建者」），其余都是一次实时 AWS 调用。详见
 [architecture.zh-CN.md](architecture.zh-CN.md)「托管知识库」一节。
 
 | 方法 | 路径 | 结果 |

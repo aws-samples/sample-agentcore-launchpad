@@ -22,7 +22,7 @@ def test_experiment_create_and_persisted_stages(client, monkeypatch):
 
     monkeypatch.setattr(
         opt_router.service, "start_experiment",
-        lambda a, _ws: _make_exp(a),
+        lambda a, _ws, **_kw: _make_exp(a),
     )
     monkeypatch.setattr(
         opt_router.readiness,

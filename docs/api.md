@@ -633,13 +633,43 @@ reads report the reference with `policy_engine.missing = true` and
 reference as unattached: it creates a new Engine, attaches it in the selected
 mode, and records the replaced ARN on the operation.
 
+## Console resource creators
+
+Every list and detail response of a user-managed resource carries two nullable
+fields recording who created it through the console:
+
+```json
+{"created_by": "3f2a…", "created_by_name": "ada"}
+```
+
+`created_by` is the creator's `users.id` — NULL for the config admin and the
+auth-disabled operator (no `users` row); `created_by_name` is the username at
+creation, display only. Both are NULL on rows that predate the field and on
+resources created outside the console or by a path with no human principal
+(Skill Lab sample task sets, the bootstrap memory, experiment/canary-owned online
+configs, built-in and third-party evaluators). They are always server-set: a
+`created_by` / `created_by_name` in a request body is ignored.
+
+| Resource | Routes carrying the fields |
+|---|---|
+| Knowledge base | `GET` / `POST /api/knowledge-bases`, `GET` / `PATCH /api/knowledge-bases/{kb_id}` |
+| Memory resource | `GET` / `POST /api/memory/resources`, `GET` / `PUT /{memory_id}`, `POST /{memory_id}/adopt` — an adopted memory carries the adopter's name with `created_by: null` |
+| Dataset | `GET` / `POST /api/eval/datasets` (+ `upload`, `from-sessions`, `PUT`) — a pipeline run's new dataset records whoever started the run; an architect-materialized one the plan approver |
+| Pipeline | `GET` / `POST /api/eval/pipelines`, `GET` / `PUT /{id}`, `POST /{id}/run` |
+| Evaluation run | `GET` / `POST /api/eval/runs`, `GET /api/eval/runs/{id}`; online report rows (`GET /api/eval/online/{id}/reports`) |
+| Online config | `GET` / `POST /api/eval/online`, `GET /api/eval/online/{config_id}` |
+| Evaluator | `GET /api/eval/evaluators`, `GET /{id}`, `POST` (the create reply) — an architect-materialized one records the plan approver |
+| Experiment / canary | `GET` / `POST /api/experiments`, `GET /{id}`; `GET` / `POST /api/runtime-canaries`, `GET /{id}` |
+| Skill Lab | job and task-set list / detail / create, `POST /jobs/{id}/import-taskset` (the importer creates the set) |
+
 ## Console Knowledge Bases API
 
 `/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over
 Bedrock *managed* knowledge bases — `bedrock-agent` for the control plane,
 `bedrock-agent-runtime` for retrieval. Only `type == "MANAGED"` KBs are
-addressable: a VECTOR KB in the same account answers `kb.not_found`. Nothing is
-stored locally, so every route is a live AWS call. See
+addressable: a VECTOR KB in the same account answers `kb.not_found`. Only the
+creator of a console-created KB is stored locally (see *Resource creators* below);
+everything else is a live AWS call. See
 [architecture.md](architecture.md#managed-knowledge-bases-console-04).
 
 | Method | Path | Result |

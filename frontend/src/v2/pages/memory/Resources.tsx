@@ -25,7 +25,7 @@ import {
   MEMORY_STRATEGY_NAMESPACES,
   type MemoryStrategyKey,
 } from "../../../lib/memory";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -222,6 +222,7 @@ export function ResourceList() {
       ),
     },
     { key: "agents", title: t("v2.memory.colUsedBy"), render: (row) => <UsedBy row={row} /> },
+    { key: "creator", title: t("v2.common.creator"), render: (row) => creatorLabel(row) },
     { key: "created", title: t("v2.memory.colCreated"), className: "nowrap", render: (row) => fmtTime(row.created_at) },
     { key: "updated", title: t("v2.memory.colUpdated"), className: "nowrap", render: (row) => fmtTime(row.updated_at) },
     {
@@ -466,6 +467,7 @@ export function ResourceDetail({ id }: { id: string }) {
             },
             { label: t("v2.memory.colUsedBy"), value: <UsedBy row={row} /> },
             { label: t("memoryPage.overview.createdAt"), value: fmtTime(mem.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(mem) },
             { label: t("memoryPage.overview.updatedAt"), value: fmtTime(mem.updated_at) },
           ]}
         />

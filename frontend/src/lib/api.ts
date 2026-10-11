@@ -207,6 +207,12 @@ export interface ExperimentSummary {
   agent_name: string;
   status: string;
   stage: string;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export type SystemPresetStatus =
@@ -713,6 +719,12 @@ export interface RuntimeCanaryInfo {
     };
     cleanup?: { category: string; status: string; detail?: string }[];
   };
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface JobEvent {
@@ -2186,6 +2198,12 @@ export interface MemoryResourceRow {
    *  else in the account is detected, not managed: no detail/edit/delete, and no
    *  agent may pin it — an administrator can adopt it. */
   managed: boolean;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface MemoryResourceList {
@@ -2228,6 +2246,12 @@ export interface MemoryResourceDetail {
   namespace_keys: MemoryResourceNamespaceKey[];
   /** always true — the per-id routes answer 404 `memory.not_managed` otherwise */
   managed: boolean;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** `PUT /api/memory/resources/{id}` — both optional, at least one required.
@@ -3036,6 +3060,12 @@ export interface EvaluatorRow {
   evaluator_type?: string | null;
   provider?: string | null;
   definition?: EvaluatorDefinition | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** Why the account's evaluators could not be listed (`code` is an `apiErrors.*` key;
@@ -3079,6 +3109,12 @@ export interface EvaluatorDetail {
   status: string | null;
   evaluator_type?: string | null;
   provider?: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** Exactly one definition per body (`instructions` | `base_evaluator_id` |
@@ -3177,6 +3213,12 @@ export interface OnlineEvalConfigRow {
   duplicate_enabled: boolean;
   created_at: string | null;
   updated_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** `POST /api/eval/online`. Exactly one kind per mode: `evaluators` for scores,
@@ -3526,6 +3568,12 @@ export interface SkillLabTasksetInfo {
   counts: Record<string, number>;
   created_at: string | null;
   updated_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /**
@@ -3656,6 +3704,12 @@ export interface SkillLabJobInfo {
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /**
@@ -4024,6 +4078,12 @@ export interface V2Dataset {
   cloud: { dataset_id?: string; status?: string; draft_status?: string } | null;
   has_ground_truth: boolean;
   created_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface V2DatasetCreate {
@@ -4127,6 +4187,12 @@ export interface V2Pipeline {
   last_run: V2PipelineRun | null;
   created_at: string | null;
   updated_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface V2PipelineBody extends V2PipelineConfig {

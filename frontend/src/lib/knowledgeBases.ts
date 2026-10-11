@@ -13,6 +13,12 @@ export interface KnowledgeBaseSummary {
   updated_at: string | null;
   data_source_count: number;
   attached_agents: string[];
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface IngestionJob {
@@ -45,6 +51,12 @@ export interface KnowledgeBaseDetail {
   failure_reasons?: string[];
   data_sources: DataSource[];
   attached_agents: string[];
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface QueryResultItem {

@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import type { ExperimentInfo } from "../../../lib/experiments";
 import { verdictLabel } from "../../../lib/experiments";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged } from "../../hooks";
 import { Alert, Button, Card, type Column, FilterSelect, LinkButton, Pager, SearchInput, Table, Tag } from "../../ui";
 import { EXPERIMENT_TONE, stageLabel } from "./common";
@@ -75,6 +75,7 @@ export function ExperimentList({
       title: t("v2.tasks.colStatus"),
       render: (e) => <Tag tone={EXPERIMENT_TONE[e.status] ?? "gray"}>{t(`v2.experiments.status.${e.status}`, { defaultValue: e.status })}</Tag>,
     },
+    { key: "creator", title: t("v2.common.creator"), render: (e) => creatorLabel(e) },
     { key: "created", title: t("v2.tasks.colCreated"), className: "nowrap", render: (e) => fmtTime(e.created_at) },
     {
       key: "ops",

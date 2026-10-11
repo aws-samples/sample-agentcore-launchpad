@@ -103,6 +103,7 @@ from app.models.assistant import (
 from app.models.ledger import User, Workspace
 from app.models.ledger import _id as _new_id
 from app.routers.auth import ROLE_ADMIN, Identity, granted_permissions
+from app.services import creators
 from app.services import users as users_service
 from app.services.workspace import WorkspaceContext, workspace_context
 
@@ -868,6 +869,11 @@ class _Unknown(RuntimeError):
     (never adopted, never deleted); re-evaluated on retry, dependents retained."""
 
 
+def _approver(op: EvaluationAssetOperation) -> creators.Creator:
+    """The creator of what an operation materializes: the plan's approver."""
+    return creators.Creator(user_id=op.approver_user_id, name=op.approved_by)
+
+
 class _Fence:
     """Lease token + approver + pinned-workspace check before every cloud write."""
 
@@ -1342,6 +1348,8 @@ class _Runner:
             workspace_id=op.workspace_id, name=plan.dataset.name, locale=plan.dataset.locale,
             description=plan.dataset.description, items=items, kind="predefined",
         )
+        # the materializer acts for the plan's approver
+        creators.stamp(dataset, _approver(op))
         db.add(dataset)
         db.flush()
         res["result"] = {"dataset_id": dataset.id, "item_count": len(items)}
@@ -2216,6 +2224,11 @@ class _Runner:
             res["owned"] = True
             self.fence.save(db, op, resources, f"{res['key']}:accepted")
             stored = res["result"]
+        if res.get("owned"):
+            # idempotent, so a worker that died between the accept checkpoint and this
+            # write records the approver on resume
+            creators.record(db, op.workspace_id, creators.EVALUATOR,
+                            stored["evaluator_id"], _approver(op))
         detail = None
         for _ in range(READBACK_ATTEMPTS):
             detail = control.get_evaluator(evaluatorId=stored["evaluator_id"])
@@ -3414,6 +3427,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
         except Exception as exc:  # noqa: BLE001 — incl. transport: recorded, retryable
             if gone(exc):
                 mark(r, "deleted", "already gone")
+                creators.forget(db, op.workspace_id, creators.EVALUATOR, eid)
                 checkpoint(f"{r['key']}:gone")
                 continue
             mark(r, "delete_failed", _safe_error(exc))
@@ -3455,6 +3469,8 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                 break
             sleeper(READBACK_DELAY_S)
         mark(r, state, None if state == "deleted" else note)
+        if state == "deleted":
+            creators.forget(db, op.workspace_id, creators.EVALUATOR, eid)
         checkpoint(f"{r['key']}:cleanup")
     # 2. each code chain waits only for its own evaluators. Ungrouped historical
     # operations keep their original shared dependency DAG and ownership evidence.

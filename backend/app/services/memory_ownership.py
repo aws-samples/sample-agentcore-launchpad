@@ -23,7 +23,9 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import ManagedMemory
+from app.services import creators
 from app.services.agentcore.client import control_client
+from app.services.creators import Creator
 from app.services.memory import memory_id_or_none, spec_memory_id
 from app.services.workspace import WorkspaceContext
 
@@ -38,6 +40,15 @@ def managed_ids(db: Session, workspace: WorkspaceContext) -> set[str]:
     if default_id:
         ids.add(default_id)
     return ids
+
+
+def managed_rows(db: Session, workspace: WorkspaceContext) -> dict[str, ManagedMemory]:
+    """The workspace's ``ManagedMemory`` rows by memory id (bootstrap memory excluded:
+    it has no row, so it carries no creator)."""
+    return {
+        row.memory_id: row
+        for row in db.query(ManagedMemory).filter(ManagedMemory.workspace_id == workspace.id)
+    }
 
 
 def is_managed(db: Session, workspace: WorkspaceContext, memory_id: str | None) -> bool:
@@ -73,20 +84,21 @@ def register(
     memory_id: str,
     *,
     origin: str,
-    created_by: str | None,
+    creator: Creator | None = None,
 ) -> None:
     """Record ``memory_id`` as managed; idempotent (a repeat or a racing writer of
-    the same id leaves one row, guarded by the unique index)."""
+    the same id leaves one row, guarded by the unique index).
+
+    A created memory records its full creator. An adopted one pre-existed in AWS,
+    so it records no owner id — only the adopting administrator's name, for display.
+    """
     if not memory_id or is_managed(db, workspace, memory_id):
         return
-    db.add(
-        ManagedMemory(
-            workspace_id=workspace.id,
-            memory_id=memory_id,
-            origin=origin,
-            created_by=created_by,
-        )
-    )
+    row = ManagedMemory(workspace_id=workspace.id, memory_id=memory_id, origin=origin)
+    if creator is not None and origin == "adopted":
+        creator = Creator(user_id=None, name=creator.name)
+    creators.stamp(row, creator)
+    db.add(row)
     try:
         db.commit()
     except IntegrityError:

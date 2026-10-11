@@ -3,7 +3,7 @@
 import re
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,9 @@ from app.optimization import providers as rec_providers
 from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import creators
 from app.services.agentcore.client import control_client
+from app.services.creators import Creator
 from app.system_agents import service as system_agents
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
@@ -37,6 +39,7 @@ def _out(exp: Experiment) -> dict[str, Any]:
         "progress": exp.progress,
         "error": exp.error,
         "created_at": exp.created_at.isoformat() if exp.created_at else None,
+        **creators.fields(exp),
     }
 
 
@@ -137,6 +140,7 @@ class ExperimentCreate(BaseModel):
 @router.post("", status_code=201)
 def create_experiment(
     req: ExperimentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -169,7 +173,7 @@ def create_experiment(
             {"readiness": trace_readiness},
             status_code=409,
         )
-    exp = service.start_experiment(agent, ws.context)
+    exp = service.start_experiment(agent, ws.context, creator=Creator.of_request(request))
     return _out(exp)
 
 

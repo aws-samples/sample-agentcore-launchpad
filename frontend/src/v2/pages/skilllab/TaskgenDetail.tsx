@@ -17,7 +17,7 @@ import {
   type TaskgenReviewDraft,
   toReviewDrafts,
 } from "../../../lib/skillLabTaskgen";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
 import { GoneCard, JobStatusTag } from "./common";
@@ -257,6 +257,7 @@ export function TaskgenDetail({ id }: { id: string }) {
             { label: t("skillLab.taskgen.field.attachments"), value: attachedNames.length ? <span className="mono">{attachedNames.join(" · ")}</span> : "—" },
             { label: t("v2.skillLab.progress"), value: detail.progress || detail.status },
             { label: t("skillLab.eval.col.created"), value: fmtTime(detail.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(detail) },
             { label: t("skillLab.eval.field.elapsed"), value: elapsed(detail) },
             ...(detail.params.guidance
               ? [{ label: t("skillLab.taskgen.field.guidance"), value: <span className="v2-skilllab-clamp">{detail.params.guidance}</span> }]

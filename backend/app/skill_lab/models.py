@@ -54,6 +54,11 @@ class SkillLabJob(Base):
     params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     cancel_requested: Mapped[bool] = mapped_column(default=False)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -72,6 +77,11 @@ class SkillLabTaskset(Base):
     sample: Mapped[bool] = mapped_column(default=False)
     # {"tasks": n} for single, {"train": n, "val": n, "test": n?} for split
     counts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

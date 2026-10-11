@@ -16,6 +16,7 @@ from app.optimization import canary_harness, canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
+from app.services import creators
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -250,6 +251,7 @@ def start_harness_canary(
     start_stage: int = 0,
     online_evaluators: list[str] | None = None,
     primary_evaluator: str | None = None,
+    creator: creators.Creator | None = None,
 ) -> RuntimeCanary:
     """Ledger row for a Harness canary: two EXISTING versions of one Harness.
 
@@ -279,6 +281,7 @@ def start_harness_canary(
             **_evaluator_artifacts(online_evaluators, primary_evaluator),
         },
     )
+    creators.stamp(row, creator)
     db = SessionLocal()
     try:
         db.add(row)
@@ -297,6 +300,7 @@ def start_canary(
     *,
     online_evaluators: list[str] | None = None,
     primary_evaluator: str | None = None,
+    creator: creators.Creator | None = None,
 ) -> RuntimeCanary:
     """Create only the ledger row; setup mints the candidate version + gateway.
 
@@ -321,6 +325,7 @@ def start_canary(
             **_evaluator_artifacts(online_evaluators, primary_evaluator),
         },
     )
+    creators.stamp(row, creator)
     db = SessionLocal()
     try:
         db.add(row)

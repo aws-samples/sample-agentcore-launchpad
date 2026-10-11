@@ -20,6 +20,7 @@ import {
   JUDGE_MODEL_OPTIONS,
   LEVEL_PLACEHOLDERS,
 } from "../../lib/evaluators";
+import { creatorLabel } from "../format";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
   Alert,
@@ -126,6 +127,7 @@ function EvaluatorList() {
       render: (row) =>
         row.requires_ground_truth ? <Tag tone="orange">{t("v2.evaluators.needsGt")}</Tag> : <span className="v2-muted">{t("v2.common.no")}</span>,
     },
+    { key: "creator", title: t("v2.common.creator"), render: (row) => creatorLabel(row) },
     {
       key: "ops",
       title: t("v2.common.actions"),
@@ -260,6 +262,7 @@ function EvaluatorDetailView({ id }: { id: string }) {
                 },
                 { label: t("v2.evaluators.model"), value: d?.model_id ? <span className="mono">{d.model_id}</span> : "—" },
                 { label: t("v2.evaluators.description"), value: d?.description || "—" },
+                { label: t("v2.common.creator"), value: creatorLabel({ created_by_name: d?.created_by_name ?? row?.created_by_name }) },
                 {
                   label: t("v2.evaluators.colGroundTruth"),
                   value: row?.requires_ground_truth ? t("v2.evaluators.needsGt") : t("v2.common.no"),

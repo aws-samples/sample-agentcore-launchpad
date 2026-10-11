@@ -231,7 +231,45 @@ class ManagedMemory(Base):
     memory_id: Mapped[str] = mapped_column(String(128), index=True)
     # created (console CreateMemory) | adopted (administrator adopted an existing one)
     origin: Mapped[str] = mapped_column(String(16), default="created")
-    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Who brought it in (`app.services.creators`): `created_by` is the creator's
+    # `users.id` — NULL for the config admin / auth-disabled operator, for an
+    # adopted memory (it pre-existed in AWS, so the adopter is not its owner) and
+    # for rows whose username had no `users` row at migration. `created_by_name`
+    # is the creating (or adopting) principal's username, display only.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ResourceCreator(Base):
+    """Who created an AWS-only resource through the console.
+
+    Knowledge bases and custom evaluators have no ledger row of their own — AWS is
+    their only store — so their creator lives here, keyed on (workspace, kind,
+    AWS resource id). Written only by the server right after the console's create
+    call succeeds and removed by the console's delete; a resource created outside
+    the console has no row (its creator reads as unknown), and one deleted outside
+    it leaves a harmless orphan that the workspace purge clears. Same column
+    semantics as `ApiKey.created_by` / `created_by_name` (not a FK).
+    """
+
+    __tablename__ = "resource_creators"
+    __table_args__ = (
+        Index(
+            "uq_resource_creators_workspace_kind_resource",
+            "workspace_id",
+            "kind",
+            "resource_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    kind: Mapped[str] = mapped_column(String(32))  # knowledge_base | evaluator
+    resource_id: Mapped[str] = mapped_column(String(128))
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

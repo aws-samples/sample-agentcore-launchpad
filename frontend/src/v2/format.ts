@@ -22,6 +22,14 @@ export function fmtTime(value: string | null | undefined): string {
   )}:${pad(d.getSeconds())}`;
 }
 
+/** Who created a resource — the username recorded at creation; "—" when unknown
+ *  (legacy rows, system-created and out-of-console resources). */
+export function creatorLabel(
+  row: { created_by?: string | null; created_by_name?: string | null } | null | undefined,
+): string {
+  return row?.created_by_name || "—";
+}
+
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null) return "—";
   if (ms < 1000) return `${Math.round(ms)}ms`;

@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJobInfo, type SkillLabJobResults } from "../../../lib/api";
 import { elapsed, isLiveJob, LIVE_STATUSES, tasksetLabel } from "../../../lib/skillLab";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Spin, Tag } from "../../ui";
 import { ArtifactBrowser } from "./ArtifactBrowser";
@@ -52,6 +52,7 @@ export function JobOverview({ job, extra = [] }: { job: SkillLabJobInfo; extra?:
       ),
     },
     { label: t("skillLab.eval.col.created"), value: fmtTime(job.created_at) },
+    { label: t("v2.common.creator"), value: creatorLabel(job) },
     { label: t("skillLab.eval.field.elapsed"), value: elapsed(job) },
     { label: t("v2.skillLab.finishedAt"), value: fmtTime(job.finished_at) },
     ...extra,

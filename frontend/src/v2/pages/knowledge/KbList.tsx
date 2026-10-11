@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { v2KnowledgeApi } from "../../../lib/api";
 import type { KnowledgeBaseSummary } from "../../../lib/knowledgeBases";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
 import {
   Alert,
@@ -100,6 +100,7 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
           <span className="mono v2-muted">0</span>
         ),
     },
+    { key: "creator", title: t("v2.common.creator"), render: (kb) => creatorLabel(kb) },
     { key: "updated", title: t("knowledge.cols.updated"), className: "nowrap", render: (kb) => fmtTime(kb.updated_at) },
     {
       key: "ops",

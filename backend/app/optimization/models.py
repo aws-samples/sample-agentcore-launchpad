@@ -46,6 +46,11 @@ class Experiment(Base):
     progress: Mapped[str | None] = mapped_column(Text, default=None)
     # free-form progress line for the UI while running_action is set
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -72,6 +77,11 @@ class RuntimeCanary(Base):
     running_action: Mapped[str | None] = mapped_column(String(24), default=None)
     progress: Mapped[str | None] = mapped_column(Text, default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

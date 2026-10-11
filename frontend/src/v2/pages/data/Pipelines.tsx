@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type V2Pipeline, type V2PipelineBody, type V2Range } from "../../../lib/api";
 import { cleanSource, defaultLogFormat, logSourceProblem, PROBLEM_KEY } from "../../../lib/pipelineLogs";
-import { fmtTime, RANGES, rangeLabel } from "../../format";
+import { creatorLabel, fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -195,6 +195,7 @@ export function PipelinesTab() {
           <span className="v2-muted">{t("v2.pipelines.never")}</span>
         ),
     },
+    { key: "creator", title: t("v2.common.creator"), render: (p) => creatorLabel(p) },
     {
       key: "ops",
       title: t("v2.common.actions"),

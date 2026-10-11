@@ -11,7 +11,7 @@ import {
   kbInFlight,
   type KnowledgeBaseDetail,
 } from "../../../lib/knowledgeBases";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -463,6 +463,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
             { label: t("knowledge.cols.status"), value: <KbStatusTag status={kb.status} /> },
             { label: t("knowledge.cols.dataSources"), value: <span className="mono">{sources.length}</span> },
             { label: t("v2.common.createdAt"), value: fmtTime(kb.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(kb) },
             { label: t("knowledge.detail.overview.updated"), value: fmtTime(kb.updated_at) },
             { label: t("knowledge.detail.overview.arn"), value: kb.arn ? <span className="mono">{kb.arn}</span> : "—" },
             {

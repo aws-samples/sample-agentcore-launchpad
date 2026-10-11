@@ -207,6 +207,9 @@ def test_get_evaluator_output_mapping(client, monkeypatch):
         "evaluator_type": None,
         "provider": None,
         "status": "ACTIVE",
+        # never created through the console here → no creator row
+        "created_by": None,
+        "created_by_name": None,
     }
 
 
@@ -382,6 +385,9 @@ def test_get_derived_output_mapping(client, monkeypatch):
         "evaluator_type": "CustomDerived",
         "provider": "DeepEval",
         "status": "ACTIVE",
+        # never created through the console here → no creator row
+        "created_by": None,
+        "created_by_name": None,
     }
 
 
@@ -594,6 +600,9 @@ def test_get_code_output_mapping(client, monkeypatch):
         "evaluator_type": "CustomCode",
         "provider": None,
         "status": "ACTIVE",
+        # never created through the console here → no creator row
+        "created_by": None,
+        "created_by_name": None,
     }
 
 

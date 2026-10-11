@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, ApiError, errorMessage, type SkillLabAssetDescriptor, type SkillLabTask } from "../../../lib/api";
 import { countsLabel, excerpt, fileCount, splitsFor } from "../../../lib/skillLabTasksets";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -155,6 +155,7 @@ export function TasksetDetail({ id }: { id: string }) {
             { label: t("skillLab.tasksets.col.counts"), value: <span className="mono">{countsLabel(info.counts)}</span> },
             { label: t("skillLab.tasksets.field.description"), value: info.description || "—" },
             { label: t("v2.common.createdAt"), value: fmtTime(info.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(info) },
             { label: t("skillLab.tasksets.col.updated"), value: fmtTime(info.updated_at) },
           ]}
         />

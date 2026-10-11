@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services.creators import Creator
 from app.skill_lab import artifacts as artifacts_svc
 from app.skill_lab import jobs as jobs_svc
 from app.skill_lab import runner
@@ -112,6 +113,7 @@ def list_tasksets(
 @router.post("/tasksets", status_code=201)
 def create_taskset(
     body: TasksetCreate,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
@@ -122,6 +124,7 @@ def create_taskset(
         description=body.description,
         mode=body.mode,
         tasks_by_split=body.tasks_by_split,
+        creator=Creator.of_request(request),
     )
 
 
@@ -190,9 +193,11 @@ def list_jobs(
 @router.post("/jobs", status_code=201)
 def create_job(
     body: JobCreate,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    creator = Creator.of_request(request)
     if body.type in ("eval", "train") and not body.taskset_id:
         raise AppError("skill_lab.bad_params", "taskset_id is required", status_code=422)
     if body.type == "eval":
@@ -204,6 +209,7 @@ def create_job(
             taskset_id=body.taskset_id,
             split=body.split,
             params=body.params,
+            creator=creator,
         )
     if body.type == "train":
         if body.split:
@@ -219,6 +225,7 @@ def create_job(
             skill_source=body.skill_source,
             taskset_id=body.taskset_id,
             params=body.params,
+            creator=creator,
         )
     if body.type == "taskgen":
         if body.split:
@@ -236,6 +243,7 @@ def create_job(
             target_split=body.target_split,
             params=body.params,
             attachments=body.attachments,
+            creator=creator,
         )
     raise AppError("skill_lab.bad_params", "type must be 'eval' or 'train'", status_code=422)
 
@@ -362,12 +370,15 @@ def _edits(selection: list[TaskgenRowEdit] | None) -> list[dict[str, Any]] | Non
 def import_taskgen_taskset(
     job_id: str,
     body: ImportTasksetRequest,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Save a succeeded taskgen job's reviewed tasks as a new task set."""
+    """Save a succeeded taskgen job's reviewed tasks as a new task set (created by
+    whoever imports it)."""
     return jobs_svc.import_taskgen_taskset(
-        db, ws.id, job_id, name=body.name, edits=_edits(body.tasks)
+        db, ws.id, job_id, name=body.name, edits=_edits(body.tasks),
+        creator=Creator.of_request(request),
     )
 
 

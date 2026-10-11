@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type V2Dataset } from "../../../lib/api";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -134,7 +134,17 @@ export function DatasetsTab() {
           <span className="v2-muted">{t("v2.datasets.cloudLocal")}</span>
         ),
     },
-    { key: "created", title: t("v2.common.createdAt"), className: "nowrap", render: (ds) => fmtTime(ds.created_at) },
+    {
+      key: "created",
+      title: t("v2.common.createdAt"),
+      className: "nowrap",
+      render: (ds) => (
+        <>
+          {fmtTime(ds.created_at)}
+          <span className="sub" title={t("v2.common.creator")}>{creatorLabel(ds)}</span>
+        </>
+      ),
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),
@@ -279,6 +289,7 @@ export function DatasetDetail({ id }: { id: string }) {
             { label: t("v2.datasets.colOrigin"), value: t(`v2.datasets.origin.${datasetOrigin(ds)}`) },
             { label: t("v2.datasets.colCount"), value: t("v2.datasets.items", { count: ds.item_count }) },
             { label: t("v2.common.createdAt"), value: fmtTime(ds.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(ds) },
             { label: t("v2.datasets.description"), value: ds.description || "—" },
             { label: t("v2.datasets.colGt"), value: ds.has_ground_truth ? t("v2.common.yes") : t("v2.common.no") },
           ]}

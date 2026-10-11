@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabTasksetInfo } from "../../../lib/api";
 import { countsLabel } from "../../../lib/skillLabTasksets";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged, useV2Toast } from "../../hooks";
 import {
   Button,
@@ -84,6 +84,7 @@ export function TasksetList() {
       ),
     },
     { key: "counts", title: t("skillLab.tasksets.col.counts"), className: "nowrap mono", render: (row) => countsLabel(row.counts) },
+    { key: "creator", title: t("v2.common.creator"), render: (row) => creatorLabel(row) },
     { key: "updated", title: t("skillLab.tasksets.col.updated"), className: "nowrap", render: (row) => fmtTime(row.updated_at) },
     {
       key: "ops",

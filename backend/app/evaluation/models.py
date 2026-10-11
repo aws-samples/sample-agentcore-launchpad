@@ -37,6 +37,11 @@ class EvalDataset(Base):
     # cloud: {dataset_id, arn, status, synced_at, failure_reason, draft_status
     #   (MODIFIED|UNMODIFIED), example_count, versions: [{version, example_count,
     #   created_at}]} — the row's one AWS Dataset (draft edited in place on re-sync)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -80,6 +85,11 @@ class EvalRun(Base):
     # ``agentcore_eval.summarize_session_failures``); NULL on clean or older rows.
     session_failures: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -145,6 +155,11 @@ class OnlineEvalConfig(Base):
     name: Mapped[str] = mapped_column(String(48))
     service_name: Mapped[str] = mapped_column(String(128))
     log_group: Mapped[str] = mapped_column(String(256))
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -166,6 +181,11 @@ class EvalPipeline(Base):
     status: Mapped[str] = mapped_column(String(16), default="idle")  # idle|running|succeeded|failed
     # {at, scanned, matched, added, skipped: [{session_id, reason}], dataset_id, error}
     last_run: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

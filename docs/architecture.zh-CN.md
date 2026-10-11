@@ -1715,7 +1715,7 @@ ingestion 失败时才暴露。
 | `long-term` | 解析出的命名空间下的记录,以及带相关度评分的语义检索 | `ListMemoryRecords`、`RetrieveMemoryRecords` |
 | `resources` | 账号/区域内的全部记忆(标出工作区默认记忆,以及 spec 绑定了每个记忆的 Agent);创建记忆(名称、描述、事件过期、与引导布局一致的策略选择,以及——目前仅 API 可用——最多 5 个灵活命名空间变量键:CreateMemory `namespaceKeys`,控制台表单通过 `ResourcesTab.tsx` 的 `SHOW_NS_KEYS` 隐藏该编辑器);行内编辑描述与事件过期(7–365 天)——`UpdateMemory` 只发送 `memoryId` 加实际改动的字段,**绝不**发送 `namespaceKeys`(API 文档写明该字段整体替换现有集合,漏掉的键会被删除),随后用 `GetMemory` 读回详情;策略、命名空间变量与执行角色不可编辑,编辑不会被阻止,确认对话框会列出使用该记忆的 Agent(缩短过期窗口会影响它们全部);删除记忆——工作区默认记忆与仍被在线 Agent 引用的记忆受删除保护 | `ListMemories`、`GetMemory`、`CreateMemory`、`UpdateMemory`、`DeleteMemory` |
 
-**约束 spec 可绑定范围的是归属,而不是账号**(issue #55)。spoke 角色在 `*` 上持有 `bedrock-agentcore:*`,否则只要填入 id,账号内任何记忆——包括其他团队的——都可被绑定。`services/memory_ownership.py` 定义*已纳管*:工作区的 bootstrap 记忆,或 `managed_memories` 账本行登记的记忆——该行只在本控制台创建记忆、或管理员纳管(`POST /api/memory/resources/{id}/adopt`)时写入。被绑定的 id 必须已纳管且为 `ACTIVE`:在创建、重新发布、转换时检查,`execute_deploy_job` 在任何阶段之前再查一次,因此无论哪条路径启动作业,执行角色授权与运行时绑定都不会见到外部 id。读回路径对绑定了未纳管 id 的旧 spec 直接拒绝,而不是去读它。生命周期路由把未纳管的记忆列为*未纳管*,所有按 id 的路由返回 `404 memory.not_managed`;写操作走可撤销的 `perm:memory.manage`。
+**约束 spec 可绑定范围的是归属,而不是账号**(issue #55)。spoke 角色在 `*` 上持有 `bedrock-agentcore:*`,否则只要填入 id,账号内任何记忆——包括其他团队的——都可被绑定。`services/memory_ownership.py` 定义*已纳管*:工作区的 bootstrap 记忆,或 `managed_memories` 账本行登记的记忆——该行只在本控制台创建记忆、或管理员纳管(`POST /api/memory/resources/{id}/adopt`)时写入，并记录是谁引入的（见*资源创建者*）。被绑定的 id 必须已纳管且为 `ACTIVE`:在创建、重新发布、转换时检查,`execute_deploy_job` 在任何阶段之前再查一次,因此无论哪条路径启动作业,执行角色授权与运行时绑定都不会见到外部 id。读回路径对绑定了未纳管 id 的旧 spec 直接拒绝,而不是去读它。生命周期路由把未纳管的记忆列为*未纳管*,所有按 id 的路由返回 `404 memory.not_managed`;写操作走可撤销的 `perm:memory.manage`。
 
 `ListEvents` 的载荷条目是一个标签联合：`conversational`、`blob`，以及自 2026 年 8 月
 Memory 发布起新增的 `json`（`{json: {content: <任意 JSON 值>}}`）。控制台把每条投影为
@@ -1986,6 +1986,22 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 | `eval_datasets` / `eval_runs` | 评估数据集(legacy prompt 或 devguide scenario + 描述 + 最近一次 AWS 同步信息)与运行状态(分数或 insight 树;窗口运行以 `dataset_name="window:<N>h"` 编码范围) |
 | `online_eval_configs` | 控制台为某个 agent 创建的在线评估配置——只存标识(config id/ARN/名称、agent、service name、源日志组);状态、rule 与 evaluators 始终从 `GetOnlineEvaluationConfig` 读回。没有行的配置在读取时按名称归类(`exp_*`/`can_*` → 实验持有,其余为外部) |
 | `experiments` | 优化闭环——阶段 + 各阶段产物,可恢复 |
+| `resource_creators` | 通过控制台创建的纯 AWS 资源的创建者——(workspace、`kind` = `knowledge_base` \| `evaluator`、AWS 资源 id)→ `created_by` / `created_by_name`;控制台删除资源时一并删除 |
+
+**资源创建者。** 每个用户管理的资源都记录创建它的控制台主体，语义与 API 密钥相同：
+`created_by` 是创建者的 `users.id`（归属键；配置 admin 与关闭认证时的本地操作员没有
+`users` 行，记为 NULL），`created_by_name` 是创建时的用户名（仅用于展示）。台账型资源在
+各自的行上带这两列——`eval_datasets`、`eval_pipelines`、`eval_runs`、
+`online_eval_configs`、`experiments`、`runtime_canaries`、`skill_lab_jobs`、
+`skill_lab_tasksets` 与 `managed_memories`；知识库与自定义评估器只存在于 AWS，改用
+`resource_creators`。唯一的模块 `app/services/creators.py` 负责写入（路由中用
+`Creator.of_request`，服务函数接收仅限关键字的 `creator`）并输出这两个响应字段，因此每个
+列表与详情响应都带有它们。代表某人执行的进程内路径：评估资产物化器为其创建的数据集与评估器
+记录计划的审批人，pipeline 运行为其创建的数据集记录发起运行的人，在线评估报告运行记录
+`/reports` 的调用者。没有人类主体的路径——Skill Lab 示例、bootstrap 记忆、实验/灰度持有的
+在线评估配置、发现的资源——不记录任何创建者。旧行不回填（两个字段均为 NULL，控制台显示
+"—"），也没有任何请求体可以携带创建者。被纳管（adopt）的记忆保留执行纳管的管理员的
+名字，但没有 `created_by`：它在 AWS 中早已存在。
 
 **Job/event 模型。** 创建 Agent 返回 `202` 并带一个 `job_id`。部署 job 在后台线程
 运行,每次阶段切换向 `Job.log` 追加一条 JSONL 事件;`GET /api/jobs/{id}` 返回这些

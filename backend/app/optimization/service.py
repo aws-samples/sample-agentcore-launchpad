@@ -40,6 +40,7 @@ from app.optimization.models import Experiment
 from app.optimization.providers import evidence as rec_evidence
 from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
+from app.services import creators
 from app.services.agentcore.client import control_client, data_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
@@ -1698,7 +1699,9 @@ def act_verdict(exp_id: str, progress: Progress) -> None:
             artifact={"verdict": {"metrics": metrics, **verdict}})
 
 
-def start_experiment(agent_row: Any, workspace: WorkspaceContext) -> Experiment:
+def start_experiment(
+    agent_row: Any, workspace: WorkspaceContext, *, creator: creators.Creator | None = None
+) -> Experiment:
     """Create the experiment row only — every stage waits for its action."""
     control = control_client(workspace)
     agent_meta = {
@@ -1718,6 +1721,7 @@ def start_experiment(agent_row: Any, workspace: WorkspaceContext) -> Experiment:
             name=f"EXP-{agent_row.name[:20]}", agent_id=agent_row.id,
             agent_name=agent_row.name, artifacts={"agent_meta": agent_meta},
         )
+        creators.stamp(exp, creator)
         db.add(exp)
         db.commit()
         exp_id = exp.id

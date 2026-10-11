@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.models.ledger import Agent
-from app.services import kb_gateway
+from app.services import creators, kb_gateway
 from app.services.agentcore.client import (
     agent_client,
     agent_runtime_client,
@@ -583,7 +583,12 @@ def list_documents(
 
 
 def create_kb(
-    workspace: WorkspaceContext, name: str, description: str, source: dict[str, Any]
+    workspace: WorkspaceContext,
+    name: str,
+    description: str,
+    source: dict[str, Any],
+    *,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     role_arn = workspace.resources.get("kb_role_arn")
     if not role_arn:
@@ -603,6 +608,9 @@ def create_kb(
         kwargs["description"] = description
     created = client.create_knowledge_base(**kwargs)
     kb_id = created["knowledgeBase"]["knowledgeBaseId"]
+    # AWS keeps no ledger row of a KB, so its creator is recorded beside it — now,
+    # before the slow tail, so a dying thread cannot lose it
+    _record_creator(workspace, kb_id, creator)
     # KB creation takes 1.5–3 min; never wait it out on the request. This used
     # to poll up to 60 s for an ACTIVE fast path, which behind a proxy with a
     # ~60 s origin timeout (CloudFront in the workshop deployment) cut the
@@ -832,4 +840,21 @@ def delete_kb(
             "the KB is still being created — wait for it to become ACTIVE before deleting",
             status_code=409,
         ) from exc
+    db = SessionLocal()
+    try:
+        creators.forget(db, workspace.id, creators.KB, kb_id)
+    finally:
+        db.close()
     return {"deleted": True, "kb_id": kb_id}
+
+
+def _record_creator(
+    workspace: WorkspaceContext, kb_id: str, creator: creators.Creator | None
+) -> None:
+    if creator is None:
+        return
+    db = SessionLocal()
+    try:
+        creators.record(db, workspace.id, creators.KB, kb_id, creator)
+    finally:
+        db.close()

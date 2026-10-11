@@ -26,6 +26,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation.queue import EvalRunQueue
+from app.services import creators
 from app.services.local_exec import kill_process_group
 from app.services.workspace import context_for_workspace
 from app.skill_lab import artifacts, runner, task_assets
@@ -58,6 +59,7 @@ def job_out(row: SkillLabJob) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        **creators.fields(row),
     }
 
 
@@ -153,6 +155,7 @@ def submit_eval_job(
     taskset_id: str,
     split: str | None = None,
     params: dict[str, Any] | None = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     # The per-taskset lock keeps the source stable through snapshot copy and
     # the first commit that makes this job row visible. Delete then either
@@ -172,6 +175,7 @@ def submit_eval_job(
             split=resolved_split,
             params=merged_params,
         )
+        creators.stamp(row, creator)
         db.add(row)
         db.flush()
         directory = artifacts.job_dir(row.id)
@@ -209,6 +213,7 @@ def submit_train_job(
     skill_source: dict[str, Any],
     taskset_id: str,
     params: dict[str, Any] | None = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     """Submit training after atomically snapshotting the whole task set."""
     # The per-taskset lock keeps the source stable through snapshot copy and
@@ -227,6 +232,7 @@ def submit_train_job(
             split="",
             params=merged_params,
         )
+        creators.stamp(row, creator)
         db.add(row)
         db.flush()
         directory = artifacts.job_dir(row.id)
@@ -398,6 +404,7 @@ def submit_taskgen_job(
     target_split: str | None = None,
     params: dict[str, Any] | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     """AI task-set generation (studio parity): an exec-backend agent authors
     tasks for the selected skill(s) on the AgentCore worker; the result is a
@@ -448,6 +455,7 @@ def submit_taskgen_job(
         split=target_split or "",
         params=merged_params,
     )
+    creators.stamp(row, creator)
     db.add(row)
     db.flush()
     directory = artifacts.job_dir(row.id)
@@ -725,6 +733,7 @@ def import_taskgen_taskset(
     *,
     name: str,
     edits: list[dict[str, Any]] | None = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     """Save a taskgen job's reviewed output as a NEW single-mode task set.
 
@@ -758,6 +767,7 @@ def import_taskgen_taskset(
         mode="single",
         tasks_by_split={"tasks": tasks},
         extra_sources=extra_sources,
+        creator=creator,
     )
     row.params = {**(row.params or {}), "imported_taskset_id": info["id"]}
     db.commit()

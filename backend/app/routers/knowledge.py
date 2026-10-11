@@ -6,12 +6,15 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
+from app.core.db import get_db
 from app.core.errors import AppError
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import kb_gateway, knowledge
+from app.services import creators, kb_gateway, knowledge
 from app.services.agentcore.client import control_client
+from app.services.creators import Creator
 
 router = APIRouter(prefix="/api/knowledge-bases", tags=["knowledge-bases"])
 
@@ -43,12 +46,25 @@ class QueryRequest(BaseModel):
 @router.get("")
 def list_knowledge_bases(
     status: str | None = None,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     items = knowledge.list_kbs(ws.context)
     if status:  # e.g. the Create-Agent picker requests ?status=ACTIVE
         items = [i for i in items if i.get("status") == status]
+    # the creator lives in the ledger (AWS has none); a KB made outside the
+    # console reads null
+    known = creators.lookup(db, ws.id, creators.KB, (i.get("kb_id") or "" for i in items))
+    for item in items:
+        item.update(known.get(item.get("kb_id") or "") or creators.empty())
     return {"items": items}
+
+
+def _with_creator(db: Session, ws: WorkspaceScope, detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **detail,
+        **creators.lookup_one(db, ws.id, creators.KB, detail.get("kb_id") or ""),
+    }
 
 
 # 202: the KB is returned while still CREATING — the data source is finished by
@@ -56,27 +72,34 @@ def list_knowledge_bases(
 @router.post("", status_code=202)
 def create_knowledge_base(
     req: CreateKBRequest,
+    request: Request,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return knowledge.create_kb(
-        ws.context, req.name, req.description, req.source.model_dump()
+    detail = knowledge.create_kb(
+        ws.context, req.name, req.description, req.source.model_dump(),
+        creator=Creator.of_request(request),
     )
+    return _with_creator(db, ws, detail)
 
 
 @router.get("/{kb_id}")
 def get_knowledge_base(
-    kb_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    kb_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return knowledge.get_kb_detail(ws.context, kb_id)
+    return _with_creator(db, ws, knowledge.get_kb_detail(ws.context, kb_id))
 
 
 @router.patch("/{kb_id}")
 def patch_knowledge_base(
     kb_id: str,
     req: PatchKBRequest,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return knowledge.update_description(ws.context, kb_id, req.description)
+    return _with_creator(db, ws, knowledge.update_description(ws.context, kb_id, req.description))
 
 
 @router.delete("/{kb_id}")

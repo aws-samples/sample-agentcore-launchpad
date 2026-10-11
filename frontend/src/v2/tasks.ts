@@ -42,6 +42,8 @@ export interface V2Task {
   status: TaskStatus;
   createdAt: string | null;
   updatedAt: string | null;
+  /** username recorded when the run / online config was created; null when unknown */
+  createdByName: string | null;
   run?: EvaluationRunInfo;
   online?: OnlineEvalConfigRow;
 }
@@ -87,6 +89,7 @@ export function taskFromRun(run: EvaluationRunInfo): V2Task {
     status: runStatus(run),
     createdAt: run.created_at ?? null,
     updatedAt: run.updated_at ?? run.created_at ?? null,
+    createdByName: run.created_by_name ?? null,
     run,
   };
 }
@@ -114,6 +117,7 @@ export function taskFromOnline(row: OnlineEvalConfigRow): V2Task {
     status: onlineStatus(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,
+    createdByName: row.created_by_name ?? null,
     online: row,
   };
 }

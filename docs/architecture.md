@@ -3077,7 +3077,8 @@ role holds `bedrock-agentcore:*` on `*`, so any memory in the account — anothe
 team's included — would otherwise be reachable by pinning its id.
 `services/memory_ownership.py` defines *managed*: the workspace's bootstrap memory,
 or a `managed_memories` ledger row written only when this console creates a memory
-or an administrator adopts one (`POST /api/memory/resources/{id}/adopt`). A pinned
+or an administrator adopts one (`POST /api/memory/resources/{id}/adopt`); the row
+also records who brought it in (see *Resource creators*). A pinned
 id must be managed and `ACTIVE` — checked at create / re-publish / convert time and
 again by `execute_deploy_job` before any stage, so the execution-role grant and the
 runtime binding never see a foreign id, whichever path started the job. Read-back
@@ -3463,6 +3464,27 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `eval_datasets` / `eval_runs` | Evaluation datasets (legacy prompts or devguide scenarios + description + last AWS-sync blob) and run state (scores or insight trees; window runs encode their scope as `dataset_name="window:<N>h"`) |
 | `online_eval_configs` | Online evaluation configs the console created for an agent — identifiers only (config id/ARN/name, agent, service name, source log group); status, rule and evaluators are always read back from `GetOnlineEvaluationConfig`. Configs without a row are classified by name at read time (`exp_*`/`can_*` → experiment-owned, else external) |
 | `experiments` | Optimization loop — stage + per-stage artifacts, resumable |
+| `resource_creators` | Creator of an AWS-only resource made through the console — (workspace, `kind` = `knowledge_base` \| `evaluator`, AWS resource id) → `created_by` / `created_by_name`; removed by the console's delete |
+
+**Resource creators.** Every user-managed resource records the console principal
+that created it, with the API-key semantics: `created_by` is the creator's
+`users.id` (the ownership key; NULL for the config admin and the auth-disabled
+operator, who have no `users` row) and `created_by_name` the username at creation
+(display only). The ledger-backed kinds carry both columns on their own row —
+`eval_datasets`, `eval_pipelines`, `eval_runs`, `online_eval_configs`,
+`experiments`, `runtime_canaries`, `skill_lab_jobs`, `skill_lab_tasksets` and
+`managed_memories` — while knowledge bases and custom evaluators, which AWS alone
+stores, use `resource_creators`. One module, `app/services/creators.py`, stamps rows
+(`Creator.of_request` in the routers; service functions take a keyword-only
+`creator`) and renders the two response fields, so every list and detail response
+carries them. In-process paths act for a person: the evaluation-asset materializer
+stamps the plan's approver on the dataset and evaluators it creates, a pipeline run
+stamps whoever started it on the dataset it creates, and an online report run the
+caller of `/reports`. Paths with no human principal — Skill Lab samples, the
+bootstrap memory, experiment/canary-owned online configs, discovered resources —
+record nothing. Legacy rows are never backfilled (both fields NULL, the console
+shows "—"), and no request body carries the creator. An adopted memory keeps the
+adopting admin's name but no `created_by`: it pre-existed in AWS.
 
 File-based SQLite uses SQLAlchemy `NullPool`. Every request-owned session
 already closes deterministically, so retaining the SQLAlchemy 2 default

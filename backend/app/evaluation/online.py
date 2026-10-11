@@ -42,7 +42,9 @@ from app.evaluation.online_evaluators import normalize_online_evaluators
 from app.evaluation.service import EVAL_SUPPORTED_METHODS, resolve_telemetry
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope
+from app.services import creators
 from app.services.agentcore.client import control_client, data_client
+from app.services.creators import Creator
 from app.services.observability import BIN_BY_RANGE, RANGE_HOURS, run_insights_queries
 from app.services.workspace import WorkspaceContext
 
@@ -248,6 +250,8 @@ def _normalize(
         "duplicate_enabled": False,
         "created_at": _iso(aws.get("createdAt")),
         "updated_at": _iso(aws.get("updatedAt")),
+        # console-created configs only: experiment/canary/external ones have no row
+        **creators.fields(row),
     }
     return out
 
@@ -356,6 +360,7 @@ def create_config(
     clustering_frequencies: Sequence[str] | None = None,
     control: Any = None,
     logs: Any = None,
+    creator: Creator | None = None,
 ) -> dict[str, Any]:
     control = control or control_client(ws.context)
     service_name, log_group = resolve_telemetry(agent, ws.context, logs)
@@ -419,6 +424,7 @@ def create_config(
         service_name=service_name,
         log_group=log_group,
     )
+    creators.stamp(row, creator)
     db.add(row)
     db.commit()
     # Create returns status/executionStatus/outputConfig but not the config body;
@@ -741,6 +747,8 @@ def _report_row(summary: dict[str, Any], *, origin: str, run: EvalRun | None = N
         "origin": origin,
         "run_id": run.id if run else None,
         "error": (summary.get("errorDetails") or [None])[0] or (run.error if run else None),
+        # console-started reports only; AWS-scheduled batches have no creator
+        **creators.fields(run),
     }
 
 
@@ -831,6 +839,7 @@ def report_detail(
 
 def start_report(
     db: Session, ws: WorkspaceScope, config_id: str, range_key: str, *, control: Any = None,
+    creator: Creator | None = None,
 ) -> dict[str, Any]:
     """RUN REPORT NOW: an on-demand insights report over the sessions this config
     sampled in the window, through the bounded run queue (shared 5-active quota)."""
@@ -850,7 +859,7 @@ def start_report(
         agent=agent, workspace=ws.context, dataset_items=[], dataset_id=None,
         dataset_name=f"online:{config_id}", evaluators=list(config["insights"]),
         mode="insights", insights=list(config["insights"]), time_range=time_range,
-        online_config_arn=config["arn"],
+        online_config_arn=config["arn"], creator=creator,
     )
     return {
         "run_id": run.id, "status": run.status, "queue_position": run.queue_position,

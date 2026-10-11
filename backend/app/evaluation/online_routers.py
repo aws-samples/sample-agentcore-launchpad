@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,7 @@ from app.evaluation import online
 from app.evaluation.online_evaluators import ONLINE_EVAL_MAX
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services.creators import Creator
 
 router = APIRouter(prefix="/api/eval/online", tags=["evaluation-online"])
 
@@ -113,6 +114,7 @@ def list_configs(
 @router.post("", status_code=201)
 def create_config(
     req: OnlineConfigCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -131,6 +133,7 @@ def create_config(
         filters=[f.payload() for f in req.filters],
         description=req.description,
         enable_on_create=req.enable_on_create,
+        creator=Creator.of_request(request),
     )
 
 
@@ -169,10 +172,13 @@ def list_reports(
 def run_report(
     config_id: str,
     req: ReportStart,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return online.start_report(db, ws, config_id, req.range)
+    return online.start_report(
+        db, ws, config_id, req.range, creator=Creator.of_request(request)
+    )
 
 
 @router.get("/{config_id}/reports/{batch_id}")

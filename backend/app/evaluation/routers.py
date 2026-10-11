@@ -31,8 +31,10 @@ from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
+from app.services import creators
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
+from app.services.creators import Creator
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
 logger = logging.getLogger(__name__)
@@ -268,6 +270,7 @@ def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
         "cloud": dataset.cloud,
         "has_ground_truth": _has_ground_truth(dataset.items),
         "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
+        **creators.fields(dataset),
     }
 
 
@@ -296,6 +299,7 @@ def list_datasets(
 @router.post("/datasets", status_code=201)
 def create_dataset(
     req: DatasetCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -308,6 +312,7 @@ def create_dataset(
         items=req.items,
         kind=_infer_kind(req.items),
     )
+    creators.stamp(dataset, Creator.of_request(request))
     db.add(dataset)
     db.commit()
     return _dataset_out(dataset)
@@ -323,6 +328,7 @@ class DatasetUpload(BaseModel):
 @router.post("/datasets/upload", status_code=201)
 def upload_dataset(
     req: DatasetUpload,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -353,6 +359,7 @@ def upload_dataset(
         items=items,
         kind=_infer_kind(items),
     )
+    creators.stamp(dataset, Creator.of_request(request))
     db.add(dataset)
     db.commit()
     return _dataset_out(dataset)
@@ -794,27 +801,11 @@ _LIST_DEFINITION = {"Custom": "judge", "CustomDerived": "derived", "CustomCode":
 
 
 @router.get("/evaluators")
-def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    builtin = [
-        {
-            "id": name,
-            "level": level,
-            "source": "builtin",
-            "evaluator_type": "Builtin",
-            "provider": "AWS",
-        }
-        for name, level in ac.ALL_BUILTIN_EVALUATORS.items()
-    ] + [
-        {
-            "id": name,
-            "level": level,
-            "source": "builtin",
-            "requires_ground_truth": True,
-            "evaluator_type": "Builtin",
-            "provider": "AWS",
-        }
-        for name, level in ac.TRAJECTORY_EVALUATORS.items()
-    ]
+def list_evaluators(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    builtin = [{**row, **creators.empty()} for row in _builtin_evaluator_rows()]
     live: list[dict[str, Any]] = []
     try:
         for ev in ac.list_evaluators(control_client(ws.context)):
@@ -852,7 +843,35 @@ def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str
             "builtin_count": len(builtin),
             "custom_unavailable": _listing_failure(exc),
         }
+    # the creator of an evaluator made through the console (AWS keeps no ledger
+    # row of it); third-party and out-of-console ones read null
+    known = creators.lookup(db, ws.id, creators.EVALUATOR, (row["id"] for row in live))
+    for row in live:
+        row.update(known.get(row["id"]) or creators.empty())
     return {"evaluators": builtin + live, "builtin_count": len(builtin)}
+
+
+def _builtin_evaluator_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": name,
+            "level": level,
+            "source": "builtin",
+            "evaluator_type": "Builtin",
+            "provider": "AWS",
+        }
+        for name, level in ac.ALL_BUILTIN_EVALUATORS.items()
+    ] + [
+        {
+            "id": name,
+            "level": level,
+            "source": "builtin",
+            "requires_ground_truth": True,
+            "evaluator_type": "Builtin",
+            "provider": "AWS",
+        }
+        for name, level in ac.TRAJECTORY_EVALUATORS.items()
+    ]
 
 
 def _listing_failure(exc: Exception) -> dict[str, str]:
@@ -1038,7 +1057,10 @@ def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/evaluators", status_code=201)
 def create_judge(
-    req: JudgeCreate, ws: WorkspaceScope = Depends(require_workspace)
+    req: JudgeCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     _require_one_definition(req)
     client = control_client(ws.context)
@@ -1072,22 +1094,28 @@ def create_judge(
             level=req.level,
             description=req.description,
         )
+    creator = Creator.of_request(request)
+    creators.record(db, ws.id, creators.EVALUATOR, created.get("evaluatorId") or "", creator)
     return {
         "evaluator_id": created.get("evaluatorId"),
         "arn": created.get("evaluatorArn"),
         # set only when AgentCore refused the requested judge model and the
         # evaluator was created on ac.JUDGE_FALLBACK_MODEL_ID instead
         "model_fallback": created.get("launchpadModelFallback"),
+        **creators.fields(creator),
     }
 
 
 @router.get("/evaluators/{evaluator_id}")
 def get_evaluator(
-    evaluator_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    evaluator_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return _evaluator_out(
+    detail = _evaluator_out(
         ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     )
+    return {**detail, **creators.lookup_one(db, ws.id, creators.EVALUATOR, evaluator_id)}
 
 
 class JudgeUpdate(BaseModel):
@@ -1195,6 +1223,7 @@ def delete_evaluator(
             owner, status_code=409,
         )
     ac.delete_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
+    creators.forget(db, ws.id, creators.EVALUATOR, evaluator_id)
     return {"deleted": True}
 
 
@@ -1275,6 +1304,7 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "stop_requested": service.stop_requested(run.id),
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+        **creators.fields(run),
     }
 
 
@@ -1349,6 +1379,7 @@ def get_run_results(
 @router.post("/runs", status_code=201)
 def create_run(
     req: RunCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -1487,6 +1518,7 @@ def create_run(
         name=req.name,
         description=req.description,
         log_source=log_source,
+        creator=Creator.of_request(request),
     )
     return _run_out(run)
 

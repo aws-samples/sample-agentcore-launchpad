@@ -347,7 +347,7 @@ def test_create_fails_open_when_readiness_is_unavailable(client, monkeypatch):
         lambda *_args, **_kwargs: {"state": "unavailable", "agent_id": agent.id},
     )
 
-    def start(row, _ws):
+    def start(row, _ws, **_kw):
         db = SessionLocal()
         exp = Experiment(
             workspace_id=DEFAULT_WORKSPACE_ID, name="EXP-ready",

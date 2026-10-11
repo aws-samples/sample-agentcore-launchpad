@@ -141,6 +141,12 @@ export interface EvaluationRunInfo {
   name?: string | null;
   description?: string | null;
   updated_at?: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface EvaluationScenarioFailure {

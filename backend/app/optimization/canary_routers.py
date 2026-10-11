@@ -3,7 +3,7 @@
 from functools import partial
 from typing import Any
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,9 @@ from app.optimization import canary_harness, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
+from app.services import creators
 from app.services.agentcore.client import control_client
+from app.services.creators import Creator
 from app.services.harness_convert import graft_config_bundle
 from app.system_agents import service as system_agents
 
@@ -41,6 +43,7 @@ def _out(row: RuntimeCanary) -> dict[str, Any]:
         "progress": row.progress,
         "error": row.error,
         "created_at": row.created_at.isoformat() if row.created_at else None,
+        **creators.fields(row),
     }
 
 
@@ -244,9 +247,11 @@ def _resolve_edited_spec(agent: Agent, candidate: CandidateEdit) -> AgentSpec:
 @router.post("", status_code=201)
 def create_runtime_canary(
     req: RuntimeCanaryCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    creator = Creator.of_request(request)
     agent = _eligible_agent(db, ws, req.agent_id)
     if agent.method == "harness":
         if req.harness_versions is None:
@@ -265,6 +270,7 @@ def create_runtime_canary(
             start_stage=req.start_stage,
             online_evaluators=evaluators,
             primary_evaluator=primary,
+            creator=creator,
         )
         return _out(row)
     if req.start_stage:
@@ -313,7 +319,7 @@ def create_runtime_canary(
     evaluators, primary = _validate_evaluators(req, ws)
     row = canary_service.start_canary(
         agent, edited_spec, ws.context, req.source_experiment_id,
-        online_evaluators=evaluators, primary_evaluator=primary,
+        online_evaluators=evaluators, primary_evaluator=primary, creator=creator,
     )
     return _out(row)
 

@@ -225,6 +225,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             },
             { label: t("v2.tasks.colCreated"), value: fmtTime(data.createdAt) },
             { label: t("v2.tasks.colUpdated"), value: fmtTime(data.updatedAt) },
+            { label: t("v2.common.creator"), value: data.createdByName || "—" },
             ...(data.kind === "run"
               ? [
                   { label: t("v2.taskDetail.sessions"), value: data.run?.session_ids.length ?? 0 },
