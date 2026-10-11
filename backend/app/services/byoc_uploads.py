@@ -16,6 +16,7 @@ uncompressed); entry-shape rules mirror ``skill_ingest``'s safe extractor
 from __future__ import annotations
 
 import json
+import logging
 import re
 import stat
 import uuid
@@ -26,10 +27,12 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.runtime_target import TARGET_PYTHON
 from app.services import requirements_txt
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger(__name__)
 
 # AgentCore direct-code artifact limits (also enforced for container_source zips
 # — CodeBuild contexts have no service cap this small, but one build contract is
@@ -356,5 +359,9 @@ def delete_upload_objects(
     for key in (source_key(workspace_id, upload_id), manifest_key(workspace_id, upload_id)):
         try:
             s3.delete_object(Bucket=bucket, Key=key)
-        except Exception:  # noqa: BLE001 — cleanup must never block a delete
-            pass
+        except Exception as exc:  # noqa: BLE001 — cleanup must never block a delete
+            if not is_not_found(exc):
+                logger.warning(
+                    "byoc delete: staged upload s3://%s/%s left behind: %s",
+                    bucket, key, cleanup_error(exc),
+                )

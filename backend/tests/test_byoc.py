@@ -1284,3 +1284,57 @@ def test_create_code_runtime_default_contract_unchanged():
     cfg = stub.created_with["agentRuntimeArtifact"]["codeConfiguration"]
     assert cfg["runtime"] == "PYTHON_3_13"
     assert cfg["entryPoint"] == ["opentelemetry-instrument", "main.py"]
+
+
+# ─── staged-upload cleanup on delete: quiet only when already gone ────────────
+
+class _UploadS3:
+    """delete_object answers per key: an exception to raise, or success."""
+
+    def __init__(self, errors: dict[str, Exception] | None = None) -> None:
+        self.errors = errors or {}
+        self.deleted: list[str] = []
+
+    def delete_object(self, Bucket, Key):  # noqa: N803 — boto3 kwarg names
+        if Key in self.errors:
+            raise self.errors[Key]
+        self.deleted.append(Key)
+        return {}
+
+
+def _delete_upload(s3: _UploadS3) -> None:
+    workspace = ws_ctx(resources={"artifacts_bucket": "lp-artifacts"})
+    byoc_uploads.delete_upload_objects(workspace, "ws1", "up-1", s3_client=s3)
+
+
+def test_delete_upload_objects_success_is_quiet(caplog):
+    caplog.set_level(logging.WARNING, logger=byoc_uploads.__name__)
+    s3 = _UploadS3()
+    _delete_upload(s3)
+    assert s3.deleted == [
+        byoc_uploads.source_key("ws1", "up-1"),
+        byoc_uploads.manifest_key("ws1", "up-1"),
+    ]
+    assert caplog.records == []
+
+
+def test_delete_upload_objects_already_gone_is_quiet(caplog):
+    caplog.set_level(logging.WARNING, logger=byoc_uploads.__name__)
+    source = byoc_uploads.source_key("ws1", "up-1")
+    s3 = _UploadS3({source: client_error("NoSuchKey")})
+    _delete_upload(s3)
+    assert s3.deleted == [byoc_uploads.manifest_key("ws1", "up-1")]
+    assert caplog.records == []
+
+
+def test_delete_upload_objects_access_denied_warns_and_never_blocks(caplog):
+    caplog.set_level(logging.WARNING, logger=byoc_uploads.__name__)
+    source = byoc_uploads.source_key("ws1", "up-1")
+    s3 = _UploadS3({source: client_error("AccessDenied", "not authorized")})
+    _delete_upload(s3)  # no exception escapes
+    # the manifest is still attempted after the source failed
+    assert s3.deleted == [byoc_uploads.manifest_key("ws1", "up-1")]
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    text = record.getMessage()
+    assert f"s3://lp-artifacts/{source}" in text and "AccessDenied" in text
