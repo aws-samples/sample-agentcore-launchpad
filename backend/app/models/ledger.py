@@ -350,6 +350,15 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # The minting console principal: `created_by` is its `users.id`, NULL for the
+    # config admin / auth-disabled operator (no `users` row) and for keys minted
+    # before this column existed. Not a FK — a deleted creator must leave the id
+    # behind, since that dangling id is how the key knows its creator is gone.
+    # `created_by_name` is the display name at mint time (NULL only on legacy rows).
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Stamped by /v1 auth on success, at most once per `LAST_USED_RESOLUTION`.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class IdentityProvider(Base):

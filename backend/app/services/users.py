@@ -502,9 +502,19 @@ def apply_patch(
         user.permissions = _normalized_permissions(patch["permissions"])
     if "workspaces" in patch:
         set_workspace_grants(db, user, patch["workspaces"])
+    # A disable, a lapsed expiry, a demotion or a revoked grant can each offboard
+    # the account from keys it minted; same transaction as the change itself.
+    _disable_offboarded_api_keys(db, user.id)
     db.commit()
     db.refresh(user)
     return generated
+
+
+def _disable_offboarded_api_keys(db: Session, user_id: str) -> None:
+    # Imported here: services.api_keys reads this module's account-state helpers.
+    from app.services import api_keys as api_keys_service
+
+    api_keys_service.disable_offboarded_keys(db, user_id)
 
 
 def workspace_grants(db: Session, user_ids: Sequence[str]) -> dict[str, list[str]]:
@@ -589,4 +599,7 @@ def delete_user(db: Session, user: User) -> None:
     # a recycled user id would inherit them
     db.query(UserWorkspace).filter(UserWorkspace.user_id == user.id).delete()
     db.delete(user)
+    # The keys it minted are disabled, never deleted: they stay listed for audit,
+    # and their dangling `created_by` keeps them from being re-enabled.
+    _disable_offboarded_api_keys(db, user.id)
     db.commit()

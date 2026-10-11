@@ -22,6 +22,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.attachments import AttachmentRequest
+from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
@@ -40,6 +41,9 @@ def require_api_key(
     The hash lookup is deliberately global: it is the only way to learn which
     workspace the caller is in, since /v1 carries no header. Everything after it
     filters on `key.workspace_id`.
+
+    A key whose creator has been offboarded is refused (and disabled) here — see
+    `services.api_keys`. On success `last_used_at` is stamped, throttled.
     """
     if not x_api_key:
         raise AppError("auth.missing_api_key", "X-Api-Key header required", status_code=401)
@@ -51,6 +55,16 @@ def require_api_key(
         # could resolve an invoke target. Answered like any other unusable key:
         # /v1 never reports whether a workspace once existed.
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
+    if api_keys_service.creator_offboarded(db, key) is not None:
+        # The member who minted it is gone (deleted, disabled, expired, or no
+        # longer granted this workspace). Disabled for good in the same request
+        # — expiry has no write event, so this is where it lands — and answered
+        # like any other unusable key: /v1 never says why.
+        key.enabled = False
+        db.commit()
+        raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
+    if api_keys_service.touch_last_used(key):
+        db.commit()
     return key
 
 

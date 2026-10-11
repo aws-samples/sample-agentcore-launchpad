@@ -5594,6 +5594,14 @@ export interface ApiKeyInfo {
   prefix: string;
   enabled: boolean;
   created_at?: string | null;
+  /** `users.id` of the minting account; null for the config admin and legacy keys. */
+  created_by?: string | null;
+  /** Display name at mint time; null only on legacy keys (creator unknown). */
+  created_by_name?: string | null;
+  /** Last successful /v1 call, stamped at most once a minute. */
+  last_used_at?: string | null;
+  /** Why the creator may no longer hold this key (it cannot be re-enabled), or null. */
+  creator_offboarded?: "deleted" | "disabled" | "expired" | "no_workspace_grant" | null;
   key?: string;
 }
 

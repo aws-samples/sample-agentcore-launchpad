@@ -1,17 +1,24 @@
-"""API key management — keys are stored as sha256 hashes, never plaintext."""
+"""API key management — keys are stored as sha256 hashes, never plaintext.
+
+A key records the console principal that minted it; once that account is
+offboarded the key is disabled and cannot be re-enabled (`services.api_keys`).
+"""
 
 import hashlib
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import NotFoundError
+from app.core.errors import AppError, NotFoundError
 from app.models.ledger import ApiKey
+from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import api_keys as api_keys_service
+from app.services.users import as_utc
 
 router = APIRouter(prefix="/api", tags=["api-keys"])
 
@@ -24,13 +31,20 @@ class CreateKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
-def _key_out(key: ApiKey) -> dict[str, Any]:
+def _key_out(key: ApiKey, offboarded: str | None = None) -> dict[str, Any]:
+    last_used = as_utc(key.last_used_at)
     return {
         "id": key.id,
         "name": key.name,
         "prefix": key.prefix,
         "enabled": key.enabled,
         "created_at": key.created_at.isoformat() if key.created_at else None,
+        # NULL on keys minted before creators were recorded — "unknown".
+        "created_by": key.created_by,
+        "created_by_name": key.created_by_name,
+        "last_used_at": last_used.isoformat() if last_used else None,
+        # why the creator may no longer hold this key, or null
+        "creator_offboarded": offboarded,
     }
 
 
@@ -52,20 +66,36 @@ def list_keys(
         .order_by(ApiKey.created_at.desc())
         .all()
     )
-    return {"keys": [_key_out(k) for k in keys]}
+    # one predicate evaluation per creator (the list is a single workspace's)
+    reasons: dict[str | None, str | None] = {}
+    out = []
+    for key in keys:
+        if key.created_by not in reasons:
+            reasons[key.created_by] = api_keys_service.creator_offboarded(db, key)
+        out.append(_key_out(key, reasons[key.created_by]))
+    return {"keys": out}
 
 
 @router.post("/apikeys", status_code=201)
 def create_key(
     req: CreateKeyRequest,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    identity = require_identity(request)
     raw = f"lp_live_{secrets.token_hex(16)}"
     # The key's workspace is what scopes it on /v1 — a key minted here reaches
-    # this environment's agents only.
+    # this environment's agents only. Its creator is what keeps it alive: the
+    # `users.id` when the principal has a row (the config admin and the
+    # auth-disabled operator do not, so their keys are never offboarded).
     key = ApiKey(
-        workspace_id=ws.id, name=req.name, prefix=raw[:12] + "…", key_hash=hash_key(raw)
+        workspace_id=ws.id,
+        name=req.name,
+        prefix=raw[:12] + "…",
+        key_hash=hash_key(raw),
+        created_by=identity.user_id,
+        created_by_name=identity.username,
     )
     db.add(key)
     db.commit()
@@ -82,7 +112,7 @@ def disable_key(
     key = _key_in(db, ws, key_id)
     key.enabled = False
     db.commit()
-    return _key_out(key)
+    return _key_out(key, api_keys_service.creator_offboarded(db, key))
 
 
 @router.post("/apikeys/{key_id}/enable")
@@ -92,6 +122,16 @@ def enable_key(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     key = _key_in(db, ws, key_id)
+    reason = api_keys_service.creator_offboarded(db, key)
+    if reason is not None:
+        # Any member may still toggle any key, but not revive one whose creator
+        # was offboarded — /v1 would refuse (and re-disable) it on first use.
+        raise AppError(
+            "apikey.creator_offboarded",
+            "this key's creator no longer has access to this workspace; mint a new key",
+            {"reason": reason},
+            status_code=409,
+        )
     key.enabled = True
     db.commit()
     return _key_out(key)

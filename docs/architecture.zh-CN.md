@@ -1270,7 +1270,16 @@ runtime 侧缺它会让调用从内部 500;Gateway 侧缺它会让 MCP 调用返
 上的 Gateway 工具。
 
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
-一切与控制台路径完全相同。每个 Agent 的响应都带一份由后端拥有的 `invoke_capability`;
+一切与控制台路径完全相同。密钥记录创建者(`api_keys.created_by` = `users.id`)与
+`last_used_at`(由 `require_api_key` 在成功时写入，每分钟最多一次),并且只在创建者仍有资格持有时有效。
+同一个判定 `services.api_keys.creator_offboarded`(账号已删除 / 非 active / 已过期，或成员
+没有密钥所属工作空间的授权——管理员一如既往绕过授权)用在三处:`require_api_key` 返回普通的
+`401 auth.invalid_api_key` 并把密钥置为停用;`POST /api/apikeys/{id}/enable` 以
+`409 apikey.creator_offboarded` 拒绝;`GET /api/apikeys` 标记该密钥。管理员停用 / 删除账号
+(`users_service.apply_patch` / `delete_user`)以及移除授权(按用户的 `PATCH /api/users/{id}`
+与批量的 `PUT /api/workspaces/{id}/grants`)在同一事务中立即停用创建者的密钥;账号过期没有写入
+事件，由使用时的检查覆盖。密钥从不删除。创建者没有 `users` 行(配置内置管理员、未开启鉴权的本地
+操作者)或旧密钥创建者为 NULL 时，永远不会被判定为失效。每个 Agent 的响应都带一份由后端拥有的 `invoke_capability`;
 控制台调用、Chat 与 `/v1` 强制的是同一份投影。导入进来的 runtime 走带缓冲的兼容路径，
 因为 Launchpad 无法假定一个任意的外部 runtime 会发出生成代码那套 Claude SDK 事件契约。
 
@@ -1972,7 +1981,7 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
 | `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
-| `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文) |
+| `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文)、创建者(`created_by` 用户 id + `created_by_name`,旧密钥为 NULL)、`last_used_at` |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |
 | `eval_datasets` / `eval_runs` | 评估数据集(legacy prompt 或 devguide scenario + 描述 + 最近一次 AWS 同步信息)与运行状态(分数或 insight 树;窗口运行以 `dataset_name="window:<N>h"` 编码范围) |
 | `online_eval_configs` | 控制台为某个 agent 创建的在线评估配置——只存标识(config id/ARN/名称、agent、service name、源日志组);状态、rule 与 evaluators 始终从 `GetOnlineEvaluationConfig` 读回。没有行的配置在读取时按名称归类(`exp_*`/`can_*` → 实验持有,其余为外部) |

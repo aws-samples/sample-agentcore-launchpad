@@ -462,9 +462,11 @@ export function Chat() {
   };
 
   const toggleKey = async (key: KeyInfo) => {
-    await fetch(`/api/apikeys/${key.id}/${key.enabled ? "disable" : "enable"}`, {
+    const res = await fetch(`/api/apikeys/${key.id}/${key.enabled ? "disable" : "enable"}`, {
       method: "POST",
     });
+    // e.g. 409 apikey.creator_offboarded: the creator's account is gone
+    if (!res.ok) toast(await responseMessage(res), "crit");
     void loadKeys();
   };
 

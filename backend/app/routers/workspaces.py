@@ -40,6 +40,7 @@ from app.core.db import (
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
 from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
+from app.services import api_keys as api_keys_service
 from app.services import aws_clients, workspace_bootstrap
 from app.services import users as users_service
 from app.services.workspace import (
@@ -1004,6 +1005,10 @@ def replace_grants(
             )
             .delete(synchronize_session=False)
         )
+        # A revoked member's keys in THIS workspace stop working now; their keys
+        # elsewhere are untouched (the predicate is per key workspace).
+        for user_id in sorted(revoke):
+            api_keys_service.disable_offboarded_keys(db, user_id)
     db.commit()
     return {
         "workspace_id": row.id,

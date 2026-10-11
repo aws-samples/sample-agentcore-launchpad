@@ -15,6 +15,19 @@ curl -s -X POST localhost:8000/api/apikeys -H 'Content-Type: application/json' \
 
 密钥以 **哈希(sha256)** 存储——完整密钥仅在创建时展示一次。
 
+**密钥生命周期。** 每个密钥记录创建它的控制台账号(`created_by` = 其 `users.id`,另有
+`created_by_name`;在此之前创建的密钥两者均为 `null`,控制台显示为"未知")以及
+`last_used_at`(`/v1` 调用成功时写入，每分钟最多一次)。密钥只在其创建者仍有资格持有时有效：
+一旦该账号被 **删除、停用或过期**,或(成员账号)**失去** 密钥所属工作空间的 **授权**,
+该密钥返回 `401 auth.invalid_api_key`(与任何不可用密钥相同;`/v1` 从不说明原因)并被置为停用。
+管理员停用 / 删除账号以及移除授权会立即停用创建者的密钥;过期没有写入事件，因此在密钥下一次被使用时生效。
+密钥只会被停用、从不删除——仍列在 `GET /api/apikeys` 中(`created_by`、`created_by_name`、
+`last_used_at`、`creator_offboarded`:`deleted` | `disabled` | `expired` |
+`no_workspace_grant` | `null`)。任何工作空间成员仍可停用 / 启用任意密钥，但对创建者已失效的
+密钥调用 `POST /api/apikeys/{id}/enable` 会被拒绝，返回 `409 apikey.creator_offboarded`
+(`detail.reason`)。由配置内置管理员或未开启鉴权时的本地操作者(没有 `users` 行)创建的密钥，
+以及旧密钥，永远不会被判定为创建者失效。过期时间、权限范围与 Agent 白名单尚未实现。
+
 ## 同步调用 / Sync invoke
 
 ```bash
@@ -74,7 +87,7 @@ with requests.post(
 ```
 
 错误使用平台统一信封 `{code, message, detail}`——例如
-`auth.missing_api_key`(401)、`agent.not_active`(409)、`agent.not_found`(404)。
+`auth.missing_api_key`(401)、`auth.invalid_api_key`(401——未知、已停用或创建者已失效的密钥)、`agent.not_active`(409)、`agent.not_found`(404)。
 
 平台没有映射成自有服务错误码(`kb.not_found`、`memory.unavailable` 等)的 AWS 侧失败,
 同样以信封返回,而不是裸的 `500 Internal Server Error` 或 botocore 的

@@ -276,6 +276,33 @@ def _migrate(bind) -> None:
     _migrate_system_skill_records_index(bind)
     _migrate_identity_indexes(bind)
     _migrate_managed_memories_index(bind)
+    _migrate_api_key_lifecycle_columns(bind)
+
+
+def _migrate_api_key_lifecycle_columns(bind) -> None:
+    """SE-054 credential lifecycle on `api_keys`: creator + last use. Existing rows
+    keep NULL — a legacy key has an unknown creator and is never offboarded."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "api_keys" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("api_keys")}
+    additions = {
+        "created_by": "ALTER TABLE api_keys ADD COLUMN created_by VARCHAR(32)",
+        "created_by_name": "ALTER TABLE api_keys ADD COLUMN created_by_name VARCHAR(64)",
+        "last_used_at": "ALTER TABLE api_keys ADD COLUMN last_used_at DATETIME",
+    }
+    for column, ddl in additions.items():
+        if column not in existing:
+            with bind.begin() as conn:
+                conn.execute(text(ddl))
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_api_keys_created_by ON api_keys (created_by)"
+            )
+        )
 
 
 def _migrate_inbound_auth_columns(bind) -> None:

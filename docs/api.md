@@ -14,6 +14,24 @@ curl -s -X POST localhost:8000/api/apikeys -H 'Content-Type: application/json' \
 Keys are stored **hashed (sha256)** — the full key is shown exactly once.
 密钥仅创建时展示一次,后端只保存哈希。
 
+**Key lifecycle.** A key records the console account that minted it
+(`created_by` = its `users.id`, plus `created_by_name`; both `null` on keys minted
+before this existed, which the console shows as "unknown") and `last_used_at`
+(stamped on a successful `/v1` call, at most once a minute). A key lives only as
+long as its creator may hold it: once that account is **deleted, disabled or
+expired**, or — for a member — **loses its grant** to the key's workspace, the key
+answers `401 auth.invalid_api_key` (the same code as any unusable key; `/v1` never
+says why) and is flipped to disabled. Admin disable / delete and grant removal
+disable the creator's keys at once; expiry has no write event, so it lands on the
+key's next use. Keys are disabled, never deleted — they stay listed in
+`GET /api/apikeys` (`created_by`, `created_by_name`, `last_used_at`,
+`creator_offboarded`: `deleted` | `disabled` | `expired` | `no_workspace_grant` |
+`null`). Any workspace member can still disable / enable any key, but
+`POST /api/apikeys/{id}/enable` on an offboarded creator's key is refused with
+`409 apikey.creator_offboarded` (`detail.reason`). Keys minted by the config-driven
+admin or the auth-disabled local operator (no `users` row) and legacy keys are never
+offboarded. Expiry, scopes and agent allowlists are not implemented.
+
 ## Sync invoke / 同步调用
 
 ```bash
@@ -83,7 +101,8 @@ with requests.post(
 ```
 
 Errors use the platform envelope `{code, message, detail}` — e.g.
-`auth.missing_api_key` (401), `agent.not_active` (409), `agent.not_found` (404).
+`auth.missing_api_key` (401), `auth.invalid_api_key` (401 — unknown, disabled, or
+offboarded-creator key), `agent.not_active` (409), `agent.not_found` (404).
 
 An AWS-side failure the platform did not map to a service code of its own
 (`kb.not_found`, `memory.unavailable`, …) is still returned as an envelope, never

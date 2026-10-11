@@ -14,6 +14,7 @@ import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Kpi, LinkButton, SubTabs, Tag } from "../../ui";
 import { classicMemoryToV2 } from "../memory/classicUrl";
 import { classicObservabilityToV2 } from "../observability/classicUrl";
+import { apiKeyMeta, apiKeyOffboardedNote } from "./apiKeys";
 
 export type InspectorTab = "trace" | "memory" | "api";
 
@@ -301,7 +302,15 @@ function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string |
           <span className="v2-chat-key-name">
             <span>{key.name}</span>
             <span className="mono v2-muted">{key.prefix}</span>
+            <span className="v2-muted" data-testid="api-key-meta">
+              {apiKeyMeta(t, key)}
+            </span>
           </span>
+          {key.creator_offboarded && (
+            <Tag tone="orange" title={apiKeyOffboardedNote(t, key) ?? undefined}>
+              {t("v2.chat.keyCreatorOffboarded")}
+            </Tag>
+          )}
           <Tag tone={key.enabled ? "green" : "gray"}>
             {key.enabled ? t("v2.chat.keyEnabled") : t("v2.chat.keyDisabled")}
           </Tag>

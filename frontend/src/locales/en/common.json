@@ -2237,6 +2237,7 @@
     "skill_lab.attachment_path_conflict": "A generated task both declares an attached document and defines the same path inline.",
     "skill_lab.snapshot_exists": "This job already has an immutable input snapshot.",
     "agent.name_exists": "An agent with this name already exists",
+    "apikey.creator_offboarded": "This key cannot be re-enabled: the account that created it was deleted, disabled, expired, or lost access to this workspace. Mint a new key instead.",
     "agent.method_not_available": "This creation method ships in a later phase",
     "agent.not_active": "The agent is not active yet",
     "agent.invoke_not_supported": "This Runtime is not available for invocation",
@@ -6682,6 +6683,17 @@
       "noKeys": "No API keys yet",
       "keyEnabled": "Enabled",
       "keyDisabled": "Disabled",
+      "keyCreator": "Created by {{name}}",
+      "keyCreatorUnknown": "unknown",
+      "keyLastUsed": "last used {{time}}",
+      "keyNeverUsed": "never used",
+      "keyCreatorOffboarded": "Creator offboarded",
+      "keyOffboardedReason": {
+        "deleted": "The account that created this key was deleted — the key stays disabled. Mint a new key.",
+        "disabled": "The account that created this key is disabled — the key stays disabled. Mint a new key.",
+        "expired": "The account that created this key has expired — the key stays disabled. Mint a new key.",
+        "no_workspace_grant": "The account that created this key no longer has access to this workspace — the key stays disabled. Mint a new key."
+      },
       "enable": "Enable",
       "disable": "Disable",
       "auth": {

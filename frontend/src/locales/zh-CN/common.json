@@ -2237,6 +2237,7 @@
     "skill_lab.attachment_path_conflict": "某个生成的任务既声明了附件，又在同一路径内联定义了文件。",
     "skill_lab.snapshot_exists": "该作业已有不可变输入快照。",
     "agent.name_exists": "同名 Agent 已存在",
+    "apikey.creator_offboarded": "无法重新启用此密钥：创建它的账号已被删除、停用、过期，或已失去此工作空间的访问权限。请新建密钥。",
     "agent.method_not_available": "该创建方式将在后续阶段开放",
     "agent.not_active": "Agent 尚未处于运行状态",
     "agent.invoke_not_supported": "该 Runtime 当前不可调用",
@@ -6682,6 +6683,17 @@
       "noKeys": "暂无 API 密钥",
       "keyEnabled": "已启用",
       "keyDisabled": "已停用",
+      "keyCreator": "创建者：{{name}}",
+      "keyCreatorUnknown": "未知",
+      "keyLastUsed": "最近使用 {{time}}",
+      "keyNeverUsed": "从未使用",
+      "keyCreatorOffboarded": "创建者账号已失效",
+      "keyOffboardedReason": {
+        "deleted": "创建此密钥的账号已被删除，密钥保持停用。请新建密钥。",
+        "disabled": "创建此密钥的账号已被停用，密钥保持停用。请新建密钥。",
+        "expired": "创建此密钥的账号已过期，密钥保持停用。请新建密钥。",
+        "no_workspace_grant": "创建此密钥的账号已失去此工作空间的访问权限，密钥保持停用。请新建密钥。"
+      },
       "enable": "启用",
       "disable": "停用",
       "auth": {

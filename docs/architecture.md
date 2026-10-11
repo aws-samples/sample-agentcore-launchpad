@@ -2256,6 +2256,21 @@ tools on the container method.
 
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.
+A key records its creator (`api_keys.created_by` = `users.id`) and `last_used_at`
+(stamped by `require_api_key` on success, at most once a minute), and lives only
+as long as that creator may hold it. One predicate,
+`services.api_keys.creator_offboarded` (deleted / non-active / expired account,
+or a member without a grant to the key's workspace — admins bypass grants as
+everywhere), is used three times: `require_api_key` answers the ordinary
+`401 auth.invalid_api_key` and flips the key to disabled; `POST
+/api/apikeys/{id}/enable` refuses with `409 apikey.creator_offboarded`; and
+`GET /api/apikeys` marks the key. Admin disable/delete (`users_service.apply_patch`
+/ `delete_user`) and grant removal (per-user `PATCH /api/users/{id}` and bulk
+`PUT /api/workspaces/{id}/grants`) disable the creator's keys eagerly in the same
+transaction; account expiry has no write event, so the check at use is what
+covers it. Keys are never deleted. A key whose creator has no `users` row (the
+config admin, the auth-disabled operator) or a legacy NULL creator is never
+offboarded.
 Every agent response carries one backend-owned `invoke_capability`; console
 invoke, Chat, and `/v1` enforce the same projection. Imported runtimes use the
 buffered compatibility path because Launchpad cannot assume an arbitrary
@@ -3442,7 +3457,7 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `jobs` | Async work (type `deploy_agent`) — status + a JSONL `log` of stage events |
 | `chat_sessions` | Chat playground sessions — turns, actor, last-seen, `ended_at` once the runtime session was explicitly ended |
 | `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status (`pending`/`active`/`disabled`), `expires_at` (null until approval), last sign-in + sign-in count (the built-in admin is config-only and has no row) |
-| `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored) |
+| `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored), creator (`created_by` user id + `created_by_name`, NULL on legacy keys), `last_used_at` |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |
 | `policy_changes` | Immutable Gateway/Engine/Policy mutation snapshots, operation progress, override reasons, and rollback inputs |
 | `eval_datasets` / `eval_runs` | Evaluation datasets (legacy prompts or devguide scenarios + description + last AWS-sync blob) and run state (scores or insight trees; window runs encode their scope as `dataset_name="window:<N>h"`) |
