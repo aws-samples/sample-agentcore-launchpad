@@ -4,6 +4,7 @@ Adapted from agentcore_eva_opt routers (datasets/evaluators/runs/insights).
 """
 
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -15,7 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError, NotFoundError, aws_error_code
+from app.core.errors import (
+    AppError,
+    NotFoundError,
+    aws_error_code,
+    mapped_aws_error,
+    public_aws_message,
+)
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import recommendations, service
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
@@ -25,8 +32,10 @@ from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client
+from app.services.aws_clients import is_assume_role_failure
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
+logger = logging.getLogger(__name__)
 
 
 # ─── datasets ────────────────────────────────────────────────────────────────
@@ -832,9 +841,38 @@ def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str
                     ),
                 }
             )
-    except Exception:
-        pass  # account listing unavailable — builtins still render
+    except Exception as exc:
+        # Builtins still render, but the console must not read an empty custom
+        # section as "this account has none" (an operator would re-create one).
+        logger.warning(
+            "ListEvaluators failed for workspace %s: %s", ws.id, type(exc).__name__
+        )
+        return {
+            "evaluators": builtin,
+            "builtin_count": len(builtin),
+            "custom_unavailable": _listing_failure(exc),
+        }
     return {"evaluators": builtin + live, "builtin_count": len(builtin)}
+
+
+def _listing_failure(exc: Exception) -> dict[str, str]:
+    """`{code, message}` for a failed account listing.
+
+    Never the raw AWS text — it names the workspace role ARN and the account id.
+    """
+    if is_assume_role_failure(exc):
+        return {
+            "code": "workspace.assume_role_failed",
+            "message": "cannot assume this workspace's role",
+        }
+    mapped = mapped_aws_error(exc)
+    if mapped is not None:
+        code = mapped[1]
+        return {"code": code, "message": public_aws_message(code)}
+    return {
+        "code": "evaluators.list_failed",
+        "message": "the account's evaluators could not be listed",
+    }
 
 
 _PLACEHOLDER_RE = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")

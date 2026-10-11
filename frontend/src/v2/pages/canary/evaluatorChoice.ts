@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, type EvaluatorRow } from "../../../lib/api";
+import { api, type EvaluatorRow, type EvaluatorsUnavailable } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { ONLINE_EVAL_DEFAULT } from "../../../lib/experiments";
 import { useLoad } from "../../hooks";
@@ -35,6 +35,8 @@ export interface CanaryEvaluatorChoice {
   loading: boolean;
   error: string | null;
   reload: () => void;
+  /** set when the account listing failed (the rows are builtins only) */
+  customUnavailable?: EvaluatorsUnavailable;
   selected: string[];
   setSelected: (next: string[]) => void;
   primary: string;
@@ -62,6 +64,7 @@ export function useCanaryEvaluators(): CanaryEvaluatorChoice {
     loading: load.loading,
     error: load.error,
     reload: load.reload,
+    customUnavailable: load.data?.custom_unavailable,
     selected,
     setSelected,
     primary,

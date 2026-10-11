@@ -582,6 +582,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               loading={evaluatorsLoad.loading}
               error={evaluatorsLoad.error}
               onRetry={evaluatorsLoad.reload}
+              customUnavailable={evaluatorsLoad.data?.custom_unavailable}
               selected={onlineEvaluators}
               onChange={setOnlineEvaluators}
               max={ONLINE_EVAL_MAX}

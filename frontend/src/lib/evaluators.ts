@@ -1,5 +1,7 @@
 import type { TFunction } from "i18next";
 
+import type { EvaluatorsUnavailable } from "./api";
+
 // Localized display names for evaluators. Builtins translate through the
 // evalPage.evaluatorNames.<Name> locale block, third-party managed evaluators
 // (ThirdParty.<Provider>.<Metric>) through evalPage.thirdPartyNames.<Metric>
@@ -15,6 +17,20 @@ export function evaluatorLabel(t: TFunction, id: string): string {
     if (metric) return t(`evalPage.thirdPartyNames.${metric}`, { defaultValue: metric });
   }
   return id;
+}
+
+// The account listing failed, so the catalog holds builtins only: the evaluator
+// pages show a banner, the pickers a one-line note, both naming why in the
+// console's `apiErrors.<code>` copy (else the backend's generic sentence). Null
+// while loading and on success — an empty custom section then really is empty.
+export function customUnavailableNote(
+  t: TFunction,
+  marker: EvaluatorsUnavailable | null | undefined,
+  variant: "banner" | "inline",
+): string | null {
+  if (!marker) return null;
+  const msg = t(`apiErrors.${marker.code}`, { defaultValue: marker.message }).replace(/[.。]\s*$/, "");
+  return t(variant === "banner" ? "v2.evaluators.customUnavailable" : "v2.picker.customUnavailable", { msg });
 }
 
 // Penalty evaluators: Refusal scores "Yes" = 1.0 when the agent refused, so a lower

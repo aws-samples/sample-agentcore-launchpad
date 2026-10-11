@@ -21,6 +21,7 @@ export function CanaryEvaluatorFields({ choice, disabled }: { choice: CanaryEval
         loading={choice.loading}
         error={choice.error}
         onRetry={choice.reload}
+        customUnavailable={choice.customUnavailable}
         selected={choice.selected}
         onChange={(next) => !disabled && choice.setSelected(next)}
         max={ONLINE_EVAL_MAX}

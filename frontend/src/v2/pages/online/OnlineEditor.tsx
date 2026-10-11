@@ -237,6 +237,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
             loading={evaluators.loading}
             error={evaluators.error}
             onRetry={evaluators.reload}
+            customUnavailable={evaluators.data?.custom_unavailable}
             selected={draft.evaluators}
             onChange={(next) => set({ evaluators: next })}
             max={MAX_EVALUATORS}

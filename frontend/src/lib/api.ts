@@ -3038,6 +3038,22 @@ export interface EvaluatorRow {
   definition?: EvaluatorDefinition | null;
 }
 
+/** Why the account's evaluators could not be listed (`code` is an `apiErrors.*` key;
+ *  `message` is a generic sentence, never the raw AWS text). */
+export interface EvaluatorsUnavailable {
+  code: string;
+  message: string;
+}
+
+/** `GET /api/eval/evaluators` — builtins first, then the account's custom and
+ *  third-party rows; `custom_unavailable` is present only when that listing failed
+ *  (the list then holds builtins only). */
+export interface EvaluatorCatalog {
+  evaluators: EvaluatorRow[];
+  builtin_count: number;
+  custom_unavailable?: EvaluatorsUnavailable;
+}
+
 export interface ScalePoint {
   value: number;
   label: string;
@@ -5450,8 +5466,7 @@ export const api = {
     }),
   v2RunPipeline: (id: string) =>
     request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}/run`, { method: "POST" }),
-  v2Evaluators: () =>
-    request<{ evaluators: EvaluatorRow[]; builtin_count: number }>("/api/eval/evaluators"),
+  v2Evaluators: () => request<EvaluatorCatalog>("/api/eval/evaluators"),
   v2Evaluator: (id: string) =>
     request<EvaluatorDetail>(`/api/eval/evaluators/${encodeURIComponent(id)}`),
   v2CreateEvaluator: (body: EvaluatorCreateBody) =>

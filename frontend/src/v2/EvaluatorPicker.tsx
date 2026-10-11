@@ -1,15 +1,28 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { type EvaluatorRow } from "../lib/api";
-import { evaluatorLabel, type EvaluatorLevel } from "../lib/evaluators";
+import { type EvaluatorRow, type EvaluatorsUnavailable } from "../lib/api";
+import { customUnavailableNote, evaluatorLabel, type EvaluatorLevel } from "../lib/evaluators";
 import { usePaged } from "./hooks";
-import { FilterSelect, Pager, SearchInput, Table, Tag } from "./ui";
+import { Alert, FilterSelect, Pager, SearchInput, Table, Tag } from "./ui";
+
+/** The one-line note a picker shows when the account's custom evaluators could
+ *  not be listed (it then offers builtins only); nothing otherwise. */
+export function CustomUnavailableNote({ marker }: { marker?: EvaluatorsUnavailable | null }) {
+  const { t } = useTranslation();
+  const note = customUnavailableNote(t, marker, "inline");
+  return note ? (
+    <div style={{ marginBottom: 12 }} data-testid="v2-eval-custom-unavailable">
+      <Alert tone="warn">{note}</Alert>
+    </div>
+  ) : null;
+}
 
 /**
  * Multi-select of evaluators in the anchor pages' table form (level filter,
  * search, picked tags, a hard maximum). `blockedReason` disables a row and
  * names why (e.g. it needs ground truth the live traffic cannot carry).
+ * `customUnavailable` is the catalog's marker for a failed account listing.
  */
 export function EvaluatorPicker({
   evaluators,
@@ -20,6 +33,7 @@ export function EvaluatorPicker({
   onChange,
   max,
   blockedReason,
+  customUnavailable,
   testIdPrefix = "v2-eval",
 }: {
   evaluators: EvaluatorRow[];
@@ -30,6 +44,7 @@ export function EvaluatorPicker({
   onChange: (next: string[]) => void;
   max: number;
   blockedReason?: (e: EvaluatorRow) => string | null;
+  customUnavailable?: EvaluatorsUnavailable | null;
   testIdPrefix?: string;
 }) {
   const { t } = useTranslation();
@@ -49,6 +64,7 @@ export function EvaluatorPicker({
 
   return (
     <>
+      <CustomUnavailableNote marker={customUnavailable} />
       <div className="v2-toolbar">
         <FilterSelect
           label={t("v2.evaluators.colLevel")}

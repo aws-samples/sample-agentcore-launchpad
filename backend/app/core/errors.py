@@ -190,6 +190,11 @@ def mapped_aws_error(exc: BaseException) -> tuple[int, str] | None:
     return AWS_ERROR_MAP.get(aws_error_code(exc))
 
 
+def public_aws_message(code: str) -> str:
+    """The generic sentence for a mapped `aws.*` code — no ARN, account id or operation."""
+    return _PUBLIC_AWS_MESSAGES.get(code, "AWS request failed")
+
+
 async def client_error_handler(request: Request, exc: ClientError) -> JSONResponse:
     """Turn an AWS `ClientError` the platform did not anticipate into a 4xx envelope.
 

@@ -5,7 +5,10 @@ definition kinds: llmAsAJudge (numerical rating scale + bedrock model config),
 derived (base evaluator + model) and codeBased (Lambda ARN + timeout).
 """
 
+import logging
 from unittest.mock import MagicMock
+
+from botocore.exceptions import ClientError
 
 FIVE_POINT_SCALE = [
     {"value": float(v), "label": f"level{v}", "definition": f"definition {v}"}
@@ -611,6 +614,74 @@ def test_list_marks_code_rows(client, monkeypatch):
     assert by_id["my_derived-def456"]["definition"] == "derived"
     assert by_id["my_judge-abc123"]["definition"] == "judge"
     assert by_id["ThirdParty.DeepEval.TaskCompletion"]["definition"] is None
+
+
+def test_list_success_carries_no_unavailable_marker(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.list_evaluators.return_value = {
+        "evaluators": [{"evaluatorId": "my_judge-abc123", "evaluatorType": "Custom"}]
+    }
+    body = client.get("/api/eval/evaluators").json()
+    assert "custom_unavailable" not in body
+    assert any(r["id"] == "my_judge-abc123" for r in body["evaluators"])
+
+
+def test_list_access_denied_reports_custom_unavailable(client, monkeypatch, caplog):
+    stub = stub_control(monkeypatch)
+    role = "arn:aws:sts::111122223333:assumed-role/launchpad-spoke/session"
+    stub.list_evaluators.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "AccessDeniedException",
+                "Message": f"User: {role} is not authorized to perform: "
+                "bedrock-agentcore:ListEvaluators on resource: "
+                "arn:aws:bedrock-agentcore:us-west-2:111122223333:*",
+            }
+        },
+        "ListEvaluators",
+    )
+    with caplog.at_level(logging.WARNING, logger="app.evaluation.routers"):
+        res = client.get("/api/eval/evaluators")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["evaluators"] and all(r["source"] == "builtin" for r in body["evaluators"])
+    assert body["builtin_count"] == len(body["evaluators"])
+    marker = body["custom_unavailable"]
+    assert marker["code"] == "aws.access_denied"
+    assert "111122223333" not in marker["message"]
+    assert "arn:" not in marker["message"]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "ClientError" in warnings[0].getMessage()
+    assert "111122223333" not in warnings[0].getMessage()
+
+
+def test_list_assume_role_failure_names_the_workspace_role(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.list_evaluators.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "arn:aws:iam::111122223333:role/hub is not authorized",
+            }
+        },
+        "AssumeRole",
+    )
+    marker = client.get("/api/eval/evaluators").json()["custom_unavailable"]
+    assert marker["code"] == "workspace.assume_role_failed"
+    assert "111122223333" not in marker["message"]
+
+
+def test_list_non_aws_failure_reports_generic_marker(client, monkeypatch, caplog):
+    stub = stub_control(monkeypatch)
+    stub.list_evaluators.side_effect = RuntimeError("projection bug: role arn:aws:iam::1:role/x")
+    with caplog.at_level(logging.WARNING, logger="app.evaluation.routers"):
+        res = client.get("/api/eval/evaluators")
+    assert res.status_code == 200
+    marker = res.json()["custom_unavailable"]
+    assert marker["code"] == "evaluators.list_failed"
+    assert "arn:" not in marker["message"] and "projection bug" not in marker["message"]
+    assert any("RuntimeError" in r.getMessage() for r in caplog.records)
 
 
 def test_code_update_payload_shape(client, monkeypatch):

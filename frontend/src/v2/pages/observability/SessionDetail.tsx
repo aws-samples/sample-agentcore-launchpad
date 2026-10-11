@@ -235,6 +235,7 @@ function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
         loading={evaluators.loading}
         error={evaluators.error}
         onRetry={evaluators.reload}
+        customUnavailable={evaluators.data?.custom_unavailable}
         selected={chosen}
         onChange={(next) => setChosen(next.slice(0, MAX_SCORE_EVALUATORS))}
         max={MAX_SCORE_EVALUATORS}

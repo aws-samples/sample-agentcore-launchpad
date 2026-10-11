@@ -14,6 +14,7 @@ import {
   type ScalePoint,
 } from "../../lib/api";
 import {
+  customUnavailableNote,
   evaluatorLabel,
   type EvaluatorLevel,
   JUDGE_MODEL_OPTIONS,
@@ -77,6 +78,7 @@ function EvaluatorList() {
     });
   }, [data, source, level, q, t]);
   const paged = usePaged(rows, 12);
+  const unavailable = customUnavailableNote(t, data?.custom_unavailable, "banner");
 
   const remove = async () => {
     if (!deleting) return;
@@ -147,6 +149,11 @@ function EvaluatorList() {
   return (
     <>
       <PageHeader title={t("v2.evaluators.title")} desc={t("v2.evaluators.desc")} />
+      {unavailable && (
+        <div style={{ marginBottom: 12 }} data-testid="v2-evaluators-custom-unavailable">
+          <Alert tone="warn">{unavailable}</Alert>
+        </div>
+      )}
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>

@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
 import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { CustomUnavailableNote } from "../../EvaluatorPicker";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { INSIGHT_TYPES, insightLabel } from "../../online";
@@ -668,6 +669,7 @@ export function TaskWizard() {
 
       {step === 1 && draft.mode === "evaluators" && (
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
+          <CustomUnavailableNote marker={evaluators.data?.custom_unavailable} />
           <div className="v2-toolbar">
             <FilterSelect
               label={t("v2.evaluators.colLevel")}

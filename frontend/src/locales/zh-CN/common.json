@@ -2414,7 +2414,8 @@
     "agent.memory_not_active": "所选记忆资源尚未处于 ACTIVE 状态——请等待创建完成后重试。",
     "identity.external_connection": "该凭证是在 Launchpad 之外创建的，请在 AgentCore Identity 中删除。",
     "identity.as_user_requires_console": "该工具以登录用户身份执行，需由已登录控制台的用户授权，请使用 Chat 控制台。",
-    "registry.a2a_demo_jwt_unsupported": "该 Agent 仅接受 JWT Bearer 令牌，而 A2A 演示使用 SigV4 调用。请改用 IAM 入站的 Agent，或在 Chat 控制台中与其对话。"
+    "registry.a2a_demo_jwt_unsupported": "该 Agent 仅接受 JWT Bearer 令牌，而 A2A 演示使用 SigV4 调用。请改用 IAM 入站的 Agent，或在 Chat 控制台中与其对话。",
+    "evaluators.list_failed": "无法列出该账号的评估器。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -6348,7 +6349,8 @@
         "skill_content": "该技能的内容",
         "available_skills": "Agent 可用的技能",
         "user_message": "用户消息"
-      }
+      },
+      "customUnavailable": "自定义评估器加载失败：{{msg}}。列表仅显示内置评估器。"
     },
     "online": {
       "title": "在线评估",
@@ -6553,7 +6555,8 @@
     },
     "picker": {
       "picked": "已选 {{count}} / {{max}}",
-      "colNote": "说明"
+      "colNote": "说明",
+      "customUnavailable": "自定义评估器加载失败（{{msg}}），仅列出内置评估器。"
     },
     "canary": {
       "status": {

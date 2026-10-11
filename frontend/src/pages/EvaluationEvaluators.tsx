@@ -18,14 +18,17 @@ import {
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import type {
+  EvaluatorCatalog,
   EvaluatorDefinition,
   EvaluatorDetail,
   EvaluatorRow,
+  EvaluatorsUnavailable,
   EvaluatorUpdateBody,
   JudgeModelFallback,
   ScalePoint,
 } from "../lib/api";
 import {
+  customUnavailableNote,
   evaluatorLabel,
   type EvaluatorLevel,
   JUDGE_MODEL_OPTIONS as MODEL_OPTIONS,
@@ -131,6 +134,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const [rows, setRows] = useState<EvaluatorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [unavailable, setUnavailable] = useState<EvaluatorsUnavailable | null>(null);
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [detail, setDetail] = useState<EvaluatorDetail | null>(null);
   const [detailError, setDetailError] = useState(false);
@@ -151,7 +155,9 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     try {
       const res = await fetch("/api/eval/evaluators");
       if (!res.ok) throw new Error(`http ${res.status}`);
-      setRows(((await res.json()) as { evaluators: EvaluatorRow[] }).evaluators);
+      const catalog = (await res.json()) as EvaluatorCatalog;
+      setRows(catalog.evaluators);
+      setUnavailable(catalog.custom_unavailable ?? null);
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -847,6 +853,16 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         </Btn>
       </div>
 
+      {!creatingNew && unavailable && (
+        <div
+          className="note"
+          style={{ borderColor: "var(--warn)", marginBottom: 10 }}
+          data-testid="evaluators-custom-unavailable"
+        >
+          <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+          <span>{customUnavailableNote(t, unavailable, "banner")}</span>
+        </div>
+      )}
       {!creatingNew && (
         <Panel
           brk
