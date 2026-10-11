@@ -2,12 +2,13 @@
 immutable versions fronted by a dedicated per-canary Gateway)."""
 
 import copy
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from app.core.db import SessionLocal
-from app.core.errors import AppError
+from app.core.errors import AppError, cleanup_error, is_not_found
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.online_evaluators import ONLINE_EVAL_DEFAULT
 from app.models.ledger import Agent
@@ -20,6 +21,8 @@ from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 from app.services.memory import scoped_actor
 from app.services.workspace import WorkspaceContext, context_for_workspace
+
+logger = logging.getLogger(__name__)
 
 Progress = Callable[[str], None]
 RAMP_WEIGHTS = ((90, 10), (50, 50), (1, 99))
@@ -1487,8 +1490,11 @@ def act_cleanup(
                 progress,
                 label="Runtime canary A/B test",
             )
-        except Exception:
-            pass
+        except Exception as exc:  # the delete below still runs and reports its result
+            if not is_not_found(exc):
+                message = f"could not stop A/B test {ab_test_id}: {cleanup_error(exc)}"
+                logger.warning("canary %s cleanup: %s", canary_id, message)
+                progress(message)
     # ac.cleanup_resources keeps delete_gateway=False (it must never delete a
     # shared gateway); the dedicated per-canary gateway is deleted explicitly
     # below after its targets drain.

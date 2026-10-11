@@ -20,12 +20,14 @@ takes one for exactly this reason, and it keeps the derivation testable.
 """
 
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.errors import cleanup_error, is_not_found
 from app.models.ledger import Agent
 from app.schemas.agent import (
     DEFAULT_MODEL_ID,
@@ -34,6 +36,8 @@ from app.schemas.agent import (
     byoc_model_target,
 )
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger(__name__)
 
 # Inference-profile prefixes: an id like `global.anthropic.claude-sonnet-5` is a
 # profile, and invoking it authorizes against the profile ARN *and* the underlying
@@ -942,8 +946,14 @@ def _sync_fs_policy(
     try:
         iam.delete_role_policy(RoleName=role_name, PolicyName=name)
         log(f"inline policy {name} removed (no BYO mounts)")
-    except Exception:  # noqa: BLE001 — absent on most agents, nothing to clean
-        pass
+    except Exception as exc:  # noqa: BLE001 — absent on most agents, nothing to clean
+        if not is_not_found(exc):
+            message = (
+                f"stale inline policy {name} could not be removed from role "
+                f"{role_name}: {cleanup_error(exc)}"
+            )
+            logger.warning(message)
+            log(message)
 
 
 def provision_execution_role(

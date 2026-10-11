@@ -35,6 +35,7 @@ config_mod.CONFIG_FILE.write_text(
 config_mod.get_settings.cache_clear()
 
 import pytest  # noqa: E402
+from botocore.exceptions import ClientError  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.core.db import Base, _seed_default_workspace, engine  # noqa: E402
@@ -54,6 +55,11 @@ def ws_ctx(resources: dict | None = None, **fields) -> WorkspaceContext:
         resources=dict(resources or {}),
         **fields,
     )
+
+
+def client_error(code: str, message: str = "", operation: str = "Op") -> ClientError:
+    """The `ClientError` a boto3 call raises for AWS error `code`."""
+    return ClientError({"Error": {"Code": code, "Message": message or code}}, operation)
 
 
 @pytest.fixture

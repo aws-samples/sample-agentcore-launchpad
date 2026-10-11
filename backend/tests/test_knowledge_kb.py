@@ -10,6 +10,9 @@
 """
 
 
+import logging
+from unittest.mock import MagicMock
+
 import pytest
 from pydantic import ValidationError
 
@@ -19,7 +22,7 @@ from app.schemas.agent import AgentSpec, KnowledgeBaseRef
 from app.services import kb_gateway, knowledge
 from app.services.agentcore import harness as hc
 
-from .conftest import ws_ctx
+from .conftest import client_error, ws_ctx
 
 ROLE_ARN = "arn:aws:iam::111:role/launchpad-agent-execution-role"
 KB_GW = {"arn": "arn:aws:...:gateway/launchpad-kb-gw", "oauth_provider_arn": "arn:aws:...:oauth/p"}
@@ -404,6 +407,149 @@ def test_strip_kb_from_agents_updates_specs(monkeypatch):
         row = db.query(Agent).filter(Agent.name == name).one()
         assert [r["kb_id"] for r in row.spec["knowledge_bases"]] == ["KBLIVE0002"]
     db.close()
+
+
+def _mount_one_harness_agent(name: str) -> None:
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    db = SessionLocal()
+    db.add(Agent(
+        workspace_id="default", name=name, method="harness", status="active",
+        spec={"name": name, "method": "harness",
+              "knowledge_bases": [{"kb_id": "KBDEAD0001", "name": "dead"}]},
+    ))
+    db.commit()
+    db.close()
+
+
+def _strip_with_failing_resync(monkeypatch, exc: Exception) -> list[str]:
+    def fail(control, gw, name, refs):
+        raise exc
+
+    monkeypatch.setattr(knowledge, "control_client", lambda _ws: object())
+    monkeypatch.setattr(knowledge.kb_gateway, "sync_agentic_target", fail)
+    return knowledge._strip_kb_from_agents(
+        ws_ctx({"kb_gateway_id": "gw-1"}, id="default"), "KBDEAD0001"
+    )
+
+
+def test_strip_kb_resync_on_a_gone_gateway_is_quiet(monkeypatch, caplog):
+    _mount_one_harness_agent("kb-gone")
+    caplog.set_level(logging.WARNING, logger=knowledge.__name__)
+    stripped = _strip_with_failing_resync(
+        monkeypatch, client_error("ResourceNotFoundException")
+    )
+    assert stripped == ["kb-gone"]
+    assert caplog.records == []
+
+
+def test_strip_kb_resync_failure_warns_and_still_strips(monkeypatch, caplog):
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    _mount_one_harness_agent("kb-denied")
+    caplog.set_level(logging.WARNING, logger=knowledge.__name__)
+    stripped = _strip_with_failing_resync(monkeypatch, client_error("AccessDeniedException"))
+    assert stripped == ["kb-denied"]
+    (record,) = caplog.records
+    text = record.getMessage()
+    assert "KBDEAD0001" in text and "kb-denied" in text and "gw-1" in text
+    assert "AccessDeniedException" in text
+    db = SessionLocal()
+    row = db.query(Agent).filter(Agent.name == "kb-denied").one()
+    assert row.spec["knowledge_bases"] == []  # the ledger strip is not rolled back
+    db.close()
+
+
+# ── force/plain delete: best-effort cleanups ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("error", "warned"),
+    [(None, False), (client_error("NoSuchEntity"), False),
+     (client_error("AccessDenied"), True)],
+)
+def test_delete_kb_policy_warns_only_when_the_policy_is_left(
+    monkeypatch, caplog, error, warned
+):
+    from app.services import aws_clients
+
+    iam = MagicMock()
+    iam.delete_role_policy.side_effect = error
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: iam)
+    caplog.set_level(logging.WARNING, logger=knowledge.__name__)
+    workspace = ws_ctx({"kb_role_arn": "arn:aws:iam::1:role/kb-role"})
+    knowledge._delete_kb_policy(workspace, "KB1")  # never raises
+    iam.delete_role_policy.assert_called_once_with(
+        RoleName="kb-role", PolicyName="launchpad-kb-KB1"
+    )
+    assert len(caplog.records) == int(warned)
+    if warned:
+        text = caplog.records[0].getMessage()
+        assert "launchpad-kb-KB1" in text and "kb-role" in text and "AccessDenied" in text
+
+
+def test_delete_kb_warns_only_for_data_sources_not_already_gone(monkeypatch, caplog):
+    client = MagicMock()
+    client.get_knowledge_base.return_value = {
+        "knowledgeBase": {"knowledgeBaseConfiguration": {"type": "MANAGED"}}
+    }
+    client.delete_data_source.side_effect = [
+        None,
+        client_error("ResourceNotFoundException"),
+        client_error("ThrottlingException"),
+    ]
+    monkeypatch.setattr(knowledge, "agent_client", lambda _ws: client)
+    monkeypatch.setattr(
+        knowledge, "_list_data_sources",
+        lambda c, kb: [{"dataSourceId": "DS-OK"}, {"dataSourceId": "DS-GONE"},
+                       {"dataSourceId": "DS-SLOW"}],
+    )
+    monkeypatch.setattr(knowledge, "_delete_kb_policy", lambda ws, kb: None)
+    caplog.set_level(logging.WARNING, logger=knowledge.__name__)
+
+    out = knowledge.delete_kb(ws_ctx({}, id="default"), "KB1")
+
+    assert out == {"deleted": True, "kb_id": "KB1"}
+    client.delete_knowledge_base.assert_called_once_with(knowledgeBaseId="KB1")
+    (record,) = caplog.records
+    text = record.getMessage()
+    assert "KB1" in text and "DS-SLOW" in text and "ThrottlingException" in text
+
+
+class FailingDeleteControl(StubControl):
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    def delete_gateway_target(self, gatewayIdentifier, targetId):
+        self.deletes += 1
+        raise self.exc
+
+
+@pytest.mark.parametrize(
+    ("error", "warned"),
+    [(client_error("ResourceNotFoundException"), False),
+     (client_error("AccessDeniedException"), True)],
+)
+def test_delete_target_warns_only_when_the_target_is_left(caplog, error, warned):
+    ctl = FailingDeleteControl(error)
+    caplog.set_level(logging.WARNING, logger=kb_gateway.__name__)
+    kb_gateway._delete_target(ctl, "gw-1", "tid-1")  # never raises
+    assert ctl.deletes == 1
+    assert len(caplog.records) == int(warned)
+    if warned:
+        text = caplog.records[0].getMessage()
+        assert "gw-1" in text and "tid-1" in text and "AccessDeniedException" in text
+
+
+def test_delete_target_success_is_quiet(caplog):
+    ctl = StubControl()
+    ctl.targets["t"] = {"name": "t", "targetId": "tid-1", "status": "READY"}
+    caplog.set_level(logging.WARNING, logger=kb_gateway.__name__)
+    kb_gateway._delete_target(ctl, "gw-1", "tid-1")
+    assert ctl.targets == {} and caplog.records == []
 
 
 # ── data-source document listing ─────────────────────────────────────────────

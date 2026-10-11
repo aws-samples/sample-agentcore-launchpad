@@ -9,12 +9,14 @@
     register  → create/refresh the A2A registry record (auto-submit)
 """
 
+import logging
 import shutil
 import time
 from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.errors import cleanup_error, is_not_found
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -29,6 +31,8 @@ from app.services.workspace import WorkspaceContext
 from app.templates.claude_sdk_agent import TEMPLATE_DIR, assemble_build_context
 
 from .zip_runtime import bundle_skill_paths_into, sanitize_runtime_name
+
+logger = logging.getLogger(__name__)
 
 
 def platform_buildspec_path() -> Path:
@@ -347,11 +351,14 @@ def delete_agent_resources(
         return
     role_arn = agent_iam.shared_role_arn(workspace)
     if role_arn:
+        role_name = role_arn.rsplit("/", 1)[-1]
+        policy_name = agent_iam.fs_policy_name(agent.name)
         try:
             iam = iam_client or workspace.client("iam")
-            iam.delete_role_policy(
-                RoleName=role_arn.rsplit("/", 1)[-1],
-                PolicyName=agent_iam.fs_policy_name(agent.name),
-            )
-        except Exception:  # noqa: BLE001 — absent on most agents
-            pass
+            iam.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+        except Exception as exc:  # noqa: BLE001 — absent on most agents
+            if not is_not_found(exc):
+                logger.warning(
+                    "container delete %s: inline policy %s left on role %s: %s",
+                    agent.name, policy_name, role_name, cleanup_error(exc),
+                )

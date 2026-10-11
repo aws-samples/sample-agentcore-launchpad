@@ -1,6 +1,7 @@
 """Runtime Canary records, guards, actions, and resource ownership (Model 1:
 one agent, two immutable versions, dedicated per-canary Gateway)."""
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,6 +13,7 @@ from app.core.errors import AppError
 from app.models.ledger import Agent
 from app.optimization.models import Experiment, RuntimeCanary
 from app.schemas.agent import AgentSpec
+from tests.conftest import client_error
 
 RUNTIME_ARN = (
     "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
@@ -990,6 +992,46 @@ def test_second_concurrent_canary_for_same_agent_is_rejected(client):
     )
     assert res.status_code == 409
     assert res.json()["code"] == "canary.already_running"
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (client_error("ResourceNotFoundException"), None),
+        (client_error("AccessDeniedException", "not authorized"), "AccessDeniedException"),
+        (TimeoutError("Runtime canary A/B test ab-1 did not reach STOPPED"), "TimeoutError"),
+    ],
+)
+def test_cleanup_ab_stop_failure_is_reported_not_raised(monkeypatch, caplog, error, code):
+    row = _mk_canary(artifacts={"setup": _setup_artifact(), "rounds": []})
+    monkeypatch.setattr(
+        canary_svc, "_owned_resources", lambda row, control, data: ("gw-1", [], [], ["ab-1"]),
+    )
+
+    def stop(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(exp_svc, "_stop_ab_test", stop)
+    monkeypatch.setattr(canary_svc.ac, "cleanup_resources", lambda c, d, **kw: [])
+    monkeypatch.setattr(canary_svc.canary_infra, "delete_canary_gateway", lambda c, g, **kw: None)
+    monkeypatch.setattr(canary_svc.canary_infra, "delete_endpoint_quiet", lambda c, **kw: None)
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+    monkeypatch.setattr(canary_svc, "data_client", MagicMock)
+    caplog.set_level(logging.WARNING, logger=canary_svc.__name__)
+    progress: list[str] = []
+
+    canary_svc.act_cleanup(row.id, progress.append)  # the stop never blocks the teardown
+
+    assert _reload(row.id).status == "cleaned"
+    stop_lines = [m for m in progress if "could not stop A/B test" in m]
+    if code:
+        (record,) = caplog.records
+        text = record.getMessage()
+        assert "ab-1" in text and row.id in text and code in text
+        (line,) = stop_lines
+        assert "ab-1" in line and code in line
+    else:
+        assert caplog.records == [] and stop_lines == []
 
 
 def test_cleanup_deletes_dedicated_gateway_and_both_endpoints(monkeypatch):

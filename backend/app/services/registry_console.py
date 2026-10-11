@@ -6,6 +6,7 @@ registryRecordId.
 """
 
 import json
+import logging
 import re
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -15,7 +16,7 @@ import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import REPO_ROOT
-from app.core.errors import AppError
+from app.core.errors import AppError, cleanup_error, is_not_found
 from app.models.ledger import Agent
 from app.services import mcp_client
 from app.services.agentcore import policy as policy_api
@@ -38,6 +39,8 @@ from app.services.skill_ingest import (
     validate_bundle,
 )
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger(__name__)
 
 # Shared frontmatter parser lives in skill_ingest now; kept as a module-level
 # name for the existing callers (upload_skill_bundle) and tests.
@@ -1212,8 +1215,12 @@ def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> None:
     for key in keys:
         try:
             s3.delete_object(Bucket=bucket, Key=key)
-        except Exception:  # cleanup must never mask the original failure
-            pass
+        except Exception as exc:  # cleanup must never mask the original failure
+            if not is_not_found(exc):
+                logger.warning(
+                    "registry write cleanup: s3://%s/%s left behind: %s",
+                    bucket, key, cleanup_error(exc),
+                )
 
 
 def register_skill(

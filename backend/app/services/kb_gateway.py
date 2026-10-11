@@ -7,10 +7,12 @@ target (globally visible) plus a per-agent ``AgenticRetrieveStream`` target whos
 retrievers are bound to that agent's selected KBs.
 """
 
+import logging
 import re
 import time
 from typing import Any
 
+from app.core.errors import cleanup_error, is_not_found
 from app.services.gateway_bootstrap import (
     _list_targets,
     _wait_gateway_ready,
@@ -18,6 +20,8 @@ from app.services.gateway_bootstrap import (
     ensure_gateway_allows_client,
 )
 from app.services.workspace import WorkspaceContext, merge_workspace_resources
+
+logger = logging.getLogger(__name__)
 
 KB_GATEWAY_NAME = "launchpad-kb-gw"
 _CONNECTOR_ID = "bedrock-knowledge-bases"
@@ -249,8 +253,12 @@ def _wait_target_gone(
 def _delete_target(control: Any, gateway_id: str, target_id: str) -> None:
     try:
         control.delete_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
-    except Exception:  # already gone (or racing delete) — nothing to clean
-        pass
+    except Exception as exc:  # already gone (or racing delete) — nothing to clean
+        if not is_not_found(exc):
+            logger.warning(
+                "kb gateway %s: target %s left behind: %s",
+                gateway_id, target_id, cleanup_error(exc),
+            )
 
 
 def delete_retrieve_target(control: Any, gateway_id: str, kb_id: str) -> None:

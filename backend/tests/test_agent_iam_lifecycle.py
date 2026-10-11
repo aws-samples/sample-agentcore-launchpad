@@ -6,8 +6,10 @@ either. Those are the properties asserted here.
 """
 
 import json
+import logging
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app.core.db import DEFAULT_WORKSPACE_ID
 from app.models.ledger import Agent
@@ -28,8 +30,12 @@ class EntityAlreadyExists(Exception):
     """Name-matched by agent_iam._is_already_exists."""
 
 
-class NoSuchEntity(Exception):
-    """Name-matched by agent_iam._is_no_such_entity."""
+class NoSuchEntity(ClientError):
+    """What boto3 raises (IAM `NoSuchEntityException`, code `NoSuchEntity`):
+    name-matched by agent_iam._is_no_such_entity, code-matched by is_not_found."""
+
+    def __init__(self, what: str):
+        super().__init__({"Error": {"Code": "NoSuchEntity", "Message": what}}, "IAM")
 
 
 class StubIam:
@@ -183,6 +189,33 @@ class TestMountPolicyOnTheAgentsOwnRole:
         agent_iam.ensure_role(iam, agent, _spec(), CTX)  # re-publish, mounts removed
         name = agent_iam.role_name_for(agent.name, agent.id)
         assert agent_iam.fs_policy_name(agent.name) not in iam.roles[name]["policies"]
+
+    def test_absent_stale_policy_is_quiet(self, caplog):
+        caplog.set_level(logging.WARNING, logger=agent_iam.__name__)
+        lines: list[str] = []
+        agent_iam.ensure_role(StubIam(), _agent(), _spec(), CTX, log=lines.append)
+        assert caplog.records == []
+        assert not any("could not be removed" in line for line in lines)
+
+    def test_stale_policy_left_behind_is_warned_and_logged(self, caplog):
+        class DeniedDelete(StubIam):
+            def delete_role_policy(self, RoleName, PolicyName):
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "not authorized"}},
+                    "DeleteRolePolicy",
+                )
+
+        caplog.set_level(logging.WARNING, logger=agent_iam.__name__)
+        iam = DeniedDelete()
+        agent = _agent()
+        lines: list[str] = []
+        agent_iam.ensure_role(iam, agent, _spec(), CTX, log=lines.append)  # never raises
+        role = agent_iam.role_name_for(agent.name, agent.id)
+        policy = agent_iam.fs_policy_name(agent.name)
+        (record,) = caplog.records
+        assert policy in record.getMessage() and role in record.getMessage()
+        assert "AccessDenied" in record.getMessage()
+        assert record.getMessage() in lines
 
     def test_a_shrinking_capability_set_is_reflected(self):
         """A re-publish that dropped knowledge bases must not leave the grant."""

@@ -3,6 +3,7 @@ the inspect→import router flow with staging (mocked AWS, no live calls)."""
 
 import io
 import json
+import logging
 import zipfile
 
 import app.routers.registry as registry_router
@@ -10,7 +11,7 @@ import app.services.registry_console as console_mod
 from app.core.errors import AppError
 from app.services import aws_clients
 from app.services import skill_ingest as si
-from tests.conftest import ws_ctx
+from tests.conftest import client_error, ws_ctx
 
 WS = ws_ctx({"artifacts_bucket": "bkt"})
 
@@ -99,6 +100,37 @@ def test_register_skill_bundle_cleans_up_on_record_failure(monkeypatch):
     # every uploaded object was removed — no orphan S3 prefix left behind
     assert sorted(fake.deleted) == sorted(fake.uploaded)
     assert len(fake.deleted) == 3
+
+
+def test_register_skill_bundle_cleanup_failure_warns_but_never_masks(monkeypatch, caplog):
+    class LeakyS3(FakeS3):
+        def delete_object(self, Bucket, Key):  # noqa: N803 (boto3 kwarg names)
+            self.deleted.append(Key)
+            if Key.endswith("SKILL.md"):
+                raise client_error("NoSuchKey")  # already gone — quiet
+            if Key.endswith("doc.md"):
+                raise client_error("AccessDenied", "not authorized")
+
+    def boom(*a, **k):
+        raise RuntimeError("registry down")
+
+    fake = LeakyS3()
+    _patch_aws(monkeypatch, fake, upsert=boom)
+    caplog.set_level(logging.WARNING, logger=console_mod.__name__)
+    bundle = si.bundle_from_zip(_multifile_zip())
+    try:
+        try:
+            console_mod.register_skill_bundle(bundle, WS)
+            raise AssertionError("expected failure")
+        except RuntimeError as exc:
+            assert str(exc) == "registry down"  # the original failure, not the cleanup's
+    finally:
+        bundle.close()
+    assert sorted(fake.deleted) == sorted(fake.uploaded)  # one failure stops nothing
+    (record,) = caplog.records
+    text = record.getMessage()
+    assert "s3://bkt/skills/meeting-summarizer/references/doc.md" in text
+    assert "AccessDenied" in text
 
 
 def test_register_skill_bundle_rejects_bad_name(monkeypatch):

@@ -16,6 +16,7 @@ work is archive extraction, file checks and a pip *download/install into the
 bundle directory* (wheels are unpacked, never imported or run).
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.errors import cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -53,6 +55,8 @@ from .container import (
     platform_buildspec_path,
 )
 from .zip_runtime import _compile_lock, sanitize_runtime_name
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_KEY_TMPL = "agents/{name}/byoc_package.zip"
 
@@ -507,9 +511,25 @@ def delete_agent_resources(
         try:
             ecr = ecr_client or workspace.client("ecr")
             versions = range(1, int(agent.version or "1") + 1)
-            ecr.batch_delete_image(
+            resp = ecr.batch_delete_image(
                 repositoryName=repo,
                 imageIds=[{"imageTag": f"{agent.name}-v{v}"} for v in versions],
             )
-        except Exception:  # noqa: BLE001 — cleanup must never block a delete
-            pass
+        except Exception as exc:  # noqa: BLE001 — cleanup must never block a delete
+            if not is_not_found(exc):
+                logger.warning(
+                    "byoc delete %s: ECR tags %s-v* in %s left behind: %s",
+                    agent.name, agent.name, repo, cleanup_error(exc),
+                )
+            return
+        # per-image failures come back in the response, not as an exception
+        for failure in (resp or {}).get("failures") or []:
+            if failure.get("failureCode") != "ImageNotFound":
+                logger.warning(
+                    "byoc delete %s: ECR image %s in %s left behind: %s: %s",
+                    agent.name,
+                    (failure.get("imageId") or {}).get("imageTag", "?"),
+                    repo,
+                    failure.get("failureCode"),
+                    failure.get("failureReason", ""),
+                )

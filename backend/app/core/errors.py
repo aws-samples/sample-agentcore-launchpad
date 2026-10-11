@@ -190,6 +190,35 @@ def mapped_aws_error(exc: BaseException) -> tuple[int, str] | None:
     return AWS_ERROR_MAP.get(aws_error_code(exc))
 
 
+# The "it is already gone" family across the services a best-effort cleanup
+# deletes from (AgentCore, IAM, S3, ECR). Only these may be swallowed silently.
+NOT_FOUND_CODES = frozenset({
+    "ResourceNotFoundException",
+    "NotFoundException",
+    "NoSuchEntity",
+    "NoSuchKey",
+    "ImageNotFoundException",
+    "ImageNotFound",
+    "RepositoryNotFoundException",
+})
+
+
+def is_not_found(exc: BaseException) -> bool:
+    """True when `exc` is AWS saying the resource does not exist.
+
+    A best-effort delete swallows exactly this; anything else (AccessDenied,
+    throttling, validation, a bug) leaves a resource behind and must be logged."""
+    return isinstance(exc, ClientError) and aws_error_code(exc) in NOT_FOUND_CODES
+
+
+def cleanup_error(exc: BaseException) -> str:
+    """`Code: message` for a failed cleanup call — the AWS error code when there
+    is one, else the exception type — for the warning that names what was left."""
+    if isinstance(exc, ClientError):
+        return f"{aws_error_code(exc) or 'ClientError'}: {aws_error_message(exc)}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def public_aws_message(code: str) -> str:
     """The generic sentence for a mapped `aws.*` code — no ARN, account id or operation."""
     return _PUBLIC_AWS_MESSAGES.get(code, "AWS request failed")

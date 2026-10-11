@@ -3,6 +3,7 @@ deployer stages and the delete path — all hermetic (AWS stubbed, no pip runs).
 
 import io
 import json
+import logging
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,7 @@ from app.routers import agents as agents_router
 from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.services import byoc_uploads
 from app.services.agentcore import runtime as rt
-from tests.conftest import ws_ctx
+from tests.conftest import client_error, ws_ctx
 from tests.test_agent_iam_lifecycle import StubIam
 
 ECR_IMAGE = "111122223333.dkr.ecr.us-west-2.amazonaws.com/my-agents:v1"
@@ -1131,7 +1132,8 @@ def test_resumed_deploy_does_not_fall_back_after_iam_failure(monkeypatch):
 
 # ── delete path ──────────────────────────────────────────────────────────────
 
-def test_delete_removes_runtime_upload_and_images(monkeypatch):
+def test_delete_removes_runtime_upload_and_images(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=byoc_dep.__name__)
     stub = StubRuntimeControl()
     monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: stub)
     s3 = StubS3()
@@ -1144,6 +1146,7 @@ def test_delete_removes_runtime_upload_and_images(monkeypatch):
 
         def batch_delete_image(self, repositoryName, imageIds):
             self.deleted = (repositoryName, imageIds)
+            return {"imageIds": imageIds, "failures": []}
 
     ecr = StubEcr()
     _client_router(monkeypatch, {"s3": s3, "ecr": ecr})
@@ -1161,6 +1164,69 @@ def test_delete_removes_runtime_upload_and_images(monkeypatch):
     assert ("bkt", "byoc/default/u2/manifest.json") not in s3.objects
     assert ecr.deleted == ("launchpad-agents",
                            [{"imageTag": "byoc-agent-v1"}, {"imageTag": "byoc-agent-v2"}])
+    assert caplog.records == []
+
+
+def _delete_container_source(monkeypatch, ecr) -> None:
+    monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: StubRuntimeControl())
+    _client_router(monkeypatch, {"s3": StubS3(), "ecr": ecr})
+    spec = AgentSpec(**_byoc_spec(
+        byoc={"artifact_kind": "container_source", "upload_id": "u2"}
+    ))
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID, name="byoc-agent", method="byoc",
+        status="active", spec=spec.model_dump(), resource_id="rt-1", version="2",
+    )
+    byoc_dep.delete_agent_resources(agent, ws_ctx(RESOURCES), ecr_client=ecr)
+
+
+class RaisingEcr:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def batch_delete_image(self, repositoryName, imageIds):
+        raise self.exc
+
+
+def test_delete_ecr_repo_already_gone_is_quiet(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=byoc_dep.__name__)
+    _delete_container_source(
+        monkeypatch, RaisingEcr(client_error("RepositoryNotFoundException"))
+    )
+    assert caplog.records == []
+
+
+def test_delete_ecr_access_denied_warns_and_never_blocks(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=byoc_dep.__name__)
+    _delete_container_source(
+        monkeypatch, RaisingEcr(client_error("AccessDeniedException", "not authorized"))
+    )
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    text = record.getMessage()
+    assert "byoc-agent-v*" in text and "launchpad-agents" in text
+    assert "AccessDeniedException" in text
+
+
+def test_delete_ecr_per_image_failures_warn_all_but_image_not_found(monkeypatch, caplog):
+    class PartialEcr:
+        def batch_delete_image(self, repositoryName, imageIds):
+            return {
+                "imageIds": [],
+                "failures": [
+                    {"imageId": {"imageTag": "byoc-agent-v1"}, "failureCode": "ImageNotFound",
+                     "failureReason": "Requested image not found"},
+                    {"imageId": {"imageTag": "byoc-agent-v2"}, "failureCode": "KmsError",
+                     "failureReason": "kms key disabled"},
+                ],
+            }
+
+    caplog.set_level(logging.WARNING, logger=byoc_dep.__name__)
+    _delete_container_source(monkeypatch, PartialEcr())
+    (record,) = caplog.records
+    text = record.getMessage()
+    assert "byoc-agent-v2" in text and "KmsError" in text and "launchpad-agents" in text
+    assert "byoc-agent-v1" not in text
 
 
 def test_delete_code_zip_skips_ecr(monkeypatch):

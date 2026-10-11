@@ -1,10 +1,14 @@
 """BYO-mount IAM inline policy — document shape + provision/delete lifecycle."""
 
 
+import logging
+
+import pytest
+
 from app.deployer import container as c
 from app.schemas.agent import AgentSpec
 
-from .conftest import ws_ctx
+from .conftest import client_error, ws_ctx
 
 S3_AP = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc/access-point/ap-1"
 S3_AP2 = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc/access-point/ap-2"
@@ -13,15 +17,18 @@ VPC = {"subnets": ["subnet-a"], "security_groups": ["sg-1"]}
 
 
 class StubIam:
-    def __init__(self):
+    def __init__(self, delete_error: Exception | None = None):
         self.put_calls: list[dict] = []
         self.delete_calls: list[dict] = []
+        self.delete_error = delete_error
 
     def put_role_policy(self, **kw):
         self.put_calls.append(kw)
 
     def delete_role_policy(self, **kw):
         self.delete_calls.append(kw)
+        if self.delete_error:
+            raise self.delete_error
 
 
 def _spec(**over) -> AgentSpec:
@@ -42,7 +49,7 @@ class AgentRow:
 # integration with it.
 
 
-def test_delete_agent_resources_drops_the_stale_shared_role_policy(monkeypatch):
+def _shared_role_delete(monkeypatch, iam: StubIam) -> None:
     class StubControlClient:
         class exceptions:
             class ResourceNotFoundException(Exception):
@@ -62,7 +69,28 @@ def test_delete_agent_resources_drops_the_stale_shared_role_policy(monkeypatch):
         resources = {"execution_role_arn": "arn:aws:iam::1:role/launchpad-base"}
 
     monkeypatch.setattr(c, "get_settings", lambda: Settings())
-    iam = StubIam()
     c.delete_agent_resources(AgentRow(), ws_ctx(Settings.resources), iam_client=iam)
+
+
+def test_delete_agent_resources_drops_the_stale_shared_role_policy(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=c.__name__)
+    iam = StubIam()
+    _shared_role_delete(monkeypatch, iam)
     (call,) = iam.delete_calls
     assert call == {"RoleName": "launchpad-base", "PolicyName": "launchpad-fs-fs-agent"}
+    assert caplog.records == []
+
+
+def test_delete_agent_resources_absent_fs_policy_is_quiet(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=c.__name__)
+    _shared_role_delete(monkeypatch, StubIam(client_error("NoSuchEntity")))
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize("code", ["AccessDenied", "Throttling"])
+def test_delete_agent_resources_warns_when_the_fs_policy_is_left(monkeypatch, caplog, code):
+    caplog.set_level(logging.WARNING, logger=c.__name__)
+    _shared_role_delete(monkeypatch, StubIam(client_error(code)))  # never raises
+    (record,) = caplog.records
+    text = record.getMessage()
+    assert "launchpad-fs-fs-agent" in text and "launchpad-base" in text and code in text

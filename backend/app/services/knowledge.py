@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.models.ledger import Agent
 from app.services import kb_gateway
 from app.services.agentcore.client import (
@@ -247,8 +247,15 @@ def _strip_kb_from_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
                             for r in remaining
                         ],
                     )
-                except Exception:  # target resync is best-effort during delete
-                    pass
+                except Exception as exc:  # target resync is best-effort during delete
+                    # not-found = the gateway/target is gone, so nothing routes to
+                    # the dead KB; anything else leaves it offered as a tool
+                    if not is_not_found(exc):
+                        logger.warning(
+                            "kb %s force delete: agent %s target on gateway %s still "
+                            "lists the KB: %s",
+                            kb_id, agent.name, gateway_id, cleanup_error(exc),
+                        )
         db.commit()
     finally:
         db.close()
@@ -301,12 +308,15 @@ def _sync_kb_policy(
 
 def _delete_kb_policy(workspace: WorkspaceContext, kb_id: str) -> None:
     iam = workspace.client("iam")
+    role_name, policy_name = _kb_role_name(workspace), _kb_policy_name(kb_id)
     try:
-        iam.delete_role_policy(
-            RoleName=_kb_role_name(workspace), PolicyName=_kb_policy_name(kb_id)
-        )
-    except Exception:  # NoSuchEntity / role absent — nothing to clean
-        pass
+        iam.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+    except Exception as exc:  # NoSuchEntity / role absent — nothing to clean
+        if not is_not_found(exc):
+            logger.warning(
+                "kb %s: inline policy %s left on role %s: %s",
+                kb_id, policy_name, role_name, cleanup_error(exc),
+            )
 
 
 # ── data-source construction ─────────────────────────────────────────────────
@@ -799,8 +809,12 @@ def delete_kb(
     for ds in _list_data_sources(client, kb_id):
         try:  # async deletion — best-effort; DeleteKnowledgeBase cascades the rest
             client.delete_data_source(knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"])
-        except Exception:
-            pass
+        except Exception as exc:
+            if not is_not_found(exc):
+                logger.warning(
+                    "kb %s: data source %s delete failed: %s",
+                    kb_id, ds["dataSourceId"], cleanup_error(exc),
+                )
 
     # only touch the gateway target if the gateway already exists — never
     # provision the KB gateway during a delete

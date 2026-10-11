@@ -9,7 +9,15 @@ from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.core.errors import AWS_ERROR_MAP, AppError, aws_error_message, register_error_handlers
+from app.core.errors import (
+    AWS_ERROR_MAP,
+    NOT_FOUND_CODES,
+    AppError,
+    aws_error_message,
+    cleanup_error,
+    is_not_found,
+    register_error_handlers,
+)
 
 BOTO_TEXT = "An error occurred (ResourceNotFoundException) when calling the GetMemory operation: "
 
@@ -184,3 +192,44 @@ def test_every_public_code_has_a_generic_message(aws_code, status, code, message
         "message": message,
         "detail": {"aws_error_code": aws_code},
     }
+
+
+# ── best-effort cleanup: "already gone" vs everything else ───────────────────
+
+
+@pytest.mark.parametrize(
+    "aws_code",
+    [
+        "ResourceNotFoundException",
+        "NotFoundException",
+        "NoSuchEntity",
+        "NoSuchKey",
+        "ImageNotFoundException",
+        "ImageNotFound",
+        "RepositoryNotFoundException",
+    ],
+)
+def test_is_not_found_covers_the_already_gone_family(aws_code):
+    assert aws_code in NOT_FOUND_CODES
+    assert is_not_found(aws_error(aws_code, "gone", "DeleteThing")) is True
+
+
+@pytest.mark.parametrize(
+    "aws_code",
+    ["AccessDeniedException", "AccessDenied", "ThrottlingException", "ValidationException", ""],
+)
+def test_is_not_found_rejects_every_other_aws_code(aws_code):
+    assert is_not_found(aws_error(aws_code, "nope", "DeleteThing")) is False
+
+
+def test_is_not_found_rejects_a_non_client_error():
+    # name-alike plain exceptions (stubs, bugs) are not AWS saying "gone"
+    assert is_not_found(RuntimeError("ResourceNotFoundException")) is False
+    assert is_not_found(TimeoutError("NoSuchEntity")) is False
+
+
+def test_cleanup_error_names_the_code():
+    assert cleanup_error(aws_error("AccessDeniedException", "not authorized", "DeleteX")) == (
+        "AccessDeniedException: not authorized"
+    )
+    assert cleanup_error(TimeoutError("did not stop")) == "TimeoutError: did not stop"
