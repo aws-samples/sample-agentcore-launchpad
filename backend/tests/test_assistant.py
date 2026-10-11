@@ -1960,6 +1960,9 @@ def test_member_discussion_is_open_but_approval_needs_the_deploy_permission(gate
     assert res.status_code == 202
     assert res.json()["proposal"]["approval"]["approved_by"] == MEMBER_CREDS["username"]
     assert res.json()["agent"]["owner"] == MEMBER_CREDS["username"]
+    # the approver is the agent's creator — the key workspace isolation filters on
+    assert res.json()["agent"]["created_by"] == ids[MEMBER_CREDS["username"]]
+    assert res.json()["agent"]["created_by_name"] == MEMBER_CREDS["username"]
 
 
 @pytest.mark.parametrize("revocation", ["permission", "grant", "account"])

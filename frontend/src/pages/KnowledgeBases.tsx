@@ -6,7 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { Btn, Chip, LoadError, Panel, StaleLink, useStaleParam, ViewHead } from "../components";
 import type { ChipTone } from "../components";
 import { errorMessage, getJson } from "../lib/api";
-import type { KnowledgeBaseSummary } from "../lib/knowledgeBases";
+import { attachedAgentCount, type KnowledgeBaseSummary } from "../lib/knowledgeBases";
 import { CreateView } from "./knowledge/CreateView";
 import { DetailView } from "./knowledge/DetailView";
 
@@ -167,7 +167,7 @@ export function KnowledgeBases() {
                     <KbStatusChip status={kb.status} />
                   </td>
                   <td className="mono">{kb.data_source_count}</td>
-                  <td className="mono">{kb.attached_agents.length}</td>
+                  <td className="mono">{attachedAgentCount(kb)}</td>
                   <td className="mono dim">{kb.updated_at?.slice(0, 19) ?? "—"}</td>
                 </tr>
               ))}

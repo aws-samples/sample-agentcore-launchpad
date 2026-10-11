@@ -14,6 +14,7 @@ from app.evaluation.models import EvalRun
 from app.models.ledger import ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import visibility
+from app.services.agent_access import HiddenAgents, hidden_agent_ids
 from app.services.agentcore.client import control_client
 from app.services.governance import attached_policy_engine_id
 from app.services.registry_console import console_list
@@ -50,6 +51,7 @@ def _registry_assets(workspace: WorkspaceContext) -> dict[str, int]:
         return slot["assets"]
     counts = {"agents": 0, "tools": 0, "skills": 0}
     by_type = {"A2A": "agents", "MCP": "tools", "AGENT_SKILLS": "skills"}
+    a2a_ids: list[str] = []
     try:
         for record in console_list(workspace):
             if record.get("status") == "DEPRECATED":
@@ -57,12 +59,28 @@ def _registry_assets(workspace: WorkspaceContext) -> dict[str, int]:
             key = by_type.get(record.get("descriptorType", ""))
             if key:
                 counts[key] += 1
+            if key == "agents" and record.get("recordId"):
+                a2a_ids.append(str(record["recordId"]))
     except Exception:
         # keep the last good value warm; on a cold cache return the default
         # WITHOUT caching it, so the next request retries immediately
         return slot["assets"] if slot["assets"] is not None else counts
-    slot.update(assets_at=time.monotonic(), assets=counts)
+    # the A2A record ids ride along so a member's count can drop hidden agents'
+    slot.update(assets_at=time.monotonic(), assets=counts, a2a_ids=a2a_ids)
     return counts
+
+
+def _viewer_assets(
+    db: Session, workspace: WorkspaceContext, viewer: Viewer, assets: dict[str, int]
+) -> dict[str, int]:
+    """The cached counts as `viewer` sees them: under workspace isolation the A2A
+    records of agents hidden from a member are not counted."""
+    if not viewer.filters:
+        return assets
+    hidden = HiddenAgents(db, viewer, workspace.id).record_ids
+    listed = set(_slot(workspace.id).get("a2a_ids") or [])
+    drop = len(hidden & listed)
+    return {**assets, "agents": max(0, assets.get("agents", 0) - drop)} if drop else assets
 
 
 def _traces_active(workspace: WorkspaceContext) -> bool:
@@ -90,15 +108,17 @@ def overview(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     resources = ws.context.resources
-    assets = _registry_assets(ws.context)
+    assets = _viewer_assets(db, ws.context, viewer, _registry_assets(ws.context))
     policy_engine_id = attached_policy_engine_id(control_client(ws.context), ws.context)
 
     day_ago = datetime.now(UTC) - timedelta(hours=24)
-    active_sessions = (
-        db.query(ChatSession)
-        .filter(ChatSession.workspace_id == ws.id, ChatSession.last_at >= day_ago)
-        .count()
+    sessions = db.query(ChatSession).filter(
+        ChatSession.workspace_id == ws.id, ChatSession.last_at >= day_ago
     )
+    hidden_agents = hidden_agent_ids(db, viewer, ws.id)
+    if hidden_agents:  # the viewer's agents only (workspace isolation)
+        sessions = sessions.filter(ChatSession.agent_id.not_in(hidden_agents))
+    active_sessions = sessions.count()
 
     runs = (
         db.query(EvalRun)

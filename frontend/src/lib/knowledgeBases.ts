@@ -13,6 +13,9 @@ export interface KnowledgeBaseSummary {
   updated_at: string | null;
   data_source_count: number;
   attached_agents: string[];
+  /** Every mounting agent, including those hidden by workspace isolation (whose
+   *  names `attached_agents` omits) — so "in use" stays truthful. */
+  attached_agent_count?: number;
   /** `users.id` of the creating account (the ownership key); null for the config
    *  admin / auth-disabled operator, system-created and legacy rows. */
   created_by?: string | null;
@@ -51,6 +54,9 @@ export interface KnowledgeBaseDetail {
   failure_reasons?: string[];
   data_sources: DataSource[];
   attached_agents: string[];
+  /** Every mounting agent, including those hidden by workspace isolation (whose
+   *  names `attached_agents` omits) — so "in use" stays truthful. */
+  attached_agent_count?: number;
   /** `users.id` of the creating account (the ownership key); null for the config
    *  admin / auth-disabled operator, system-created and legacy rows. */
   created_by?: string | null;
@@ -165,6 +171,15 @@ export function mergeFiles(current: File[], picked: File[]): File[] {
 
 /** Agent names carried by a DELETE 409 (attached & not forced). Tolerant of
  *  either a top-level `agents` or a nested `detail.agents`. */
+/** How many agents mount the KB — the server count when present (it includes
+ *  agents whose names workspace isolation hides), else the visible names. */
+export function attachedAgentCount(kb: {
+  attached_agents: string[];
+  attached_agent_count?: number;
+}): number {
+  return Math.max(kb.attached_agent_count ?? 0, kb.attached_agents.length);
+}
+
 export function extractConflictAgents(body: unknown): string[] {
   const b = (body ?? {}) as { agents?: unknown; detail?: { agents?: unknown } };
   const raw = Array.isArray(b.agents)

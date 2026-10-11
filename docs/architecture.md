@@ -2881,8 +2881,9 @@ In a `shared` workspace (the default) data is **not** partitioned per user: ever
 authenticated account sees — and, since the opening, can mutate — the same agents,
 records, datasets, knowledge bases and gateways. An admin can switch a workspace to
 `isolated`, after which each member sees only their own, creator-unknown and
-admin-created resources of the in-scope kinds (see *Workspaces — Member resource
-visibility*); agents, registry records and gateways stay shared either way. Revoking the `perm:*` keys restores a partial guardrail for
+admin-created resources of the in-scope kinds — agents and their A2A registry records
+and `/v1` API keys included (see *Workspaces — Member resource visibility*); MCP /
+skill registry records and gateways stay shared either way. Revoking the `perm:*` keys restores a partial guardrail for
 one user (no deploys, no eval runs), but the rest of the console remains writable
 for any member; treat member accounts accordingly. The `/users` console module
 renders an administrator-required panel instead of firing a request.
@@ -3295,8 +3296,42 @@ answer the kind's ordinary not-found, so existence is not disclosed. The overvie
 pass rate / run count and the online-quality tile count only what the viewer sees
 (the tile is cached per viewer), and the architect catalog lists the KBs its
 conversation **owner** can see. The setting is re-read with the workspace row on
-every request, so a switch applies to the next request and changes no data. Agents
-and agent-spec KB / memory pins are not covered yet.
+every request, so a switch applies to the next request and changes no data.
+
+*Agents* follow the same rule on `Agent.created_by` (stamped on `POST /api/agents`,
+on harness → runtime conversion — the converter owns the twin — and on architect
+approval — the approver; discovered runtimes and system presets record nothing and
+stay shared). `app/services/agent_access.py` is the one agent choke point:
+`agent_in(..., viewer=)` behind every by-id helper (agents router, Chat, eval run /
+online / log-streams, experiment readiness / create, canary create, registry A2A demo
+and live card), each keeping its own miss answer (`agent.not_found` 404,
+`agent.not_active` / `canary.agent_not_active` 400, `registry.*`); `agent_clause` for
+the lists (`GET /api/agents`, which feeds every picker, conversion twins, `/v1/agents`);
+and a request-scoped `HiddenAgents` snapshot for surfaces that hold an agent only by a
+derived key. Those drop a hidden agent's observability traces / sessions (resolved
+through the span `service.name` resolver or the ledger's chat / eval-run session ids;
+details, transcripts and on-demand scoring answer `observability.*_not_found`), its
+memory actors `<agent>__<human>` (`memory.actor_not_found` on events / records /
+namespaces / search / extraction jobs, and the shared `default` actor loses the
+sessions the ledger attributes to it), its A2A registry records (`aws.not_found`),
+its deploy jobs (`job.not_found`), and its name from KB / memory used-by lists,
+Connections references, online `matched_agent`, discovery `managed_agent_*` and
+import `already_managed` — counts stay truthful, only names go. The overview's
+active sessions and A2A count are per viewer; the dashboard charts stay workspace
+totals. Name uniqueness stays workspace-wide; the `agent.name_exists` 409 carries the
+holder's id only when the caller may see it. A `/v1` key follows its **creator's**
+current visibility (`visibility.viewer_for_key`): a member's key reaches only what
+that member sees, keys by admins / the config admin / legacy keys are unrestricted.
+On `/api/apikeys` a member of an isolated workspace lists and toggles only the keys
+they minted (stricter than the resource rule: a key is a credential). An agent spec
+may pin only KBs / memories the caller can see (`agent_access.check_pins`, before any
+row or AWS call); a re-publish checks only the pins it *adds*, so an agent pinned
+while shared keeps re-publishing. A visible eval run, experiment or canary does not
+make its agent the caller's: recommendation accept and every experiment / canary
+action except `verdict` / `cleanup` require the agent to be visible. KB force-delete
+still strips the KB from every mounting agent (integrity). Deploy pipeline, resume,
+workers, purge, the observability resolver, name claims and the preset service keep
+`Viewer.ALL`.
 
 **Removal.** `DELETE /api/workspaces/{id}` is a detach — the row and its grants
 go, AWS is untouched — and it is refused while any scoped row still names the
@@ -3506,7 +3541,8 @@ operator, who have no `users` row) and `created_by_name` the username at creatio
 (display only). The ledger-backed kinds carry both columns on their own row —
 `eval_datasets`, `eval_pipelines`, `eval_runs`, `online_eval_configs`,
 `experiments`, `runtime_canaries`, `skill_lab_jobs`, `skill_lab_tasksets` and
-`managed_memories` — while knowledge bases and custom evaluators, which AWS alone
+`managed_memories`, and `agents` (whose older `owner` column stays a provenance
+label) — while knowledge bases and custom evaluators, which AWS alone
 stores, use `resource_creators`. One module, `app/services/creators.py`, stamps rows
 (`Creator.of_request` in the routers; service functions take a keyword-only
 `creator`) and renders the two response fields, so every list and detail response

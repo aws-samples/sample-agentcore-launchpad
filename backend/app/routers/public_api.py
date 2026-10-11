@@ -22,6 +22,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.attachments import AttachmentRequest
+from app.services import agent_access, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
@@ -74,10 +75,13 @@ class InvokeV1Request(AttachmentRequest):
 
 
 def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
-    """The agent this key may invoke. One from another workspace reads exactly
-    like a missing one — the key's scope must not be probeable."""
-    agent = db.get(Agent, agent_id)
-    if agent is None or agent.status == "deleted" or agent.workspace_id != key.workspace_id:
+    """The agent this key may invoke. One from another workspace — or one its
+    creator cannot see under workspace isolation — reads exactly like a missing
+    one: the key's scope must not be probeable."""
+    agent = agent_access.agent_in(
+        db, key.workspace_id, agent_id, viewer=visibility.viewer_for_key(db, key)
+    )
+    if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     require_invoke_capability(agent)
     return agent
@@ -90,7 +94,11 @@ def v1_list_agents(
     agents = [
         agent
         for agent in db.query(Agent)
-        .filter(Agent.status == "active", Agent.workspace_id == key.workspace_id)
+        .filter(
+            Agent.status == "active",
+            Agent.workspace_id == key.workspace_id,
+            agent_access.agent_clause(visibility.viewer_for_key(db, key)),
+        )
         .all()
         if invoke_capability(agent)["eligible"]
     ]

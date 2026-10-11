@@ -216,8 +216,11 @@ def validate_filters(filters: Sequence[dict[str, Any]] | None) -> list[dict[str,
     return out
 
 
-def _agent_log_group_matchers(db: Session, ws: WorkspaceScope) -> list[tuple[Agent, str, bool]]:
-    """(agent, log-group needle, is_prefix) for every deployed agent in the workspace.
+def _agent_log_group_matchers(
+    db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+) -> list[tuple[Agent, str, bool]]:
+    """(agent, log-group needle, is_prefix) for every deployed agent in the workspace
+    that ``viewer`` may see (a hidden agent is never named as the match).
 
     Derived offline: runtime methods log to ``runtimes/<resource_id>-DEFAULT``; a
     harness's backing runtime logs under ``runtimes/harness_<name>-*`` (see
@@ -225,7 +228,11 @@ def _agent_log_group_matchers(db: Session, ws: WorkspaceScope) -> list[tuple[Age
     ``matched_agent`` hint on external configs.
     """
     rows = db.scalars(
-        select(Agent).where(Agent.workspace_id == ws.id, Agent.status == "active")
+        select(Agent).where(
+            Agent.workspace_id == ws.id,
+            Agent.status == "active",
+            visibility.clause(viewer, Agent.created_by),
+        )
     ).all()
     out: list[tuple[Agent, str, bool]] = []
     for agent in rows:
@@ -350,7 +357,7 @@ def list_configs(
         matched = None
         if owner == "external" and detailed:
             if matchers is None:
-                matchers = _agent_log_group_matchers(db, ws)
+                matchers = _agent_log_group_matchers(db, ws, viewer)
             ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
             matched = _match_agent(ds.get("logGroupNames") or [], matchers)
         out.append(_normalize(aws, owner=owner, row=row, matched_agent=matched,
@@ -393,7 +400,9 @@ def get_config(
     matched = None
     if owner == "external":
         ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
-        matched = _match_agent(ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws))
+        matched = _match_agent(
+            ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws, viewer)
+        )
     return _normalize(aws, owner=owner, row=ledger.get(config_id), matched_agent=matched,
                       detailed=True)
 

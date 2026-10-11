@@ -14,6 +14,7 @@ from app.evaluation import online
 from app.evaluation.online_evaluators import ONLINE_EVAL_MAX, refuse_hidden_evaluators
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import agent_access
 from app.services.creators import Creator
 from app.services.visibility import Viewer, require_viewer
 
@@ -95,10 +96,12 @@ class ReportStart(BaseModel):
     range: Literal["1h", "6h", "24h", "7d"] = "24h"
 
 
-def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
-    agent = db.get(Agent, agent_id)
-    if agent is not None and agent.workspace_id != ws.id:
-        agent = None
+def _agent_in(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    """An active agent of this workspace the caller may see; a foreign, missing or
+    isolation-hidden id answers 400 ``agent.not_active`` alike."""
+    agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
     return agent
@@ -122,7 +125,7 @@ def create_config(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _agent_in(db, ws, req.agent_id)
+    agent = _agent_in(db, ws, req.agent_id, viewer)
     refuse_hidden_evaluators(db, ws.id, viewer, req.evaluators, code_prefix="online_eval")
     default_sampling = 100.0 if req.mode == "insights" else 10.0
     return online.create_config(

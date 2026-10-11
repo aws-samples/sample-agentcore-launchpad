@@ -17,10 +17,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError, mapped_aws_error
+from app.core.errors import AppError, NotFoundError, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory_console
+from app.services.agent_access import HiddenAgents
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
@@ -74,6 +76,23 @@ def _agent_names(db: Session, ws: WorkspaceScope, agent_ids: list[str]) -> dict[
     return {row[0]: row[1] for row in rows}
 
 
+def _hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> HiddenAgents:
+    """Agents workspace isolation hides from the caller (empty, no query, unless the
+    viewer filters). Their actors (`<agent>__<human>`) are dropped from lists and
+    every read keyed by such an actor — or a namespace carrying it — answers 404."""
+    return HiddenAgents(db, viewer, ws.id)
+
+
+def _require_actor_visible(hidden: HiddenAgents, actor_id: str | None) -> None:
+    if hidden.hides_actor(actor_id):
+        raise NotFoundError("memory.actor_not_found", "memory actor not found")
+
+
+def _require_namespace_visible(hidden: HiddenAgents, namespace: str | None) -> None:
+    if hidden.hides_namespace(namespace):
+        raise NotFoundError("memory.actor_not_found", "memory actor not found")
+
+
 def _resolve_namespace(
     ws: WorkspaceScope,
     namespace: str | None,
@@ -113,8 +132,12 @@ def actors(
     max_results: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     page = _guard(memory_console.list_actors, ws.context, next_token, max_results)
+    hidden = _hidden(db, ws, viewer)
+    if hidden:
+        page["items"] = [a for a in page["items"] if not hidden.hides_actor(a["actor_id"])]
     names = _agent_names(
         db, ws, [a["agent_id"] for a in page["items"] if a["agent_id"]]
     )
@@ -132,10 +155,19 @@ def sessions(
     max_results: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    hidden = _hidden(db, ws, viewer)
+    _require_actor_visible(hidden, actor_id)
     page = _guard(
         memory_console.list_sessions, ws.context, actor_id, next_token, max_results
     )
+    if hidden:
+        # an unscoped actor ("default") is shared across agents: drop the sessions
+        # the ledger attributes to a hidden agent (chat / eval run)
+        page["items"] = [
+            s for s in page["items"] if not hidden.hides_session(s.get("session_id"))
+        ]
     session_ids = [s["session_id"] for s in page["items"] if s["session_id"]]
     ledger: dict[str, dict[str, Any]] = {}
     if session_ids:
@@ -179,8 +211,14 @@ def events(
     include_payloads: bool = True,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    hidden = _hidden(db, ws, viewer)
+    _require_actor_visible(hidden, actor_id)
+    if hidden.hides_session(session_id):
+        raise NotFoundError("memory.actor_not_found", "memory actor not found")
     return _guard(
         memory_console.list_events,
         ws.context,
@@ -195,8 +233,11 @@ def events(
 @router.get("/namespaces")
 def namespaces(
     actor_id: str = Query(min_length=1),
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_actor_visible(_hidden(db, ws, viewer), actor_id)
     return {"items": _guard(memory_console.resolve_namespaces, ws.context, actor_id)}
 
 
@@ -207,9 +248,15 @@ def records(
     namespace: str | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    hidden = _hidden(db, ws, viewer)
+    _require_actor_visible(hidden, actor_id)
+    _require_namespace_visible(hidden, namespace)
     resolved = _resolve_namespace(ws, namespace, actor_id, strategy_id)
+    _require_namespace_visible(hidden, resolved)
     return _guard(
         memory_console.list_records,
         ws.context,
@@ -223,9 +270,15 @@ def records(
 @router.post("/records/search")
 def search_records(
     req: SearchRequest,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    hidden = _hidden(db, ws, viewer)
+    _require_actor_visible(hidden, req.actor_id)
+    _require_namespace_visible(hidden, req.namespace)
     resolved = _resolve_namespace(ws, req.namespace, req.actor_id, req.strategy_id)
+    _require_namespace_visible(hidden, resolved)
     return _guard(
         memory_console.search_records,
         ws.context,
@@ -244,9 +297,13 @@ def extraction_jobs(
     status: str | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return _guard(
+    hidden = _hidden(db, ws, viewer)
+    _require_actor_visible(hidden, actor_id)
+    page = _guard(
         memory_console.list_extraction_jobs,
         ws.context,
         actor_id,
@@ -256,3 +313,8 @@ def extraction_jobs(
         next_token,
         max_results,
     )
+    if hidden:
+        page["items"] = [
+            j for j in page["items"] if not hidden.hides_actor(j.get("actor_id"))
+        ]
+    return page

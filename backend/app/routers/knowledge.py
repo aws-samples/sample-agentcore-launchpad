@@ -12,7 +12,7 @@ from starlette.datastructures import UploadFile
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import creators, kb_gateway, knowledge, visibility
+from app.services import agent_access, creators, kb_gateway, knowledge, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.visibility import Viewer, require_viewer
@@ -55,6 +55,16 @@ def visible_kbs(
     return [i for i in items if (i.get("kb_id") or "") not in hidden]
 
 
+def _mask_attached(item: dict[str, Any], hidden_names: set[str]) -> dict[str, Any]:
+    """Drop the names of agents workspace isolation hides from the caller; the
+    count of every mounting agent stays, so "in use" remains truthful."""
+    names = list(item.get("attached_agents") or [])
+    item["attached_agent_count"] = len(names)
+    if hidden_names:
+        item["attached_agents"] = [n for n in names if n not in hidden_names]
+    return item
+
+
 def _require_visible(db: Session, ws: WorkspaceScope, viewer: Viewer, kb_id: str) -> None:
     """A KB hidden by workspace isolation answers like a missing one — before any
     AWS call."""
@@ -76,8 +86,10 @@ def list_knowledge_bases(
     # the creator lives in the ledger (AWS has none); a KB made outside the
     # console reads null
     known = creators.lookup(db, ws.id, creators.KB, (i.get("kb_id") or "" for i in items))
+    hidden_names = agent_access.hidden_agent_names(db, viewer, ws.id)
     for item in items:
         item.update(known.get(item.get("kb_id") or "") or creators.empty())
+        _mask_attached(item, hidden_names)
     return {"items": items}
 
 
@@ -112,7 +124,8 @@ def get_knowledge_base(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _require_visible(db, ws, viewer, kb_id)
-    return _with_creator(db, ws, knowledge.get_kb_detail(ws.context, kb_id))
+    detail = _with_creator(db, ws, knowledge.get_kb_detail(ws.context, kb_id))
+    return _mask_attached(detail, agent_access.hidden_agent_names(db, viewer, ws.id))
 
 
 @router.patch("/{kb_id}")
@@ -136,7 +149,15 @@ def delete_knowledge_base(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _require_visible(db, ws, viewer, kb_id)
-    return knowledge.delete_kb(ws.context, kb_id, force=force)
+    try:
+        # force still strips the KB from EVERY mounting agent, hidden ones included
+        # (integrity: no agent may keep a dangling KB id)
+        return knowledge.delete_kb(ws.context, kb_id, force=force)
+    except knowledge.KBAttachedError as exc:
+        hidden_names = agent_access.hidden_agent_names(db, viewer, ws.id)
+        if hidden_names:  # the message keeps the true count; detail names only visible
+            exc.detail = {"agents": [n for n in exc.agents if n not in hidden_names]}
+        raise
 
 
 @router.post("/{kb_id}/files")

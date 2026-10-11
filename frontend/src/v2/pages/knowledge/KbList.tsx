@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { v2KnowledgeApi } from "../../../lib/api";
-import type { KnowledgeBaseSummary } from "../../../lib/knowledgeBases";
+import { attachedAgentCount, type KnowledgeBaseSummary } from "../../../lib/knowledgeBases";
 import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
 import {
@@ -91,9 +91,9 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
       key: "agents",
       title: t("knowledge.cols.agents"),
       render: (kb) =>
-        kb.attached_agents.length ? (
+        attachedAgentCount(kb) ? (
           <span className="v2-knowledge-agents" title={kb.attached_agents.join(", ")}>
-            <span className="mono">{kb.attached_agents.length}</span>
+            <span className="mono">{attachedAgentCount(kb)}</span>
             <span className="sub">{kb.attached_agents.join(", ")}</span>
           </span>
         ) : (

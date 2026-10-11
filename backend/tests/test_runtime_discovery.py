@@ -229,6 +229,8 @@ def test_import_is_idempotent_and_refreshes_sanitized_metadata(client, monkeypat
     row = db.get(Agent, agent_id)
     assert row.method == "discovered_runtime"
     assert row.owner == "aws-discovery"
+    # creator-unknown: a discovered runtime stays visible to every member
+    assert row.created_by is None and row.created_by_name is None
     assert row.status == "active"
     assert row.version == "3"
     assert row.spec == {

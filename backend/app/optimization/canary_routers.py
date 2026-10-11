@@ -20,7 +20,7 @@ from app.optimization import canary_harness, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import creators, visibility
+from app.services import agent_access, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.harness_convert import graft_config_bundle
@@ -178,10 +178,10 @@ def _validate_harness_versions(agent: Agent, versions: HarnessVersions, ws: Work
         )
 
 
-def _eligible_agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
-    agent = db.get(Agent, agent_id)
-    if agent is not None and agent.workspace_id != ws.id:
-        agent = None
+def _eligible_agent(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None or agent.status != "active":
         raise AppError(
             "canary.agent_not_active",
@@ -267,7 +267,7 @@ def create_runtime_canary(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     creator = Creator.of_request(request)
-    agent = _eligible_agent(db, ws, req.agent_id)
+    agent = _eligible_agent(db, ws, req.agent_id, viewer)
     if agent.method == "harness":
         if req.harness_versions is None:
             raise AppError(
@@ -349,6 +349,11 @@ class RuntimeCanaryAction(BaseModel):
     allow_non_significant: bool = False
 
 
+# Actions that never touch the champion agent: the verdict read and the teardown
+# of the canary's own resources.
+AGENT_FREE_ACTIONS = frozenset({"verdict", "cleanup"})
+
+
 @router.post("/{canary_id}/action")
 def runtime_canary_action(
     canary_id: str,
@@ -359,6 +364,14 @@ def runtime_canary_action(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     row = _canary_in(db, ws, canary_id, viewer=viewer)
+    if req.action not in AGENT_FREE_ACTIONS:
+        # setup / advance / complete / rollback re-publish the champion and traffic
+        # invokes it: a visible canary does not make a hidden agent the caller's
+        agent_access.require_agent_visible(
+            db, viewer,
+            db.get(Agent, row.champion_agent_id) if row.champion_agent_id else None,
+            NotFoundError("agent.not_found", "agent not found"),
+        )
     system_agents.assert_not_system_agent(db, row.champion_agent_id, "canary")
     system_agents.assert_not_system_agent(db, row.challenger_agent_id, "canary")
     # a conversation CLEAR owns this canary's cleanup while it runs

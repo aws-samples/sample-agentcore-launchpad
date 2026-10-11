@@ -23,10 +23,13 @@ curl -s -X POST localhost:8000/api/apikeys -H 'Content-Type: application/json' \
 管理员停用 / 删除账号以及移除授权会立即停用创建者的密钥;过期没有写入事件，因此在密钥下一次被使用时生效。
 密钥只会被停用、从不删除——仍列在 `GET /api/apikeys` 中(`created_by`、`created_by_name`、
 `last_used_at`、`creator_offboarded`:`deleted` | `disabled` | `expired` |
-`no_workspace_grant` | `null`)。任何工作空间成员仍可停用 / 启用任意密钥，但对创建者已失效的
+`no_workspace_grant` | `null`)。在 `shared` 工作空间中任何成员都可停用 / 启用任意密钥；在 `isolated`
+可见性下，成员只能列出和启停自己创建的密钥（其他密钥 → `404 apikey.not_found`；管理员可管理全部）。对创建者已失效的
 密钥调用 `POST /api/apikeys/{id}/enable` 会被拒绝，返回 `409 apikey.creator_offboarded`
 (`detail.reason`)。由配置内置管理员或未开启鉴权时的本地操作者(没有 `users` 行)创建的密钥，
-以及旧密钥，永远不会被判定为创建者失效。过期时间、权限范围与 Agent 白名单尚未实现。
+以及旧密钥，永远不会被判定为创建者失效。密钥跟随其**创建者当前**的工作空间可见性：在 `isolated` 下，
+成员创建的密钥只能列出和调用该成员能看到的 Agent（其他 Agent → `404 agent.not_found`），每次调用时重新判定；
+由管理员、配置内置管理员创建的密钥以及记录创建者之前的旧密钥不受限制。过期时间、权限范围与 Agent 白名单尚未实现。
 
 ## 同步调用 / Sync invoke
 
@@ -374,6 +377,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | 数据处理 pipeline | `GET` / `POST /api/eval/pipelines`、`GET` / `PUT /{id}`、`POST /{id}/run` |
 | 评估运行 | `GET` / `POST /api/eval/runs`、`GET /api/eval/runs/{id}`；在线报告行（`GET /api/eval/online/{id}/reports`） |
 | 在线评估配置 | `GET` / `POST /api/eval/online`、`GET /api/eval/online/{config_id}` |
+| Agent | `GET` / `POST /api/agents`、`GET /api/agents/{id}`、`POST /{id}/convert`（孪生 Agent 由转换者创建）、转换列表、`/api/system-agents` 行、架构助手审批响应（审批人）；发现导入的运行时与预设为 `null`——`owner` 仍只是来源标签 |
 | 评估器 | `GET /api/eval/evaluators`、`GET /{id}`、`POST`（创建响应）——架构助手物化的评估器记录计划审批人 |
 | 实验 / 灰度 | `GET` / `POST /api/experiments`、`GET /{id}`；`GET` / `POST /api/runtime-canaries`、`GET /{id}` |
 | Skill Lab | 任务与任务集的列表 / 详情 / 创建、`POST /jobs/{id}/import-taskset`（由导入者创建该任务集） |
@@ -408,7 +412,24 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | 架构助手目录 | 只列出会话所有者能看到的知识库 |
 
 内部引用不受影响：引用了隐藏资源的可见资源（管理员的实验回放某成员的数据集、pipeline 追加到其配置的
-数据集）继续工作。Agent 以及 Agent spec 里固定的知识库 / 记忆尚未覆盖。
+数据集）继续工作。
+
+**Agent** 在其 `created_by` 上遵循同一条规则（发现导入的运行时与系统预设的创建者未知，因此共享）：
+
+| 界面 | 被隐藏的 Agent 的表现 |
+|---|---|
+| 列表与选择器 | 不出现在 `GET /api/agents`（所有控制台选择器）、转换孪生列表，以及（成员创建的密钥调用的）`GET /v1/agents` 中 |
+| 按 id 的路由 | `/api/agents/{id}`（以及 `conversions`、`versions`、`identity`、`redeploy`、`inbound-auth`、`convert`、`invoke`、`DELETE`）、`/api/chat/{id}/*` 与 `/v1/agents/{id}/invoke[-stream]` → `404 agent.not_found`；`POST /api/eval/runs`、`POST /api/eval/online`、`GET /api/eval/agents/{id}/log-streams`、`GET /api/experiments/readiness`、`POST /api/experiments` → `400 agent.not_active`；`POST /api/runtime-canaries` → `400 canary.agent_not_active`；`404 registry.a2a_demo_agent`；`live-agent-card` → `404 registry.record_not_deployed`；它的部署作业 → `404 job.not_found` |
+| 跨模块变更 | 对可见运行所属的隐藏 Agent 接受推荐，以及除 `verdict` / `cleanup` 之外的每个实验 / 灰度动作 → `404 agent.not_found`；这类运行的 `recommendation-inputs` 读作 `source: "manual"`（不透露隐藏 Agent 的提示词 / 工具） |
+| Agent spec 固定项 | 创建 / 转换：固定的每个知识库 / 记忆都必须可见（`404 kb.not_found`、`422 agent.memory_not_managed`）；重新发布 / inbound-auth 只检查相对已存 spec **新增**的固定项 |
+| 注册表 | 它的 A2A 记录从 `GET /api/registry/records`、`/search`、`/discoverable` 中去掉；对其 `GET` / `PUT` / `DELETE` / `action` / `reimport` → `404 aws.not_found` |
+| 可观测性 | 它的 trace / 会话从列表中去掉；trace / 会话详情、`transcript` 与 `evaluate` → `404 observability.{trace,session}_not_found`；`/dashboard` 仍是 workspace 合计 |
+| 记忆控制台 | 它的 actor（`<agent>__<human>`）从 `/api/memory/actors` 与抽取任务中去掉；以该 actor 或其命名空间为键的 `sessions` / `events` / `namespaces` / `records` / `records/search` → `404 memory.actor_not_found`；共享的 `default` actor 会去掉账本归给它的会话 |
+| 派生名称 | 从知识库 `attached_agents`（`attached_agent_count` 保留真实数量）与 `kb.has_attached_agents` 409、记忆资源 `agents` 与 `memory.in_use` 409、Connections `referenced_by`（含 `identity.connection_referenced` 409）、在线评估 `matched_agent` 中去掉；发现结果 `managed_agent_id` / `managed_agent_name` 与导入结果 `already_managed` 读作 `null`，并带 `managed: true` |
+| 聚合 | `GET /api/overview` 的 `active_sessions` 与 A2A `registry_assets.agents` 只统计可见的 Agent |
+| 名称唯一性 | 仍在整个 workspace 内生效；占用者被隐藏时，`409 agent.name_exists` 的 `detail.agent_id` 为 `null` |
+
+知识库强制删除仍会从每个挂载它的 Agent 上移除该知识库。
 
 ## 控制台知识库 API / Console Knowledge Bases API
 

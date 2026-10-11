@@ -32,7 +32,7 @@ from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import creators, visibility
+from app.services import agent_access, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
 from app.services.creators import Creator
@@ -1478,9 +1478,7 @@ def create_run(
         )
     agent = None
     if req.agent_id:
-        agent = db.get(Agent, req.agent_id)
-        if agent is not None and agent.workspace_id != ws.id:
-            agent = None
+        agent = agent_access.agent_in(db, ws.id, req.agent_id, viewer=viewer)
         if agent is None or agent.status != "active":
             raise AppError("agent.not_active", "agent must be active", status_code=400)
 
@@ -1718,7 +1716,12 @@ def get_recommendation_inputs(
     attached Gateways' tool schemas), ``spec`` (the Launchpad agent spec) or
     ``manual`` (nothing readable — the operator must enter them)."""
     run = _run_in(db, ws, run_id, viewer=viewer)
-    return recommendations.resolve_inputs(db, run, ws.context)
+    # a visible run does not disclose a hidden agent's prompt / tools (isolation)
+    agent = db.get(Agent, run.agent_id) if run.agent_id and viewer.filters else None
+    return recommendations.resolve_inputs(
+        db, run, ws.context,
+        agent_visible=agent is None or agent_access.agent_visible(db, viewer, agent),
+    )
 
 
 @router.get("/runs/{run_id}/recommendations")
@@ -1799,6 +1802,12 @@ def accept_run_recommendation(
     from app.routers.agents import republish_agent
 
     run = _run_in(db, ws, run_id, viewer=viewer)
+    # a visible run does not make its agent the caller's to re-publish (isolation):
+    # refused before the target checks, which would describe the hidden agent
+    agent_access.require_agent_visible(
+        db, viewer, db.get(Agent, run.agent_id) if run.agent_id else None,
+        NotFoundError("agent.not_found", "the run's agent no longer exists"),
+    )
     row, agent, prompt = recommendations.acceptance_target(db, run, rec_id)
     reviewed = recommendations.edited_prompt(row)
     if req is not None and req.system_prompt is not None:
@@ -1814,7 +1823,7 @@ def accept_run_recommendation(
     # KB section the deployer appends — keep only the operator-owned part
     spec = current.model_copy(update={"system_prompt": strip_generated_prompt(current, prompt)})
     spec = AgentSpec(**spec.model_dump())
-    result = republish_agent(db, agent, spec, ws)
+    result = republish_agent(db, agent, spec, ws, viewer=viewer)
     identity = getattr(request.state, "identity", None)
     recommendations.record_acceptance(
         db, row,

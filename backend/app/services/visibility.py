@@ -32,7 +32,7 @@ from fastapi import Request
 from sqlalchemy import or_, select, true
 from sqlalchemy.orm import Session
 
-from app.models.ledger import ResourceCreator, User, Workspace
+from app.models.ledger import ApiKey, ResourceCreator, User, Workspace
 
 if TYPE_CHECKING:
     from app.core.errors import AppError
@@ -123,6 +123,24 @@ def viewer_for_principal(db: Session, workspace: Workspace | None, principal: st
     if user is not None and user.role == _ROLE_ADMIN:
         return Viewer.ALL
     return Viewer(user_id=user_id, filters=True)
+
+
+def viewer_for_key(db: Session, key: ApiKey) -> Viewer:
+    """The viewer of a `/v1` API key: its **creator's** current visibility.
+
+    Shared workspace → everything. A key with no recorded creator (config admin,
+    auth-disabled operator, legacy keys) → everything. A creator who is currently
+    an admin → everything. Otherwise the member's own view — re-evaluated on every
+    call, so switching the workspace to isolated narrows existing member keys at
+    once. (A deleted creator's key is refused before this by offboarding.)
+    """
+    workspace = db.get(Workspace, key.workspace_id) if key.workspace_id else None
+    if mode(workspace) != ISOLATED or key.created_by is None:
+        return Viewer.ALL
+    user = db.get(User, key.created_by)
+    if user is not None and user.role == _ROLE_ADMIN:
+        return Viewer.ALL
+    return Viewer(user_id=key.created_by, filters=True)
 
 
 # ── predicates: a row check paired with its SQL clause ────────────────────────

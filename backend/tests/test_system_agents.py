@@ -320,6 +320,8 @@ def test_install_is_explicit_and_idempotent_while_deploying(client, no_real_depl
         "protected_actions": ["redeploy", "delete", "convert", "experiment", "canary"],
     }
     assert agent["spec"]["allowed_tools"] == ["shell", "file_*", "@aws_knowledge"]
+    # a preset is creator-unknown: shared with every member under isolation too
+    assert agent["created_by"] is None and agent["created_by_name"] is None
     assert no_real_deploy == [body["job_id"]]
     assert _status(client)["status"] == "deploying"
 

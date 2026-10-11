@@ -430,6 +430,7 @@
         "inspection-failed": "无法读取资源详情。",
         "external-authorizer": "使用外部自定义 JWT，无法对话。",
         "harness-managed": "这是托管 Harness 的底层 Runtime，请使用对应的 Harness Agent。",
+        "already-managed": "已由 Launchpad 中的某个 Agent 管理。",
         "harness-not-ready": "Harness 尚未就绪，无法导入或对话。",
         "runtime-not-ready": "Runtime 尚未就绪，无法对话。",
         "unknown": "无法判断该能力。"
@@ -6759,6 +6760,7 @@
       "docsLoaded": "已加载 {{count}}{{more}} 个文档",
       "attachCta": "去创建 Agent",
       "attachHint": "挂载在创建 Agent 向导中完成：ACTIVE 状态的知识库可挂载到 Harness Agent。",
+      "attachedHidden": "另有 {{n}} 个你无权查看的 Agent",
       "comingSoonLabel": "即将支持："
     },
     "memory": {
@@ -7727,7 +7729,7 @@
         "shared": "共享",
         "isolated": "隔离",
         "sharedHint": "共享：每位成员都能看到此工作空间的全部资源（默认）。",
-        "isolatedHint": "隔离：成员只能看到自己创建的资源，以及管理员创建或创建者未知的资源；管理员始终可见全部。适用于知识库、记忆、评估数据集、数据处理、评估任务、在线评估与自定义评估器、A/B 实验、金丝雀发布和 Skill Lab。Agent 暂不受影响。",
+        "isolatedHint": "隔离：成员只能看到自己创建的资源，以及管理员创建或创建者未知的资源；管理员始终可见全部。适用于知识库、记忆、评估数据集、数据处理、评估任务、在线评估与自定义评估器、A/B 实验、金丝雀发布、Skill Lab 和 Agent：成员无法与他人的 Agent 对话、调用（包括通过自己的 /v1 API 密钥）或查看其可观测性与记忆详情，且只能管理自己创建的 API 密钥。",
         "saved": "成员可见性已保存，从下一次请求起生效。"
       }
     },

@@ -28,7 +28,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, mapped_aws_error
 from app.models.ledger import Agent, ManagedMemory
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import creators, memory_admin, memory_ownership
+from app.services import agent_access, creators, memory_admin, memory_ownership
 from app.services.creators import Creator
 from app.services.visibility import Viewer, require_viewer
 
@@ -124,12 +124,17 @@ def _guard(fn, *args, **kwargs):
         ) from exc
 
 
-def _agents_by_memory(db: Session, ws: WorkspaceScope) -> dict[str, list[dict[str, str]]]:
+def _agents_by_memory(
+    db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+) -> dict[str, list[dict[str, str]]]:
     """Live agents grouped by the memory their spec pins (default users excluded).
 
     The reference lives inside the spec JSON, so this scans the workspace's
     agent rows in Python — bounded by the agent count, and only non-deleted rows.
+    Agents hidden from ``viewer`` (workspace isolation) are not named; callers
+    that need the true usage (the delete guard) count with ``Viewer.ALL``.
     """
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
     usage: dict[str, list[dict[str, str]]] = {}
     rows = (
         db.query(Agent)
@@ -138,7 +143,7 @@ def _agents_by_memory(db: Session, ws: WorkspaceScope) -> dict[str, list[dict[st
     )
     for agent in rows:
         mem_id = ((agent.spec or {}).get("memory") or {}).get("memory_id")
-        if mem_id:
+        if mem_id and agent.id not in hidden:
             usage.setdefault(mem_id, []).append({"id": agent.id, "name": agent.name})
     return usage
 
@@ -166,7 +171,7 @@ def list_resources(
     hidden = memory_ownership.hidden_ids(db, ws.context, viewer)
     if hidden:
         page["items"] = [i for i in page["items"] if (i.get("id") or "") not in hidden]
-    usage = _agents_by_memory(db, ws)
+    usage = _agents_by_memory(db, ws, viewer)
     managed = memory_ownership.managed_ids(db, ws.context)
     rows = memory_ownership.managed_rows(db, ws.context)
     for item in page["items"]:
@@ -276,13 +281,15 @@ def delete_resource(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
+    # the guard counts every agent; the 409 names only those the caller may see
     agents = _agents_by_memory(db, ws).get(memory_id, [])
     if agents:
+        hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
         raise AppError(
             "memory.in_use",
             f"{len(agents)} agent(s) still reference this memory — "
             "delete or re-point them first",
-            {"agents": agents},
+            {"agents": [a for a in agents if a["id"] not in hidden]},
             status_code=409,
         )
     deleted = _guard(memory_admin.delete_memory_resource, ws.context, memory_id)

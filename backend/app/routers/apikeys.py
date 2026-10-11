@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import false, true
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -19,6 +20,7 @@ from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import api_keys as api_keys_service
 from app.services.users import as_utc
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api", tags=["api-keys"])
 
@@ -48,9 +50,25 @@ def _key_out(key: ApiKey, offboarded: str | None = None) -> dict[str, Any]:
     }
 
 
-def _key_in(db: Session, ws: WorkspaceScope, key_id: str) -> ApiKey:
+def _own_clause(viewer: Viewer) -> Any:
+    """Under workspace isolation a member manages only the keys they minted.
+
+    Stricter than the resource rule on purpose: a key is a credential, not a
+    shared resource, so a key with no recorded creator (config admin, legacy) or
+    an admin's key is not the member's to list or toggle. Admins and shared
+    workspaces see every key (`true()`)."""
+    if not viewer.filters:
+        return true()
+    return ApiKey.created_by == viewer.user_id if viewer.user_id else false()
+
+
+def _key_in(
+    db: Session, ws: WorkspaceScope, key_id: str, viewer: Viewer = Viewer.ALL
+) -> ApiKey:
     key = db.get(ApiKey, key_id)
     if key is None or key.workspace_id != ws.id:
+        raise NotFoundError("apikey.not_found", "api key not found")
+    if viewer.filters and (not viewer.user_id or key.created_by != viewer.user_id):
         raise NotFoundError("apikey.not_found", "api key not found")
     return key
 
@@ -59,10 +77,11 @@ def _key_in(db: Session, ws: WorkspaceScope, key_id: str) -> ApiKey:
 def list_keys(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     keys = (
         db.query(ApiKey)
-        .filter(ApiKey.workspace_id == ws.id)
+        .filter(ApiKey.workspace_id == ws.id, _own_clause(viewer))
         .order_by(ApiKey.created_at.desc())
         .all()
     )
@@ -108,8 +127,9 @@ def disable_key(
     key_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    key = _key_in(db, ws, key_id)
+    key = _key_in(db, ws, key_id, viewer)
     key.enabled = False
     db.commit()
     return _key_out(key, api_keys_service.creator_offboarded(db, key))
@@ -120,11 +140,12 @@ def enable_key(
     key_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    key = _key_in(db, ws, key_id)
+    key = _key_in(db, ws, key_id, viewer)
     reason = api_keys_service.creator_offboarded(db, key)
     if reason is not None:
-        # Any member may still toggle any key, but not revive one whose creator
+        # A member may toggle a key they can manage, but not revive one whose creator
         # was offboarded — /v1 would refuse (and re-disable) it on first use.
         raise AppError(
             "apikey.creator_offboarded",

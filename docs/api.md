@@ -26,11 +26,17 @@ disable the creator's keys at once; expiry has no write event, so it lands on th
 key's next use. Keys are disabled, never deleted — they stay listed in
 `GET /api/apikeys` (`created_by`, `created_by_name`, `last_used_at`,
 `creator_offboarded`: `deleted` | `disabled` | `expired` | `no_workspace_grant` |
-`null`). Any workspace member can still disable / enable any key, but
-`POST /api/apikeys/{id}/enable` on an offboarded creator's key is refused with
+`null`). In a `shared` workspace any member can disable / enable any key; under
+`isolated` visibility a member lists and toggles only the keys they minted (others →
+`404 apikey.not_found`; admins manage all). `POST /api/apikeys/{id}/enable` on an
+offboarded creator's key is refused with
 `409 apikey.creator_offboarded` (`detail.reason`). Keys minted by the config-driven
 admin or the auth-disabled local operator (no `users` row) and legacy keys are never
-offboarded. Expiry, scopes and agent allowlists are not implemented.
+offboarded. A key follows its **creator's current** workspace visibility: under
+`isolated`, a member-minted key lists and invokes only the agents that member can see
+(another agent → `404 agent.not_found`), re-evaluated on every call; keys minted by an
+admin, the config admin or before creators were recorded are unrestricted. Expiry,
+scopes and agent allowlists are not implemented.
 
 ## Sync invoke / 同步调用
 
@@ -658,6 +664,7 @@ configs, built-in and third-party evaluators). They are always server-set: a
 | Pipeline | `GET` / `POST /api/eval/pipelines`, `GET` / `PUT /{id}`, `POST /{id}/run` |
 | Evaluation run | `GET` / `POST /api/eval/runs`, `GET /api/eval/runs/{id}`; online report rows (`GET /api/eval/online/{id}/reports`) |
 | Online config | `GET` / `POST /api/eval/online`, `GET /api/eval/online/{config_id}` |
+| Agent | `GET` / `POST /api/agents`, `GET /api/agents/{id}`, `POST /{id}/convert` (the converter creates the twin), conversions, `/api/system-agents` rows, the architect approval reply (the approver); discovered runtimes and presets carry `null` — `owner` stays a provenance label |
 | Evaluator | `GET /api/eval/evaluators`, `GET /{id}`, `POST` (the create reply) — an architect-materialized one records the plan approver |
 | Experiment / canary | `GET` / `POST /api/experiments`, `GET /{id}`; `GET` / `POST /api/runtime-canaries`, `GET /{id}` |
 | Skill Lab | job and task-set list / detail / create, `POST /jobs/{id}/import-taskset` (the importer creates the set) |
@@ -697,8 +704,25 @@ A hidden resource is absent everywhere, with the same answer as a missing id:
 
 Internal references are untouched: a visible resource that references a hidden
 one (an admin's experiment replaying a member's dataset, a pipeline appending to
-its configured dataset) keeps working. Agents and agent-spec KB / memory pins are
-not covered yet.
+its configured dataset) keeps working.
+
+**Agents** follow the same rule on the agent's `created_by` (discovered runtimes and
+system presets are creator-unknown, hence shared):
+
+| Surface | Hidden agent behaves as |
+|---|---|
+| Lists and pickers | omitted from `GET /api/agents` (every console picker), conversion twins and `GET /v1/agents` (for a member-minted key) |
+| By-id routes | `404 agent.not_found` on `/api/agents/{id}` (+ `conversions`, `versions`, `identity`, `redeploy`, `inbound-auth`, `convert`, `invoke`, `DELETE`), `/api/chat/{id}/*` and `/v1/agents/{id}/invoke[-stream]`; `400 agent.not_active` on `POST /api/eval/runs`, `POST /api/eval/online`, `GET /api/eval/agents/{id}/log-streams`, `GET /api/experiments/readiness`, `POST /api/experiments`; `400 canary.agent_not_active` on `POST /api/runtime-canaries`; `404 registry.a2a_demo_agent`; `404 registry.record_not_deployed` on `live-agent-card`; `404 job.not_found` on its deploy jobs |
+| Cross-module mutations | `404 agent.not_found` when accepting a recommendation of a visible run on a hidden agent, and on every experiment / canary action except `verdict` / `cleanup`; such a run's `recommendation-inputs` read as `source: "manual"` (the hidden agent's prompt / tools are not disclosed) |
+| Agent-spec pins | create / convert: every pinned KB / memory must be visible (`404 kb.not_found`, `422 agent.memory_not_managed`); redeploy / inbound-auth check only the pins **added** to the stored spec |
+| Registry | its A2A record is dropped from `GET /api/registry/records`, `/search`, `/discoverable`; `GET` / `PUT` / `DELETE` / `action` / `reimport` on it → `404 aws.not_found` |
+| Observability | its traces / sessions are dropped from the lists; trace / session detail, `transcript` and `evaluate` → `404 observability.{trace,session}_not_found`; `/dashboard` stays a workspace total |
+| Memory console | its actors (`<agent>__<human>`) are dropped from `/api/memory/actors` and extraction jobs; `sessions` / `events` / `namespaces` / `records` / `records/search` keyed by such an actor or its namespace → `404 memory.actor_not_found`; the shared `default` actor loses sessions the ledger attributes to it |
+| Derived names | dropped from KB `attached_agents` (`attached_agent_count` keeps the true count) and the `kb.has_attached_agents` 409, memory-resource `agents` and the `memory.in_use` 409, Connections `referenced_by` (incl. the `identity.connection_referenced` 409), online `matched_agent`; discovery `managed_agent_id` / `managed_agent_name` and import `already_managed` read `null` with `managed: true` |
+| Aggregates | `GET /api/overview` `active_sessions` and the A2A `registry_assets.agents` count only visible agents |
+| Name uniqueness | workspace-wide; the `409 agent.name_exists` `detail.agent_id` is `null` when the holder is hidden |
+
+KB force-delete still strips the KB from every mounting agent.
 
 ## Console Knowledge Bases API
 

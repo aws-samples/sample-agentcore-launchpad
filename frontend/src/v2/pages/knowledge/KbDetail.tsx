@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { api, ApiError, errorMessage, v2KnowledgeApi } from "../../../lib/api";
 import {
+  attachedAgentCount,
   type DataSource,
   jobRunning,
   KB_DESCRIPTION_MAX,
@@ -491,7 +492,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         }
         testId="v2-kb-agents"
       >
-        {kb.attached_agents.length === 0 ? (
+        {attachedAgentCount(kb) === 0 ? (
           <span className="v2-muted">{t("knowledge.detail.agents.empty")}</span>
         ) : (
           <div className="v2-tags">
@@ -507,6 +508,13 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
                 </Tag>
               );
             })}
+            {attachedAgentCount(kb) > kb.attached_agents.length && (
+              <Tag tone="outline">
+                {t("v2.knowledge.attachedHidden", {
+                  n: attachedAgentCount(kb) - kb.attached_agents.length,
+                })}
+              </Tag>
+            )}
           </div>
         )}
         <p className="v2-muted v2-knowledge-hint">{t("v2.knowledge.attachHint")}</p>

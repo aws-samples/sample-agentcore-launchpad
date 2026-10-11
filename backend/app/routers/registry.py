@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from app.assistant.principal import principal_of
-from app.core.errors import AppError, aws_error_message, mapped_aws_error
+from app.core.errors import AppError, NotFoundError, aws_error_message, mapped_aws_error
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
@@ -23,6 +23,7 @@ from app.services.skill_ingest import (
     bundle_errors,
     bundle_from_zip,
 )
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])
 
@@ -34,9 +35,42 @@ class A2ADemoRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
 
 
+def _hidden_record_ids(ws: WorkspaceScope, viewer: Viewer) -> frozenset[str]:
+    """Registry record ids of agents hidden from ``viewer`` by workspace isolation
+    (an A2A record is the agent's: its deploy ``register`` stage created it). No
+    ledger read at all for a viewer who does not filter."""
+    if not viewer.filters:
+        return frozenset()
+    from app.core.db import SessionLocal
+    from app.services.agent_access import HiddenAgents
+
+    db = SessionLocal()
+    try:
+        return HiddenAgents(db, viewer, ws.id).record_ids
+    finally:
+        db.close()
+
+
+def _require_record_visible(ws: WorkspaceScope, viewer: Viewer, record_id: str) -> None:
+    """A hidden agent's A2A record answers like a missing record — before AWS."""
+    if record_id in _hidden_record_ids(ws, viewer):
+        raise NotFoundError("aws.not_found", "registry record not found")
+
+
+def _visible_records(
+    ws: WorkspaceScope, viewer: Viewer, records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    hidden = _hidden_record_ids(ws, viewer)
+    if not hidden:
+        return records
+    return [r for r in records if str(r.get("recordId") or "") not in hidden]
+
+
 @router.post("/a2a-demo")
 def a2a_demo(
-    req: A2ADemoRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: A2ADemoRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Invoke a front-desk-style agent and return {answer, trace}.
 
@@ -47,17 +81,16 @@ def a2a_demo(
     import json as _json
 
     from app.core.db import SessionLocal
-    from app.models.ledger import Agent
+    from app.services.agent_access import agent_in
     from app.services.agentcore.client import data_client
     from app.services.agentcore.harness import new_session_id
 
     db = SessionLocal()
     try:
-        agent = db.get(Agent, req.agent_id)
-        # An agent from another workspace is as good as absent: this route is the
-        # second invoke entrance, so it owes the same boundary as /agents/{id}/invoke.
-        if agent is not None and agent.workspace_id != ws.id:
-            agent = None
+        # An agent from another workspace (or hidden by workspace isolation) is as
+        # good as absent: this route is the second invoke entrance, so it owes the
+        # same boundary as /agents/{id}/invoke.
+        agent = agent_in(db, ws.id, req.agent_id, viewer=viewer)
         if agent is None or agent.status != "active":
             raise AppError("registry.a2a_demo_agent", "agent not found or not active",
                            status_code=404)
@@ -150,14 +183,20 @@ def list_records(
     type: str | None = None,
     status: str | None = None,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    records = console.console_list(ws.context, type, status)
+    records = _visible_records(ws, viewer, console.console_list(ws.context, type, status))
     return {"records": _with_system(ws, records)}
 
 
 @router.get("/records/search")
-def search(q: str, ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    return {"records": _with_system(ws, console.console_search(ws.context, q))}
+def search(
+    q: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    records = _visible_records(ws, viewer, console.console_search(ws.context, q))
+    return {"records": _with_system(ws, records)}
 
 
 def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -172,7 +211,9 @@ def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/records/discoverable")
 def list_discoverable(
-    type: str | None = None, ws: WorkspaceScope = Depends(require_workspace)
+    type: str | None = None,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Consumer view of `launchpad-registry`: the records a consumer or agent with
     data-plane access can actually discover (`ListDiscoverableRegistryRecords`,
@@ -185,19 +226,25 @@ def list_discoverable(
         records = console.console_list_discoverable(ws.context, type)
     except ValueError as exc:  # unknown ?type= — a caller mistake, not a 500
         raise AppError("registry.bad_type", str(exc), status_code=422) from exc
+    records = _visible_records(ws, viewer, records)
     return {"records": [_discoverable_out(r) for r in records], "count": len(records)}
 
 
 @router.get("/records/{record_id}")
 def get_record(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_record_visible(ws, viewer, record_id)
     return _one_with_system(ws, console.console_get(ws.context, record_id))
 
 
 @router.get("/records/{record_id}/live-agent-card")
 def live_agent_card(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """The A2A card the runtime behind this record serves right now (GetAgentCard).
 
@@ -210,6 +257,7 @@ def live_agent_card(
     """
     from app.core.db import SessionLocal
     from app.models.ledger import Agent
+    from app.services.agent_access import agent_clause
 
     db = SessionLocal()
     try:
@@ -219,6 +267,8 @@ def live_agent_card(
                 Agent.registry_record_id == record_id,
                 Agent.workspace_id == ws.id,
                 Agent.status != "deleted",
+                # a hidden agent's record reads as one no Launchpad agent owns
+                agent_clause(viewer),
             )
             .order_by(Agent.updated_at.desc())
             .first()
@@ -270,7 +320,9 @@ def record_action(
     req: ActionRequest,
     request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_record_visible(ws, viewer, record_id)
     # The caller's role reaches the service explicitly: a system-managed Skill's
     # lifecycle is administrator-only, ordinary records stay member-operable.
     identity = require_identity(request)
@@ -545,13 +597,16 @@ def install_git() -> dict[str, Any]:
 
 @router.post("/records/{record_id}/reimport")
 def reimport_record(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Re-run the ingestion pipeline for a git/url-sourced skill: re-acquire from
     the stored source, replace the S3 prefix, and bump the record version. Returns
     the updated record (same shape as GET). inline/zip records (no retrievable
     origin) and DEPRECATED records return 400 ``registry.not_reimportable``; a
     failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
+    _require_record_visible(ws, viewer, record_id)
     record = console.reimport_skill(ws.context, record_id)
     _invalidate_attachables(ws.id)
     return _one_with_system(ws, record)
@@ -576,12 +631,14 @@ def update_record(
     record_id: str,
     req: UpdateRecordRequest,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Edit a record's description and/or content. Description-only edits don't
     bump the version; content edits (MCP url / skill SKILL.md / whole bundle) do.
     Returns the refreshed record (same shape as GET). DEPRECATED/A2A records are
     not editable (400). A ``staging_id`` bundle is consumed only on success so a
     failed save can be retried without re-uploading (same as import)."""
+    _require_record_visible(ws, viewer, record_id)
     if (
         req.description is None and req.url is None
         and req.skill_md is None and req.staging_id is None
@@ -660,8 +717,11 @@ def update_record(
 
 @router.delete("/records/{record_id}")
 def delete_record(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_record_visible(ws, viewer, record_id)
     console.console_delete(ws.context, record_id)
     _invalidate_attachables(ws.id)
     return {"deleted": True, "record_id": record_id}

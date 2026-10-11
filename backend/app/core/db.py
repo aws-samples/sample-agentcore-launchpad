@@ -298,6 +298,10 @@ def _migrate_creator_columns(bind) -> None:
     from sqlalchemy import inspect, text
 
     additions = {
+        "agents": {
+            "created_by": "ALTER TABLE agents ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": "ALTER TABLE agents ADD COLUMN created_by_name VARCHAR(64)",
+        },
         "eval_datasets": {
             "created_by": "ALTER TABLE eval_datasets ADD COLUMN created_by VARCHAR(32)",
             "created_by_name": "ALTER TABLE eval_datasets ADD COLUMN created_by_name VARCHAR(64)",

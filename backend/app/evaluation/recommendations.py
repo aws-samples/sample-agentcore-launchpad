@@ -328,9 +328,12 @@ def evaluator_options(
 
 
 def resolve_inputs(
-    db: Session, run: EvalRun, workspace: WorkspaceContext
+    db: Session, run: EvalRun, workspace: WorkspaceContext, *, agent_visible: bool = True
 ) -> dict[str, Any]:
-    agent = db.get(Agent, run.agent_id) if run.agent_id else None
+    """``agent_visible=False`` (the run's agent is hidden from the caller by
+    workspace isolation) reads like an agent that is gone: nothing of its prompt
+    or tools is disclosed, the operator enters them."""
+    agent = db.get(Agent, run.agent_id) if run.agent_id and agent_visible else None
     if agent is not None and agent.workspace_id == run.workspace_id and _is_harness(agent) \
             and agent.resource_id:
         inputs = _harness_inputs(agent, workspace)

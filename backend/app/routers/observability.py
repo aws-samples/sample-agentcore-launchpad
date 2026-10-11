@@ -23,6 +23,7 @@ from app.evaluation.online_evaluators import require_visible_evaluators
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import model_prices, observability
+from app.services.agent_access import HiddenAgents
 from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
@@ -51,6 +52,22 @@ def _private(request: Request, ws: WorkspaceScope, db: Session | None = None) ->
         return PrivateSessions(own, ws.id, principal)
     finally:
         own.close()
+
+
+def _hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> HiddenAgents:
+    """Agents workspace isolation hides from the caller: their rows are dropped and
+    their details answer 404 — after the per-workspace cache, like `_private`."""
+    return HiddenAgents(db, viewer, ws.id)
+
+
+def _drop_hidden(rows: list[dict[str, Any]], hidden: HiddenAgents) -> list[dict[str, Any]]:
+    if not hidden:
+        return rows
+    return [
+        r for r in rows
+        if not hidden.hides_service(r.get("service"))
+        and not hidden.hides_session(r.get("session_id"))
+    ]
 
 
 @router.get("/dashboard")
@@ -91,10 +108,12 @@ def traces(
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     payload = observability.list_traces(range, db, ws.context, force=force)
     rows = [r for r in payload["traces"] if private.visible(r.get("session_id"))]
+    rows = _drop_hidden(rows, _hidden(db, ws, viewer))
     if agent:
         rows = [r for r in rows if r["agent"] == agent or r["service"] == agent]
     if status:
@@ -115,10 +134,11 @@ def trace_detail(
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     payload = observability.get_trace(trace_id, range, db, ws.context, force=force)
-    if private.mentions_hidden(payload):
+    if private.mentions_hidden(payload) or _hidden(db, ws, viewer).mentions(payload):
         raise NotFoundError("observability.trace_not_found", "trace not found")
     return payload
 
@@ -130,10 +150,12 @@ def sessions(
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     payload = observability.list_sessions(range, db, ws.context, force=force)
     rows = [r for r in payload["sessions"] if private.visible(r.get("session_id"))]
+    rows = _drop_hidden(rows, _hidden(db, ws, viewer))
     return {**payload, "sessions": rows, "count": len(rows)}
 
 
@@ -145,11 +167,15 @@ def session_detail(
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     private.require_visible(session_id)  # before any query, cached or not
+    hidden = _hidden(db, ws, viewer)
+    if hidden.hides_session(session_id):  # a hidden agent's ledger session
+        raise NotFoundError("observability.session_not_found", "session not found")
     payload = observability.get_session(session_id, range, db, ws.context, force=force)
-    if private.mentions_hidden(payload):
+    if private.mentions_hidden(payload) or hidden.mentions(payload):
         raise NotFoundError("observability.session_not_found", "session not found")
     return payload
 
@@ -161,13 +187,17 @@ def session_transcript(
     agent_id: AgentParam = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Conversation only (no span query) — the evaluation result drawer's read;
     `agent_id` attributes a session no ledger row claims."""
     private = _private(request, ws, db)
     private.require_visible(session_id)
+    hidden = _hidden(db, ws, viewer)
+    if hidden.hides_session(session_id) or hidden.hides(agent_id):
+        raise NotFoundError("observability.session_not_found", "session not found")
     payload = observability.get_session_transcript(session_id, db, ws.context, agent_id)
-    if private.mentions_hidden(payload):
+    if private.mentions_hidden(payload) or hidden.mentions(payload):
         raise NotFoundError("observability.session_not_found", "session not found")
     return payload
 
@@ -200,6 +230,9 @@ def session_evaluate(
     if viewer.filters:
         db = SessionLocal()
         try:
+            # a ledger-attributed session of a hidden agent answers like a missing one
+            if HiddenAgents(db, viewer, ws.id).hides_session(session_id):
+                raise NotFoundError("observability.session_not_found", "session not found")
             require_visible_evaluators(db, ws.id, viewer, body.evaluator_ids)
         finally:
             db.close()

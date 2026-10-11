@@ -103,7 +103,15 @@ class Agent(Base):
     # Server-owned: the runtime version whose packaged entrypoint acknowledges
     # native attachments. Never copied from AgentSpec or an import descriptor.
     attachment_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Provenance label only ("river" default, "system", "aws-discovery", the
+    # architect approver's username) — not a principal. Ownership is `created_by`.
     owner: Mapped[str] = mapped_column(String(64), default="river")
+    # The creating console principal (`app.services.creators`): `users.id` — the
+    # ownership key workspace visibility filters on — and the username at
+    # creation (display). NULL for discovered runtimes, system presets and
+    # legacy rows: a creator-unknown agent stays visible to every member.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # Server-owned system identity. NULL for every ordinary agent; a preset key
     # (``app.system_agents.presets``) for a platform-managed preset the console

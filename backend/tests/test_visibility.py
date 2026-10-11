@@ -785,7 +785,7 @@ def test_hidden_evaluators_cannot_be_referenced(evaluator_world, monkeypatch, bo
     monkeypatch.setattr(exp_routers, "control_client", lambda _ctx=None: evaluator_world)
     monkeypatch.setattr(canary_routers, "control_client", lambda _ctx=None: evaluator_world)
     monkeypatch.setattr(canary_routers, "_eligible_agent",
-                        lambda db, ws, aid: MagicMock(method="zip_runtime", id=aid))
+                        lambda db, ws, aid, viewer=None: MagicMock(method="zip_runtime", id=aid))
     monkeypatch.setattr(canary_routers, "_resolve_edited_spec", lambda agent, cand: {})
     monkeypatch.setattr(exp_routers.service, "run_action", lambda *a, **k: None)
     _isolate()
@@ -876,7 +876,7 @@ def test_experiment_and_canary_references_respect_isolation(monkeypatch, ada, bo
     monkeypatch.setattr(exp_routers.service, "stage_not_ready_reason", lambda *a: None)
     monkeypatch.setattr(canary_routers.canary_service, "stage_not_ready_reason", lambda *a: None)
     monkeypatch.setattr(canary_routers, "_eligible_agent",
-                        lambda db, ws, aid: MagicMock(method="zip_runtime", id=aid))
+                        lambda db, ws, aid, viewer=None: MagicMock(method="zip_runtime", id=aid))
     monkeypatch.setattr(canary_routers.service, "promotion_complete", lambda artifacts: True)
     _isolate()
 

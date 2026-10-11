@@ -17,7 +17,7 @@ from app.optimization import providers as rec_providers
 from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import creators, visibility
+from app.services import agent_access, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.visibility import Viewer, require_viewer
@@ -77,10 +77,10 @@ def _experiment_in(
     return exp
 
 
-def _eligible_agent(agent_id: str, db: Session, ws: WorkspaceScope) -> Agent:
-    agent = db.get(Agent, agent_id)
-    if agent is not None and agent.workspace_id != ws.id:
-        agent = None
+def _eligible_agent(
+    agent_id: str, db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
     assistant_purge.refuse_while_clearing(agent.id, "experiment")
@@ -111,8 +111,9 @@ def experiment_readiness(
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _eligible_agent(agent_id, db, ws)
+    agent = _eligible_agent(agent_id, db, ws, viewer)
     return readiness.project_readiness(
         agent,
         db,
@@ -178,7 +179,7 @@ def create_experiment(
             f"{named} is still running — wait for its verdict or clean it up first",
             status_code=409,
         )
-    agent = _eligible_agent(req.agent_id, db, ws)
+    agent = _eligible_agent(req.agent_id, db, ws, viewer)
     trace_readiness = readiness.project_readiness(
         agent,
         db,
@@ -262,6 +263,11 @@ def _validate_recommend_provider(req: ActionRequest) -> None:
         )
 
 
+# Actions that never touch the experiment's agent: the verdict read and the
+# teardown of the experiment's own resources.
+AGENT_FREE_ACTIONS = frozenset({"verdict", "cleanup"})
+
+
 @router.post("/{exp_id}/action")
 def experiment_action(
     exp_id: str, req: ActionRequest, response: Response,
@@ -270,6 +276,14 @@ def experiment_action(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     exp = _experiment_in(db, ws, exp_id, viewer=viewer)
+    if req.action not in AGENT_FREE_ACTIONS:
+        # A visible experiment does not make its agent the caller's: every action
+        # that reads, invokes or re-publishes it needs the agent visible too
+        # (workspace isolation). Its own cleanup stays the experiment owner's.
+        agent_access.require_agent_visible(
+            db, viewer, db.get(Agent, exp.agent_id) if exp.agent_id else None,
+            NotFoundError("agent.not_found", "agent not found"),
+        )
     # A stale row that references a system-managed preset must not drive any
     # action — checked before running_action or any other state is written.
     system_agents.assert_not_system_agent(db, exp.agent_id, "experiment")

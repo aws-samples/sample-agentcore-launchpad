@@ -76,6 +76,12 @@ export interface AgentInfo {
   resource_id: string | null;
   version: string | null;
   owner: string;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system presets, discovered runtimes and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows, system presets and discovered runtimes. */
+  created_by_name?: string | null;
   error: string | null;
   spec: Record<string, unknown>;
   /** The A2A registry record the last deploy created/refreshed, when Registry was available. */
@@ -499,6 +505,9 @@ export interface RuntimeDiscoveryCandidate {
   managed_agent_id: string | null;
   managed_agent_name: string | null;
   managed_agent_method: AgentInfo["method"] | null;
+  /** Set when the owning agent is hidden by workspace isolation: the resource is
+   *  managed (not importable, `reason_code: "already-managed"`) but no owner is named. */
+  managed?: boolean;
   importable: boolean;
   reason_code: string | null;
   reason: string | null;
@@ -522,6 +531,9 @@ export interface HarnessDiscoveryCandidate {
   managed_agent_id: string | null;
   managed_agent_name: string | null;
   managed_agent_method: AgentInfo["method"] | null;
+  /** Set when the owning agent is hidden by workspace isolation: the resource is
+   *  managed (not importable, `reason_code: "already-managed"`) but no owner is named. */
+  managed?: boolean;
   importable: boolean;
   reason_code: string | null;
   reason: string | null;

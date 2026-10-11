@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { OnlineEvalConfigRow } from "../lib/api";
+import type { AgentInfo, OnlineEvalConfigRow } from "../lib/api";
 import type { EvaluationRunInfo } from "../lib/evaluation";
 import en from "../locales/en/common.json";
 import zh from "../locales/zh-CN/common.json";
@@ -71,6 +71,13 @@ describe("creatorLabel", () => {
     expect(creatorLabel({})).toBe("—"); // older backend: field absent
     expect(creatorLabel(null)).toBe("—");
     expect(creatorLabel(undefined)).toBe("—");
+  });
+
+  it("never shows an agent's provenance owner as its creator", () => {
+    // legacy agents carry owner "river" / presets "system" — a label, not a principal
+    const legacy: Pick<AgentInfo, "owner" | "created_by" | "created_by_name"> = { owner: "river" };
+    expect(creatorLabel(legacy)).toBe("—");
+    expect(creatorLabel({ ...legacy, created_by: "u_1", created_by_name: "alice" })).toBe("alice");
   });
 });
 

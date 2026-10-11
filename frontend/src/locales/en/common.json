@@ -430,6 +430,7 @@
         "inspection-failed": "Resource details could not be inspected.",
         "external-authorizer": "External custom JWT authorizer; Chat is unavailable.",
         "harness-managed": "Backing runtime of a managed Harness; use its Harness agent instead.",
+        "already-managed": "Already managed by a Launchpad agent.",
         "harness-not-ready": "Harness is not READY; it cannot be imported or chatted with.",
         "runtime-not-ready": "Runtime is not READY; Chat is unavailable.",
         "unknown": "Capability could not be determined."
@@ -6759,6 +6760,7 @@
       "docsLoaded": "{{count}}{{more}} documents loaded",
       "attachCta": "Create an agent",
       "attachHint": "Mounting happens in the Create-Agent wizard: an ACTIVE knowledge base can be attached to Harness agents.",
+      "attachedHidden": "+{{n}} agent(s) not visible to you",
       "comingSoonLabel": "Coming soon:"
     },
     "memory": {
@@ -7727,7 +7729,7 @@
         "shared": "Shared",
         "isolated": "Isolated",
         "sharedHint": "Shared: every member sees every resource in this workspace (the default).",
-        "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries and Skill Lab. Agents are not affected yet.",
+        "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries, Skill Lab and agents: a member cannot chat with, invoke (also via their /v1 API key) or observe another member's agent, and manages only the API keys they created.",
         "saved": "Member visibility saved. It applies from the next request."
       }
     },

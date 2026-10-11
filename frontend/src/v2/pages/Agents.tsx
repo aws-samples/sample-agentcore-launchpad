@@ -16,7 +16,7 @@ import {
   type StageInfo,
 } from "../../lib/api";
 import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
-import { fmtTime } from "../format";
+import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
@@ -276,7 +276,7 @@ function AgentList() {
       ),
     },
     { key: "version", title: t("v2.agents.colVersion"), render: (a) => <span className="mono">{versionLabel(a)}</span> },
-    { key: "owner", title: t("v2.agents.colOwner"), render: (a) => a.owner || "—" },
+    { key: "creator", title: t("v2.common.creator"), render: (a) => creatorLabel(a) },
     { key: "updated", title: t("v2.agents.colUpdated"), className: "nowrap", render: (a) => fmtTime(a.updated_at) },
     {
       key: "ops",
@@ -585,7 +585,7 @@ function AgentDetail({ id }: { id: string }) {
               label: t("v2.agents.protocol"),
               value: String(spec.protocol ?? "http").toUpperCase(),
             },
-            { label: t("v2.agents.colOwner"), value: agent.owner || "—" },
+            { label: t("v2.common.creator"), value: creatorLabel(agent) },
             { label: t("v2.common.createdAt"), value: fmtTime(agent.created_at) },
             { label: t("v2.agents.colUpdated"), value: fmtTime(agent.updated_at) },
             {

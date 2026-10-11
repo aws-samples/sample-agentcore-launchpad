@@ -36,10 +36,12 @@ from app.schemas.agent import (
 )
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.services import (
+    agent_access,
     agent_iam,
     agent_identity,
     agent_names,
     byoc_uploads,
+    creators,
     identity_providers,
     memory_ownership,
     oauth_sessions,
@@ -50,6 +52,7 @@ from app.services.agent_versions import list_agent_versions
 from app.services.agentcore import harness as harness_api
 from app.services.agentcore.client import control_client
 from app.services.attachments import attachment_capability, prepare_attachments
+from app.services.creators import Creator
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import (
@@ -61,6 +64,7 @@ from app.services.runtime_discovery import (
     scan_harnesses,
     scan_runtimes,
 )
+from app.services.visibility import Viewer, require_viewer
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
 from app.system_agents.presets import is_reserved_name
@@ -86,6 +90,8 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "registry_record_id": agent.registry_record_id,
         "version": agent.version,
         "owner": agent.owner,
+        # the creating principal (NULL for discovered / preset / legacy rows)
+        **creators.fields(agent),
         "error": agent.error,
         "spec": agent.spec,
         # Server-owned; None for every ordinary agent. The console renders the
@@ -120,14 +126,21 @@ def _deployment_out(dep: Deployment) -> dict[str, Any]:
     }
 
 
-def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent | None:
-    """The agent, but only if it lives in this workspace.
+def _agent_in(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent | None:
+    """The agent, but only if it lives in this workspace and ``viewer`` may see it
+    (workspace isolation). Deleted rows are returned; callers decide.
 
-    A foreign id is indistinguishable from a missing one on purpose: the caller
-    learns nothing about other workspaces' agents.
+    A foreign or hidden id is indistinguishable from a missing one on purpose: the
+    caller learns nothing about other workspaces' (or members') agents.
     """
-    agent = db.get(Agent, agent_id)
-    return agent if agent is not None and agent.workspace_id == ws.id else None
+    return agent_access.agent_in(db, ws.id, agent_id, viewer=viewer, include_deleted=True)
+
+
+def _holder_id(db: Session, viewer: Viewer, holder: Agent) -> str | None:
+    """The live name holder's id for the 409 detail — only when the caller may see it."""
+    return holder.id if agent_access.agent_visible(db, viewer, holder) else None
 
 
 def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
@@ -209,8 +222,10 @@ def _validate_tool_auth(spec: AgentSpec, ws: WorkspaceScope) -> None:
 @router.post("/agents", status_code=202)
 def create_agent(
     spec: AgentSpec,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     if spec.method not in SUPPORTED_METHODS:
         raise AppError(
@@ -232,7 +247,9 @@ def create_agent(
     # own AgentCore resource namespaces.
     existing = agent_names.live_holder(db, ws.id, spec.name)
     if existing:
-        raise agent_names.name_exists_error(spec.name, existing.id)
+        raise agent_names.name_exists_error(spec.name, _holder_id(db, viewer, existing))
+    # every KB / memory the spec pins must be visible to the caller (isolation)
+    agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
     _validate_tool_auth(spec, ws)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
@@ -244,11 +261,12 @@ def create_agent(
         status="deploying",
         spec=spec.model_dump(),
     )
+    creators.stamp(agent, Creator.of_request(request))
     db.add(agent)
     db.flush()
     # Atomic reservation shared with the assistant approval path: a concurrent
     # creator of the same name loses here with the same 409, before any job.
-    agent_names.claim_agent_name(db, ws.id, spec.name, agent.id)
+    agent_names.claim_agent_name(db, ws.id, spec.name, agent.id, viewer=viewer)
     deployment, job = create_deployment(db, agent)
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
@@ -258,10 +276,15 @@ def create_agent(
 def list_agents(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     agents = (
         db.query(Agent)
-        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
+        .filter(
+            Agent.workspace_id == ws.id,
+            Agent.status != "deleted",
+            agent_access.agent_clause(viewer),
+        )
         .order_by(Agent.created_at.desc())
         .all()
     )
@@ -280,10 +303,15 @@ def list_agents(
 def discover_runtimes(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     runtimes = scan_runtimes(control, db, workspace_id=ws.id)
     harnesses, harness_scan_error = scan_harnesses(control, db, workspace_id=ws.id)
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
+    if hidden:
+        for candidate in [*runtimes, *harnesses]:
+            _mask_managed(candidate, hidden)
     return {
         "region": ws.context.region,
         "runtimes": runtimes,
@@ -297,6 +325,7 @@ def import_discovered_runtimes(
     req: RuntimeImportRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Import selected Runtimes and/or Harnesses; result rows are keyed by kind."""
     control = control_client(ws.context)
@@ -306,7 +335,32 @@ def import_discovered_runtimes(
     ).items():
         result[bucket].extend(rows)
     db.commit()
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
+    if hidden:
+        for rows in result.values():
+            for row in rows if isinstance(rows, list) else []:
+                if isinstance(row, dict):
+                    _mask_managed(row, hidden)
     return result
+
+
+def _mask_managed(row: dict[str, Any], hidden: set[str]) -> None:
+    """Under isolation a runtime managed by an agent the caller cannot see stays
+    marked managed (``managed: true``; it is not importable either way) but names
+    no owner — scan candidates (``managed_agent_*``) and import results
+    (``already_managed`` → ``agent_id`` / ``agent_name``) alike."""
+    for id_key, name_key in (("managed_agent_id", "managed_agent_name"),
+                             ("agent_id", "agent_name")):
+        if row.get(id_key) and row[id_key] in hidden:
+            row[id_key] = None
+            row[name_key] = None
+            row["managed"] = True
+            if "managed_agent_method" in row:
+                row["managed_agent_method"] = None
+            if "importable" in row:  # a scan candidate: still not importable
+                row["importable"] = False
+                row["reason_code"] = "already-managed"
+                row["reason"] = "This resource is already managed by a Launchpad agent."
 
 
 @router.post("/agents/uploads", status_code=201)
@@ -393,8 +447,9 @@ def get_agent(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     deployments = (
@@ -413,6 +468,7 @@ def list_agent_conversions(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """The runtime twins converted from this agent, newest first.
 
@@ -423,13 +479,17 @@ def list_agent_conversions(
     again after a reload — or when the operator converted from the Agents page.
     Pure ledger read; nothing on AWS is called.
     """
-    source = _agent_in(db, ws, agent_id)
+    source = _agent_in(db, ws, agent_id, viewer)
     if source is None or source.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     twins = [
         a
         for a in db.query(Agent)
-        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
+        .filter(
+            Agent.workspace_id == ws.id,
+            Agent.status != "deleted",
+            agent_access.agent_clause(viewer),
+        )
         .all()
         if ((a.spec or {}).get("source_harness") or {}).get("agent_id") == agent_id
     ]
@@ -450,6 +510,7 @@ def get_agent_versions(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Read-only AWS versions + endpoints of the agent's Runtime or Harness.
 
@@ -457,7 +518,7 @@ def get_agent_versions(
     artifact, role or authorizer values). 409 ``agent.no_resource`` when the row
     has no AWS resource to ask about.
     """
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     return list_agent_versions(control_client(ws.context), agent)
@@ -468,10 +529,11 @@ def get_agent_identity(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Read-only identity view: workload identity, inbound mode, and every
     downstream with its acting mode and Connection (see docs/identity.md §5)."""
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     return agent_identity.agent_identity(
@@ -485,6 +547,7 @@ def redeploy_agent(
     spec: AgentSpec,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Re-publish an agent in place with an edited spec.
 
@@ -498,17 +561,20 @@ def redeploy_agent(
 
     Name and method are immutable — changing either would be a different agent.
     """
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
-    return republish_agent(db, agent, spec, ws)
+    return republish_agent(db, agent, spec, ws, viewer=viewer)
 
 
 def republish_agent(
-    db: Session, agent: Agent, spec: AgentSpec, ws: WorkspaceScope
+    db: Session, agent: Agent, spec: AgentSpec, ws: WorkspaceScope,
+    *, viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """The redeploy guards + an update-mode deploy job for an edited spec — shared
-    by the redeploy route and accepting an AI recommendation (a new Harness version)."""
+    by the redeploy route and accepting an AI recommendation (a new Harness version).
+    ``viewer`` only decides which *newly added* KB / memory pins the caller may use;
+    the caller has already checked the agent itself is visible."""
     _refuse_redeploy(agent)
     if spec.name != agent.name or spec.method != agent.method:
         raise AppError(
@@ -535,12 +601,14 @@ def republish_agent(
                 status_code=400,
             )
 
-    return _start_redeploy(db, ws, agent, spec)
+    return _start_redeploy(db, ws, agent, spec, viewer=viewer)
 
 
-def _redeployable(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
+def _redeployable(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent:
     """The agent row a re-publish may update in place, or the refusal."""
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     _refuse_redeploy(agent)
@@ -566,8 +634,15 @@ def _refuse_redeploy(agent: Agent) -> None:
 
 
 def _start_redeploy(
-    db: Session, ws: WorkspaceScope, agent: Agent, spec: AgentSpec
+    db: Session, ws: WorkspaceScope, agent: Agent, spec: AgentSpec,
+    *, viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
+    # only pins ADDED relative to the stored spec must be visible: an agent pinned
+    # while the workspace was shared keeps re-publishing after a switch to isolated
+    agent_access.check_pins(
+        db, viewer, context_for_workspace(agent.workspace_id), spec.model_dump(),
+        previous_spec=agent.spec or {},
+    )
     _validate_tool_auth(spec, ws)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
     # refused before the stored spec changes, so a refusal leaves the agent as is
@@ -603,13 +678,14 @@ def switch_inbound_auth(
     body: InboundAuthSwitch,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Switch the agent's inbound auth IN PLACE: pin (or unpin) ``inbound_auth``
     on the stored spec and re-publish it — UpdateAgentRuntime on the same
     runtime, a new version, the DEFAULT endpoint rolls. Every other spec field
     is re-published unchanged, so this is the wizard's re-publish minus the form.
     """
-    agent = _redeployable(db, ws, agent_id)
+    agent = _redeployable(db, ws, agent_id, viewer)
     stored = agent.spec or {}
     if body.inbound_auth is not None and body.inbound_auth.mode == "jwt" and (
         agent.method not in JWT_CAPABLE_METHODS or stored.get("protocol") == "a2a"
@@ -632,14 +708,16 @@ def switch_inbound_auth(
             )},
             status_code=422,
         ) from exc
-    return _start_redeploy(db, ws, agent, spec)
+    return _start_redeploy(db, ws, agent, spec, viewer=viewer)
 
 
 @router.post("/agents/{agent_id}/convert", status_code=202)
 def convert_agent(
     agent_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Convert a managed-harness agent into a NEW runtime-backed agent.
 
@@ -651,7 +729,7 @@ def convert_agent(
     from app.deployer.zip_runtime import platform_requirements
     from app.services import harness_convert as hc
 
-    source = _agent_in(db, ws, agent_id)
+    source = _agent_in(db, ws, agent_id, viewer)
     if source is None or source.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     system_agents.refuse_system_mutation(source, "convert")
@@ -669,11 +747,16 @@ def convert_agent(
         if (a.spec or {}).get("source_harness", {}).get("agent_id") == agent_id
     ]
     if in_flight:
+        # the mutex is workspace-wide; the message names the twin only when visible
+        twin = in_flight[0]
+        label = f" ({twin.name})" if agent_access.agent_visible(db, viewer, twin) else ""
         raise AppError(
             "agent.convert_in_flight",
-            f"a conversion of this harness is already deploying ({in_flight[0].name})",
+            f"a conversion of this harness is already deploying{label}",
             status_code=409,
         )
+    # the twin inherits the source's KB / memory pins — refuse before the export
+    agent_access.check_pins(db, viewer, ws.context, source.spec or {})
 
     # {name}-rt, suffixed -2/-3… until free (never overwrite, R5)
     taken = {
@@ -709,6 +792,8 @@ def convert_agent(
         )
     except hc.ConversionError as exc:
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
+    # the twin inherits the source's KB / memory pins: the converter must see them
+    agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
     # the twin inherits the source's memory pin — same ownership rule (issue #55)
     memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
 
@@ -716,9 +801,11 @@ def convert_agent(
         workspace_id=ws.id, name=spec.name, method=spec.method, status="deploying",
         spec=spec.model_dump(),
     )
+    # the twin is a new agent: its creator is the converter, not the source's
+    creators.stamp(agent, Creator.of_request(request))
     db.add(agent)
     db.flush()
-    agent_names.claim_agent_name(db, ws.id, spec.name, agent.id)
+    agent_names.claim_agent_name(db, ws.id, spec.name, agent.id, viewer=viewer)
     deployment, job = create_deployment(db, agent)
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
@@ -730,8 +817,9 @@ def invoke_agent(
     req: InvokeRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> InvokeResponse:
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     require_invoke_capability(agent)
@@ -758,8 +846,9 @@ def delete_agent(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     # the conversation purge owns this agent's teardown while it runs
@@ -799,9 +888,15 @@ def get_job(
     job_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     job = db.get(Job, job_id)
     if job is None or job.workspace_id != ws.id:
+        raise NotFoundError("job.not_found", "job not found")
+    # a deploy job of an agent hidden by workspace isolation reads as missing
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    job_agent_id = payload.get("agent_id") if viewer.filters else None
+    if job_agent_id and job_agent_id in agent_access.hidden_agent_ids(db, viewer, ws.id):
         raise NotFoundError("job.not_found", "job not found")
     events = [json.loads(line) for line in job.log.splitlines() if line.strip()]
     return {

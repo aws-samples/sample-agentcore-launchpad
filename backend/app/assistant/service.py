@@ -79,9 +79,10 @@ from app.models.assistant import AssistantConversation, AssistantMessage, Assist
 from app.models.ledger import Agent, Job, Workspace
 from app.routers.auth import Identity
 from app.schemas.agent import ToolRef
-from app.services import agent_names, knowledge, registry_console, visibility
+from app.services import agent_names, creators, knowledge, registry_console, visibility
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client, data_client
+from app.services.creators import Creator
 from app.services.kb_gateway import gateway_identity
 from app.services.memory import scoped_actor
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
@@ -2558,9 +2559,14 @@ def approve_proposal(
             spec=spec.model_dump(),
             owner=approver.username,
         )
+        # the approver (possibly a collaborator, not the conversation owner) created it
+        creators.stamp(agent, Creator.of(approver))
         db.add(agent)
         db.flush()
-        agent_names.claim_agent_name(db, fresh_row.id, spec.name, agent.id)  # 409 → rollback
+        agent_names.claim_agent_name(  # 409 → rollback; names the holder only if visible
+            db, fresh_row.id, spec.name, agent.id,
+            viewer=visibility.viewer_for_principal(db, fresh_row, principal_of(approver)),
+        )
         deployment, job = create_deployment(
             db, agent, commit=False,
             payload_extra={"assistant": {

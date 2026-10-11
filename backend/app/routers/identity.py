@@ -17,15 +17,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.errors import AppError
 from app.models.ledger import Agent, Workspace
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import CONNECTION_NAME_RE
 from app.schemas.inbound_auth import InboundAuth
-from app.services import consent_portals, inbound_auth, oauth_sessions, policy_identity
+from app.services import (
+    agent_access,
+    consent_portals,
+    inbound_auth,
+    oauth_sessions,
+    policy_identity,
+)
 from app.services import identity_gateway_targets as gateway_targets
 from app.services import identity_providers as connections
 from app.services.agentcore.client import control_client, data_client
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/identity", tags=["identity"])
 
@@ -105,14 +113,31 @@ def _resources(ws: WorkspaceScope) -> dict[str, Any]:
 # ── Connections ──────────────────────────────────────────────────────────────
 
 
+def _mask_refs(item: dict[str, Any], hidden: set[str]) -> dict[str, Any]:
+    """Drop the agents workspace isolation hides from the caller out of a
+    Connection's ``referenced_by`` (gateway targets stay)."""
+    if hidden and isinstance(item.get("referenced_by"), list):
+        item["referenced_by"] = [
+            r for r in item["referenced_by"]
+            if not (r.get("type") == "agent" and r.get("id") in hidden)
+        ]
+    return item
+
+
 @router.get("/connections")
 def list_connections(
-    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace)
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     bound = gateway_targets.bound_targets_safe(control, _resources(ws))
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
     return {
-        "connections": connections.list_connections(control, db, ws.id, bound_targets=bound)
+        "connections": [
+            _mask_refs(item, hidden)
+            for item in connections.list_connections(control, db, ws.id, bound_targets=bound)
+        ]
     }
 
 
@@ -137,10 +162,14 @@ def get_connection(
     name: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     bound = gateway_targets.bound_targets_safe(control, _resources(ws))
-    return connections.get_connection(control, db, ws.id, kind, name, bound_targets=bound)
+    return _mask_refs(
+        connections.get_connection(control, db, ws.id, kind, name, bound_targets=bound),
+        agent_access.hidden_agent_ids(db, viewer, ws.id),
+    )
 
 
 @router.post("/connections/oauth2", status_code=201)
@@ -195,12 +224,19 @@ def delete_connection(
     name: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     # not the `_safe` variant: a gateway read failure must refuse the delete
     # rather than skip the target-reference check
     bound = gateway_targets.list_targets(control, _resources(ws))
-    connections.delete_connection(control, db, ws.id, kind, name, bound_targets=bound)
+    try:
+        connections.delete_connection(control, db, ws.id, kind, name, bound_targets=bound)
+    except AppError as exc:
+        # the reference guard counts every agent; the 409 names only visible ones
+        if exc.code == "identity.connection_referenced" and isinstance(exc.detail, dict):
+            _mask_refs(exc.detail, agent_access.hidden_agent_ids(db, viewer, ws.id))
+        raise
     return {"deleted": True}
 
 

@@ -1570,8 +1570,8 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 实际效果是 `member` 接近只读。在 `shared`（默认）workspace 中数据**不**按用户隔离，这是有意为之:
 所有已登录账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
 管理员可以把 workspace 切换为 `isolated`，此后每个成员只能看到覆盖种类中自己的、创建者未知的
-以及管理员创建的资源（见「Workspaces —— 成员资源可见性」）；Agent、注册表记录与 Gateway 在两种
-模式下都保持共享。
+以及管理员创建的资源（见「Workspaces —— 成员资源可见性」），其中包括 Agent 及其 A2A 注册表记录
+与 `/v1` API 密钥；MCP / 技能注册表记录与 Gateway 在两种模式下都保持共享。
 仅管理员可用的模块(`/users`、`/agents`、Studio 画布、注册表的注册/编辑)会渲染"需要
 管理员权限"面板而不是发出请求;`auth.forbidden` 也映射进了 `apiErrors` i18n 块,因此
 任何漏加门禁的界面仍会显示本地化的原因。
@@ -1893,7 +1893,32 @@ Users 页面按账号编辑（审批时会分配授权，`PATCH /api/users/{id}`
 列表）、按 id 的路由以及创建时的引用都返回该种类普通的 not-found，不泄露资源是否存在。概览的通过率 /
 运行数与在线质量卡片只统计查看者能看到的内容（该卡片按查看者缓存），架构助手的目录只列出会话
 **所有者**能看到的知识库。该设置随 workspace 行在每次请求时重新读取，因此切换会在下一次请求生效，
-且不改动任何数据。Agent 以及 Agent spec 里固定的知识库 / 记忆尚未覆盖。
+且不改动任何数据。
+
+*Agent* 在 `Agent.created_by` 上遵循同一条规则（在 `POST /api/agents`、Harness → 运行时转换
+——转换出的孪生 Agent 归转换者——以及架构助手审批——归审批人——时写入；发现导入的运行时与系统
+预设不记录创建者，保持共享）。`app/services/agent_access.py` 是唯一的 Agent 收口：每个按 id 的
+辅助函数（Agents 路由、Chat、评估运行 / 在线评估 / 日志流、实验就绪度 / 创建、灰度创建、注册表
+A2A 演示与实时名片）都经由 `agent_in(..., viewer=)`，并各自保留原有的未命中答复（`agent.not_found`
+404、`agent.not_active` / `canary.agent_not_active` 400、`registry.*`）；`agent_clause` 用于列表
+（为所有选择器供数的 `GET /api/agents`、转换孪生列表、`/v1/agents`）；对只能通过派生键找到 Agent
+的界面，则使用按请求构建的 `HiddenAgents` 快照。这些界面会丢弃隐藏 Agent 的可观测性 trace / 会话
+（通过 span 的 `service.name` 解析器或账本中的聊天 / 评估运行会话 id 识别；详情、对话记录与即时
+评分返回 `observability.*_not_found`）、它的记忆 actor `<agent>__<human>`（events / records /
+namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `default` actor 也会去掉账本
+归给它的会话）、它的 A2A 注册表记录（`aws.not_found`）、它的部署作业（`job.not_found`），并在知识库 /
+记忆的“使用者”列表、Connections 引用、在线评估 `matched_agent`、发现结果 `managed_agent_*` 与导入
+结果 `already_managed` 中去掉它的名字——计数保持真实，只隐去名字。概览的活跃会话数与 A2A 数量按
+查看者统计；仪表盘图表仍是 workspace 合计。名称唯一性仍在整个 workspace 内生效；`agent.name_exists`
+409 只有在调用者能看到占用者时才带上其 id。`/v1` 密钥跟随其**创建者**当前的可见性
+（`visibility.viewer_for_key`）：成员的密钥只能触达该成员能看到的 Agent，管理员 / 配置 admin 创建的
+密钥以及旧密钥不受限制。在 `/api/apikeys` 上，isolated workspace 中的成员只能列出和启停自己创建的
+密钥（比资源规则更严：密钥是凭证）。Agent spec 只能固定调用者看得到的知识库 / 记忆
+（`agent_access.check_pins`，在任何行变更与 AWS 调用之前）；重新发布只检查*新增*的固定项，因此在
+共享期间固定过的 Agent 仍能继续重新发布。可见的评估运行、实验或灰度并不会让其 Agent 归调用者所有：
+接受推荐，以及除 `verdict` / `cleanup` 以外的每个实验 / 灰度动作，都要求 Agent 对调用者可见。知识库
+强制删除仍会从每个挂载它的 Agent 上移除该知识库（保证完整性）。部署管道、恢复、worker、purge、
+可观测性解析器、名称占用与预设服务仍使用 `Viewer.ALL`。
 
 **移除。** `DELETE /api/workspaces/{id}` 是一次解除关联——行与它的授权一起消失，AWS 不受
 影响——并且只要还有任何按范围划分的行指向该 workspace，它就会被拒绝。这道门禁同时也会困住
@@ -2017,7 +2042,8 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 `users` 行，记为 NULL），`created_by_name` 是创建时的用户名（仅用于展示）。台账型资源在
 各自的行上带这两列——`eval_datasets`、`eval_pipelines`、`eval_runs`、
 `online_eval_configs`、`experiments`、`runtime_canaries`、`skill_lab_jobs`、
-`skill_lab_tasksets` 与 `managed_memories`；知识库与自定义评估器只存在于 AWS，改用
+`skill_lab_tasksets`、`managed_memories` 与 `agents`（其原有的 `owner` 列仍只是来源标签）；
+知识库与自定义评估器只存在于 AWS，改用
 `resource_creators`。唯一的模块 `app/services/creators.py` 负责写入（路由中用
 `Creator.of_request`，服务函数接收仅限关键字的 `creator`）并输出这两个响应字段，因此每个
 列表与详情响应都带有它们。代表某人执行的进程内路径：评估资产物化器为其创建的数据集与评估器

@@ -602,11 +602,12 @@ def agent_log_streams(
     q: str | None = Query(None, max_length=128),
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Recent streams of the agent's runtime log group, newest first; with `q`
     only those whose name or content contains the keyword. A session stream
     carries its `session_id` — the unit a batch evaluation scores."""
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     logs = ws.context.client("logs")
     _service, log_group = resolve_telemetry(agent, ws.context, logs)
     since_ms = int((_now().timestamp() - hours * 3600) * 1000)
