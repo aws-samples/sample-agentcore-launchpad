@@ -19,9 +19,11 @@ from app.assistant.sessions import PrivateSessions
 from app.core.config import get_settings
 from app.core.db import SessionLocal, get_db
 from app.core.errors import NotFoundError
+from app.evaluation.online_evaluators import require_visible_evaluators
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import model_prices, observability
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
 
@@ -186,13 +188,21 @@ def session_evaluate(
     body: SessionEvaluateBody,
     request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _private(request, ws).require_visible(session_id)  # another principal's turn: 404
     """Score the session on demand through the data-plane `Evaluate` API.
 
     Synchronous (one judge inference per evaluator), results are returned
     inline and never written to the ledger; 409
-    `observability.session_spans_missing` when no spans have landed yet."""
+    `observability.session_spans_missing` when no spans have landed yet. A custom
+    evaluator hidden by workspace isolation answers like a missing one."""
+    _private(request, ws).require_visible(session_id)  # another principal's turn: 404
+    if viewer.filters:
+        db = SessionLocal()
+        try:
+            require_visible_evaluators(db, ws.id, viewer, body.evaluator_ids)
+        finally:
+            db.close()
     return observability.evaluate_session(
         session_id, body.range, body.evaluator_ids, ws.context
     )

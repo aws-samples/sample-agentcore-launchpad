@@ -3354,6 +3354,13 @@ export interface OnlineEvalRunReportAck {
 
 export type WorkspaceBootstrapStatus = "registered" | "bootstrapping" | "ready" | "failed";
 
+/**
+ * Who sees a workspace's member-created resources. `shared` (the default):
+ * everyone sees everything. `isolated`: a member sees only what they created,
+ * plus resources created by an admin or with no recorded creator; admins see all.
+ */
+export type ResourceVisibility = "shared" | "isolated";
+
 export interface Workspace {
   id: string;
   name: string;
@@ -3366,6 +3373,8 @@ export interface Workspace {
   bootstrap_status: WorkspaceBootstrapStatus;
   /** the hub's own environment: cannot be deleted or bootstrapped from here */
   is_default: boolean;
+  /** absent on an older backend — read as `shared` */
+  resource_visibility?: ResourceVisibility;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -4622,6 +4631,17 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  /** The workspace's member-visibility mode (admin only; hub-global route). */
+  getWorkspaceVisibility: (id: string) =>
+    request<{ resource_visibility: ResourceVisibility }>(
+      `/api/workspaces/${id}/settings/visibility`,
+    ),
+  /** Switch member visibility; takes effect on the next request, moves no data. */
+  putWorkspaceVisibility: (id: string, value: ResourceVisibility) =>
+    request<{ resource_visibility: ResourceVisibility }>(
+      `/api/workspaces/${id}/settings/visibility`,
+      { method: "PUT", body: JSON.stringify({ resource_visibility: value }) },
+    ),
   bootstrapWorkspace: (id: string) =>
     request<WorkspaceBootstrapAck>(`/api/workspaces/${id}/bootstrap`, { method: "POST" }),
   /** The latest bootstrap run, so a browser that did not start it can watch. */

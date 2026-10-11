@@ -22,7 +22,7 @@ bootstrap job's `validate-access` stage is what proves they actually work.
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Request
@@ -41,7 +41,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
 from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
 from app.services import api_keys as api_keys_service
-from app.services import aws_clients, workspace_bootstrap
+from app.services import aws_clients, visibility, workspace_bootstrap
 from app.services import users as users_service
 from app.services.workspace import (
     WorkspaceContext,
@@ -242,6 +242,7 @@ def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
         "cross_account": row.role_arn is not None,
         "bootstrap_status": row.bootstrap_status,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
+        "resource_visibility": visibility.mode(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -1018,3 +1019,39 @@ def replace_grants(
         "removed": int(removed),
         "granted_total": _granted_total(db, row.id),
     }
+
+
+# ── settings ───────────────────────────────────────────────────────────────
+
+
+class VisibilitySetting(BaseModel):
+    """Whether members see each other's resources (`services/visibility.py`)."""
+
+    resource_visibility: Literal["shared", "isolated"]
+
+
+def _visibility_out(row: Workspace) -> dict[str, Any]:
+    return {"resource_visibility": visibility.mode(row)}
+
+
+@router.get("/{workspace_id}/settings/visibility")
+def get_visibility(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    return _visibility_out(_requested_row(db, workspace_id))
+
+
+@router.put("/{workspace_id}/settings/visibility")
+def put_visibility(
+    workspace_id: str,
+    req: VisibilitySetting,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Switch shared ⇄ isolated. Changes no resource and applies to the next
+    request: the workspace row is re-read on every request."""
+    row = _requested_row(db, workspace_id)
+    visibility.set_mode(db, row, req.resource_visibility)
+    return _visibility_out(row)

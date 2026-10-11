@@ -10,11 +10,12 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
 from app.core.db import get_db
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import creators, kb_gateway, knowledge
+from app.services import creators, kb_gateway, knowledge, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/knowledge-bases", tags=["knowledge-bases"])
 
@@ -43,15 +44,35 @@ class QueryRequest(BaseModel):
     number_of_results: int = Field(default=8, ge=1, le=100)
 
 
+def visible_kbs(
+    db: Session, workspace_id: str, viewer: Viewer, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Drop the KBs workspace isolation hides from `viewer` (list + pickers +
+    the architect catalog)."""
+    hidden = visibility.hidden_aws_ids(
+        viewer, db, workspace_id, creators.KB, (i.get("kb_id") or "" for i in items)
+    )
+    return [i for i in items if (i.get("kb_id") or "") not in hidden]
+
+
+def _require_visible(db: Session, ws: WorkspaceScope, viewer: Viewer, kb_id: str) -> None:
+    """A KB hidden by workspace isolation answers like a missing one — before any
+    AWS call."""
+    if not visibility.aws_id_visible(viewer, db, ws.id, creators.KB, kb_id):
+        raise NotFoundError("kb.not_found", "knowledge base not found")
+
+
 @router.get("")
 def list_knowledge_bases(
     status: str | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     items = knowledge.list_kbs(ws.context)
     if status:  # e.g. the Create-Agent picker requests ?status=ACTIVE
         items = [i for i in items if i.get("status") == status]
+    items = visible_kbs(db, ws.id, viewer, items)
     # the creator lives in the ledger (AWS has none); a KB made outside the
     # console reads null
     known = creators.lookup(db, ws.id, creators.KB, (i.get("kb_id") or "" for i in items))
@@ -88,7 +109,9 @@ def get_knowledge_base(
     kb_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return _with_creator(db, ws, knowledge.get_kb_detail(ws.context, kb_id))
 
 
@@ -98,7 +121,9 @@ def patch_knowledge_base(
     req: PatchKBRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return _with_creator(db, ws, knowledge.update_description(ws.context, kb_id, req.description))
 
 
@@ -106,8 +131,11 @@ def patch_knowledge_base(
 def delete_knowledge_base(
     kb_id: str,
     force: bool = False,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return knowledge.delete_kb(ws.context, kb_id, force=force)
 
 
@@ -115,8 +143,11 @@ def delete_knowledge_base(
 async def upload_knowledge_base_files(
     kb_id: str,
     request: Request,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     form = await request.form()
     uploads = [
         f
@@ -135,29 +166,47 @@ async def upload_knowledge_base_files(
 def add_data_source(
     kb_id: str,
     req: SourceSpec,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return knowledge.add_data_source(ws.context, kb_id, req.model_dump())
 
 
 @router.delete("/{kb_id}/data-sources/{ds_id}")
 def delete_data_source(
-    kb_id: str, ds_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    kb_id: str,
+    ds_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return knowledge.delete_data_source(ws.context, kb_id, ds_id)
 
 
 @router.post("/{kb_id}/data-sources/{ds_id}/sync")
 def sync_data_source(
-    kb_id: str, ds_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    kb_id: str,
+    ds_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return knowledge.start_sync(ws.context, kb_id, ds_id)
 
 
 @router.get("/{kb_id}/data-sources/{ds_id}/ingestion-jobs")
 def list_ingestion_jobs(
-    kb_id: str, ds_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    kb_id: str,
+    ds_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return {"items": knowledge.list_ingestion_jobs(ws.context, kb_id, ds_id)}
 
 
@@ -167,8 +216,11 @@ def list_documents(
     ds_id: str,
     page_size: int = Query(default=50, ge=1, le=100),
     token: str | None = None,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return knowledge.list_documents(
         ws.context, kb_id, ds_id, page_size=page_size, token=token
     )
@@ -178,8 +230,11 @@ def list_documents(
 def query_knowledge_base(
     kb_id: str,
     req: QueryRequest,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible(db, ws, viewer, kb_id)
     return {
         "results": knowledge.query(ws.context, kb_id, req.text, req.number_of_results)
     }

@@ -47,8 +47,9 @@ from app.evaluation.routers import (
 from app.evaluation.service import resolve_telemetry
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import creators, observability
+from app.services import creators, observability, visibility
 from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
 
@@ -195,10 +196,11 @@ def datasets_from_sessions(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     kind = "predefined"
     if body.dataset_id:
-        target = _dataset_in(db, ws, body.dataset_id)
+        target = _dataset_in(db, ws, body.dataset_id, viewer=viewer)
         _require_receivable(target)
         kind = target.kind
     items, skipped = _read_items(
@@ -279,25 +281,35 @@ def _pipeline_out(row: EvalPipeline) -> dict[str, Any]:
     }
 
 
-def _pipeline_in(db: Session, ws: WorkspaceScope, pipeline_id: str) -> EvalPipeline:
+def _pipeline_in(
+    db: Session, ws: WorkspaceScope, pipeline_id: str, *, viewer: Viewer = Viewer.ALL
+) -> EvalPipeline:
     row = db.get(EvalPipeline, pipeline_id)
     if row is None or row.workspace_id != ws.id:
         raise NotFoundError("pipeline.not_found", "pipeline not found")
+    visibility.require_seen(
+        viewer, db, row.created_by, NotFoundError("pipeline.not_found", "pipeline not found")
+    )
     return row
 
 
-def _check_output(db: Session, ws: WorkspaceScope, output: PipelineOutput) -> None:
+def _check_output(
+    db: Session, ws: WorkspaceScope, output: PipelineOutput, *, viewer: Viewer
+) -> None:
     if output.dataset_id:
-        _require_receivable(_dataset_in(db, ws, output.dataset_id))
+        _require_receivable(_dataset_in(db, ws, output.dataset_id, viewer=viewer))
 
 
 @router.get("/pipelines")
 def list_pipelines(
-    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace)
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     rows = db.scalars(
         select(EvalPipeline)
         .where(EvalPipeline.workspace_id == ws.id)
+        .where(visibility.clause(viewer, EvalPipeline.created_by))
         .order_by(EvalPipeline.created_at.desc())
     ).all()
     for row in rows:
@@ -311,8 +323,9 @@ def create_pipeline(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _check_output(db, ws, body.output)
+    _check_output(db, ws, body.output, viewer=viewer)
     row = EvalPipeline(
         workspace_id=ws.id,
         name=body.name,
@@ -330,8 +343,9 @@ def get_pipeline(
     pipeline_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    row = _pipeline_in(db, ws, pipeline_id)
+    row = _pipeline_in(db, ws, pipeline_id, viewer=viewer)
     _reap(db, row)
     return _pipeline_out(row)
 
@@ -342,12 +356,13 @@ def update_pipeline(
     body: PipelineBody,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    row = _pipeline_in(db, ws, pipeline_id)
+    row = _pipeline_in(db, ws, pipeline_id, viewer=viewer)
     _reap(db, row)
     if row.status == "running":
         raise AppError("pipeline.running", "the pipeline is running", status_code=409)
-    _check_output(db, ws, body.output)
+    _check_output(db, ws, body.output, viewer=viewer)
     row.name = body.name
     row.description = body.description
     row.config = body.model_dump(include={"source", "processing", "output"})
@@ -360,8 +375,9 @@ def delete_pipeline(
     pipeline_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    row = _pipeline_in(db, ws, pipeline_id)
+    row = _pipeline_in(db, ws, pipeline_id, viewer=viewer)
     db.delete(row)
     db.commit()
     return {"deleted": True}
@@ -373,11 +389,12 @@ def run_pipeline(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Start one run in the background and return the row as `running` — a run
     reads up to `max_sessions` session details (seconds each), far too long to
     hold the request open; the outcome lands on `status` + `last_run`."""
-    row = _pipeline_in(db, ws, pipeline_id)
+    row = _pipeline_in(db, ws, pipeline_id, viewer=viewer)
     _reap(db, row)
     if row.status == "running":
         raise AppError("pipeline.running", "the pipeline is already running", status_code=409)

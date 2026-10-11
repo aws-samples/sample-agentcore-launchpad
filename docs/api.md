@@ -662,6 +662,44 @@ configs, built-in and third-party evaluators). They are always server-set: a
 | Experiment / canary | `GET` / `POST /api/experiments`, `GET /{id}`; `GET` / `POST /api/runtime-canaries`, `GET /{id}` |
 | Skill Lab | job and task-set list / detail / create, `POST /jobs/{id}/import-taskset` (the importer creates the set) |
 
+## Workspace resource visibility
+
+An admin chooses per workspace whether members see each other's resources:
+
+| Method | Path | Role | Body / response |
+|---|---|---|---|
+| `GET` | `/api/workspaces/{workspace_id}/settings/visibility` | admin | `{"resource_visibility": "shared" \| "isolated"}` — `shared` when never set |
+| `PUT` | `/api/workspaces/{workspace_id}/settings/visibility` | admin | body and response `{"resource_visibility": "shared" \| "isolated"}`; any other value → `422 validation.invalid_request`; a member → `403 auth.forbidden`; an unknown workspace → `404 workspace.not_found` |
+
+Both target the path parameter (not `X-Workspace`) and work on a workspace whose
+bootstrap has not finished. Every workspace row returned by `GET /api/workspaces`
+and the admin workspace routes carries `resource_visibility`. A switch takes
+effect on the next request and changes no data.
+
+Under `isolated`, a **member** sees a resource of the kinds in the table above iff
+its `created_by` is their own `users.id`, is `null` (creator unknown — legacy rows,
+samples, the config admin, resources made outside the console), or is the
+`users.id` of an account whose role is **currently** `admin`. Admins see
+everything. Built-in / third-party evaluators and the bootstrap memory are always
+visible; a cloud dataset follows the local datasets linked to it (visible when any
+is; one with no local row is shared), and an experiment/canary-owned online config
+(`exp_<id8>_…` / `can_<id8>_…`) follows its experiment or canary.
+
+A hidden resource is absent everywhere, with the same answer as a missing id:
+
+| Surface | Hidden behaves as |
+|---|---|
+| Lists and pickers | omitted — filtered before paging, so `GET /api/eval/runs` `total` and the 20-row experiment / canary lists count only visible rows; `GET /api/memory/resources` drops a hidden managed memory entirely (it is not listed as detected) |
+| By-id routes | the kind's not-found: `kb.not_found`, `memory.not_managed`, `dataset.not_found` (local and cloud), `pipeline.not_found`, `run.not_found`, `online_eval.not_found` (incl. `/results`; a hidden report run → `online_eval.report_not_found`), `aws.not_found` (custom evaluator `GET`/`PUT`/`DELETE`), `experiment.not_found`, `canary.not_found`, `skill_lab.job_not_found`, `skill_lab.taskset_not_found` |
+| Create-time references | as for a missing id: a run on a hidden dataset → `404 dataset.not_found`, with a hidden evaluator → `422 run.evaluator_not_found`; a hidden evaluator on an online config / experiment `gateway` / canary → `400 {online_eval,experiment,canary}.evaluator_unsupported`; SCORE NOW (`POST /api/observability/sessions/{id}/evaluate`) → `404 aws.not_found`; a pipeline output / from-sessions / experiment or canary `traffic` dataset → `404 dataset.not_found`; an experiment `recommend_source_run_id` → `404 experiment.recommend_source_not_found`; a canary `source_experiment_id` → `400 canary.source_experiment_invalid`; a Skill Lab job's task set → `404 skill_lab.taskset_not_found` |
+| Aggregates | `GET /api/overview` `eval_pass_rate` / `eval_runs` and `GET /api/overview/online-quality` cover only visible runs / configs (the quality tile is cached per viewer) |
+| Architect catalog | lists only the KBs the conversation's owner can see |
+
+Internal references are untouched: a visible resource that references a hidden
+one (an admin's experiment replaying a member's dataset, a pipeline appending to
+its configured dataset) keeps working. Agents and agent-spec KB / memory pins are
+not covered yet.
+
 ## Console Knowledge Bases API
 
 `/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over

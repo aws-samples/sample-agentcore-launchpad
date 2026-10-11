@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session, make_transient
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
-from app.services import creators
+from app.services import creators, visibility
+from app.services.visibility import Viewer
 from app.skill_lab import task_assets
 from app.skill_lab.models import SkillLabTaskset
 from app.skill_lab.worker_build import VENDOR_ROOT
@@ -419,19 +420,27 @@ def _reject_sample_write(row: SkillLabTaskset) -> None:
         )
 
 
-def list_tasksets(db: Session, workspace_id: str) -> list[dict[str, Any]]:
+def list_tasksets(
+    db: Session, workspace_id: str, *, viewer: Viewer = Viewer.ALL
+) -> list[dict[str, Any]]:
     rows = db.scalars(
         select(SkillLabTaskset)
         .where(SkillLabTaskset.workspace_id == workspace_id)
+        .where(visibility.clause(viewer, SkillLabTaskset.created_by))
         .order_by(SkillLabTaskset.created_at.desc())
     ).all()
     return [taskset_info(row) for row in rows]
 
 
-def get_row(db: Session, workspace_id: str, taskset_id: str) -> SkillLabTaskset:
+def get_row(
+    db: Session, workspace_id: str, taskset_id: str, *, viewer: Viewer = Viewer.ALL
+) -> SkillLabTaskset:
+    """The task set, or 404 — also when workspace isolation hides it from ``viewer``
+    (built-in samples carry no creator and stay shared)."""
     row = db.get(SkillLabTaskset, taskset_id)
     if row is None or row.workspace_id != workspace_id:
         raise _not_found(taskset_id)
+    visibility.require_seen(viewer, db, row.created_by, _not_found(taskset_id))
     return row
 
 

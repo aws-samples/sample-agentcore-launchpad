@@ -15,6 +15,7 @@ from app.core.db import get_db
 from app.core.errors import AppError
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 from app.skill_lab import artifacts as artifacts_svc
 from app.skill_lab import jobs as jobs_svc
 from app.skill_lab import runner
@@ -102,12 +103,27 @@ async def upload_task_assets(
     return {"assets": await asset_svc.stage_uploads(ws.id, files)}
 
 
+def _gate_taskset(db: Session, ws: WorkspaceScope, taskset_id: str, viewer: Viewer) -> None:
+    """Workspace isolation for a by-id task-set route: a hidden task set answers the
+    service's own not-found before the service runs (no extra query otherwise)."""
+    if viewer.filters:
+        svc.get_row(db, ws.id, taskset_id, viewer=viewer)
+
+
+def _gate_job(db: Session, ws: WorkspaceScope, job_id: str, viewer: Viewer) -> None:
+    """Same for a job action whose service resolves the job itself (and keeps its
+    own internal loads — e.g. an expansion's target task set — unfiltered)."""
+    if viewer.filters:
+        jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)
+
+
 @router.get("/tasksets")
 def list_tasksets(
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> list[dict[str, Any]]:
-    return svc.list_tasksets(db, ws.id)
+    return svc.list_tasksets(db, ws.id, viewer=viewer)
 
 
 @router.post("/tasksets", status_code=201)
@@ -134,7 +150,9 @@ def get_taskset(
     full: bool = False,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_taskset(db, ws, taskset_id, viewer)
     return svc.read_taskset(db, ws.id, taskset_id, full=full)
 
 
@@ -144,7 +162,9 @@ def update_taskset(
     body: TasksetUpdate,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_taskset(db, ws, taskset_id, viewer)
     return svc.update_taskset(
         db,
         ws.id,
@@ -160,7 +180,9 @@ def delete_taskset(
     taskset_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_taskset(db, ws, taskset_id, viewer)
     svc.delete_taskset(db, ws.id, taskset_id)
     return {"ok": True}
 
@@ -186,8 +208,9 @@ def list_jobs(
     type: str | None = None,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> list[dict[str, Any]]:
-    return jobs_svc.list_jobs(db, ws.id, type_filter=type)
+    return jobs_svc.list_jobs(db, ws.id, type_filter=type, viewer=viewer)
 
 
 @router.post("/jobs", status_code=201)
@@ -196,6 +219,7 @@ def create_job(
     request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     creator = Creator.of_request(request)
     if body.type in ("eval", "train") and not body.taskset_id:
@@ -210,6 +234,7 @@ def create_job(
             split=body.split,
             params=body.params,
             creator=creator,
+            viewer=viewer,  # a task set the caller cannot see is a missing one
         )
     if body.type == "train":
         if body.split:
@@ -226,6 +251,7 @@ def create_job(
             taskset_id=body.taskset_id,
             params=body.params,
             creator=creator,
+            viewer=viewer,
         )
     if body.type == "taskgen":
         if body.split:
@@ -244,6 +270,7 @@ def create_job(
             params=body.params,
             attachments=body.attachments,
             creator=creator,
+            viewer=viewer,
         )
     raise AppError("skill_lab.bad_params", "type must be 'eval' or 'train'", status_code=422)
 
@@ -253,8 +280,9 @@ def get_job(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return jobs_svc.job_out(jobs_svc.get_job(db, ws.id, job_id))
+    return jobs_svc.job_out(jobs_svc.get_job(db, ws.id, job_id, viewer=viewer))
 
 
 @router.post("/jobs/{job_id}/cancel")
@@ -262,7 +290,9 @@ def cancel_job(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_job(db, ws, job_id, viewer)
     return jobs_svc.cancel_job(db, ws.id, job_id)
 
 
@@ -271,7 +301,9 @@ def delete_job(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_job(db, ws, job_id, viewer)
     jobs_svc.delete_job(db, ws.id, job_id)
     return {"ok": True}
 
@@ -282,8 +314,9 @@ def job_log(
     offset: int = 0,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    jobs_svc.get_job(db, ws.id, job_id)  # workspace ownership gate
+    jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)  # workspace ownership gate
     return artifacts_svc.read_log(job_id, offset)
 
 
@@ -292,8 +325,9 @@ def job_results(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    row = jobs_svc.get_job(db, ws.id, job_id)
+    row = jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)
     results = (
         artifacts_svc.taskgen_results(job_id)
         if row.type == "taskgen"
@@ -373,9 +407,11 @@ def import_taskgen_taskset(
     request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Save a succeeded taskgen job's reviewed tasks as a new task set (created by
     whoever imports it)."""
+    _gate_job(db, ws, job_id, viewer)
     return jobs_svc.import_taskgen_taskset(
         db, ws.id, job_id, name=body.name, edits=_edits(body.tasks),
         creator=Creator.of_request(request),
@@ -388,9 +424,11 @@ def apply_taskgen_expansion(
     body: ApplyExpansionRequest | None = None,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Append a succeeded expansion job's tasks to its target task set/split.
     The body is optional: no body (or no `tasks`) appends every generated row."""
+    _gate_job(db, ws, job_id, viewer)
     return jobs_svc.apply_taskgen_expansion(
         db, ws.id, job_id, edits=_edits(body.tasks) if body is not None else None
     )
@@ -405,7 +443,9 @@ def resume_job(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_job(db, ws, job_id, viewer)
     return jobs_svc.resume_job(db, ws.id, ws.context, job_id)
 
 
@@ -415,7 +455,9 @@ def publish_job(
     body: PublishRequest,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _gate_job(db, ws, job_id, viewer)
     return jobs_svc.publish_job(db, ws.id, ws.context, job_id, reapprove=body.reapprove)
 
 
@@ -424,8 +466,9 @@ def job_train_summary(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    row = jobs_svc.get_job(db, ws.id, job_id)
+    row = jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)
     summary = artifacts_svc.train_summary(job_id)
     if summary is None:
         raise AppError(
@@ -441,8 +484,9 @@ def job_skill_diff(
     job_id: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    row = jobs_svc.get_job(db, ws.id, job_id)
+    row = jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)
     diff = artifacts_svc.skill_diff(job_id)
     if diff is None:
         raise AppError(
@@ -459,8 +503,9 @@ def job_artifacts(
     path: str = "",
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    jobs_svc.get_job(db, ws.id, job_id)
+    jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)
     return artifacts_svc.list_artifacts(job_id, path)
 
 
@@ -470,7 +515,8 @@ def job_artifact_raw(
     path: str,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
+    viewer: Viewer = Depends(require_viewer),
 ) -> FileResponse:
-    jobs_svc.get_job(db, ws.id, job_id)
+    jobs_svc.get_job(db, ws.id, job_id, viewer=viewer)
     target = artifacts_svc.artifact_file(job_id, path)
     return FileResponse(target, filename=target.name)

@@ -17,10 +17,15 @@ error-code family (``experiment.evaluator_unsupported`` vs
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from app.services.visibility import Viewer
 
 # The pair every experiment used before the set became selectable; also the
 # create-form default on the online evaluation sub-page.
@@ -89,6 +94,56 @@ def normalize_online_evaluators(
             categorical_code=f"{code_prefix}.evaluator_categorical" if require_numeric else None,
         )
     return chosen
+
+
+def refuse_hidden_evaluators(
+    db: Session, workspace_id: str, viewer: Viewer, ids: Sequence[str] | None,
+    *, code_prefix: str = "experiment",
+) -> None:
+    """Workspace isolation: a custom evaluator the viewer cannot see is refused
+    exactly like one that does not exist (`{code_prefix}.evaluator_unsupported`,
+    "unknown evaluator"). Built-in and third-party ids are always visible."""
+    if not viewer.filters:
+        return
+    from app.services import creators, visibility
+
+    custom = [str(e).strip() for e in ids or () if not str(e).startswith(_MANAGED)]
+    hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.EVALUATOR, custom)
+    for evaluator in custom:
+        if evaluator in hidden:
+            raise AppError(
+                f"{code_prefix}.evaluator_unsupported",
+                f"unknown evaluator {evaluator}",
+                {"evaluator": evaluator},
+                status_code=400,
+            )
+
+
+_MANAGED = ("Builtin.", "ThirdParty.")
+
+
+def require_visible_evaluators(
+    db: Session, workspace_id: str, viewer: Viewer, ids: Sequence[str] | None,
+) -> None:
+    """Workspace isolation for routes that hand an evaluator id straight to AWS
+    (`GET/PUT/DELETE /api/eval/evaluators/{id}`, the session SCORE NOW): a hidden
+    custom evaluator answers exactly what a missing one does — AWS's own
+    `ResourceNotFoundException`, through the global ClientError handler."""
+    if not viewer.filters:
+        return
+    from botocore.exceptions import ClientError
+
+    from app.services import creators, visibility
+
+    custom = [str(e) for e in ids or () if not str(e).startswith(_MANAGED)]
+    hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.EVALUATOR, custom)
+    for evaluator in custom:
+        if evaluator in hidden:
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException",
+                           "Message": f"Evaluator {evaluator} not found"}},
+                "GetEvaluator",
+            )
 
 
 def is_categorical(detail: dict[str, Any] | None) -> bool:

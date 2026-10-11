@@ -30,6 +30,7 @@ from app.models.ledger import Agent, ManagedMemory
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import creators, memory_admin, memory_ownership
 from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/memory/resources", tags=["memory-resources"])
 
@@ -157,8 +158,14 @@ def _creator_of(db: Session, ws: WorkspaceScope, memory_id: str) -> dict[str, An
 def list_resources(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     page = _guard(memory_admin.list_memory_resources, ws.context)
+    # workspace isolation drops a hidden managed memory entirely — it must not
+    # resurface as a "detected" one
+    hidden = memory_ownership.hidden_ids(db, ws.context, viewer)
+    if hidden:
+        page["items"] = [i for i in page["items"] if (i.get("id") or "") not in hidden]
     usage = _agents_by_memory(db, ws)
     managed = memory_ownership.managed_ids(db, ws.context)
     rows = memory_ownership.managed_rows(db, ws.context)
@@ -203,8 +210,9 @@ def get_resource(
     memory_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    memory_ownership.require_managed(db, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
     detail = _guard(memory_admin.get_memory_resource, ws.context, memory_id)
     return {**detail, **_creator_of(db, ws, memory_id), "managed": True}
 
@@ -240,6 +248,7 @@ def update_resource(
     req: UpdateMemoryResourceRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Edit description / event expiry; the reply is the refreshed detail.
 
@@ -248,7 +257,7 @@ def update_resource(
     confirm dialog (from the list route's ``agents`` annotation) so the operator
     knows whom a shorter expiry window reaches.
     """
-    memory_ownership.require_managed(db, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
     detail = _guard(
         memory_admin.update_memory_resource,
         ws.context,
@@ -264,8 +273,9 @@ def delete_resource(
     memory_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    memory_ownership.require_managed(db, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
     agents = _agents_by_memory(db, ws).get(memory_id, [])
     if agents:
         raise AppError(

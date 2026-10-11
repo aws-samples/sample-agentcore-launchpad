@@ -26,15 +26,17 @@ from app.core.errors import (
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import recommendations, service
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
+from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import creators
+from app.services import creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
 from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
 logger = logging.getLogger(__name__)
@@ -156,6 +158,7 @@ def _unverifiable(evaluator: str, exc: Exception) -> AppError:
 def _assert_target_references(
     db: Session, ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]],
     dataset_scope: bool, *, agent_spec: dict[str, Any] | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> None:
     """Every chosen evaluator that reads ground truth must find it on EVERY target it
     will be applied to — each session or each TRACE turn of the CURRENT dataset
@@ -177,7 +180,11 @@ def _assert_target_references(
 
     problems: dict[str, list[str]] = {}
     control = None
+    hidden = visibility.hidden_aws_ids(viewer, db, ws.id, creators.EVALUATOR, evaluators)
     for evaluator in dict.fromkeys(evaluators):
+        if evaluator in hidden:
+            # workspace isolation: a hidden custom evaluator is a missing one
+            raise _evaluator_missing(evaluator)
         if evaluator in coverage.KNOWN_BUILTINS:
             needs, level = coverage.builtin_needs(evaluator), coverage.KNOWN_BUILTINS[evaluator]
         elif evaluator.startswith(("Builtin.", "ThirdParty.")):
@@ -193,12 +200,7 @@ def _assert_target_references(
                     detail = ac.get_evaluator(control, evaluator_id=evaluator)
                 except ClientError as exc:
                     if aws_error_code(exc) in ("ResourceNotFoundException", "NotFoundException"):
-                        raise AppError(
-                            "run.evaluator_not_found",
-                            f"evaluator {evaluator} does not exist in this workspace — "
-                            "drop it or pick one from the catalog",
-                            {"evaluator": evaluator}, status_code=422,
-                        ) from exc
+                        raise _evaluator_missing(evaluator) from exc
                     raise _unverifiable(evaluator, exc) from exc
                 except Exception as exc:  # transport / timeout / SDK failures
                     raise _unverifiable(evaluator, exc) from exc
@@ -258,6 +260,23 @@ def _assert_target_references(
         )
 
 
+def _evaluator_missing(evaluator: str) -> AppError:
+    return AppError(
+        "run.evaluator_not_found",
+        f"evaluator {evaluator} does not exist in this workspace — "
+        "drop it or pick one from the catalog",
+        {"evaluator": evaluator}, status_code=422,
+    )
+
+
+def _require_visible_evaluator(
+    db: Session, ws: WorkspaceScope, viewer: Viewer, evaluator_id: str
+) -> None:
+    """A custom evaluator hidden by workspace isolation answers like a missing one;
+    built-in / third-party ids carry no creator and are always visible."""
+    require_visible_evaluators(db, ws.id, viewer, [evaluator_id])
+
+
 def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
     return {
         "id": dataset.id,
@@ -274,11 +293,17 @@ def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
     }
 
 
-def _dataset_in(db: Session, ws: WorkspaceScope, dataset_id: str) -> EvalDataset:
-    """The dataset, or 404 — another workspace's dataset is not visible here."""
+def _dataset_in(
+    db: Session, ws: WorkspaceScope, dataset_id: str, *, viewer: Viewer = Viewer.ALL
+) -> EvalDataset:
+    """The dataset, or 404 — another workspace's dataset, or one hidden from the
+    viewer by workspace isolation (`services/visibility.py`), is not visible here."""
     dataset = db.get(EvalDataset, dataset_id)
     if dataset is None or dataset.workspace_id != ws.id:
         raise NotFoundError("dataset.not_found", "dataset not found")
+    visibility.require_seen(
+        viewer, db, dataset.created_by, NotFoundError("dataset.not_found", "dataset not found")
+    )
     return dataset
 
 
@@ -286,10 +311,12 @@ def _dataset_in(db: Session, ws: WorkspaceScope, dataset_id: str) -> EvalDataset
 def list_datasets(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     rows = (
         db.query(EvalDataset)
         .filter(EvalDataset.workspace_id == ws.id)
+        .filter(visibility.clause(viewer, EvalDataset.created_by))
         .order_by(EvalDataset.created_at.desc())
         .all()
     )
@@ -379,8 +406,9 @@ def update_dataset(
     req: DatasetUpdate,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    dataset = _dataset_in(db, ws, dataset_id)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
     if req.items is not None:
         _validate_items(req.items)
         if _infer_kind(req.items) != dataset.kind:
@@ -404,8 +432,9 @@ def delete_dataset(
     dataset_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    dataset = _dataset_in(db, ws, dataset_id)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
     db.delete(dataset)
     db.commit()
     return {"deleted": True}
@@ -477,6 +506,7 @@ def sync_dataset_to_aws(
     dataset_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Push the local dataset to AWS. Without a live cloud copy this creates an
     AWS Dataset (inline examples, devguide predefined schema) and waits for
@@ -486,7 +516,7 @@ def sync_dataset_to_aws(
     published versions and any run pinned to them survive; the draft then reads
     MODIFIED until PUBLISH VERSION snapshots it. The recorded `cloud` blob caches
     id/arn/status plus draft_status, example_count and the version list."""
-    dataset = _dataset_in(db, ws, dataset_id)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
     examples = normalize_scenarios(dataset.items)
     client = control_client(ws.context)
     synced_at = datetime.now(UTC).isoformat()
@@ -596,11 +626,12 @@ def publish_dataset_version(
     dataset_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Snapshot the cloud copy's DRAFT as the next immutable numbered version.
     The draft stays (draft_status flips to UNMODIFIED); the new version joins
     `cloud.versions`. 409 `dataset.not_synced` without a live cloud copy."""
-    dataset = _dataset_in(db, ws, dataset_id)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
     client = control_client(ws.context)
     detail = _existing_cloud_draft(client, dataset)
     if detail is None:
@@ -681,10 +712,15 @@ def _cloud_dataset_items(
 
 @router.get("/datasets/cloud")
 def list_cloud_datasets(
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     out = []
+    hidden = _hidden_cloud_ids(db, ws, viewer)
     for ds in ac.list_datasets(control_client(ws.context)):
+        if ds.get("datasetId") in hidden:
+            continue
         out.append(
             {
                 "datasetId": ds.get("datasetId"),
@@ -701,11 +737,15 @@ def list_cloud_datasets(
 
 @router.get("/datasets/cloud/{cloud_id}")
 def get_cloud_dataset(
-    cloud_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    cloud_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Cloud dataset detail for the run form and the datasets page — whether it
     can drive a run, whether its scenarios carry ground truth (gates Trajectory*
     evaluators), the DRAFT status and the published versions."""
+    _require_cloud_visible(db, ws, cloud_id, viewer)
     client = control_client(ws.context)
     detail = ac.get_dataset(client, dataset_id=cloud_id)
     return _cloud_detail_out(client, detail)
@@ -740,10 +780,14 @@ def _cloud_detail_out(client: Any, detail: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/datasets/cloud/{cloud_id}/publish-version")
 def publish_cloud_dataset_version(
-    cloud_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    cloud_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """PUBLISH VERSION for a cloud-only dataset (no local row): CreateDatasetVersion,
     poll to ACTIVE, return the refreshed detail with the new version listed."""
+    _require_cloud_visible(db, ws, cloud_id, viewer)
     client = control_client(ws.context)
     final = _publish_version(client, cloud_id)
     return _cloud_detail_out(client, final)
@@ -755,9 +799,11 @@ def delete_cloud_dataset_version(
     version: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Delete ONE published version (DeleteDataset with datasetVersion); the draft
     and the other versions stay. A local row's cached version list is refreshed."""
+    _require_cloud_visible(db, ws, cloud_id, viewer)
     client = control_client(ws.context)
     ac.delete_dataset(client, dataset_id=cloud_id, version=version)
     for row in _rows_with_cloud(db, ws, cloud_id):
@@ -781,12 +827,41 @@ def _rows_with_cloud(db: Session, ws: WorkspaceScope, cloud_id: str) -> list[Eva
     ]
 
 
+def _hidden_cloud_ids(db: Session, ws: WorkspaceScope, viewer: Viewer) -> set[str]:
+    """Cloud dataset ids hidden from `viewer`: a cloud dataset follows the local
+    rows linked to it — visible when ANY of them is — and one with no local row
+    (made outside the console) has no known creator, so it stays shared."""
+    if not viewer.filters:
+        return set()
+    linked: dict[str, bool] = {}
+    for row in (
+        db.query(EvalDataset)
+        .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
+        .all()
+    ):
+        cloud_id = (row.cloud or {}).get("dataset_id")
+        if cloud_id:
+            linked[cloud_id] = linked.get(cloud_id, False) or visibility.sees(
+                viewer, db, row.created_by
+            )
+    return {cloud_id for cloud_id, seen in linked.items() if not seen}
+
+
+def _require_cloud_visible(
+    db: Session, ws: WorkspaceScope, cloud_id: str, viewer: Viewer
+) -> None:
+    if cloud_id in _hidden_cloud_ids(db, ws, viewer):
+        raise NotFoundError("dataset.not_found", "dataset not found")
+
+
 @router.delete("/datasets/cloud/{cloud_id}")
 def delete_cloud_dataset(
     cloud_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_cloud_visible(db, ws, cloud_id, viewer)
     ac.delete_dataset(control_client(ws.context), dataset_id=cloud_id)
     # A local row pointing at this cloud dataset loses its live copy — the next
     # sync creates a fresh dataset.
@@ -804,6 +879,7 @@ _LIST_DEFINITION = {"Custom": "judge", "CustomDerived": "derived", "CustomCode":
 def list_evaluators(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     builtin = [{**row, **creators.empty()} for row in _builtin_evaluator_rows()]
     live: list[dict[str, Any]] = []
@@ -845,6 +921,10 @@ def list_evaluators(
         }
     # the creator of an evaluator made through the console (AWS keeps no ledger
     # row of it); third-party and out-of-console ones read null
+    hidden = visibility.hidden_aws_ids(
+        viewer, db, ws.id, creators.EVALUATOR, (row["id"] for row in live)
+    )
+    live = [row for row in live if row["id"] not in hidden]
     known = creators.lookup(db, ws.id, creators.EVALUATOR, (row["id"] for row in live))
     for row in live:
         row.update(known.get(row["id"]) or creators.empty())
@@ -1111,7 +1191,9 @@ def get_evaluator(
     evaluator_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    _require_visible_evaluator(db, ws, viewer, evaluator_id)
     detail = _evaluator_out(
         ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     )
@@ -1144,9 +1226,12 @@ def _reject_managed(evaluator_id: str) -> None:
 def update_evaluator(
     evaluator_id: str,
     req: JudgeUpdate,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id)
     _require_one_definition(req)
     if req.instructions is not None:
         _require_placeholder(req.instructions)
@@ -1207,8 +1292,10 @@ def delete_evaluator(
     evaluator_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id)
     from app.assistant.evaluation_assets import managed_evaluator
 
     owner = managed_evaluator(db, ws.id, evaluator_id)
@@ -1317,6 +1404,7 @@ def list_runs(
     agent_id: str | None = Query(None, min_length=1, max_length=32),
     dataset_id: str | None = Query(None, min_length=1, max_length=16),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Newest-first page of runs plus the unpaginated `total`.
 
@@ -1329,7 +1417,9 @@ def list_runs(
     NEXT STEPS panel, which lists the runs of one agent on the Dataset the
     evaluation-assets operation created.
     """
-    query = db.query(EvalRun).filter(EvalRun.workspace_id == ws.id)
+    query = db.query(EvalRun).filter(
+        EvalRun.workspace_id == ws.id, visibility.clause(viewer, EvalRun.created_by)
+    )
     if mode:
         query = query.filter(EvalRun.mode == mode)
     if agent_id:
@@ -1353,12 +1443,9 @@ def get_run(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    run = db.get(EvalRun, run_id)
-    # A run of another workspace reads as absent, like every other foreign id.
-    if run is None or run.workspace_id != ws.id:
-        raise NotFoundError("run.not_found", "run not found")
-    return _run_out(run)
+    return _run_out(_run_in(db, ws, run_id, viewer=viewer))
 
 
 @router.get("/runs/{run_id}/results")
@@ -1366,13 +1453,12 @@ def get_run_results(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Per-session scores + judge explanations of a terminal evaluators run,
     read on demand from the batch's results log stream (never persisted).
     ``available=false`` + ``reason`` when there is nothing to read."""
-    run = db.get(EvalRun, run_id)
-    if run is None or run.workspace_id != ws.id:
-        raise NotFoundError("run.not_found", "run not found")
+    run = _run_in(db, ws, run_id, viewer=viewer)
     return service.run_results(run, workspace=ws.context)
 
 
@@ -1382,6 +1468,7 @@ def create_run(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     if bool(req.agent_id) == bool(req.log_source):
         raise AppError(
@@ -1444,10 +1531,11 @@ def create_run(
     dataset_name = None
     time_range = None
     if req.dataset_id:
-        dataset = _dataset_in(db, ws, req.dataset_id)
+        dataset = _dataset_in(db, ws, req.dataset_id, viewer=viewer)
         items = dataset.items
         dataset_name = dataset.name
     elif req.cloud_dataset_id:
+        _require_cloud_visible(db, ws, req.cloud_dataset_id, viewer)
         cloud_name, items = _cloud_dataset_items(
             req.cloud_dataset_id, ws, version=req.dataset_version
         )
@@ -1479,7 +1567,7 @@ def create_run(
     if req.mode == "evaluators":
         _assert_target_references(
             db, ws, req.evaluators, items, dataset_scope,
-            agent_spec=agent.spec if agent else None,
+            agent_spec=agent.spec if agent else None, viewer=viewer,
         )
     log_source = None
     if req.log_source:
@@ -1546,15 +1634,14 @@ def stop_run(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Stop an active run. With a batch on AWS this is StopBatchEvaluation
     (202: the batch goes STOPPING → STOPPED and the row follows); a queued run
     is cancelled locally and comes back `stopped` at once; a run replaying its
     dataset stops before StartBatchEvaluation. Terminal runs → 409
     `run.not_active`."""
-    run = db.get(EvalRun, run_id)
-    if run is None or run.workspace_id != ws.id:
-        raise NotFoundError("run.not_found", "run not found")
+    run = _run_in(db, ws, run_id, viewer=viewer)
     return _run_out(service.request_stop(run.id, workspace=ws.context))
 
 
@@ -1563,13 +1650,12 @@ def recheck_run(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Re-read a failed run's batch from AWS: a terminal batch settles the row
     (e.g. `completed` with scores); one still running resumes polling
     (`evaluating`). Only failed runs with a batch → else 409 `run.not_recheckable`."""
-    run = db.get(EvalRun, run_id)
-    if run is None or run.workspace_id != ws.id:
-        raise NotFoundError("run.not_found", "run not found")
+    run = _run_in(db, ws, run_id, viewer=viewer)
     return _run_out(service.recheck_run(run.id, workspace=ws.context))
 
 
@@ -1605,10 +1691,17 @@ class RecommendationAccept(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=recommendations.SYSTEM_PROMPT_MAX)
 
 
-def _run_in(db: Session, ws: WorkspaceScope, run_id: str) -> EvalRun:
+def _run_in(
+    db: Session, ws: WorkspaceScope, run_id: str, *, viewer: Viewer = Viewer.ALL
+) -> EvalRun:
+    """The run, or 404 — a run of another workspace, or one hidden from the viewer
+    by workspace isolation, reads as absent, like every other foreign id."""
     run = db.get(EvalRun, run_id)
     if run is None or run.workspace_id != ws.id:
         raise NotFoundError("run.not_found", "run not found")
+    visibility.require_seen(
+        viewer, db, run.created_by, NotFoundError("run.not_found", "run not found")
+    )
     return run
 
 
@@ -1617,13 +1710,15 @@ def get_recommendation_inputs(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """The current system prompt + tool descriptions a recommendation would revise.
 
     ``source`` says where they came from: ``harness`` (live GetHarness, incl. the
     attached Gateways' tool schemas), ``spec`` (the Launchpad agent spec) or
     ``manual`` (nothing readable — the operator must enter them)."""
-    return recommendations.resolve_inputs(db, _run_in(db, ws, run_id), ws.context)
+    run = _run_in(db, ws, run_id, viewer=viewer)
+    return recommendations.resolve_inputs(db, run, ws.context)
 
 
 @router.get("/runs/{run_id}/recommendations")
@@ -1631,10 +1726,11 @@ def list_run_recommendations(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Recommendations started from this run, newest first; each non-terminal one
     is refreshed from GetRecommendation on read."""
-    run = _run_in(db, ws, run_id)
+    run = _run_in(db, ws, run_id, viewer=viewer)
     rows = recommendations.list_for_run(db, run, ws.context)
     return {"recommendations": [recommendations.out(r) for r in rows]}
 
@@ -1645,10 +1741,11 @@ def create_run_recommendations(
     req: RecommendationCreate,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Start one StartRecommendation job per requested kind, its traces pinned to
     this run's batch evaluation (only completed runs with a batch → else 409)."""
-    run = _run_in(db, ws, run_id)
+    run = _run_in(db, ws, run_id, viewer=viewer)
     rows = recommendations.start(
         db, run, ws.context,
         kinds=list(dict.fromkeys(req.kinds)),
@@ -1670,10 +1767,11 @@ def edit_run_recommendation(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Save the operator's revision of a COMPLETED system-prompt recommendation without
     publishing anything; the card, copy and accept then use it. Ledger-only."""
-    run = _run_in(db, ws, run_id)
+    run = _run_in(db, ws, run_id, viewer=viewer)
     row = db.get(EvalRecommendation, rec_id)
     if row is None or row.run_id != run.id or row.workspace_id != run.workspace_id:
         raise NotFoundError("recommendation.not_found", "recommendation not found")
@@ -1691,6 +1789,7 @@ def accept_run_recommendation(
     req: RecommendationAccept | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Accept a COMPLETED system-prompt recommendation: re-publish the run's Harness
     with the recommended prompt (UpdateHarness → a NEW Harness version; DEFAULT
@@ -1699,7 +1798,7 @@ def accept_run_recommendation(
     from app.deployer.harness import strip_generated_prompt
     from app.routers.agents import republish_agent
 
-    run = _run_in(db, ws, run_id)
+    run = _run_in(db, ws, run_id, viewer=viewer)
     row, agent, prompt = recommendations.acceptance_target(db, run, rec_id)
     reviewed = recommendations.edited_prompt(row)
     if req is not None and req.system_prompt is not None:
@@ -1737,15 +1836,14 @@ def delete_run(
     run_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Remove the ledger row of a run that produced no result — ``failed`` or
     ``stopped``. Completed runs are the evaluation history and stay; an active run is
     stopped first (409 ``run.not_deletable``). Only the row goes: a batch evaluation that
     reached AWS is left as it is (AWS stays the source of truth; the row was the
     console's pointer to it, and the response says whether one existed)."""
-    run = db.get(EvalRun, run_id)
-    if run is None or run.workspace_id != ws.id:
-        raise NotFoundError("run.not_found", "run not found")
+    run = _run_in(db, ws, run_id, viewer=viewer)
     if run.status not in DELETABLE_RUN_STATUSES:
         raise AppError(
             "run.not_deletable",
@@ -1764,6 +1862,7 @@ def delete_run(
 def queue_state(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Queue depth and the concurrency cap stay global numbers — the AgentCore
     batch quota they exist for is per account, and one process serves every
@@ -1777,7 +1876,9 @@ def queue_state(
         mine = set(
             db.scalars(
                 select(EvalRun.id).where(
-                    EvalRun.id.in_(named), EvalRun.workspace_id == ws.id
+                    EvalRun.id.in_(named),
+                    EvalRun.workspace_id == ws.id,
+                    visibility.clause(viewer, EvalRun.created_by),
                 )
             )
         )

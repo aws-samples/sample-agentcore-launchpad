@@ -139,9 +139,14 @@ Management console: the agent lifecycle (deploy, import, delete, convert) and
 starting evaluation/insights runs. Members hold them by default; revoking them
 shuts off deploys and billable eval jobs for that account.
 
-Note the console has no per-user data partitioning: every member sees and can
-mutate the same shared resources, so hand member accounts only to people you
-would let operate the environment.
+Note the console has no per-user data partitioning by default: in a `shared`
+workspace every member sees and can mutate the same shared resources, so hand
+member accounts only to people you would let operate the environment. An admin
+can switch a workspace to `isolated` (Workspaces → detail → **Member visibility** card), after
+which each member sees only the knowledge bases, managed memories, evaluation
+assets, experiments, canaries and Skill Lab jobs/task sets they created, plus
+admin-created and creator-unknown ones; agents, registry records and gateways stay
+shared in both modes.
 
 ### System-managed presets / 系统托管预置
 

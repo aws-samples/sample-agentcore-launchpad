@@ -7718,7 +7718,18 @@
         "succeeded": "Succeeded",
         "failed": "Failed"
       },
-      "accountHint": "Fixed to this deployment's account. Choose 'External AWS account' to register an environment elsewhere."
+      "accountHint": "Fixed to this deployment's account. Choose 'External AWS account' to register an environment elsewhere.",
+      "visibility": {
+        "title": "Member visibility",
+        "sub": "Who sees the resources members create in this workspace. Saving moves no data; it applies from each member's next request.",
+        "label": "Visibility",
+        "current": "Current mode:",
+        "shared": "Shared",
+        "isolated": "Isolated",
+        "sharedHint": "Shared: every member sees every resource in this workspace (the default).",
+        "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries and Skill Lab. Agents are not affected yet.",
+        "saved": "Member visibility saved. It applies from the next request."
+      }
     },
     "announcements": {
       "untitled": "(no title yet)",

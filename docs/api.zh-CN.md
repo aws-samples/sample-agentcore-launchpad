@@ -378,6 +378,38 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | 实验 / 灰度 | `GET` / `POST /api/experiments`、`GET /{id}`；`GET` / `POST /api/runtime-canaries`、`GET /{id}` |
 | Skill Lab | 任务与任务集的列表 / 详情 / 创建、`POST /jobs/{id}/import-taskset`（由导入者创建该任务集） |
 
+## Workspace 资源可见性 / Workspace resource visibility
+
+管理员按 workspace 决定成员能否看到彼此的资源：
+
+| 方法 | 路径 | 角色 | 请求体 / 响应 |
+|---|---|---|---|
+| `GET` | `/api/workspaces/{workspace_id}/settings/visibility` | admin | `{"resource_visibility": "shared" \| "isolated"}`——从未设置时为 `shared` |
+| `PUT` | `/api/workspaces/{workspace_id}/settings/visibility` | admin | 请求体与响应均为 `{"resource_visibility": "shared" \| "isolated"}`；其他取值 → `422 validation.invalid_request`；成员 → `403 auth.forbidden`；未知 workspace → `404 workspace.not_found` |
+
+两者都作用于路径参数（而非 `X-Workspace`），并且对 bootstrap 尚未完成的 workspace 同样可用。
+`GET /api/workspaces` 与管理员 workspace 路由返回的每个 workspace 行都带 `resource_visibility`。
+切换在下一次请求生效，不改动任何数据。
+
+在 `isolated` 下，**成员**能看到上表所列种类的一个资源，当且仅当它的 `created_by` 是该成员自己的
+`users.id`、为 `null`（创建者未知——旧行、示例、配置 admin、在控制台之外创建的资源），或是一个
+**当前**角色为 `admin` 的账号的 `users.id`。管理员看到一切。内置 / 第三方评估器与 bootstrap 记忆
+始终可见；云端数据集跟随与之关联的本地数据集（任一可见即可见；没有本地行的为共享），实验 / 灰度持有的
+在线评估配置（`exp_<id8>_…` / `can_<id8>_…`）跟随其实验或灰度。
+
+被隐藏的资源在所有地方都不存在，返回与不存在的 id 相同的结果：
+
+| 界面 | 被隐藏时的表现 |
+|---|---|
+| 列表与选择器 | 不出现——在分页之前过滤，因此 `GET /api/eval/runs` 的 `total` 以及 20 行的实验 / 灰度列表只统计可见行；`GET /api/memory/resources` 会完全去掉被隐藏的托管记忆（不会作为"已发现"列出） |
+| 按 id 的路由 | 该种类的 not-found：`kb.not_found`、`memory.not_managed`、`dataset.not_found`（本地与云端）、`pipeline.not_found`、`run.not_found`、`online_eval.not_found`（含 `/results`；被隐藏的报告运行 → `online_eval.report_not_found`）、`aws.not_found`（自定义评估器的 `GET`/`PUT`/`DELETE`）、`experiment.not_found`、`canary.not_found`、`skill_lab.job_not_found`、`skill_lab.taskset_not_found` |
+| 创建时的引用 | 与不存在的 id 相同：在被隐藏的数据集上发起运行 → `404 dataset.not_found`，使用被隐藏的评估器 → `422 run.evaluator_not_found`；在线评估配置 / 实验 `gateway` / 灰度中的被隐藏评估器 → `400 {online_eval,experiment,canary}.evaluator_unsupported`；立即评分（`POST /api/observability/sessions/{id}/evaluate`）→ `404 aws.not_found`；pipeline 输出 / from-sessions / 实验或灰度 `traffic` 的数据集 → `404 dataset.not_found`；实验的 `recommend_source_run_id` → `404 experiment.recommend_source_not_found`；灰度的 `source_experiment_id` → `400 canary.source_experiment_invalid`；Skill Lab 任务的任务集 → `404 skill_lab.taskset_not_found` |
+| 聚合 | `GET /api/overview` 的 `eval_pass_rate` / `eval_runs` 与 `GET /api/overview/online-quality` 只覆盖可见的运行 / 配置（质量卡片按查看者缓存） |
+| 架构助手目录 | 只列出会话所有者能看到的知识库 |
+
+内部引用不受影响：引用了隐藏资源的可见资源（管理员的实验回放某成员的数据集、pipeline 追加到其配置的
+数据集）继续工作。Agent 以及 Agent spec 里固定的知识库 / 记忆尚未覆盖。
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库

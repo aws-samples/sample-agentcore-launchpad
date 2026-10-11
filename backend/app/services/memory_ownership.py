@@ -23,10 +23,11 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import ManagedMemory
-from app.services import creators
+from app.services import creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.memory import memory_id_or_none, spec_memory_id
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
 
 
@@ -67,15 +68,36 @@ def is_managed(db: Session, workspace: WorkspaceContext, memory_id: str | None) 
     )
 
 
-def require_managed(db: Session, workspace: WorkspaceContext, memory_id: str) -> None:
+def require_managed(
+    db: Session, workspace: WorkspaceContext, memory_id: str, *, viewer: Viewer = Viewer.ALL
+) -> None:
     """404 for an id this workspace does not manage — the same answer an id from
-    another workspace gets, so the lifecycle API discloses nothing about it."""
-    if not is_managed(db, workspace, memory_id):
+    another workspace gets, so the lifecycle API discloses nothing about it. A
+    managed memory hidden from ``viewer`` by workspace isolation answers the same.
+    ``is_managed`` itself stays unfiltered: agent pins, deploy and chat use it."""
+    if not is_managed(db, workspace, memory_id) or memory_id in hidden_ids(
+        db, workspace, viewer
+    ):
         raise NotFoundError(
             "memory.not_managed",
             "this memory is not managed by the workspace",
             {"memory_id": memory_id},
         )
+
+
+def hidden_ids(db: Session, workspace: WorkspaceContext, viewer: Viewer) -> set[str]:
+    """Managed memory ids workspace isolation hides from ``viewer`` (the bootstrap
+    memory has no row and is always visible)."""
+    if not viewer.filters:
+        return set()
+    return {
+        memory_id
+        for (memory_id,) in db.query(ManagedMemory.memory_id).filter(
+            ManagedMemory.workspace_id == workspace.id,
+            ManagedMemory.created_by.is_not(None),
+            ~visibility.clause(viewer, ManagedMemory.created_by),
+        )
+    }
 
 
 def register(

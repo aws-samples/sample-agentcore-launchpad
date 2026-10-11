@@ -192,7 +192,8 @@ def check_revision(row: AssistantConversation, expected: int) -> None:
 def live_catalog(
     workspace: WorkspaceContext, sources: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Merge only server-owned sources and re-read their real bytes on EVERY call."""
+    """Merge only server-owned sources and re-read their real bytes on EVERY call.
+    Unrestricted — conversation paths wrap it in ``service.restrict_catalog``."""
     from app.assistant import service
 
     catalog = service.fetch_catalog(workspace)
@@ -259,7 +260,10 @@ def save_selection(
     cid, principal = row.id, principal_of(identity)
     sources = list(row.preparation_sources or [])
     selected_tools = request.tools if request.tools is not None else view(db, row)["tools"]
-    catalog = live_catalog(workspace, sources)  # no write lock across AWS reads
+    catalog = service.restrict_catalog(  # no write lock across AWS reads
+        db, row.workspace_id, service.owner_viewer(db, row.workspace_id, row.owner_principal),
+        live_catalog(workspace, sources),
+    )
     # Reuse the exact Harness mount contract; no invented paths or gateway provisioning.
     candidate = proposal.ProposalContent(
         name="prepared-agent", system_prompt="Resource preparation",
@@ -370,7 +374,10 @@ def import_skills(
                 row.preparation_sources = list(sources)
                 db.commit()
             results.append({"name": source["name"], "ok": True, "key": source["key"]})
-        catalog = live_catalog(workspace, sources)
+        catalog = service.restrict_catalog(
+            db, row.workspace_id, service.owner_viewer(db, row.workspace_id, row.owner_principal),
+            live_catalog(workspace, sources),
+        )
         service._lock_conversation(db, cid)
         row = service.accessible_conversation(db, workspace.id, principal, cid)
         require_unlocked(db, cid)

@@ -1567,8 +1567,11 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 (`/api/agents/{id}/invoke`、`/api/registry/a2a-demo`)刻意保持 member 可达——这与 Chat
 已经给每个成员的能力完全相同,Chat 开着却锁 invoke 保护不了任何东西。
 
-实际效果是 `member` 接近只读。在数据**尚未**按用户隔离的前提下这是有意为之:所有已登录
-账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
+实际效果是 `member` 接近只读。在 `shared`（默认）workspace 中数据**不**按用户隔离，这是有意为之:
+所有已登录账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
+管理员可以把 workspace 切换为 `isolated`，此后每个成员只能看到覆盖种类中自己的、创建者未知的
+以及管理员创建的资源（见「Workspaces —— 成员资源可见性」）；Agent、注册表记录与 Gateway 在两种
+模式下都保持共享。
 仅管理员可用的模块(`/users`、`/agents`、Studio 画布、注册表的注册/编辑)会渲染"需要
 管理员权限"面板而不是发出请求;`auth.forbidden` 也映射进了 `apiErrors` i18n 块,因此
 任何漏加门禁的界面仍会显示本地化的原因。
@@ -1871,6 +1874,27 @@ Users 页面按账号编辑（审批时会分配授权，`PATCH /api/users/{id}`
 `PUT`）。两者都只写 `user_workspaces`;管理员从不作为其中的行存在，因为他们靠角色就能触达
 每一个 workspace。
 
+**成员资源可见性。** 每个 workspace 要么是 `shared`（默认——每个成员都能看到该 workspace 的全部
+资源，与该设置出现之前的行为一致），要么是 `isolated`；它存于
+`Workspace.settings["resource_visibility"]`，由管理员切换
+（`PUT /api/workspaces/{id}/settings/visibility`，即 Workspaces 详情视图上的可见性卡片）。
+在 `isolated` 下，成员能看到一个资源，当且仅当它的 `created_by`（见「资源创建者」）是该成员自己的
+`users.id`、为 NULL（创建者未知：旧行、示例、配置 admin、在控制台之外创建的资源），或属于一位
+**当前**的管理员——管理员相当于发布者，因此被降级的管理员的资源会转为私有，已删除创建者遗留的
+悬空 id 只有管理员可见。管理员始终看到一切。覆盖的种类是：知识库、托管记忆、评估数据集（云端数据集
+跟随与之关联的本地行；未关联的云端数据集为共享）、数据处理 pipeline、评估运行、在线评估配置
+（`exp_<id8>_…` / `can_<id8>_…` 配置跟随其实验 / 灰度）、自定义评估器（内置与第三方始终可见）、
+实验、运行时灰度，以及 Skill Lab 任务与任务集；bootstrap 记忆始终可见。唯一的模块
+`app/services/visibility.py` 负责这条规则：一个 `Viewer`（只有 isolated workspace 中的成员
+`filters` 为真），配一对行谓词与其 SQL 子句，由每个种类的收口函数（`_dataset_in`、`_run_in`、
+`online.get_config`、`jobs.get_job` 等）通过仅限关键字、默认 `Viewer.ALL` 的 `viewer` 参数使用——
+因此 worker、物化器、purge、pipeline 线程与部署路径都不受过滤，引用了隐藏资源的可见资源也能继续
+工作。隐藏即处处隐藏：列表（在任何 count / offset / limit 之前于 SQL 中过滤）、选择器（读的是同样的
+列表）、按 id 的路由以及创建时的引用都返回该种类普通的 not-found，不泄露资源是否存在。概览的通过率 /
+运行数与在线质量卡片只统计查看者能看到的内容（该卡片按查看者缓存），架构助手的目录只列出会话
+**所有者**能看到的知识库。该设置随 workspace 行在每次请求时重新读取，因此切换会在下一次请求生效，
+且不改动任何数据。Agent 以及 Agent spec 里固定的知识库 / 记忆尚未覆盖。
+
 **移除。** `DELETE /api/workspaces/{id}` 是一次解除关联——行与它的授权一起消失，AWS 不受
 影响——并且只要还有任何按范围划分的行指向该 workspace，它就会被拒绝。这道门禁同时也会困住
 一次*失败的*注册:它的 bootstrap 留下的那一行 job 会挡住解除关联，并占住那个
@@ -2001,7 +2025,8 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 `/reports` 的调用者。没有人类主体的路径——Skill Lab 示例、bootstrap 记忆、实验/灰度持有的
 在线评估配置、发现的资源——不记录任何创建者。旧行不回填（两个字段均为 NULL，控制台显示
 "—"），也没有任何请求体可以携带创建者。被纳管（adopt）的记忆保留执行纳管的管理员的
-名字，但没有 `created_by`：它在 AWS 中早已存在。
+名字，但没有 `created_by`：它在 AWS 中早已存在。`created_by` 也是 workspace 可见性隔离所依据的
+归属键（见「Workspaces —— 成员资源可见性」）。
 
 **Job/event 模型。** 创建 Agent 返回 `202` 并带一个 `job_id`。部署 job 在后台线程
 运行,每次阶段切换向 `Job.log` 追加一条 JSONL 事件;`GET /api/jobs/{id}` 返回这些

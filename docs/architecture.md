@@ -2877,9 +2877,12 @@ denials, toggled per user in the User Management console and enforced on the
 member's next request. A denied call answers `auth.permission_required` (403)
 naming the missing key.
 
-Data is **not** partitioned per user: every authenticated account sees — and,
-since the opening, can mutate — the same agents, records, datasets, knowledge
-bases and gateways. Revoking the `perm:*` keys restores a partial guardrail for
+In a `shared` workspace (the default) data is **not** partitioned per user: every
+authenticated account sees — and, since the opening, can mutate — the same agents,
+records, datasets, knowledge bases and gateways. An admin can switch a workspace to
+`isolated`, after which each member sees only their own, creator-unknown and
+admin-created resources of the in-scope kinds (see *Workspaces — Member resource
+visibility*); agents, registry records and gateways stay shared either way. Revoking the `perm:*` keys restores a partial guardrail for
 one user (no deploys, no eval runs), but the rest of the console remains writable
 for any member; treat member accounts accordingly. The `/users` console module
 renders an administrator-required panel instead of firing a request.
@@ -3265,6 +3268,36 @@ or revokes a selection in one call (`PUT` on the same path). Both write only
 `user_workspaces`; administrators are never rows there, because they reach every
 workspace by role.
 
+**Member resource visibility.** Each workspace is `shared` (the default — every
+member sees every resource of the workspace, the behavior before the setting
+existed) or `isolated`, stored as `Workspace.settings["resource_visibility"]` and
+switched by an admin (`PUT /api/workspaces/{id}/settings/visibility`, the
+Visibility card on the Workspaces detail view). Under `isolated` a member sees a
+resource iff its `created_by` (see *Resource creators*) is the member's own
+`users.id`, is NULL (creator unknown: legacy rows, samples, the config admin,
+resources made outside the console) or belongs to a **current** admin — admins act
+as publishers, so a demoted admin's resources turn private and a deleted creator's
+dangling id is visible to admins only. Admins always see everything. The kinds are
+knowledge bases, managed memories, eval datasets (cloud datasets follow their linked
+local rows; an unlinked one is shared), pipelines, eval runs, online eval configs
+(an `exp_<id8>_…` / `can_<id8>_…` config follows its experiment / canary), custom
+evaluators (built-in and third-party always visible), experiments, runtime canaries
+and Skill Lab jobs and task sets; the bootstrap memory is always visible. One module,
+`app/services/visibility.py`, owns the rule: a `Viewer` (`filters` is true only for a
+member in an isolated workspace) with a row predicate and its SQL clause, used by
+every per-kind choke point (`_dataset_in`, `_run_in`, `online.get_config`,
+`jobs.get_job`, …) through a keyword-only `viewer` defaulting to `Viewer.ALL`, so
+workers, the materializer, purge, the pipeline thread and the deploy path stay
+unfiltered and a visible resource that references a hidden one keeps working. Hidden
+means hidden everywhere — lists (filtered in SQL before any count / offset / limit),
+pickers (which read the same lists), by-id routes and create-time references all
+answer the kind's ordinary not-found, so existence is not disclosed. The overview
+pass rate / run count and the online-quality tile count only what the viewer sees
+(the tile is cached per viewer), and the architect catalog lists the KBs its
+conversation **owner** can see. The setting is re-read with the workspace row on
+every request, so a switch applies to the next request and changes no data. Agents
+and agent-spec KB / memory pins are not covered yet.
+
 **Removal.** `DELETE /api/workspaces/{id}` is a detach — the row and its grants
 go, AWS is untouched — and it is refused while any scoped row still names the
 workspace. That guard also traps a *failed* registration: the one job row its
@@ -3484,7 +3517,9 @@ caller of `/reports`. Paths with no human principal — Skill Lab samples, the
 bootstrap memory, experiment/canary-owned online configs, discovered resources —
 record nothing. Legacy rows are never backfilled (both fields NULL, the console
 shows "—"), and no request body carries the creator. An adopted memory keeps the
-adopting admin's name but no `created_by`: it pre-existed in AWS.
+adopting admin's name but no `created_by`: it pre-existed in AWS. `created_by` is
+also the key workspace visibility isolation filters on (*Workspaces — Member
+resource visibility*).
 
 File-based SQLite uses SQLAlchemy `NullPool`. Every request-owned session
 already closes deterministically, so retaining the SQLAlchemy 2 default

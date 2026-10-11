@@ -26,8 +26,9 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation.queue import EvalRunQueue
-from app.services import creators
+from app.services import creators, visibility
 from app.services.local_exec import kill_process_group
+from app.services.visibility import Viewer
 from app.services.workspace import context_for_workspace
 from app.skill_lab import artifacts, runner, task_assets
 from app.skill_lab import tasksets as taskset_svc
@@ -63,17 +64,28 @@ def job_out(row: SkillLabJob) -> dict[str, Any]:
     }
 
 
-def get_job(db: Session, workspace_id: str, job_id: str) -> SkillLabJob:
+def get_job(
+    db: Session, workspace_id: str, job_id: str, *, viewer: Viewer = Viewer.ALL
+) -> SkillLabJob:
+    """The job, or 404 — also when workspace isolation hides it from ``viewer``."""
     row = db.get(SkillLabJob, job_id)
     if row is None or row.workspace_id != workspace_id:
         raise AppError("skill_lab.job_not_found", f"job '{job_id}' not found", status_code=404)
+    visibility.require_seen(
+        viewer, db, row.created_by,
+        AppError("skill_lab.job_not_found", f"job '{job_id}' not found", status_code=404),
+    )
     return row
 
 
-def list_jobs(db: Session, workspace_id: str, type_filter: str | None = None) -> list[dict]:
+def list_jobs(
+    db: Session, workspace_id: str, type_filter: str | None = None, *,
+    viewer: Viewer = Viewer.ALL,
+) -> list[dict]:
     query = (
         select(SkillLabJob)
         .where(SkillLabJob.workspace_id == workspace_id)
+        .where(visibility.clause(viewer, SkillLabJob.created_by))
         .order_by(SkillLabJob.created_at.desc())
     )
     if type_filter:
@@ -82,10 +94,11 @@ def list_jobs(db: Session, workspace_id: str, type_filter: str | None = None) ->
 
 
 def _resolve_tasks_file(
-    db: Session, workspace_id: str, taskset_id: str, split: str | None
+    db: Session, workspace_id: str, taskset_id: str, split: str | None, *,
+    viewer: Viewer = Viewer.ALL,
 ) -> tuple[Path, str, str]:
     """(file path, resolved split, taskset name); split preference test→val→train."""
-    row = taskset_svc.get_row(db, workspace_id, taskset_id)
+    row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
     directory = taskset_svc.taskset_dir(row.id)
     if row.mode == "single":
         if split:
@@ -156,6 +169,7 @@ def submit_eval_job(
     split: str | None = None,
     params: dict[str, Any] | None = None,
     creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     # The per-taskset lock keeps the source stable through snapshot copy and
     # the first commit that makes this job row visible. Delete then either
@@ -164,7 +178,7 @@ def submit_eval_job(
         runner.require_worker(workspace)
         merged_params = runner.clamp_params(params)
         tasks_file, resolved_split, taskset_name = _resolve_tasks_file(
-            db, workspace_id, taskset_id, split
+            db, workspace_id, taskset_id, split, viewer=viewer
         )
 
         row = SkillLabJob(
@@ -214,15 +228,17 @@ def submit_train_job(
     taskset_id: str,
     params: dict[str, Any] | None = None,
     creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
-    """Submit training after atomically snapshotting the whole task set."""
+    """Submit training after atomically snapshotting the whole task set. A task
+    set hidden from ``viewer`` (workspace isolation) is a missing one."""
     # The per-taskset lock keeps the source stable through snapshot copy and
     # the first commit that makes this job row visible. Delete then either
     # runs first or observes the committed reference and refuses.
     with taskset_svc.taskset_operation(taskset_id):
         runner.require_worker(workspace)
         merged_params = runner.clamp_train_params(params)
-        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
+        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
 
         row = SkillLabJob(
             workspace_id=workspace_id,
@@ -405,6 +421,7 @@ def submit_taskgen_job(
     params: dict[str, Any] | None = None,
     attachments: list[dict[str, Any]] | None = None,
     creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """AI task-set generation (studio parity): an exec-backend agent authors
     tasks for the selected skill(s) on the AgentCore worker; the result is a
@@ -425,7 +442,7 @@ def submit_taskgen_job(
     ts_row = None
     tasks_by_split: dict[str, Any] = {}
     if taskset_id is not None:
-        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
+        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
         # Refuse at submit time, not at apply time: generating against a
         # read-only sample would only ever dead-end at apply-expansion.
         taskset_svc._reject_sample_write(ts_row)

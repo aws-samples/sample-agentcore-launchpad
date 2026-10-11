@@ -19,7 +19,7 @@ import {
   Table,
 } from "../../ui";
 import { WORKSPACE_STATUSES } from "./status";
-import { ExternalTag, HubTag, StatusTag } from "./tags";
+import { ExternalTag, HubTag, StatusTag, VisibilityTag } from "./tags";
 
 /** While any bootstrap runs, the list re-reads so its status tag moves on its own. */
 const POLL_MS = 5000;
@@ -67,6 +67,7 @@ export function WorkspaceList() {
               {w.name}
             </LinkButton>
             {w.is_default && <HubTag />}
+            {w.resource_visibility === "isolated" && <VisibilityTag mode="isolated" />}
           </span>
           <span className="sub mono">ID: {w.id}</span>
         </div>

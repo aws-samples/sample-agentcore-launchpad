@@ -484,6 +484,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Bulk grant/revoke from the workspace's side (per-user replacement stays on
     # PATCH /api/users/{id}); both write only `user_workspaces`.
     ("PUT", "/api/workspaces/{workspace_id}/grants"): ADMIN,
+    # Shared vs isolated member resource visibility (services/visibility.py).
+    ("GET", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
+    ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
@@ -554,6 +557,9 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
         ("PUT", "/api/workspaces/{workspace_id}/grants"),
+        # The target is the path parameter, like grants.
+        ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),
+        ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
     }
 )
 

@@ -40,10 +40,11 @@ from app.optimization.models import Experiment
 from app.optimization.providers import evidence as rec_evidence
 from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
-from app.services import creators
+from app.services import creators, visibility
 from app.services.agentcore.client import control_client, data_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates.toolkits import toolkit_tool_descriptions
 
@@ -468,7 +469,8 @@ _REC_KEYS: dict[str, tuple[str, ...]] = {
 
 
 def resolve_recommend_source(
-    agent_id: str, run_id: str | None, workspace: WorkspaceContext
+    agent_id: str, run_id: str | None, workspace: WorkspaceContext, *,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """An evaluation run id → the trace source RECOMMEND should read, validated.
 
@@ -487,6 +489,8 @@ def resolve_recommend_source(
     db = SessionLocal()
     try:
         run = db.get(EvalRun, run_id)
+        if run is not None and not visibility.sees(viewer, db, run.created_by):
+            run = None  # workspace isolation: a hidden run is a missing one
         if run is None:
             raise AppError(
                 "experiment.recommend_source_not_found",

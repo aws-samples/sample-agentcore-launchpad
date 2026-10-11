@@ -79,12 +79,13 @@ from app.models.assistant import AssistantConversation, AssistantMessage, Assist
 from app.models.ledger import Agent, Job, Workspace
 from app.routers.auth import Identity
 from app.schemas.agent import ToolRef
-from app.services import agent_names, knowledge, registry_console
+from app.services import agent_names, knowledge, registry_console, visibility
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client, data_client
 from app.services.kb_gateway import gateway_identity
 from app.services.memory import scoped_actor
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
 from app.system_agents import service as system_agents
 from app.system_agents.presets import ARCHITECT
@@ -598,6 +599,43 @@ def verify_skill_copy(workspace: WorkspaceContext, copy_uri: str, pinned: dict[s
         raise RuntimeError(f"immutable skill copy {copy_uri} does not match the reviewed digest")
 
 
+def owner_viewer(db: Session, workspace_id: str, principal: str | None) -> Viewer:
+    """Whose eyes a conversation's catalog is read with: its OWNER's, so a
+    collaborator refreshing a shared conversation still gets the owner's view
+    (workspace isolation, `services/visibility.py`)."""
+    return visibility.viewer_for_principal(db, db.get(Workspace, workspace_id), principal)
+
+
+def restrict_catalog(
+    db: Session, workspace_id: str, viewer: Viewer, catalog: dict[str, Any]
+) -> dict[str, Any]:
+    """The catalog as ``viewer`` (the conversation owner) may see it: the KBs
+    workspace isolation hides are dropped. Custom evaluators are never in the
+    catalog. The deploy-job re-validation reads the unrestricted catalog."""
+    if not viewer.filters or not catalog.get("knowledge_bases"):
+        return catalog
+    from app.routers.knowledge import visible_kbs
+
+    return {**catalog,
+            "knowledge_bases": visible_kbs(db, workspace_id, viewer,
+                                           list(catalog["knowledge_bases"]))}
+
+
+def owner_catalog(db: Session | None, conversation: AssistantConversation) -> dict[str, Any]:
+    """The conversation's stored catalog snapshot as its owner may see it NOW.
+
+    The snapshot is taken at create / refresh; a workspace switched to isolated
+    afterwards must not keep showing (or prompting with) KBs the owner can no
+    longer see. Free unless the workspace is isolated and the owner a member."""
+    catalog = conversation.catalog or {}
+    if db is None or not catalog.get("knowledge_bases"):
+        return catalog
+    return restrict_catalog(
+        db, conversation.workspace_id,
+        owner_viewer(db, conversation.workspace_id, conversation.owner_principal), catalog,
+    )
+
+
 def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     """Existing, attachable resources of the workspace with their deployment identity.
 
@@ -606,6 +644,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     outbound-auth identity per gateway record, the S3 content digest per skill, and
     the workspace prerequisites (shared memory ARN, KB gateway + OAuth provider,
     execution role). A failing source degrades to an empty list plus a warning.
+    Unrestricted: callers acting for a conversation owner apply ``restrict_catalog``.
     """
     warnings: list[str] = []
     from app.assistant.tool_catalog import enrich_tool
@@ -960,7 +999,10 @@ def create_conversation(
     db: Session, row: Workspace, workspace: WorkspaceContext, identity: Identity, title: str
 ) -> AssistantConversation:
     agent = _require_available(db, row)
-    catalog = fetch_catalog(workspace)
+    catalog = restrict_catalog(
+        db, row.id, visibility.viewer_for_principal(db, row, principal_of(identity)),
+        fetch_catalog(workspace),
+    )
     conversation = AssistantConversation(
         workspace_id=row.id,
         owner=identity.username,
@@ -980,7 +1022,10 @@ def refresh_catalog(
     preparation.require_idle(conversation)
     cid, principal = conversation.id, conversation.owner_principal
     expected = (conversation.preparation or {}).get("revision", 0)
-    catalog = preparation.live_catalog(workspace, list(conversation.preparation_sources or []))
+    catalog = restrict_catalog(
+        db, conversation.workspace_id, owner_viewer(db, conversation.workspace_id, principal),
+        preparation.live_catalog(workspace, list(conversation.preparation_sources or [])),
+    )
     _lock_conversation(db, cid)
     try:
         conversation = owned_conversation(db, workspace.id, principal, cid)
@@ -1066,7 +1111,7 @@ def conversation_detail(
 ) -> dict[str, Any]:
     return {
         **conversation_summary(db, row, viewer),
-        "catalog": row.catalog or {},
+        "catalog": owner_catalog(db, row),
         "preparation": preparation.view(db, row),
         "messages": [
             {
@@ -1384,7 +1429,8 @@ def _base_of(conversation: AssistantConversation) -> AssistantProposal | None:
 
 
 def _preamble(conversation: AssistantConversation, *, inline: bool = False) -> str:
-    return (PROTOCOL_PREAMBLE + "\n" + catalog_section(conversation.catalog or {})
+    return (PROTOCOL_PREAMBLE + "\n"
+            + catalog_section(owner_catalog(object_session(conversation), conversation))
             + preparation.context(conversation)
             + (submit_tool_section() if inline else "")
             + current_proposal_section(_base_of(conversation), inline=inline))
@@ -2423,8 +2469,10 @@ def approve_proposal(
         return _outcome(db, current, started=False)
 
     try:
-        live_catalog = preparation.live_catalog(
-            workspace, list(conversation.preparation_sources or []),
+        live_catalog = restrict_catalog(
+            db, conversation.workspace_id,
+            owner_viewer(db, conversation.workspace_id, conversation.owner_principal),
+            preparation.live_catalog(workspace, list(conversation.preparation_sources or [])),
         )
     except Exception as exc:
         winner = winner_after_io()
