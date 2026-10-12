@@ -126,7 +126,7 @@ curl -s http://127.0.0.1:8000/api/health
    才点亮。Runtime 与 Evaluation 统计的是**你自己创建的东西**（已部署 Agent、已完成评估），
    全新账号上显示空心灯 + `尚未创建 · 部署首个 Agent 后点亮` / `运行首次评估后点亮`，
    这是预期状态，不是故障。
-3. **左下角环境信息**：`区域 us-west-2`、`SDK bedrock-agentcore 1.17.0`、
+3. **左下角环境信息**：`区域 us-west-2`、`SDK bedrock-agentcore 1.18.1`、
    `CLI agentcore 0.21.1`、`存储 sqlite · 本地`。
 
 > 顶部四个统计卡（已部署 Agent / 活跃会话 / 注册资产 / 评估通过率）读的是**本地台账 +

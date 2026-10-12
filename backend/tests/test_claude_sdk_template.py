@@ -172,7 +172,7 @@ def test_container_requirements_pin_drifting_deps():
     requirements = Path("app/templates/claude_sdk_agent/requirements.txt").read_text()
     assert "aws-opentelemetry-distro==0.19.*" in requirements
     assert "claude-agent-sdk==0.2.*" in requirements
-    assert "bedrock-agentcore==1.17.*" in requirements
+    assert "bedrock-agentcore==1.18.*" in requirements
     assert "openinference-instrumentation-claude-agent-sdk>=0.1.3,<0.2" in requirements
 
 
@@ -190,7 +190,7 @@ def test_assemble_build_context(tmp_path: Path):
     assert "CLAUDE_CODE_USE_BEDROCK=1" in dockerfile
     assert "@anthropic-ai/claude-code" in dockerfile
     requirements = (ctx / "requirements.txt").read_text()
-    assert "bedrock-agentcore==1.17.*" in requirements
+    assert "bedrock-agentcore==1.18.*" in requirements
 
 
 def _import_rendered(spec, tmp_path: Path, monkeypatch, stem: str):

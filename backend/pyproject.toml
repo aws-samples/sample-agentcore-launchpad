@@ -10,7 +10,7 @@ dependencies = [
     "pydantic-settings>=2.5,<3",
     "pyyaml>=6.0,<7",
     "boto3>=1.43.103",
-    "bedrock-agentcore[simulation]==1.17.*",
+    "bedrock-agentcore[simulation]==1.18.*",
     "pip>=24",
     "playwright>=1.40,<2",
     "claude-agent-sdk>=0.2.116",

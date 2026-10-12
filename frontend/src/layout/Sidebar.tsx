@@ -66,7 +66,7 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
       <div className="sys" data-testid="sidebar-region">
         {t("sidebar.region")} <b>{current?.region ?? health?.region ?? "—"}</b>
         <br />
-        {t("sidebar.sdk")} <b>bedrock-agentcore 1.17.0</b>
+        {t("sidebar.sdk")} <b>bedrock-agentcore 1.18.1</b>
         <br />
         {t("sidebar.cli")} <b>agentcore 0.21.1</b>
         <br />

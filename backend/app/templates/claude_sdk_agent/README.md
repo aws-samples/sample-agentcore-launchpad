@@ -8,7 +8,7 @@ ARM64 image for AgentCore Runtime. Pinned versions verified 2026-08-16:
 | node | 22.x (nodesource) |
 | `@anthropic-ai/claude-code` CLI | ≥2.1 (2.1.205 verified) |
 | `claude-agent-sdk` (python) | 0.2.* (0.2.114 verified) |
-| `bedrock-agentcore` | 1.17.* |
+| `bedrock-agentcore` | 1.18.* |
 | `aws-opentelemetry-distro` | 0.19.* |
 | `openinference-instrumentation-claude-agent-sdk` | ≥0.1.3,<0.2 (0.1.10 verified) |
 

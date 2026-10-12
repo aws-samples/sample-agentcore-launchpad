@@ -165,7 +165,7 @@ lessons learned. Load this guide only when working on videos.
 - Python: ruff (line length 100, target py312, rules `E,F,I,W,UP,B`); FastAPI routers
   live in `app/routers/` (console `/api`) and `app/routers/public_api.py` (public `/v1`);
   errors go through `app/core/errors.register_error_handlers`.
-- `bedrock-agentcore` is a **preview SDK pinned to `1.17.*`** — treat API shapes as
+- `bedrock-agentcore` is a **preview SDK pinned to `1.18.*`** — treat API shapes as
   volatile and keep the volatility inside the `agentcore/` wrappers.
 - `vendor/skillopt/` is a trimmed, vendored SkillOpt subset that the platform runs
   **only as a subprocess**. Its pin and patches are recorded in
