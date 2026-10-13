@@ -5677,7 +5677,7 @@
         "elapsed": "Elapsed {{time}}",
         "done": "Ready in {{time}}",
         "failed": "Your agent could not be deployed. The technical log below shows what went wrong.",
-        "failedAt": "Your agent could not be deployed: the {{stage}} stage failed. The technical log below shows what went wrong.",
+        "failedAt": "Your agent could not be deployed (failed at stage: {{stage}}). The technical log below shows what went wrong.",
         "technical": "Technical log"
       },
       "integration": {
