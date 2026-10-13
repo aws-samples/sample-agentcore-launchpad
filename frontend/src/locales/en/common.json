@@ -7454,7 +7454,20 @@
         "connecting": "Connecting live view…",
         "noSession": "No active browser session"
       },
-      "testIdentity": "Identity"
+      "testIdentity": "Identity",
+      "attention": {
+        "title": "Needs attention",
+        "allClear": "Every gateway is READY, its targets are healthy and no Policy Engine is missing.",
+        "notReady": "{{name}} is not ready",
+        "engineMissing": "{{name}} points at a deleted Policy Engine",
+        "logOnly": "{{name}} only logs decisions",
+        "logOnlyHint": "The Policy Engine is in LOG_ONLY: denials are recorded but nothing is blocked.",
+        "targets_one": "{{name}}: {{count}} target not healthy",
+        "targets_other": "{{name}}: {{count}} targets not healthy",
+        "inspect": "Inspect",
+        "fix": "Fix",
+        "review": "Review"
+      }
     },
     "assistant": {
       "clear": "Clear",

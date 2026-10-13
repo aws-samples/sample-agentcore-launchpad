@@ -6,18 +6,30 @@ import { api, type GovernanceGatewaySummary } from "../../../lib/api";
 import { governanceError } from "../../../lib/governance";
 import { useLoad, usePaged } from "../../hooks";
 import {
+  type AttentionItem,
+  AttentionPanel,
   Button,
   Card,
   type Column,
   FilterSelect,
   Kpi,
+  Lamp,
   LinkButton,
   Pager,
   SearchInput,
   Table,
   Tag,
 } from "../../ui";
+import { type GatewayAttentionKind, gatewayAttention } from "./attention";
 import { StatusTag } from "./widgets";
+
+// the label of each attention row's open action
+const ATTENTION_OPEN: Record<GatewayAttentionKind, string> = {
+  notReady: "inspect",
+  engineMissing: "fix",
+  logOnly: "review",
+  targets: "inspect",
+};
 
 type EngineFilter = "" | "attached" | "none" | "enforce" | "logOnly";
 
@@ -146,6 +158,32 @@ export function GatewayList() {
 
   const source = [data?.account_id, data?.region].filter(Boolean).join(" / ");
 
+  const attention: AttentionItem[] = gatewayAttention(gateways).map((entry) => {
+    const v = entry.values;
+    const hint =
+      entry.kind === "notReady"
+        ? v.detail
+        : entry.kind === "engineMissing"
+          ? v.engine
+          : entry.kind === "logOnly"
+            ? t("v2.governance.attention.logOnlyHint")
+            : v.names;
+    return {
+      key: entry.key,
+      signal: entry.signal,
+      title: t(`v2.governance.attention.${entry.kind}`, v),
+      hint,
+      onOpen: () =>
+        setParams({
+          view: "gateway",
+          gateway: entry.gatewayId,
+          ...(entry.section ? { section: entry.section } : {}),
+        }),
+      openLabel: t(`v2.governance.attention.${ATTENTION_OPEN[entry.kind]}`),
+      testId: `v2-governance-att-${entry.kind}-${entry.gatewayId}`,
+    };
+  });
+
   return (
     <>
       <div className="v2-kpis">
@@ -158,6 +196,19 @@ export function GatewayList() {
         />
         <Kpi label={t("v2.governance.kpi.attachable")} value={data ? count((g) => g.attachability.attachable) : "—"} />
       </div>
+      {data && (
+        <AttentionPanel
+          title={t("v2.governance.attention.title")}
+          items={attention}
+          testId="v2-governance-attention"
+          empty={
+            <>
+              <Lamp signal={gateways.length ? "ok" : "off"} />
+              {gateways.length ? t("v2.governance.attention.allClear") : t("v2.governance.empty")}
+            </>
+          }
+        />
+      )}
       <Card>
         <div className="v2-toolbar">
           <Button onClick={() => (force ? reload() : setForce(1))} testId="v2-governance-refresh">

@@ -7454,7 +7454,20 @@
         "connecting": "正在连接实时画面…",
         "noSession": "当前没有浏览器会话"
       },
-      "testIdentity": "身份"
+      "testIdentity": "身份",
+      "attention": {
+        "title": "需要处理",
+        "allClear": "所有 Gateway 都处于 READY，目标都健康，也没有缺失的策略引擎。",
+        "notReady": "{{name}} 未就绪",
+        "engineMissing": "{{name}} 指向一个已删除的策略引擎",
+        "logOnly": "{{name}} 只记录决策",
+        "logOnlyHint": "策略引擎处于 LOG_ONLY：拒绝会被记录，但不会拦截任何调用。",
+        "targets_one": "{{name}}：{{count}} 个目标不健康",
+        "targets_other": "{{name}}：{{count}} 个目标不健康",
+        "inspect": "查看",
+        "fix": "修复",
+        "review": "审阅"
+      }
     },
     "assistant": {
       "clear": "清除",
