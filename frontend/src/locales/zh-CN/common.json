@@ -7205,6 +7205,10 @@
         "flowSub": "路由 Agent 自身的轨迹",
         "request": "请求",
         "response": "响应"
+      },
+      "attention": {
+        "title": "等待审批",
+        "empty": "没有等待审批的记录。"
       }
     },
     "governance": {

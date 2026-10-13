@@ -7205,6 +7205,10 @@
         "flowSub": "The routing agent's own trace",
         "request": "Request",
         "response": "Response"
+      },
+      "attention": {
+        "title": "Waiting on approval",
+        "empty": "Nothing is waiting on approval."
       }
     },
     "governance": {
