@@ -7,17 +7,21 @@ import { api, type Workspace } from "../../../lib/api";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
 import {
+  type AttentionItem,
+  AttentionPanel,
   Button,
   Card,
   type Column,
   FilterSelect,
   Kpi,
+  Lamp,
   LinkButton,
   PageHeader,
   Pager,
   SearchInput,
   Table,
 } from "../../ui";
+import { workspaceAttention } from "./attention";
 import { WORKSPACE_STATUSES } from "./status";
 import { ExternalTag, HubTag, StatusTag, VisibilityTag } from "./tags";
 
@@ -55,6 +59,21 @@ export function WorkspaceList() {
 
   const count = (s: Workspace["bootstrap_status"]) => all.filter((w) => w.bootstrap_status === s).length;
   const open = (id: string) => setParams({ view: "detail", id });
+
+  const attention: AttentionItem[] = workspaceAttention(all).map((entry) => {
+    const w = entry.workspace;
+    const where = [w.account_id, w.region].filter(Boolean).join(" · ");
+    return {
+      key: entry.key,
+      signal: entry.signal,
+      title: w.name,
+      hint: entry.kind === "failed" ? t("v2.workspaces.attention.failedHint") : t("v2.workspaces.needsBootstrap"),
+      meta: where ? <span className="mono">{where}</span> : undefined,
+      onOpen: () => open(w.id),
+      openLabel: t("v2.common.detail"),
+      testId: `v2-ws-att-${w.id}`,
+    };
+  });
 
   const columns: Column<Workspace>[] = [
     {
@@ -112,6 +131,19 @@ export function WorkspaceList() {
           tone={count("failed") ? "bad" : undefined}
         />
       </div>
+      {data && (
+        <AttentionPanel
+          title={t("v2.workspaces.attention.title")}
+          items={attention}
+          testId="v2-ws-attention"
+          empty={
+            <>
+              <Lamp signal={all.length ? "ok" : "off"} />
+              {all.length ? t("v2.workspaces.attention.empty") : t("v2.workspaces.empty")}
+            </>
+          }
+        />
+      )}
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>

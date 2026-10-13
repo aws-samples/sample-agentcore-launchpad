@@ -7797,6 +7797,11 @@
         "sharedHint": "Shared: every member sees every resource in this workspace (the default).",
         "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries, Skill Lab and agents: a member cannot chat with, invoke (also via their /v1 API key) or observe another member's agent, and manages only the API keys they created.",
         "saved": "Member visibility saved. It applies from the next request."
+      },
+      "attention": {
+        "title": "Needs you",
+        "empty": "Every workspace is bootstrapped or bootstrapping.",
+        "failedHint": "The bootstrap failed — open it to see the stage and resume."
       }
     },
     "announcements": {
