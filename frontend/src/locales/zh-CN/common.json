@@ -5666,6 +5666,17 @@
         "copyFailed": "无法复制到剪贴板。",
         "keyHint": "API 密钥在对话控制台的 API 面板中创建和停用。一个密钥可调用其创建者在本工作区内可见的所有智能体。",
         "keysLink": "管理 API 密钥"
+      },
+      "tryChat": {
+        "title": "试一试",
+        "sub": "这是真实调用：每段对话都会保存为会话，可在对话页查看。",
+        "empty": "发送一条消息，看看这个 Agent 如何回答。",
+        "placeholder": "给这个 Agent 发消息（Enter 发送，Shift+Enter 换行）",
+        "send": "发送",
+        "thinking": "思考中…",
+        "tool": "调用了工具 {{name}}",
+        "needsChat": "这一步需要授权登录，或涉及只有完整对话页才能展示的策略判定。请在对话页打开这段对话继续。",
+        "openChat": "在对话页打开"
       }
     },
     "data": {

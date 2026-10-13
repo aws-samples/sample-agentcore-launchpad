@@ -17,6 +17,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   --v2-primary-active: #0e42d2;
   --v2-primary-soft: #e8f3ff;
   --v2-primary-line: #bedaff;
+  --v2-on-primary: #fff;
   --v2-bg: #f4f6fa;
   --v2-card: #ffffff;
   --v2-fill: #f7f8fa;

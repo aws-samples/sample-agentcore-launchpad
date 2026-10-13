@@ -20,6 +20,7 @@ import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { IntegrationCard } from "./agents/IntegrationCard";
+import { TryChat } from "./agents/TryChat";
 import { AgentWizard } from "./agents/AgentWizard";
 import { v2EditPath } from "./agents/classicUrl";
 import { deployLine, fmtElapsed, isFailed } from "./agents/deployStatus";
@@ -675,6 +676,9 @@ function AgentDetail({ id }: { id: string }) {
           ]}
         />
       </Card>
+      {agent.status === "active" && agent.invoke_capability.eligible && (
+        <TryChat key={agent.id} agentId={agent.id} />
+      )}
       {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
         <InboundSwitchCard

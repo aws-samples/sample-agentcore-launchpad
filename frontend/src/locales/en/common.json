@@ -5666,6 +5666,17 @@
         "copyFailed": "Could not copy to the clipboard.",
         "keyHint": "API keys are created and disabled in the API panel of the Chat console. A key can call every agent its creator can see in this workspace.",
         "keysLink": "Manage API keys"
+      },
+      "tryChat": {
+        "title": "Try it",
+        "sub": "A real call: each conversation is saved as a session you can find in Chat.",
+        "empty": "Send a message to see how this agent answers.",
+        "placeholder": "Message this agent (Enter to send, Shift+Enter for a new line)",
+        "send": "Send",
+        "thinking": "Thinking…",
+        "tool": "Used tool {{name}}",
+        "needsChat": "This step needs a sign-in or a policy decision that only the full Chat console can show. Open the conversation in Chat to continue.",
+        "openChat": "Open in Chat"
       }
     },
     "data": {

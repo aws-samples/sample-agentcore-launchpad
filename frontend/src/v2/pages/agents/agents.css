@@ -57,3 +57,14 @@
 .v2 .v2-deploy-line { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; font-size: 14px; }
 .v2 .v2-deploy-line .elapsed { color: var(--v2-ink-3); font-family: var(--v2-mono); font-size: 12.5px; }
 .v2 .v2-deploy-details > summary { cursor: pointer; font-weight: 600; font-size: 14px; margin: 12px 0 8px; }
+/* Agent detail · try-chat panel (TryChat.tsx). */
+.v2 .v2-trychat-body { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; margin-bottom: 10px; }
+.v2 .v2-trychat-empty { margin: 0; color: var(--v2-ink-3); font-size: 13px; }
+.v2 .v2-trychat-msg { padding: 8px 12px; border-radius: 8px; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; max-width: 88%; }
+.v2 .v2-trychat-msg.user { align-self: flex-end; background: var(--v2-primary); color: var(--v2-on-primary); }
+.v2 .v2-trychat-msg.agent { align-self: flex-start; background: var(--v2-fill); border: 1px solid var(--v2-line); color: var(--v2-ink); }
+.v2 .v2-trychat-msg.pending { color: var(--v2-ink-3); }
+.v2 .v2-trychat-tool { align-self: flex-start; color: var(--v2-ink-3); font-family: var(--v2-mono); font-size: 12px; }
+.v2 .v2-trychat-form { display: flex; gap: 8px; align-items: flex-end; }
+.v2 .v2-trychat-form .v2-textarea { flex: 1; min-height: 40px; }
+.v2 .v2-trychat-foot { margin-top: 10px; font-size: 13px; }

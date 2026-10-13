@@ -5739,12 +5739,14 @@ export const chatApi = {
       method: "POST",
     }),
   /** `POST /api/chat/{agent_id}` — returns the raw SSE response (read it with
-   *  `sseEvents`); a non-2xx answer throws with the localized envelope message. */
-  stream: async (agentId: string, body: ChatRequest): Promise<Response> => {
+   *  `sseEvents`); a non-2xx answer throws with the localized envelope message.
+   *  `signal` aborts the request and the body read (TryChat aborts on unmount). */
+  stream: async (agentId: string, body: ChatRequest, signal?: AbortSignal): Promise<Response> => {
     const res = await fetch(`/api/chat/${encodeURIComponent(agentId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!res.ok) throw new Error(await responseMessage(res));
     return res;
