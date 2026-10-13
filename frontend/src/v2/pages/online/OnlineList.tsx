@@ -21,11 +21,14 @@ import {
 } from "../../online";
 import { evaluatorSummary } from "../../tasks";
 import {
+  type AttentionItem,
+  AttentionPanel,
   Button,
   Card,
   type Column,
   Confirm,
   FilterSelect,
+  Lamp,
   LinkButton,
   PageHeader,
   Pager,
@@ -33,6 +36,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { onlineAttention } from "./attention";
 
 type Pending = { row: OnlineEvalConfigRow; action: "pause" | "resume" | "delete" };
 
@@ -74,6 +78,27 @@ export function OnlineList() {
   }, [transient, reload]);
 
   const open = (row: OnlineEvalConfigRow) => setParams({ view: "detail", id: row.config_id });
+
+  const attention: AttentionItem[] = onlineAttention(configs).map((entry) => {
+    const { row } = entry;
+    const hint =
+      entry.kind === "failed"
+        ? row.failure_reason || row.status
+        : entry.kind === "duplicate"
+          ? t("v2.online.duplicateWarn")
+          : row.status;
+    return {
+      key: entry.key,
+      signal: entry.signal,
+      live: entry.kind === "settling",
+      title: configName(row),
+      hint,
+      meta: `${agentLabel(row)} · ${t(`v2.online.attention.why.${entry.kind}`)}`,
+      onOpen: () => open(row),
+      openLabel: t("v2.common.view"),
+      testId: `v2-online-att-${entry.kind}-${row.config_id}`,
+    };
+  });
 
   const act = async () => {
     if (!pending) return;
@@ -201,6 +226,19 @@ export function OnlineList() {
   return (
     <>
       <PageHeader title={t("v2.online.title")} desc={t("v2.online.desc")} />
+      {data && (
+        <AttentionPanel
+          title={t("v2.online.attention.title")}
+          items={attention}
+          testId="v2-online-attention"
+          empty={
+            <>
+              <Lamp signal={configs.length ? "ok" : "off"} />
+              {configs.length ? t("v2.online.attention.empty") : t("v2.online.empty")}
+            </>
+          }
+        />
+      )}
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>

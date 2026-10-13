@@ -6491,6 +6491,15 @@
         "filterKey": "Filter keys use letters, digits, dot, underscore or hyphen",
         "filterValue": "Every filter needs a valid value",
         "description": "Description is at most 200 characters"
+      },
+      "attention": {
+        "title": "Needs attention",
+        "empty": "No online evaluation has failed, is settling or watches an agent twice.",
+        "why": {
+          "failed": "failed",
+          "duplicate": "duplicate",
+          "settling": "settling"
+        }
       }
     },
     "experiments": {

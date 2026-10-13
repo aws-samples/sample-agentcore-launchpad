@@ -6491,6 +6491,15 @@
         "filterKey": "过滤键只能包含字母、数字、点、下划线或连字符",
         "filterValue": "每条过滤条件都需要有效的值",
         "description": "描述最多 200 个字符"
+      },
+      "attention": {
+        "title": "需要关注",
+        "empty": "没有失败、变更中或重复评判同一个 Agent 的在线评估。",
+        "why": {
+          "failed": "失败",
+          "duplicate": "重复",
+          "settling": "变更中"
+        }
       }
     },
     "experiments": {
