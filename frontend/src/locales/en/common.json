@@ -5585,7 +5585,40 @@
         "convertedPromptLocked": "Part of the exported code — read-only for a converted agent.",
         "convertedModelLocked": "The exported code calls this model directly — read-only for a converted agent.",
         "memoryOff": "Off",
-        "memoryLongOnly": "Long-term only"
+        "memoryLongOnly": "Long-term only",
+        "inlineKb": {
+          "pickTitle": "Or create a new knowledge base",
+          "name": "Knowledge base name",
+          "nameHint": "Derived from the agent's name; editable.",
+          "nameInvalid": "Use letters, digits, hyphens or underscores (max 100), starting with a letter or digit.",
+          "files": "Files",
+          "pickFiles": "Choose files",
+          "removeFile": "Remove {{name}}",
+          "filesRequired": "Choose at least one file.",
+          "create": "Create and mount",
+          "creating": "Creating knowledge base…",
+          "createFailed": "Could not create the knowledge base: {{msg}}",
+          "uploadFailed": "The knowledge base {{name}} was created but its files could not be uploaded: {{msg}}",
+          "retryUpload": "Retry upload",
+          "discard": "Remove from this agent",
+          "mounted": "Mounted: {{name}}",
+          "note": "Deploy does not wait for ingestion. The agent will answer from this knowledge base once ingestion finishes.",
+          "waitActive": "The knowledge base is still being created (about 2 to 3 minutes). You can deploy as soon as it is active.",
+          "failedBlock": "The knowledge base failed to create, so the agent cannot mount it. Remove it and try again.",
+          "state": {
+            "creating": "Creating",
+            "sourcePending": "Preparing data source",
+            "starting": "Starting ingestion",
+            "indexing": "Ingesting",
+            "ready": "Ready",
+            "ingestFailed": "Ingestion failed",
+            "failed": "Creation failed",
+            "unknown": "Checking status"
+          },
+          "keptNote": "A knowledge base created here stays in your workspace knowledge base list, even if you remove it from this agent or leave the wizard. Delete it there when you no longer need it.",
+          "keptLink": "Open knowledge bases",
+          "busyBlock": "The knowledge base is still being created and its files uploaded. You can deploy once this finishes."
+        }
       },
       "identity": {
         "open": "Identity",

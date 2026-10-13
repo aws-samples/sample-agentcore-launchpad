@@ -7,8 +7,6 @@ import {
   type AttachableKb,
   type AttachableMcp,
   type AttachableSkill,
-  resolveKb,
-  selectableKbs,
   skillNameFromPath,
   toggle,
 } from "../../../lib/agent-spec";
@@ -232,11 +230,12 @@ export function SkillsKbCard({
   cat,
   customSkills,
   setCustomSkills,
-  kbNote,
+  kbSlot,
 }: SectionProps & {
   customSkills: WizardUi["customSkills"];
   setCustomSkills: Dispatch<SetStateAction<WizardUi["customSkills"]>>;
-  kbNote: string;
+  /** the knowledge field (`KnowledgeField`: pick existing KBs or create one inline) */
+  kbSlot: ReactNode;
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
@@ -246,7 +245,6 @@ export function SkillsKbCard({
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ stagingId: string; skills: InspectedSkill[]; picked: number[] } | null>(null);
 
-  const kbs = selectableKbs(cat.kbCatalog);
   const extraSkills = form.skills
     .filter((path) => !cat.skills.some((s) => s.path === path))
     .map((path) => {
@@ -262,13 +260,6 @@ export function SkillsKbCard({
         ),
       };
     });
-  const extraKbs = form.selectedKbs
-    .filter((id) => !kbs.some((k) => k.kb_id === id))
-    .map((id) => {
-      const info = resolveKb(id, cat.kbCatalog, []);
-      return { key: id, label: info.name, hint: info.description || info.name };
-    });
-
   const toggleSkill = (path: string) => {
     if (form.skills.includes(path)) {
       set((prev) => ({ skills: prev.skills.filter((s) => s !== path) }));
@@ -413,19 +404,7 @@ export function SkillsKbCard({
             </div>
           )}
         </Field>
-        <Field label={<HintLabel term="knowledgeBase">{t("v2.agents.kbTitle")}</HintLabel>} hint={kbNote}>
-          <CheckList
-            items={kbs}
-            keyOf={(kb) => kb.kb_id}
-            labelOf={(kb) => kb.name}
-            hintOf={(kb) => kb.description || kb.name}
-            selected={form.selectedKbs}
-            onToggle={(id) => set({ selectedKbs: toggle(form.selectedKbs, id) })}
-            empty={t("v2.agents.wizard.noKbs")}
-            extra={extraKbs}
-            testId="v2-agent-kbs"
-          />
-        </Field>
+        {kbSlot}
       </div>
     </Card>
   );

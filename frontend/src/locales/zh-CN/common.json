@@ -5585,7 +5585,40 @@
         "convertedPromptLocked": "已写入导出的代码，转换来的 Agent 在此只读。",
         "convertedModelLocked": "导出的代码直接调用该模型，转换来的 Agent 在此只读。",
         "memoryOff": "关闭",
-        "memoryLongOnly": "仅长期"
+        "memoryLongOnly": "仅长期",
+        "inlineKb": {
+          "pickTitle": "或新建一个知识库",
+          "name": "知识库名称",
+          "nameHint": "由智能体名称自动生成，可修改。",
+          "nameInvalid": "只能使用字母、数字、连字符或下划线（最多 100 个字符），且须以字母或数字开头。",
+          "files": "文件",
+          "pickFiles": "选择文件",
+          "removeFile": "移除 {{name}}",
+          "filesRequired": "请至少选择一个文件。",
+          "create": "创建并挂载",
+          "creating": "正在创建知识库…",
+          "createFailed": "无法创建知识库：{{msg}}",
+          "uploadFailed": "知识库 {{name}} 已创建，但文件上传失败：{{msg}}",
+          "retryUpload": "重试上传",
+          "discard": "从此智能体中移除",
+          "mounted": "已挂载：{{name}}",
+          "note": "部署不会等待索引完成。索引完成后，智能体即可基于该知识库回答问题。",
+          "waitActive": "知识库仍在创建中（约需 2 到 3 分钟）。变为可用后即可部署。",
+          "failedBlock": "知识库创建失败，智能体无法挂载。请移除后重试。",
+          "state": {
+            "creating": "创建中",
+            "sourcePending": "正在准备数据源",
+            "starting": "正在启动索引",
+            "indexing": "索引中",
+            "ready": "已就绪",
+            "ingestFailed": "索引失败",
+            "failed": "创建失败",
+            "unknown": "正在检查状态"
+          },
+          "keptNote": "在这里创建的知识库会保留在工作区的知识库列表中，即使你将它从此智能体中移除或离开向导也不会删除。不再需要时，请到知识库页面删除。",
+          "keptLink": "打开知识库",
+          "busyBlock": "知识库仍在创建并上传文件。完成后即可部署。"
+        }
       },
       "identity": {
         "open": "身份",
