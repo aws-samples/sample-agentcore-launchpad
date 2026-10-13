@@ -8144,6 +8144,11 @@
       "readDetailHint": "从 AWS 重新读取这次批量评估的结果，补齐未评分会话的原因。只读，不重新运行，也不产生费用。",
       "readDetailDone": "已读取失败明细",
       "notComparable": "各次运行未评分的场景不同，均分不能直接对比。"
+    },
+    "navMode": {
+      "showBusiness": "只显示常用入口",
+      "showExpert": "显示全部页面",
+      "hint": "只筛选侧边栏：所有页面仍可通过 URL 打开"
     }
   },
   "identity": {

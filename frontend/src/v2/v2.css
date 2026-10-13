@@ -103,6 +103,13 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-side-item.active svg { color: var(--v2-primary); }
 .v2-side-item.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--v2-primary); }
 .v2-side-foot { border-top: 1px solid var(--v2-line-2); margin-top: 12px; padding-top: 12px; }
+/* business / expert sidebar mode toggle, at the foot of the rail */
+.v2-side-mode {
+  display: block; width: calc(100% - 16px); margin: 12px 8px 0; padding: 7px 12px;
+  border: 1px dashed var(--v2-line); border-radius: 6px; background: none;
+  color: var(--v2-ink-3); font-size: 12px; text-align: left; cursor: pointer;
+}
+.v2-side-mode:hover { border-style: solid; color: var(--v2-ink-2); background: var(--v2-fill); }
 
 .v2-main { flex: 1; min-width: 0; padding: 20px 24px 40px; }
 .v2-main-inner { max-width: 1480px; margin: 0 auto; }

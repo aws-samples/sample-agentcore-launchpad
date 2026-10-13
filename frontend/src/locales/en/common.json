@@ -8144,6 +8144,11 @@
       "readDetailHint": "Read this batch evaluation's results from AWS again to fill in why sessions were not scored. Read-only: nothing is re-run or billed.",
       "readDetailDone": "Failure details read",
       "notComparable": "These runs left different scenarios unscored, so their means are not directly comparable."
+    },
+    "navMode": {
+      "showBusiness": "Show essentials only",
+      "showExpert": "Show all pages",
+      "hint": "A sidebar filter only: every page still opens by URL"
     }
   },
   "identity": {
