@@ -34,7 +34,8 @@
 .v2 .v2-launch ol[hidden] { display: none; }
 .v2 .v2-launch[data-state="done"] ol:not([hidden]) { margin-top: 12px; }
 .v2 .v2-launch li {
-  display: grid; gap: 6px; align-content: start; min-height: 128px; padding: 12px 14px;
+  /* minmax(0, 1fr) + min-width: 0 so a long English label wraps instead of widening the step */
+  display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 6px; align-content: start; min-height: 128px; padding: 12px 14px;
   border: 1px solid var(--v2-line); border-radius: var(--v2-radius); background: var(--v2-card);
 }
 .v2 .v2-launch li .top { display: flex; align-items: center; gap: 8px; }
@@ -42,7 +43,7 @@
 .v2 .v2-launch li .v2-launch-tick { margin-left: auto; }
 .v2 .v2-launch li b { font-size: 13.5px; color: var(--v2-ink); }
 .v2 .v2-launch li small { font-size: 12.5px; line-height: 1.5; color: var(--v2-ink-3); }
-.v2 .v2-launch li .v2-btn { justify-self: start; margin-top: 4px; }
+.v2 .v2-launch li .v2-btn { justify-self: start; margin-top: 4px; max-width: 100%; height: auto; min-height: 28px; white-space: normal; text-align: left; }
 /* `.v2 a` outranks the plain `.v2-btn` colour on a link */
 .v2 .v2-launch a.v2-btn:not(.primary) { color: var(--v2-ink); }
 .v2 .v2-launch a.v2-btn:not(.primary):hover { color: var(--v2-primary); }
