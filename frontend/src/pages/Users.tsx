@@ -18,7 +18,7 @@ import {
   ViewHead,
 } from "../components";
 import type { ConsoleUser, UserStats, UserStatusFilter } from "../lib/api";
-import { AGENT_PERMISSIONS, api } from "../lib/api";
+import { AGENT_PERMISSIONS, api, togglePermission } from "../lib/api";
 import { useWorkspace } from "../workspace/workspace-context";
 
 /** Grant every approved account the hub workspace unless the admin says otherwise. */
@@ -324,7 +324,7 @@ export function Users() {
                           onClick={() =>
                             patch(
                               user,
-                              { permissions: { [key]: !granted } },
+                              { permissions: togglePermission(user.permissions, key, !granted) },
                               "usersPage.permissionsUpdated",
                             )
                           }

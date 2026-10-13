@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { api, type V2Range } from "../../lib/api";
 import { evaluatorLabel } from "../../lib/evaluators";
+import { parseTimestamp } from "../../lib/timestamps";
 import { RANGE_HOURS, RANGES, rangeLabel } from "../format";
 import { useLoad } from "../hooks";
 import { InsightsPanel } from "../InsightsPanel";
@@ -41,7 +42,7 @@ async function loadInsights(range: V2Range): Promise<InsightData> {
   const tasks = await loadTasks();
   const since = Date.now() - RANGE_HOURS[range] * 3_600_000;
   const completed = tasks.filter(
-    (task) => task.kind === "run" && task.status === "completed" && task.createdAt && new Date(task.createdAt).getTime() >= since,
+    (task) => task.kind === "run" && task.status === "completed" && (parseTimestamp(task.createdAt)?.getTime() ?? 0) >= since,
   );
   // insights runs cluster sessions instead of scoring them: their trees ride on the
   // run row (no results read) and go to the insights panel, not the score tables

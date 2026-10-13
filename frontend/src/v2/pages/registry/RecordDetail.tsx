@@ -216,10 +216,10 @@ export function RecordDetail({ id }: { id: string }) {
     }
   };
 
-  // "Use in new agent" prefills the classic agent wizard (?gateway= / ?skill=).
+  // "Use in new agent" prefills the V2 agent wizard (?gateway= / ?skill=).
   const useInAgent = () => {
-    if (record.type === "MCP") navigate(`/agents/new?gateway=${encodeURIComponent(record.name)}`);
-    else if (record.type === "AGENT_SKILLS") navigate(`/agents/new?skill=${encodeURIComponent(skillPath(record))}`);
+    if (record.type === "MCP") navigate(`/v2/agents?view=new&gateway=${encodeURIComponent(record.name)}`);
+    else if (record.type === "AGENT_SKILLS") navigate(`/v2/agents?view=new&skill=${encodeURIComponent(skillPath(record))}`);
   };
 
   const liveCardReason = (() => {

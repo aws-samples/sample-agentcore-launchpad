@@ -2,7 +2,7 @@ import { KeyRound, ShieldCheck, Trash2, UserCheck, UserX } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { AGENT_PERMISSIONS, api } from "../../../lib/api";
+import { AGENT_PERMISSIONS, api, togglePermission } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { fmtTime } from "../../format";
 import { useLoad } from "../../hooks";
@@ -157,7 +157,7 @@ export function UserDetail({ username }: { username: string }) {
                   title={key}
                   testId={`v2-users-perm-${key}`}
                   onClick={() =>
-                    void actions.patch(user, { permissions: { [key]: !granted } }, "usersPage.permissionsUpdated")
+                    void actions.patch(user, { permissions: togglePermission(user.permissions, key, !granted) }, "usersPage.permissionsUpdated")
                   }
                 >
                   {t(`v2.users.perm.${key.replace(".", "_")}`)}

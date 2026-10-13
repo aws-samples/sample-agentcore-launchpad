@@ -4,6 +4,7 @@ import type {
   SkillLabTargetBackend,
   SkillLabTasksetInfo,
 } from "./api";
+import { parseTimestamp } from "./timestamps";
 
 /** Skill Lab rules shared by the V2 pages (mirrors of the classic wizards). */
 
@@ -74,9 +75,11 @@ export const isLiveJob = (job: SkillLabJobInfo) => LIVE_STATUSES.includes(job.st
 
 /** Wall time since start ("—" before the job starts). */
 export function elapsed(job: SkillLabJobInfo): string {
-  if (!job.started_at) return "—";
-  const end = job.finished_at ? new Date(job.finished_at) : new Date();
-  const seconds = Math.max(0, (end.getTime() - new Date(job.started_at).getTime()) / 1000);
+  // ledger times are naive UTC; `new Date` alone would read them as local time
+  const start = parseTimestamp(job.started_at);
+  if (!start) return "—";
+  const end = parseTimestamp(job.finished_at) ?? new Date();
+  const seconds = Math.max(0, (end.getTime() - start.getTime()) / 1000);
   return seconds < 90 ? `${seconds.toFixed(0)}s` : `${(seconds / 60).toFixed(1)}m`;
 }
 

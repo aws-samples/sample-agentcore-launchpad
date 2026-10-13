@@ -3020,6 +3020,23 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "memory.manage",
 ];
 
+/**
+ * The `permissions` body for flipping one chip. The backend treats the map as the
+ * account's whole permission set (an unsent key counts as granted), so a one-key
+ * map silently reverted every other override; sending the full effective map with
+ * this one key changed keeps them.
+ */
+export function togglePermission(
+  current: Partial<Record<AgentPermission, boolean>> | null | undefined,
+  key: AgentPermission,
+  granted: boolean,
+): Record<AgentPermission, boolean> {
+  const next = {} as Record<AgentPermission, boolean>;
+  for (const k of AGENT_PERMISSIONS) next[k] = current?.[k] !== false;
+  next[key] = granted;
+  return next;
+}
+
 export interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
