@@ -86,15 +86,17 @@ describe("rank", () => {
     expect(routeOf(rank(entries(), "knowledge")[0])).toBe("/v2/knowledge-bases");
     expect(routeOf(rank(entries(), "obs")[0])).toBe("/v2/observability");
   });
-  it("keeps the given order for an empty query: pages, then help, agents, glossary", () => {
-    const ranked = rank(entries({ agents: [{ id: "a1", name: "shop-cs" }] }), "  ", 1000);
-    const seen = ranked.map((e) => e.group).filter((g, i, all) => all.indexOf(g) === i);
-    expect(seen).toEqual(PALETTE_GROUPS);
+  it("lists only pages, then help, for an empty query; agents and terms need a query", () => {
+    const all = entries({ agents: [{ id: "a1", name: "shop-cs" }] });
+    const ranked = rank(all, "  ", 1000);
+    const seen = ranked.map((e) => e.group).filter((g, i, groups) => groups.indexOf(g) === i);
+    expect(seen).toEqual(["page", "help"]);
+    expect(rank(all, "shop").some((e) => e.group === "agent")).toBe(true);
+    expect(rank(all, "canary").some((e) => e.group === "glossary")).toBe(true);
     expect(ranked.filter((e) => e.group === "page").map(routeOf)).toEqual(palettePages(true).map((p) => p.to));
   });
   it("caps the results at 40 by default", () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ id: `a${i}`, name: `agent-${i}` }));
-    expect(rank(entries({ agents: many }), "").length).toBe(PALETTE_CAP);
     expect(PALETTE_CAP).toBe(40);
     expect(rank(entries({ agents: many }), "agent").length).toBe(40);
     expect(rank(entries({ agents: many }), "", 5).length).toBe(5);

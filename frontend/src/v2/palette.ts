@@ -134,11 +134,15 @@ function entryScore(entry: PaletteEntry, query: string): number {
 
 /**
  * The entries that answer to `query`, best first (ties keep the given order),
- * at most `cap`. An empty query keeps the given order.
+ * at most `cap`. An empty query lists the pages and help actions in order; agents
+ * and glossary terms appear once something is typed (a workspace's agents would
+ * otherwise fill the list).
  */
 export function rank(entries: PaletteEntry[], query: string, cap = PALETTE_CAP): PaletteEntry[] {
-  const scored = entries.map((entry) => ({ entry, s: entryScore(entry, query) })).filter((r) => r.s > 0);
-  if (query.trim()) scored.sort((a, b) => b.s - a.s); // Array#sort is stable
+  const typed = query.trim() !== "";
+  const pool = typed ? entries : entries.filter((e) => e.group === "page" || e.group === "help");
+  const scored = pool.map((entry) => ({ entry, s: entryScore(entry, query) })).filter((r) => r.s > 0);
+  if (typed) scored.sort((a, b) => b.s - a.s); // Array#sort is stable
   return scored.slice(0, cap).map((r) => r.entry);
 }
 
