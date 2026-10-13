@@ -6563,7 +6563,12 @@
       "cleanupHint": "Deletes the experiment's bundles, temporary target, A/B test and online evaluators; the shared gateway stays.",
       "legacyCanaryWeights": "Champion {{c}}% · challenger {{t1}}% · stage {{stage}}/3",
       "notReached": "Not reached before the experiment ended.",
-      "notPromoted": "Not promoted"
+      "notPromoted": "Not promoted",
+      "attention": {
+        "title": "In flight or waiting on you",
+        "empty": "No experiment is running or waiting on a decision.",
+        "decide": "A verdict is in: promote or clean up"
+      }
     },
     "picker": {
       "picked": "{{count}} / {{max}} selected",
@@ -6636,6 +6641,11 @@
         "change": "Change evaluators",
         "confirm": "Both versions are scored by {{evaluators}}; the verdict is decided by {{primary}}.",
         "none": "Pick at least one evaluator"
+      },
+      "attention": {
+        "title": "In flight or waiting on you",
+        "empty": "No canary is ramping or waiting on a decision.",
+        "decide": "A verdict is in: ramp on, complete or roll back"
       }
     },
     "chat": {

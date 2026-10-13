@@ -6563,7 +6563,12 @@
       "cleanupHint": "删除实验创建的 Bundle、临时 Target、A/B 测试和在线评估器；共享的实验网关会保留。",
       "legacyCanaryWeights": "基准版 {{c}}% · 挑战者 {{t1}}% · 第 {{stage}}/3 阶段",
       "notReached": "实验结束前未进行到这一步。",
-      "notPromoted": "未发布"
+      "notPromoted": "未发布",
+      "attention": {
+        "title": "进行中或等你决定",
+        "empty": "没有进行中或等待决定的实验。",
+        "decide": "已有判定：发布或清理"
+      }
     },
     "picker": {
       "picked": "已选 {{count}} / {{max}}",
@@ -6636,6 +6641,11 @@
         "change": "修改评估器",
         "confirm": "两个版本都由 {{evaluators}} 打分；判定由 {{primary}} 决定。",
         "none": "请至少选择一个评估器"
+      },
+      "attention": {
+        "title": "进行中或等你决定",
+        "empty": "没有正在放量或等待决定的金丝雀。",
+        "decide": "已有判定：继续放量、全量发布或回滚"
       }
     },
     "chat": {

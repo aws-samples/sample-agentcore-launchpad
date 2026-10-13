@@ -31,8 +31,10 @@ export function V2Experiments() {
   const id = params.get("id");
   const canaryParam = mode === "canary" ? params.get("canary") : null;
   const list = useLoad(() => api.v2Experiments(), "v2-experiments");
+  // off the canary tab nothing is fetched; null (not an empty list) so the tab's
+  // attention panel waits for the first real read instead of saying "nothing"
   const canaries = useLoad(
-    () => (mode === "canary" ? api.listRuntimeCanaries() : Promise.resolve({ canaries: [] })),
+    () => (mode === "canary" ? api.listRuntimeCanaries() : Promise.resolve(null)),
     `v2-canaries:${mode}`,
   );
   const { reload } = list;
@@ -68,12 +70,19 @@ export function V2Experiments() {
       {mode === "canary" ? (
         <CanaryList
           canaries={canaries.data?.canaries ?? []}
+          loaded={canaries.data !== null}
           loading={canaries.loading}
           error={canaries.error}
           reload={reloadCanaries}
         />
       ) : (
-        <ExperimentList experiments={experiments} loading={list.loading} error={list.error} reload={reload} />
+        <ExperimentList
+          experiments={experiments}
+          loaded={list.data !== null}
+          loading={list.loading}
+          error={list.error}
+          reload={reload}
+        />
       )}
     </>
   );

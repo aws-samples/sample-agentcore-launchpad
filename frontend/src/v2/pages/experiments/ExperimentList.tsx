@@ -7,18 +7,36 @@ import type { ExperimentInfo } from "../../../lib/experiments";
 import { verdictLabel } from "../../../lib/experiments";
 import { creatorLabel, fmtTime } from "../../format";
 import { usePaged } from "../../hooks";
-import { Alert, Button, Card, type Column, FilterSelect, LinkButton, Pager, SearchInput, Table, Tag } from "../../ui";
+import {
+  Alert,
+  type AttentionItem,
+  AttentionPanel,
+  Button,
+  Card,
+  type Column,
+  FilterSelect,
+  Lamp,
+  LinkButton,
+  Pager,
+  SearchInput,
+  Table,
+  Tag,
+} from "../../ui";
+import { experimentQueue } from "./attention";
 import { EXPERIMENT_TONE, stageLabel } from "./common";
 
 const STATUSES = ["running", "ready", "promoted", "failed", "cleaned"];
 
 export function ExperimentList({
   experiments,
+  loaded,
   loading,
   error,
   reload,
 }: {
   experiments: ExperimentInfo[];
+  /** the list has been read at least once (the attention panel waits for it) */
+  loaded: boolean;
   loading: boolean;
   error: string | null;
   reload: () => void;
@@ -40,6 +58,21 @@ export function ExperimentList({
   }, [experiments, status, agent, q]);
   const paged = usePaged(rows, 12);
   const open = (e: ExperimentInfo) => setParams({ view: "detail", id: e.id });
+
+  const attention: AttentionItem[] = experimentQueue(experiments).map((entry) => {
+    const e = entry.experiment;
+    const next = e.progress || (entry.kind === "decide" ? t("v2.experiments.attention.decide") : null);
+    return {
+      key: entry.key,
+      signal: entry.signal,
+      title: e.name,
+      hint: [stageLabel(t, e), next].filter(Boolean).join(" · "),
+      meta: e.agent_name,
+      onOpen: () => open(e),
+      openLabel: t("v2.common.view"),
+      testId: `v2-exp-att-${e.id}`,
+    };
+  });
 
   const columns: Column<ExperimentInfo>[] = [
     {
@@ -90,50 +123,65 @@ export function ExperimentList({
   ];
 
   return (
-    <Card>
-      {hasRunning && <Alert>{t("evalPage.experiment.runningGuard")}</Alert>}
-      <div className="v2-toolbar">
-        <Button onClick={reload}>{t("v2.common.refresh")}</Button>
-        <Button
-          kind="primary"
-          disabled={hasRunning}
-          title={hasRunning ? t("evalPage.experiment.runningGuard") : undefined}
-          onClick={() => setParams({ view: "new" })}
-          testId="v2-exp-new"
-        >
-          <Plus size={14} aria-hidden="true" />
-          {t("expPage.start")}
-        </Button>
-        <FilterSelect
-          label={t("v2.tasks.colStatus")}
-          value={status}
-          allLabel={t("v2.common.all")}
-          onChange={setStatus}
-          options={STATUSES.map((s) => ({ value: s, label: t(`v2.experiments.status.${s}`) }))}
+    <>
+      {loaded && (
+        <AttentionPanel
+          title={t("v2.experiments.attention.title")}
+          items={attention}
+          testId="v2-exp-attention"
+          empty={
+            <>
+              <Lamp signal={experiments.length ? "ok" : "off"} />
+              {experiments.length ? t("v2.experiments.attention.empty") : t("v2.experiments.empty")}
+            </>
+          }
         />
-        <FilterSelect
-          label={t("v2.tasks.colAgent")}
-          value={agent}
-          allLabel={t("v2.common.all")}
-          onChange={setAgent}
-          options={agents.map((a) => ({ value: a, label: a }))}
-        />
-        <div className="end">
-          <SearchInput value={q} onChange={setQ} placeholder={t("v2.experiments.search")} />
-          <span className="v2-count">{t("v2.common.total", { count: rows.length })}</span>
+      )}
+      <Card>
+        {hasRunning && <Alert>{t("evalPage.experiment.runningGuard")}</Alert>}
+        <div className="v2-toolbar">
+          <Button onClick={reload}>{t("v2.common.refresh")}</Button>
+          <Button
+            kind="primary"
+            disabled={hasRunning}
+            title={hasRunning ? t("evalPage.experiment.runningGuard") : undefined}
+            onClick={() => setParams({ view: "new" })}
+            testId="v2-exp-new"
+          >
+            <Plus size={14} aria-hidden="true" />
+            {t("expPage.start")}
+          </Button>
+          <FilterSelect
+            label={t("v2.tasks.colStatus")}
+            value={status}
+            allLabel={t("v2.common.all")}
+            onChange={setStatus}
+            options={STATUSES.map((s) => ({ value: s, label: t(`v2.experiments.status.${s}`) }))}
+          />
+          <FilterSelect
+            label={t("v2.tasks.colAgent")}
+            value={agent}
+            allLabel={t("v2.common.all")}
+            onChange={setAgent}
+            options={agents.map((a) => ({ value: a, label: a }))}
+          />
+          <div className="end">
+            <SearchInput value={q} onChange={setQ} placeholder={t("v2.experiments.search")} />
+            <span className="v2-count">{t("v2.common.total", { count: rows.length })}</span>
+          </div>
         </div>
-      </div>
-      <Table
-        columns={columns}
-        rows={paged.slice}
-        rowKey={(e) => e.id}
-        loading={loading}
-        error={error}
-        onRetry={reload}
-        empty={experiments.length ? t("v2.experiments.noMatch") : t("v2.experiments.empty")}
-        testId="v2-exp-table"
-      />
-      <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
-    </Card>
+        <Table
+          columns={columns}
+          rows={paged.slice}
+          rowKey={(e) => e.id}
+          loading={loading}
+          error={error}
+          onRetry={reload}
+          empty={experiments.length ? t("v2.experiments.noMatch") : t("v2.experiments.empty")}
+          testId="v2-exp-table"
+        />
+        <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
+      </Card>
+    </>
   );
 }
