@@ -8149,6 +8149,11 @@
       "showBusiness": "只显示常用入口",
       "showExpert": "显示全部页面",
       "hint": "只筛选侧边栏：所有页面仍可通过 URL 打开"
+    },
+    "glossary": {
+      "title": "术语表",
+      "search": "查找术语",
+      "none": "没有匹配的术语"
     }
   },
   "identity": {
@@ -8294,6 +8299,49 @@
       "jwtNote": "保存不会影响已部署的智能体；它们会在下次部署时采用此设置。",
       "discard": "放弃更改",
       "readOnly": "只有身份管理员可以修改默认值。"
+    }
+  },
+  "glossary": {
+    "whatIs": "什么是{{term}}？",
+    "agent": "一个配置一次即可对话、或被其他应用调用的 AI 助手。",
+    "harness": "由 AgentCore 托管的 Agent 循环：选好模型、提示词和工具即可，无需编写代码或构建容器。",
+    "runtime": "AgentCore 中运行 Agent 代码的服务，每个 Agent 在隔离、自动扩缩的容器里运行；资源名称是它在 AWS 中的标识。",
+    "registry": "共享目录：发布 Agent、MCP 服务器和技能，供他人查找和复用。",
+    "gateway": "统一的安全入口，把 API 和工具转换成 Agent 可调用的 MCP 工具。",
+    "mcp": "模型上下文协议（MCP），连接 Agent 与外部工具和数据的开放标准。",
+    "cedarPolicy": "用 Cedar 语言编写的规则，决定 Agent 的工具能做什么、不能做什么，每次调用都会校验。",
+    "knowledgeBase": "可检索的文档库，Agent 从中查找资料，用你自己的内容作答。",
+    "memory": "让 Agent 记住当前对话，并可选地记住每位用户的长期信息。",
+    "evaluator": "评分规则（通常是 LLM 评审），从正确性、有用性等维度给 Agent 的回答打分。",
+    "onlineEvaluation": "持续抽样给线上真实对话打分，尽早发现质量下滑。",
+    "dataset": "一组测试问题（可附期望答案），用于可重复地评估 Agent。",
+    "experiment": "在相同流量或数据上对比两套 Agent 配置（A/B 测试），选出更好的一套。",
+    "canary": "先把一小部分流量切到新版本，出问题可在影响所有人之前回滚。",
+    "skill": "可复用的指令与文件包，教会 Agent 完成某项特定任务。",
+    "a2a": "Agent-to-Agent 协议，让 Agent 之间可以互相发现和调用的标准。",
+    "workspace": "隔离的环境（一个 AWS 账号和区域），拥有独立的 Agent、密钥和数据。",
+    "observability": "链路、延迟、错误和 Token 用量等数据，展示 Agent 在生产中的实际表现。",
+    "trace": "一次请求的逐步记录：每次模型调用和工具调用及其耗时。",
+    "name": {
+      "agent": "Agent",
+      "harness": "Harness",
+      "runtime": "Runtime",
+      "registry": "注册中心",
+      "gateway": "网关",
+      "mcp": "MCP",
+      "cedarPolicy": "Cedar 策略",
+      "knowledgeBase": "知识库",
+      "memory": "记忆",
+      "evaluator": "评估器",
+      "onlineEvaluation": "在线评估",
+      "dataset": "数据集",
+      "experiment": "实验",
+      "canary": "金丝雀发布",
+      "skill": "技能",
+      "a2a": "A2A",
+      "workspace": "工作空间",
+      "observability": "可观测性",
+      "trace": "链路"
     }
   }
 }

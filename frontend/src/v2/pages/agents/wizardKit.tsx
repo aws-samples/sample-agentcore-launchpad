@@ -21,6 +21,7 @@ import {
   supportsReasoningEffort,
 } from "../../../lib/models";
 import { EFFORT_NONE, type EffortChoice } from "../../../pages/create/presetSettings";
+import { HintLabel } from "../../Glossary";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, Segmented, Select, Spin } from "../../ui";
 
@@ -330,7 +331,7 @@ export function SkillsKbCard({
   return (
     <Card title={t("v2.agents.wizard.skillsKb")}>
       <div className="v2-form">
-        <Field label={t("v2.agents.wizard.skills")} hint={t("v2.agents.wizard.skillsHintSources")}>
+        <Field label={<HintLabel term="skill">{t("v2.agents.wizard.skills")}</HintLabel>} hint={t("v2.agents.wizard.skillsHintSources")}>
           {cat.loading ? (
             <Spin />
           ) : (
@@ -409,7 +410,7 @@ export function SkillsKbCard({
             </div>
           )}
         </Field>
-        <Field label={t("v2.agents.kbTitle")} hint={kbNote}>
+        <Field label={<HintLabel term="knowledgeBase">{t("v2.agents.kbTitle")}</HintLabel>} hint={kbNote}>
           <CheckList
             items={kbs}
             keyOf={(kb) => kb.kb_id}
@@ -441,7 +442,7 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
             {t("v2.agents.wizard.longTermOn")}
           </label>
         </Field>
-        <Field label={t("v2.agents.wizard.memoryResource")} hint={t("create.configure.memoryResourceHint")}>
+        <Field label={<HintLabel term="memory">{t("v2.agents.wizard.memoryResource")}</HintLabel>} hint={t("create.configure.memoryResourceHint")}>
           <Select
             value={form.memoryId}
             onChange={(v) => set({ memoryId: v })}

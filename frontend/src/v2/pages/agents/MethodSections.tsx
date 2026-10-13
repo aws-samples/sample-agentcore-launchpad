@@ -21,6 +21,7 @@ import {
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
+import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
@@ -29,7 +30,7 @@ export function NameField({ form, set, err, nameLocked }: Omit<SectionProps, "ca
   const { t } = useTranslation();
   return (
     <Field
-      label={t("v2.agents.colName")}
+      label={<HintLabel term="runtime">{t("v2.agents.colName")}</HintLabel>}
       required
       hint={t(nameLocked ? "v2.agents.wizard.nameLocked" : "v2.agents.wizard.nameHint")}
       error={err("name")}
@@ -85,7 +86,7 @@ function GatewayField({ form, set, cat, err }: SectionProps) {
     .map((name) => ({ key: name, label: name }));
   return (
     <Field
-      label={t("v2.agents.wizard.gateways")}
+      label={<HintLabel term="gateway">{t("v2.agents.wizard.gateways")}</HintLabel>}
       error={err("gateway")}
       hint={cat.gatewayTargets.length > 0 ? t("create.configure.gatewayWholeNote") : undefined}
     >
@@ -112,7 +113,7 @@ function GatewayField({ form, set, cat, err }: SectionProps) {
 function RemoteMcpField({ form, set, cat }: SectionProps) {
   const { t } = useTranslation();
   return (
-    <Field label={t("v2.agents.wizard.remoteMcp")}>
+    <Field label={<HintLabel term="mcp">{t("v2.agents.wizard.remoteMcp")}</HintLabel>}>
       <CheckList
         items={cat.remoteMcp}
         keyOf={(m) => m.name}
@@ -188,6 +189,7 @@ export function ProtocolCard({
             desc={t(`v2.agents.wizard.protocol.${p}Desc`)}
             on={form.protocol === p}
             onClick={() => form.protocol !== p && onProtocol(p)}
+            hint={p === "a2a" ? t("glossary.a2a") : undefined}
             testId={`v2-agent-protocol-${p}`}
           />
         ))}

@@ -11,6 +11,7 @@ import { RouteChunk } from "../layout/RouteChunk";
 import { useNavMode } from "../lib/nav-mode";
 import { setUiVersion } from "../lib/ui-version";
 import { useWorkspace } from "../workspace/workspace-context";
+import { GlossaryDialog } from "./Glossary";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
 import { isNavItemActive, navGroupsFor } from "./nav";
@@ -199,6 +200,8 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
               </div>
             </div>
           </div>
+          {/* opened by a Term click (and later the palette / help menu) */}
+          <GlossaryDialog />
         </ModuleDemoProvider>
       </V2ToastProvider>
     </div>

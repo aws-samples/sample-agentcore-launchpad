@@ -376,6 +376,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
                   desc={t(`v2.agents.wizard.method.${m}Desc`)}
                   on={method === m}
                   onClick={() => pickMethod(m)}
+                  hint={t(m === "harness" ? "glossary.harness" : "glossary.runtime")}
                   badge={m === "harness" ? <Tag tone="blue">{t("v2.agents.wizard.recommended")}</Tag> : undefined}
                   testId={`v2-agent-method-${m}`}
                 />

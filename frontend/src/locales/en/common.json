@@ -8149,6 +8149,11 @@
       "showBusiness": "Show essentials only",
       "showExpert": "Show all pages",
       "hint": "A sidebar filter only: every page still opens by URL"
+    },
+    "glossary": {
+      "title": "Glossary",
+      "search": "Find a term",
+      "none": "No term matches"
     }
   },
   "identity": {
@@ -8294,6 +8299,49 @@
       "jwtNote": "Saving does not touch deployed agents; each picks this up on its next deploy.",
       "discard": "Discard changes",
       "readOnly": "Only identity managers can change the default."
+    }
+  },
+  "glossary": {
+    "whatIs": "What is {{term}}?",
+    "agent": "An AI assistant you configure once, then chat with or call from other apps.",
+    "harness": "A managed agent loop hosted by AgentCore: pick a model, a prompt and tools — no code or container to build.",
+    "runtime": "The AgentCore service that runs an agent's code in an isolated, auto-scaling container; the resource name identifies it in AWS.",
+    "registry": "A shared catalog where agents, MCP servers and skills are published so others can find and reuse them.",
+    "gateway": "One secure entry point that turns APIs and tools into MCP tools your agents can call.",
+    "mcp": "Model Context Protocol — an open standard for connecting agents to external tools and data.",
+    "cedarPolicy": "A rule in the Cedar language that allows or denies what an agent's tools may do, checked on every call.",
+    "knowledgeBase": "A searchable store of your documents that the agent looks things up in, so it answers with your own facts.",
+    "memory": "Lets the agent remember the current conversation and, optionally, long-term facts about each user.",
+    "evaluator": "A scoring rule, often an LLM judge, that rates agent answers for qualities such as correctness or helpfulness.",
+    "onlineEvaluation": "Continuously scores a sample of live conversations so quality drops show up early.",
+    "dataset": "A set of test questions, optionally with expected answers, used to evaluate an agent repeatably.",
+    "experiment": "An A/B comparison of two agent configurations on the same traffic or data to pick the better one.",
+    "canary": "Sends a small share of traffic to a new version first, so it can be rolled back before everyone is affected.",
+    "skill": "A reusable package of instructions and files that teaches an agent how to do one specific task.",
+    "a2a": "Agent-to-Agent protocol — a standard that lets agents discover and call each other.",
+    "workspace": "An isolated environment (one AWS account and region) with its own agents, keys and data.",
+    "observability": "Traces, latency, errors and token usage that show how your agents behave in production.",
+    "trace": "The step-by-step record of one request: every model call and tool call, with timings.",
+    "name": {
+      "agent": "Agent",
+      "harness": "Harness",
+      "runtime": "Runtime",
+      "registry": "Registry",
+      "gateway": "Gateway",
+      "mcp": "MCP",
+      "cedarPolicy": "Cedar policy",
+      "knowledgeBase": "Knowledge base",
+      "memory": "Memory",
+      "evaluator": "Evaluator",
+      "onlineEvaluation": "Online evaluation",
+      "dataset": "Dataset",
+      "experiment": "Experiment",
+      "canary": "Canary",
+      "skill": "Skill",
+      "a2a": "A2A",
+      "workspace": "Workspace",
+      "observability": "Observability",
+      "trace": "Trace"
     }
   }
 }

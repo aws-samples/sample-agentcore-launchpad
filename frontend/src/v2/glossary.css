@@ -1,0 +1,87 @@
+/* Glossary hints + dialog — scoped under .v2 like the rest of the V2 theme.
+   The tooltip's own translate is fine; never put transform/filter/contain on a
+   container (it would re-anchor the fixed select popups). */
+.v2 .v2-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--v2-ink-3);
+  cursor: help;
+  vertical-align: middle;
+  border-radius: 50%;
+}
+.v2 .v2-hint:hover,
+.v2 .v2-hint:focus-visible { color: var(--v2-primary); }
+.v2 .v2-term {
+  margin-left: 0;
+  color: inherit;
+  vertical-align: baseline;
+  border-radius: 0;
+}
+.v2 .v2-term-word {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dotted var(--v2-ink-3);
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: help;
+}
+.v2 .v2-term-word:hover,
+.v2 .v2-term-word:focus-visible { border-bottom-color: var(--v2-primary); }
+.v2 .v2-hint-tip {
+  position: absolute;
+  z-index: 50;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: var(--v2-radius-sm);
+  background: #1d2129;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  box-shadow: var(--v2-shadow);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+.v2 .v2-hint:hover > .v2-hint-tip,
+.v2 .v2-hint:focus-visible > .v2-hint-tip,
+.v2 .v2-hint:focus > .v2-hint-tip,
+.v2 .v2-term-word:focus-visible + .v2-hint-tip,
+.v2 .v2-option.has-hint:hover > .v2-hint-tip,
+.v2 .v2-option.has-hint:focus-visible > .v2-hint-tip {
+  opacity: 1;
+  visibility: visible;
+}
+.v2 .v2-option.has-hint { position: relative; }
+.v2 .v2-option.has-hint > .v2-hint-tip { left: 16px; transform: none; }
+.v2 .v2-option .v2-option-hint { color: var(--v2-ink-3); display: inline-flex; }
+@media (prefers-reduced-motion: reduce) {
+  .v2 .v2-hint-tip { transition: none; }
+}
+
+/* the glossary dialog */
+.v2 .v2-glossary-title { display: inline-flex; align-items: center; gap: 8px; }
+.v2 .v2-glossary-find { margin-bottom: 12px; }
+.v2 .v2-glossary-find .v2-search { width: 100%; }
+.v2 .v2-glossary { display: grid; gap: 2px; margin: 0; }
+.v2 .v2-glossary > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--v2-radius-sm);
+}
+.v2 .v2-glossary > div.on { background: var(--v2-primary-soft); box-shadow: 0 0 0 1px var(--v2-primary) inset; }
+.v2 .v2-glossary dt { font-weight: 600; color: var(--v2-ink); }
+.v2 .v2-glossary dd { margin: 0; color: var(--v2-ink-2); line-height: 1.55; }
