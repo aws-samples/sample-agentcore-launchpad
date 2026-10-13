@@ -5632,6 +5632,20 @@
           "missing": "Missing",
           "unbound": "Unbound"
         }
+      },
+      "progress": {
+        "harness": "Preparing your agent — about 30 seconds",
+        "zipPackage": "Installing dependencies and packaging — 1 to 3 minutes",
+        "containerBuild": "Building the container image — 2 to 4 minutes",
+        "package": "Packaging your agent — 1 to 3 minutes",
+        "prepare": "Preparing your agent — a few seconds",
+        "start": "Starting your agent — about 1 minute",
+        "register": "Finishing up — a few seconds",
+        "elapsed": "Elapsed {{time}}",
+        "done": "Ready in {{time}}",
+        "failed": "Your agent could not be deployed. The technical log below shows what went wrong.",
+        "failedAt": "Your agent could not be deployed: the {{stage}} stage failed. The technical log below shows what went wrong.",
+        "technical": "Technical log"
       }
     },
     "data": {

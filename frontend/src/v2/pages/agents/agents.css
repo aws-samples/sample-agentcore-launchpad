@@ -53,3 +53,7 @@
   .v2 .v2-agents-row.a2a, .v2 .v2-agents-row.mount, .v2 .v2-agents-row.env,
   .v2 .v2-agents-row.auth-head, .v2 .v2-agents-row.auth-body { grid-template-columns: 1fr; }
 }
+/* Agent detail · plain-language deploy line; technical stages + log fold below it. */
+.v2 .v2-deploy-line { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; font-size: 14px; }
+.v2 .v2-deploy-line .elapsed { color: var(--v2-ink-3); font-family: var(--v2-mono); font-size: 12.5px; }
+.v2 .v2-deploy-details > summary { cursor: pointer; font-weight: 600; font-size: 14px; margin: 12px 0 8px; }

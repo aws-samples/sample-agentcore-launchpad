@@ -21,6 +21,8 @@ import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
 import { v2EditPath } from "./agents/classicUrl";
+import { deployLine, fmtElapsed, isFailed } from "./agents/deployStatus";
+import "./agents/agents.css";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
   Alert,
@@ -369,35 +371,84 @@ function AgentList() {
 }
 
 // ─── detail ────────────────────────────────────────────────────────────────
-function DeployProgress({ deployment, job }: { deployment: DeploymentInfo; job: JobInfo | null }) {
+function DeployProgress({
+  deployment,
+  job,
+  method,
+}: {
+  deployment: DeploymentInfo;
+  job: JobInfo | null;
+  method: string;
+}) {
   const { t } = useTranslation();
+  const failed = isFailed(deployment);
+  const inFlight = !failed && deployment.status === "running";
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [inFlight]);
+  const line = deployLine(method, deployment, now);
+  const elapsed = line.kind === "running" || line.kind === "done" ? line.elapsedMs : null;
+  const time = elapsed != null ? fmtElapsed(elapsed) : null;
   return (
     <Card
       title={t("v2.agents.deployTitle")}
       sub={deployment.job_id ? `job ${deployment.job_id.slice(0, 8)}` : undefined}
       testId="v2-agent-deploy"
     >
-      <div className="v2-stages">
-        {deployment.stages.map((s, i) => (
-          <div key={s.name} className={`v2-stage ${s.status}`}>
-            <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
-            <div className="b">
-              <div className="t">
-                {t(`create.stages.${s.name}`, { defaultValue: s.name })}
-                <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
+      {line.kind === "running" && (
+        <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
+          <span>{t(`v2.agents.progress.${line.key}`)}</span>
+          {time && <span className="elapsed">{t("v2.agents.progress.elapsed", { time })}</span>}
+        </p>
+      )}
+      {line.kind === "done" && time && (
+        <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
+          <span>{t("v2.agents.progress.done", { time })}</span>
+        </p>
+      )}
+      {line.kind === "failed" && (
+        <Alert tone="error">
+          {line.stage
+            ? t("v2.agents.progress.failedAt", {
+                stage: t(`create.stages.${line.stage}`, { defaultValue: line.stage }),
+              })
+            : t("v2.agents.progress.failed")}
+        </Alert>
+      )}
+      {/* technical detail is collapsed unless the deploy failed; the key remounts the
+          element so a deploy that fails while the page is open auto-expands */}
+      <details
+        className="v2-deploy-details"
+        key={failed ? "failed" : "ok"}
+        open={failed}
+        data-testid="v2-agent-technical"
+      >
+        <summary>{t("v2.agents.progress.technical")}</summary>
+        <div className="v2-stages">
+          {deployment.stages.map((s, i) => (
+            <div key={s.name} className={`v2-stage ${s.status}`}>
+              <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
+              <div className="b">
+                <div className="t">
+                  {t(`create.stages.${s.name}`, { defaultValue: s.name })}
+                  <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
+                </div>
+                <div className="d">{s.detail || "—"}</div>
               </div>
-              <div className="d">{s.detail || "—"}</div>
             </div>
-          </div>
-        ))}
-      </div>
-      {job?.error && <Alert tone="error">{job.error}</Alert>}
-      <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
-      <pre className="v2-pre" data-testid="v2-agent-log">
-        {job?.events.length
-          ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
-          : t("v2.agents.logEmpty")}
-      </pre>
+          ))}
+        </div>
+        {job?.error && <Alert tone="error">{job.error}</Alert>}
+        <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
+        <pre className="v2-pre" data-testid="v2-agent-log">
+          {job?.events.length
+            ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
+            : t("v2.agents.logEmpty")}
+        </pre>
+      </details>
     </Card>
   );
 }
@@ -602,7 +653,7 @@ function AgentDetail({ id }: { id: string }) {
           ]}
         />
       </Card>
-      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} />}
+      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
         <InboundSwitchCard
           agentId={agent.id}
