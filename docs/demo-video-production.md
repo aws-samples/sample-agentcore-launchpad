@@ -44,6 +44,16 @@
   implying instantaneous cloud work. Use ASS/libass with a verified Chinese font
   for overlays/subtitles; the previous `drawtext` + TTC font attempt failed. Export
   an H.264/AAC MP4 with `+faststart` and a WebM fallback for browsers lacking H.264.
+- **Start from a console that won't interrupt.** The V2 console has two kinds of
+  interruptions that a scripted run must account for:
+  - **The guided tour.** It starts by itself on a browser's first visit to `/v2`,
+    and it would cover the first scene. Set the "seen" flag before the first
+    navigation, e.g. in Playwright:
+    `await context.addInitScript(() => { try { localStorage.setItem("launchpad_v2_tour_done", "1"); } catch {} });`
+    Record the tour itself only on purpose, by opening it from **? → Take the tour**.
+  - **The collapsed deploy log.** On agent detail, the deploy log of a successful
+    deploy is collapsed under **Technical details** (`v2-agent-technical`). A scene
+    that shows the log must expand that section first.
 - **Anchor guidance to the actual element.** Prefer a temporary CSS outline on
   the target, restoring its previous outline before clicking or navigating.
   Viewport coordinates from `boundingBox()` must not be reused as absolute CSS
