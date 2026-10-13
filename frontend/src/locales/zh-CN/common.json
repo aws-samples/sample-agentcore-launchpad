@@ -5646,6 +5646,26 @@
         "failed": "你的智能体部署失败。下方的技术日志显示了出错原因。",
         "failedAt": "你的智能体部署失败：「{{stage}}」阶段出错。下方的技术日志显示了出错原因。",
         "technical": "技术日志"
+      },
+      "integration": {
+        "title": "系统集成",
+        "sub": "通过公开的 /v1 API 从您自己的系统调用该智能体。请将 {{key}} 替换为 API 密钥。",
+        "language": "语言",
+        "mode": "调用方式",
+        "lang": {
+          "curl": "curl",
+          "python": "Python (httpx)",
+          "javascript": "JavaScript (fetch)"
+        },
+        "modes": {
+          "sync": "同步调用",
+          "stream": "流式调用（SSE）"
+        },
+        "copy": "复制",
+        "copied": "示例代码已复制。",
+        "copyFailed": "无法复制到剪贴板。",
+        "keyHint": "API 密钥在对话控制台的 API 面板中创建和停用。一个密钥可调用其创建者在本工作区内可见的所有智能体。",
+        "keysLink": "管理 API 密钥"
       }
     },
     "data": {

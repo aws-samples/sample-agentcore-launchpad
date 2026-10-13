@@ -5646,6 +5646,26 @@
         "failed": "Your agent could not be deployed. The technical log below shows what went wrong.",
         "failedAt": "Your agent could not be deployed: the {{stage}} stage failed. The technical log below shows what went wrong.",
         "technical": "Technical log"
+      },
+      "integration": {
+        "title": "Integration",
+        "sub": "Call this agent from your own system through the public /v1 API. Replace {{key}} with an API key.",
+        "language": "Language",
+        "mode": "Call style",
+        "lang": {
+          "curl": "curl",
+          "python": "Python (httpx)",
+          "javascript": "JavaScript (fetch)"
+        },
+        "modes": {
+          "sync": "Synchronous",
+          "stream": "Streaming (SSE)"
+        },
+        "copy": "Copy",
+        "copied": "Snippet copied.",
+        "copyFailed": "Could not copy to the clipboard.",
+        "keyHint": "API keys are created and disabled in the API panel of the Chat console. A key can call every agent its creator can see in this workspace.",
+        "keysLink": "Manage API keys"
       }
     },
     "data": {

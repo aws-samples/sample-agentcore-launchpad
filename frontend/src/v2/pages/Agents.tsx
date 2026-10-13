@@ -19,6 +19,7 @@ import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
+import { IntegrationCard } from "./agents/IntegrationCard";
 import { AgentWizard } from "./agents/AgentWizard";
 import { v2EditPath } from "./agents/classicUrl";
 import { deployLine, fmtElapsed, isFailed } from "./agents/deployStatus";
@@ -689,6 +690,7 @@ function AgentDetail({ id }: { id: string }) {
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
+      {agent.invoke_capability.eligible && <IntegrationCard agentId={agent.id} />}
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>
           <Descriptions
