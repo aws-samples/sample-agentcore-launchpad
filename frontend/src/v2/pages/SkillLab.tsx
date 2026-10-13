@@ -1,9 +1,12 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../../lib/api";
+import { jobSkillName, LIST_POLL_MS } from "../../lib/skillLab";
 import { useLoad } from "../hooks";
-import { PageHeader, SubTabs } from "../ui";
+import { type AttentionItem, AttentionPanel, Lamp, PageHeader, SubTabs } from "../ui";
+import { jobParams, jobQueue } from "./skilllab/attention";
 import { ProvisionAlert } from "./skilllab/common";
 import { EvalDetail } from "./skilllab/EvalDetail";
 import { EvalWizard } from "./skilllab/EvalWizard";
@@ -77,6 +80,7 @@ export function V2SkillLab() {
         }
       />
       <ProvisionAlert status={status} />
+      <JobAttention />
       {tab === "tasksets" && (
         <>
           <TasksetList />
@@ -86,5 +90,49 @@ export function V2SkillLab() {
       {tab === "eval" && <JobList key="eval" type="eval" />}
       {tab === "train" && <JobList key="train" type="train" />}
     </>
+  );
+}
+
+/** Every job type's in-flight and failed jobs, above whichever tab is open. One list call
+ *  (no type) on the per-tab lists' 8 s cadence; it stays mounted across tab switches. */
+function JobAttention() {
+  const { t } = useTranslation();
+  const [, setParams] = useSearchParams();
+  const { data, reload } = useLoad(() => api.skillLabJobs(), "skill-lab-attention");
+  useEffect(() => {
+    const timer = window.setInterval(reload, LIST_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+  if (!data) return null;
+
+  const { entries, total } = jobQueue(data);
+  const items: AttentionItem[] = entries.map((entry) => {
+    const { job } = entry;
+    const queued = job.status === "queued" && job.queue_position > 0 ? ` #${job.queue_position}` : "";
+    return {
+      key: entry.key,
+      signal: entry.signal,
+      live: entry.live,
+      title: jobSkillName(job) || t("skillLab.eval.unknownSkill"),
+      hint: entry.detail || job.progress || job.taskset_name,
+      meta: `${t(`v2.skillLab.attention.type.${job.type}`)} · ${t(`skillLab.eval.status.${job.status}`)}${queued}`,
+      onOpen: () => setParams(jobParams(job)),
+      openLabel: t("v2.common.view"),
+      testId: `v2-skilllab-att-${job.type}-${job.id}`,
+    };
+  });
+  return (
+    <AttentionPanel
+      title={t("v2.skillLab.attention.title")}
+      items={items}
+      count={total}
+      testId="v2-skilllab-attention"
+      empty={
+        <>
+          <Lamp signal={data.length ? "ok" : "off"} />
+          {data.length ? t("v2.skillLab.attention.empty") : t("v2.skillLab.attention.noJobs")}
+        </>
+      }
+    />
   );
 }

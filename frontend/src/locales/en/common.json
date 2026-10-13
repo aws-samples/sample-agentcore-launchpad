@@ -7574,7 +7574,17 @@
       "trainLoop": "Training loop",
       "trainProgress": "Training progress",
       "uploaded": "Uploaded",
-      "genRecords": "AI generation jobs"
+      "genRecords": "AI generation jobs",
+      "attention": {
+        "title": "Needs attention",
+        "empty": "No job is queued, running, failed or interrupted.",
+        "noJobs": "No Skill Lab job yet.",
+        "type": {
+          "eval": "Evaluation",
+          "train": "Optimization",
+          "taskgen": "AI generation"
+        }
+      }
     },
     "users": {
       "trendTitle": "Registrations",
