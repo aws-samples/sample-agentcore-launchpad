@@ -33,10 +33,12 @@ export function V2Observability() {
   if (view === "session" && id) return <SessionDetail key={`${id}:${range}`} sessionId={id} range={range} />;
   if (view === "trace" && id) return <TraceDetail key={`${id}:${range}`} traceId={id} range={range} />;
 
-  const go = (next: { tab?: ObsTab; range?: string }) => {
+  // a tab or range change drops the traces status filter, like the other list filters
+  const go = (next: { tab?: ObsTab; range?: string; status?: "error" }) => {
     const p: Record<string, string> = { tab: next.tab ?? tab };
     const r = next.range ?? range;
     if (r !== "24h") p.range = r;
+    if (next.status) p.status = next.status;
     setParams(p);
   };
 
@@ -68,7 +70,15 @@ export function V2Observability() {
           </>
         }
       />
-      {tab === "dashboard" && <Dashboard range={range} force={force} onCacheHint={setCacheHint} onForce={() => setForce((n) => n + 1)} />}
+      {tab === "dashboard" && (
+        <Dashboard
+          range={range}
+          force={force}
+          onCacheHint={setCacheHint}
+          onForce={() => setForce((n) => n + 1)}
+          onOpenTraces={(status) => go({ tab: "traces", status })}
+        />
+      )}
       {tab === "sessions" && <SessionList range={range} force={force} onCacheHint={setCacheHint} />}
       {tab === "traces" && <TraceList range={range} force={force} onCacheHint={setCacheHint} />}
     </>

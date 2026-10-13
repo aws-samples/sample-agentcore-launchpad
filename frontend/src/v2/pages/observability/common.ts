@@ -28,6 +28,13 @@ export function asTab(value: string | null): ObsTab {
   return (OBS_TABS as string[]).includes(value ?? "") ? (value as ObsTab) : "dashboard";
 }
 
+/** The traces tab's `?status=` filter (a dashboard finding links to failed traces);
+ *  anything but ok/error means all. */
+export type TraceStatusFilter = "" | "ok" | "error";
+export function asTraceStatus(value: string | null): TraceStatusFilter {
+  return value === "ok" || value === "error" ? value : "";
+}
+
 /** Harness runtimes emit a constant stream of 2-span "InternalOperation"
  * health-check traces — noise for humans, hidden by default. */
 export function isSystemTrace(r: ObsTraceRow): boolean {

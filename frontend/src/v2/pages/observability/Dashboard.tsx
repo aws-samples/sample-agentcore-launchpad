@@ -5,7 +5,8 @@ import { api, errorMessage, type ObsDashboard, type V2Range } from "../../../lib
 import { fmtBucket, fmtCompact } from "../../../pages/observability/format";
 import { fmtDuration, fmtNumber } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Card, Kpi, LinkButton, Spin } from "../../ui";
+import { Alert, type AttentionItem, AttentionPanel, Card, Kpi, Lamp, LinkButton, Spin } from "../../ui";
+import { ERROR_RATE_ACT, type Finding, findings, P95_SLOW_MS, P95_TIMEOUT_MS } from "./attention";
 import { approxCost, useReportCache } from "./common";
 
 function Legend({ items }: { items: { color: string; label: string }[] }) {
@@ -211,16 +212,84 @@ function TopTools({ data }: { data: ObsDashboard }) {
   );
 }
 
+/** "Needs a look": the dashboard's findings, ranked; each opens the traces it is about. */
+function ObsAttention({ data, onOpenTraces }: { data: ObsDashboard; onOpenTraces: (status?: "error") => void }) {
+  const { t } = useTranslation();
+  const { tiles } = data;
+  const copy = (f: Finding): { title: string; hint: string } => {
+    const v = f.values;
+    switch (f.kind) {
+      case "errorRate":
+        return {
+          title: t("v2.observability.attention.errorRate", v),
+          hint: t("v2.observability.attention.errorRateHint", { limit: `${ERROR_RATE_ACT * 100}%` }),
+        };
+      case "errorSpike":
+        return {
+          title: t("v2.observability.attention.errorSpike", { ...v, bucket: fmtBucket(String(v.bucket), data.range === "7d") }),
+          hint: t("v2.observability.attention.errorSpikeHint"),
+        };
+      case "slowP95":
+        return {
+          title: t("v2.observability.attention.slowP95", { p95: fmtDuration(Number(v.p95)) }),
+          hint: t("v2.observability.attention.slowP95Hint", {
+            slow: fmtDuration(P95_SLOW_MS),
+            timeout: fmtDuration(P95_TIMEOUT_MS),
+          }),
+        };
+      case "toolFailing":
+        return {
+          title: t("v2.observability.attention.toolFailing", v),
+          hint: t("v2.observability.attention.toolFailingHint", { rate: v.rate }),
+        };
+    }
+  };
+  const items: AttentionItem[] = findings(data).map((f) => {
+    const { title, hint } = copy(f);
+    const target = f.target;
+    return {
+      key: f.kind === "toolFailing" ? `${f.kind}:${f.values.tool}` : f.kind,
+      signal: f.s,
+      live: true,
+      title,
+      hint,
+      onOpen: target ? () => onOpenTraces(target.status) : undefined,
+      openLabel: t(target?.status ? "v2.observability.attention.openFailed" : "v2.observability.attention.openTraces"),
+      testId: `v2-obs-finding-${f.kind}`,
+    };
+  });
+  const traffic = tiles.traces.total > 0 || tiles.sessions.total > 0;
+  return (
+    <AttentionPanel
+      title={t("v2.observability.attention.title")}
+      items={items}
+      testId="v2-obs-attention"
+      empty={
+        <>
+          <Lamp signal={traffic ? "ok" : "off"} />
+          {tiles.traces.total > 0
+            ? t("v2.observability.attention.quiet", { count: tiles.traces.total })
+            : tiles.sessions.total > 0
+              ? t("v2.observability.attention.quietSessions", { count: tiles.sessions.total })
+              : t("v2.observability.attention.noTraffic")}
+        </>
+      }
+    />
+  );
+}
+
 export function Dashboard({
   range,
   force,
   onCacheHint,
   onForce,
+  onOpenTraces,
 }: {
   range: V2Range;
   force: number;
   onCacheHint: (hint: string | null) => void;
   onForce: () => void;
+  onOpenTraces: (status?: "error") => void;
 }) {
   const { t } = useTranslation();
   const { data, loading, error, reload } = useLoad(() => api.obsDashboard(range, force > 0), `obs-dash:${range}:${force}`);
@@ -278,6 +347,7 @@ export function Dashboard({
           })}
         />
       </div>
+      <ObsAttention data={data} onOpenTraces={onOpenTraces} />
       <div className="v2-grid-2 v2-observability-charts">
         <TrafficChart data={data} />
         <LatencyChart data={data} />

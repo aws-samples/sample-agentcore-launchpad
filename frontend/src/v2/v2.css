@@ -146,6 +146,42 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-sec-title .sub { font-weight: 400; font-size: 13px; color: var(--v2-ink-3); }
 .v2-sec-title .end { margin-left: auto; font-weight: 400; }
 
+/* ---------- signal lamp + attention panel (v2/signals.ts vocabulary) ---------- */
+.v2-lamp { --v2-lamp: var(--v2-ink-4); position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--v2-lamp); }
+.v2-lamp[data-signal="ok"] { --v2-lamp: var(--v2-success); }
+.v2-lamp[data-signal="wait"] { --v2-lamp: var(--v2-warning); }
+.v2-lamp[data-signal="act"] { --v2-lamp: var(--v2-danger); }
+.v2-lamp[data-signal="info"] { --v2-lamp: var(--v2-primary); }
+/* the breathing ring marks a wait that is still moving; other signals stay still */
+.v2-lamp[data-live="true"][data-signal="wait"]::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1px solid var(--v2-lamp);
+  animation: v2-lamp-breathe 2.4s ease-out infinite;
+}
+@keyframes v2-lamp-breathe { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(2.1); opacity: 0; } }
+/* same selector as the ring, so the guard wins on specificity */
+@media (prefers-reduced-motion: reduce) { .v2-lamp[data-live="true"][data-signal="wait"]::after { animation: none; display: none; } }
+.v2-attention[data-signal="act"] { box-shadow: inset 3px 0 0 var(--v2-danger), var(--v2-shadow); }
+.v2-attention[data-signal="wait"] { box-shadow: inset 3px 0 0 var(--v2-warning), var(--v2-shadow); }
+.v2-attention .v2-sec-title { margin-bottom: 12px; }
+.v2-attention-empty { display: flex; align-items: center; gap: 10px; color: var(--v2-ink-2); font-size: 13px; }
+.v2-attention-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.v2-attention-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); }
+.v2-attention-row[data-signal="act"] { border-color: color-mix(in srgb, var(--v2-danger) 35%, var(--v2-line)); }
+.v2-attention-row[data-signal="wait"] { border-color: color-mix(in srgb, var(--v2-warning) 35%, var(--v2-line)); }
+.v2-attention-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  background: none; border: 0; border-radius: var(--v2-radius-sm); font: inherit; color: inherit; text-align: left;
+}
+button.v2-attention-main { cursor: pointer; }
+button.v2-attention-main:hover { background: var(--v2-fill); }
+button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; }
+.v2-attention-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.v2-attention-text .title { color: var(--v2-ink); }
+.v2-attention-text small { color: var(--v2-ink-3); font-size: 12px; }
+.v2-attention-meta { color: var(--v2-ink-3); font-size: 12px; white-space: nowrap; }
+.v2-attention-open { display: inline-flex; align-items: center; gap: 2px; color: var(--v2-primary); font-size: 13px; white-space: nowrap; }
+.v2-attention-actions { display: flex; gap: 6px; padding-right: 12px; }
+
 /* ---------- toolbar (filters above a table) ---------- */
 .v2-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .v2-toolbar .end { margin-left: auto; display: flex; align-items: center; gap: 12px; }

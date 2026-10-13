@@ -6,7 +6,7 @@ import { api, type ObsTraceRow, type V2Range } from "../../../lib/api";
 import { fmtDuration, fmtNumber, fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
 import { Card, type Column, FilterSelect, LinkButton, Pager, SearchInput, Table, Tag } from "../../ui";
-import { approxCost, isSystemTrace, shortId, TIMEOUT_MS, useReportCache } from "./common";
+import { approxCost, asTraceStatus, isSystemTrace, shortId, TIMEOUT_MS, useReportCache } from "./common";
 
 export function TraceStatusTag({ status, durationMs }: { status: "ok" | "error"; durationMs: number }) {
   const { t } = useTranslation();
@@ -24,11 +24,22 @@ export function TraceList({
   onCacheHint: (hint: string | null) => void;
 }) {
   const { t } = useTranslation();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { data, loading, error, reload } = useLoad(() => api.obsTraces(range, force > 0), `obs-traces:${range}:${force}`);
   useReportCache(data?.cache.age_seconds, data, loading, onCacheHint);
   const [agent, setAgent] = useState("");
-  const [status, setStatus] = useState("");
+  // status lives in the URL so a dashboard finding can open the failed traces
+  const status = asTraceStatus(params.get("status"));
+  const setStatus = (value: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (asTraceStatus(value)) next.set("status", value);
+        else next.delete("status");
+        return next;
+      },
+      { replace: true },
+    );
   const [q, setQ] = useState("");
   const [showSystem, setShowSystem] = useState(false);
 

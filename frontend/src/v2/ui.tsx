@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Inbox,
   Info,
   Loader2,
@@ -33,6 +34,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { PageHeaderAsideContext, ToastContext } from "./hooks";
+import { type Signal, worstSignal } from "./signals";
 
 /* ---------- button ---------- */
 export function Button({
@@ -679,6 +681,96 @@ export function Card({
           </h2>
         )}
         {children}
+      </div>
+    </section>
+  );
+}
+
+/* ---------- signal lamp + attention panel ("what needs you", ranked) ---------- */
+export function Lamp({ signal, live, title }: { signal: Signal; live?: boolean; title?: string }) {
+  return (
+    <span
+      className="v2-lamp"
+      data-signal={signal}
+      data-live={live ? "true" : undefined}
+      title={title}
+      aria-hidden={title ? undefined : true}
+    />
+  );
+}
+
+export interface AttentionItem {
+  key: string;
+  signal: Signal;
+  live?: boolean;
+  title: ReactNode;
+  hint?: ReactNode;
+  /** right-aligned muted text, e.g. a relative time */
+  meta?: ReactNode;
+  /** row click; also renders the trailing "open" label */
+  onOpen?: () => void;
+  openLabel?: string;
+  /** inline buttons, kept outside the row button so their clicks never open the row */
+  actions?: ReactNode;
+  testId?: string;
+}
+
+/** A ranked list of what needs a look. The page orders `items`; the card edge takes the
+ *  most severe item's colour and `empty` is the one-line state when nothing does. */
+export function AttentionPanel({
+  title,
+  items,
+  empty,
+  testId,
+}: {
+  title: ReactNode;
+  items: AttentionItem[];
+  empty: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <section className="v2-card v2-attention" data-signal={worstSignal(items.map((i) => i.signal))} data-testid={testId}>
+      <div className="v2-card-body">
+        <h2 className="v2-sec-title">
+          {title}
+          <span className="end v2-count">{items.length}</span>
+        </h2>
+        {items.length === 0 ? (
+          <div className="v2-attention-empty">{empty}</div>
+        ) : (
+          <ul className="v2-attention-list">
+            {items.map((item) => {
+              const body = (
+                <>
+                  <Lamp signal={item.signal} live={item.live} />
+                  <span className="v2-attention-text">
+                    <span className="title">{item.title}</span>
+                    {item.hint && <small>{item.hint}</small>}
+                  </span>
+                  {item.meta && <span className="v2-attention-meta">{item.meta}</span>}
+                  {item.onOpen && item.openLabel && (
+                    <span className="v2-attention-open">
+                      {item.openLabel}
+                      <ChevronRight size={14} aria-hidden="true" />
+                    </span>
+                  )}
+                </>
+              );
+              return (
+                <li key={item.key} className="v2-attention-row" data-signal={item.signal} data-testid={item.testId}>
+                  {item.onOpen ? (
+                    <button type="button" className="v2-attention-main" onClick={item.onOpen}>
+                      {body}
+                    </button>
+                  ) : (
+                    <div className="v2-attention-main">{body}</div>
+                  )}
+                  {item.actions && <span className="v2-attention-actions">{item.actions}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </section>
   );

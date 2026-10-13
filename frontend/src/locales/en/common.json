@@ -6983,6 +6983,22 @@
         "resultSub": "{{spans}} spans sent · {{results}} results · not persisted",
         "confirmTitle": "Score this session now?",
         "confirmBody": "Runs {{count}} evaluator(s) over this session's spans — one billable judge inference per evaluator. Results are shown here and not persisted."
+      },
+      "attention": {
+        "title": "Needs a look",
+        "quiet": "Nothing stands out across {{count}} traces.",
+        "quietSessions": "Nothing stands out across {{count}} sessions.",
+        "noTraffic": "Traces appear here once an agent is invoked.",
+        "errorRate": "{{rate}}% of traces failed ({{errors}} of {{total}})",
+        "errorRateHint": "Above the {{limit}} the console treats as a problem.",
+        "errorSpike": "Errors spiked at {{bucket}}: {{errors}} of {{traces}} traces",
+        "errorSpikeHint": "Far above this range's average error share.",
+        "slowP95": "P95 latency is {{p95}}",
+        "slowP95Hint": "Slow above {{slow}}; a root span past {{timeout}} counts as a timeout.",
+        "toolFailing": "{{tool}} failed {{errors}} of {{calls}} calls",
+        "toolFailingHint": "{{rate}}% success.",
+        "openFailed": "Failed traces",
+        "openTraces": "Traces"
       }
     },
     "registry": {

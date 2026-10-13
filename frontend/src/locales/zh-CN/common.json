@@ -6983,6 +6983,22 @@
         "resultSub": "已发送 {{spans}} 个 Span · {{results}} 条结果 · 不持久化",
         "confirmTitle": "立即为该会话评分？",
         "confirmBody": "将用 {{count}} 个评估器对该会话的 Span 进行评分，每个评估器产生一次计费的评审推理。结果仅在此展示，不会持久化。"
+      },
+      "attention": {
+        "title": "需要关注",
+        "quiet": "{{count}} 条链路中没有异常。",
+        "quietSessions": "{{count}} 个会话中没有异常。",
+        "noTraffic": "调用 Agent 之后，链路会出现在这里。",
+        "errorRate": "{{rate}}% 的链路失败（{{total}} 条中 {{errors}} 条）",
+        "errorRateHint": "高于控制台视为异常的 {{limit}}。",
+        "errorSpike": "{{bucket}} 错误激增：{{traces}} 条链路中 {{errors}} 条失败",
+        "errorSpikeHint": "远高于该时间范围的平均错误占比。",
+        "slowP95": "P95 延迟为 {{p95}}",
+        "slowP95Hint": "超过 {{slow}} 视为慢；根 Span 超过 {{timeout}} 计为超时。",
+        "toolFailing": "{{tool}} 的 {{calls}} 次调用中失败 {{errors}} 次",
+        "toolFailingHint": "成功率 {{rate}}%。",
+        "openFailed": "失败链路",
+        "openTraces": "链路"
       }
     },
     "registry": {
