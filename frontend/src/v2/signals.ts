@@ -22,3 +22,8 @@ const SEVERITY: Signal[] = ["act", "wait", "info", "ok", "off"];
 export function worstSignal(signals: Signal[]): Signal | undefined {
   return SEVERITY.find((s) => signals.includes(s));
 }
+
+/** `items` most severe first; items that share a signal keep their order (a stable sort). */
+export function rankBySignal<T extends { signal: Signal }>(items: T[]): T[] {
+  return [...items].sort((a, b) => SEVERITY.indexOf(a.signal) - SEVERITY.indexOf(b.signal));
+}

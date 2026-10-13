@@ -721,11 +721,14 @@ export function AttentionPanel({
   title,
   items,
   empty,
+  count,
   testId,
 }: {
   title: ReactNode;
   items: AttentionItem[];
   empty: ReactNode;
+  /** header count when `items` is capped (defaults to `items.length`) */
+  count?: number;
   testId?: string;
 }) {
   return (
@@ -733,7 +736,7 @@ export function AttentionPanel({
       <div className="v2-card-body">
         <h2 className="v2-sec-title">
           {title}
-          <span className="end v2-count">{items.length}</span>
+          <span className="end v2-count">{count ?? items.length}</span>
         </h2>
         {items.length === 0 ? (
           <div className="v2-attention-empty">{empty}</div>
