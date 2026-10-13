@@ -20,11 +20,14 @@ import {
   type V2Task,
 } from "../../tasks";
 import {
+  type AttentionItem,
+  AttentionPanel,
   Button,
   Card,
   type Column,
   Confirm,
   FilterSelect,
+  Lamp,
   LinkButton,
   PageHeader,
   Pager,
@@ -32,6 +35,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { failedTasks } from "./attention";
 
 type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
 
@@ -67,6 +71,18 @@ export function TaskList() {
   const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
   const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id });
   const copy = (task: V2Task) => setParams({ view: "new", from: `${task.kind}:${task.id}` });
+
+  const failed = failedTasks(tasks);
+  const attention: AttentionItem[] = failed.entries.map((entry) => ({
+    key: entry.key,
+    signal: entry.signal,
+    title: entry.task.name,
+    hint: entry.detail || statusLabel(t, entry.task.status),
+    meta: `${entry.task.agentName} · ${fmtTime(entry.task.createdAt)}`,
+    onOpen: () => open(entry.task),
+    openLabel: t("v2.common.view"),
+    testId: `v2-tasks-att-${entry.task.kind}-${entry.task.id}`,
+  }));
 
   const act = async () => {
     if (!pending) return;
@@ -201,6 +217,20 @@ export function TaskList() {
   return (
     <>
       <PageHeader title={t("v2.tasks.title")} desc={t("v2.tasks.desc")} />
+      {data && (
+        <AttentionPanel
+          title={t("v2.tasks.attention.title")}
+          items={attention}
+          count={failed.total}
+          testId="v2-tasks-attention"
+          empty={
+            <>
+              <Lamp signal={tasks.length ? "ok" : "off"} />
+              {tasks.length ? t("v2.tasks.attention.empty") : t("v2.tasks.empty")}
+            </>
+          }
+        />
+      )}
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>

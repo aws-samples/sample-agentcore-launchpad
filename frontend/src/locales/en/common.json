@@ -6148,7 +6148,11 @@
         "notEvaluable": "This service's spans come only from instrumentation scopes AgentCore Evaluation does not read as agent spans ({{scopes}}), so every session would fail with “No evaluable agent spans found”. Instrument the agent with a supported framework library (e.g. Strands, or an opentelemetry.instrumentation.* / openinference.instrumentation.* GenAI library)."
       },
       "actorModel": "User actor model",
-      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached."
+      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached.",
+      "attention": {
+        "title": "Failed — needs a look",
+        "empty": "No evaluation task has failed."
+      }
     },
     "taskStatus": {
       "queued": "Queued",
