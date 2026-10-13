@@ -5688,7 +5688,7 @@
         "lang": {
           "curl": "curl",
           "python": "Python (httpx)",
-          "javascript": "JavaScript (fetch)"
+          "javascript": "Node.js (fetch)"
         },
         "modes": {
           "sync": "同步调用",

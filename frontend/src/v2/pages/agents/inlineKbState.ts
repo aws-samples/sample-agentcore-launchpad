@@ -13,6 +13,8 @@ export interface InlineKb {
   uploaded: boolean;
   uploadError: string | null;
   detail: KnowledgeBaseDetail | null;
+  /** the automatic first sync was refused; the KB page's manual sync is the way on */
+  syncFailed?: boolean;
 }
 
 export type InlineKbPhase =
@@ -57,7 +59,12 @@ export function inlineKbPhase(d: KnowledgeBaseDetail | null): InlineKbPhase {
 
 /** The phase shown on the record's status tag. Until the files are uploaded the
  *  KB is not followed, so its state is "unknown" (checking). */
-export const displayPhase = (inline: InlineKb): InlineKbPhase => (inline.uploaded ? inlineKbPhase(inline.detail) : "unknown");
+export const displayPhase = (inline: InlineKb): InlineKbPhase => {
+  if (!inline.uploaded) return "unknown";
+  const phase = inlineKbPhase(inline.detail);
+  // a refused first sync never leaves "starting" on its own: say ingestion failed
+  return phase === "starting" && inline.syncFailed ? "ingestFailed" : phase;
+};
 
 /** The i18n key of the record's status tag. */
 export const phaseLabelKey = (inline: InlineKb) => `v2.agents.wizard.inlineKb.state.${displayPhase(inline)}`;

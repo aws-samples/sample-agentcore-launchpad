@@ -165,4 +165,13 @@ describe("submitBlock", () => {
     expect(submitBlock(mounted(detail("CREATING")), ["OTHER"], false)).toBeNull();
     expect(submitBlock(mounted(detail("FAILED")), [], false)).toBeNull();
   });
+
+  it("reports a refused first sync as failed ingestion instead of starting forever", () => {
+    const rec = uploadSucceeded(created("sales-kb", FILES, detail("ACTIVE", [source("AVAILABLE")])));
+    expect(displayPhase(rec)).toBe("starting");
+    expect(displayPhase({ ...rec, syncFailed: true })).toBe("ingestFailed");
+    // a later real job wins over the flag
+    const indexing = { ...rec, syncFailed: true, detail: detail("ACTIVE", [source("AVAILABLE", [job("IN_PROGRESS")])]) };
+    expect(displayPhase(indexing)).toBe("indexing");
+  });
 });

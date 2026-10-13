@@ -93,7 +93,7 @@ export function KnowledgeField({
             <span>{t("v2.agents.wizard.inlineKb.mounted", { name: inline.name })}</span>
             <InlineKbState inline={inline} />
             {kb.busy && <Spin />}
-            <Button size="sm" onClick={kb.discard} testId="v2-agent-inline-kb-discard">
+            <Button size="sm" disabled={kb.busy} onClick={kb.discard} testId="v2-agent-inline-kb-discard">
               {t("v2.agents.wizard.inlineKb.discard")}
             </Button>
           </div>

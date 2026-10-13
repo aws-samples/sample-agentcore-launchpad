@@ -45,6 +45,8 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
+  // one create / upload at a time, even before the `busy` re-render lands
+  const running = useRef(false);
   const synced = useRef(new Set<string>());
   useEffect(() => {
     alive.current = true;
@@ -70,6 +72,8 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
 
   const create = useCallback(
     async (name: string, files: File[]) => {
+      if (running.current) return;
+      running.current = true;
       setBusy(true);
       setError(null);
       try {
@@ -85,6 +89,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
         setInline(rec);
         await upload(rec);
       } finally {
+        running.current = false;
         if (alive.current) setBusy(false);
       }
     },
@@ -92,11 +97,13 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
   );
 
   const retryUpload = useCallback(async () => {
-    if (!inline) return;
+    if (!inline || running.current) return;
+    running.current = true;
     setBusy(true);
     try {
       await upload(inline);
     } finally {
+      running.current = false;
       if (alive.current) setBusy(false);
     }
   }, [inline, upload]);
@@ -133,7 +140,9 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
           try {
             await v2KnowledgeApi.sync(followId, dsId);
           } catch {
-            /* the KB page's manual "sync now" remains */
+            // stop following: nothing starts ingestion now but the KB page's manual sync
+            if (!cancelled) setInline((prev) => (prev && prev.kb_id === followId ? { ...prev, syncFailed: true } : prev));
+            return;
           }
           if (cancelled) return;
         }
