@@ -128,6 +128,9 @@ export function RecordList() {
   const { isAdmin } = useAuth();
   // records whose inline approve / reject is in flight
   const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
+  // records decided from the queue, hidden until the reload replaces `data`, so a second
+  // click cannot send another action in the gap between success and the fresh list
+  const [decided, setDecided] = useState<{ data: unknown; ids: ReadonlySet<string> }>({ data: null, ids: new Set() });
 
   const records = useMemo(() => data?.records ?? [], [data]);
   const discoverableIds = data?.discoverable ? new Set(data.discoverable.map((r) => r.record_id)) : null;
@@ -192,6 +195,8 @@ export function RecordList() {
     try {
       const updated = await api.registryAction(id, action);
       toast("success", t("v2.registry.actionDone", { name, status: statusLabel(t, updated.status) }));
+      setDecided((prev) => ({ data, ids: new Set(prev.data === data ? prev.ids : []).add(id) }));
+      setSearchHits(null);
       reload();
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
@@ -207,7 +212,8 @@ export function RecordList() {
   if (data?.unavailable) return <Unavailable tab="records" message={data.unavailable} />;
 
   const open = (r: RegistryRecord) => setParams({ view: "detail", id: r.record_id });
-  const approvals = approvalQueue(records, isAdmin);
+  const undecided = decided.data === data ? records.filter((r) => !decided.ids.has(r.record_id)) : records;
+  const approvals = approvalQueue(undecided, isAdmin);
   const attention: AttentionItem[] = approvals.entries.map((entry) => {
     const v = entry.values;
     const id = entry.recordId;
