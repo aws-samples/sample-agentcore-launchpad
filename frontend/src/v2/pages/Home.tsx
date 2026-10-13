@@ -96,7 +96,7 @@ export function V2Home() {
           </Button>
         }
       />
-      <div className="v2-kpis">
+      <div className="v2-kpis" data-tour="stats">
         <Kpi
           label={t("v2.home.kpi.agents")}
           value={active ?? "—"}
@@ -136,7 +136,10 @@ export function V2Home() {
       <div className="v2-home-grid">
         <div className="v2-home-main">
           {list && <LaunchChecklist agents={list} tasks={tasks.data} />}
-          <RecentAgents agents={list} loading={agents.data === null && !agents.error} error={agents.error} onRetry={agents.reload} />
+          {/* tour anchors wrap the cards: Card forwards only a testId */}
+          <div className="v2-home-slot" data-tour="agents">
+            <RecentAgents agents={list} loading={agents.data === null && !agents.error} error={agents.error} onRetry={agents.reload} />
+          </div>
           <Card
             title={t("v2.home.recentTasks")}
             flush
@@ -163,7 +166,9 @@ export function V2Home() {
         </div>
         <aside className="v2-home-rail">
           <AnnouncementBoard />
-          <ServiceHealth info={info} error={overview.error} onRetry={overview.reload} activeAgents={active} />
+          <div className="v2-home-slot" data-tour="health">
+            <ServiceHealth info={info} error={overview.error} onRetry={overview.reload} activeAgents={active} />
+          </div>
         </aside>
       </div>
     </>

@@ -1,5 +1,6 @@
-/* V2 onboarding — the launch checklist on Home. Scoped under .v2, V2 tokens only;
-   no transform / filter / contain on containers (fixed popups anchor to the viewport). */
+/* V2 onboarding — the launch checklist on Home and the guided tour. Scoped under
+   .v2, V2 tokens only; no transform / filter / contain on containers (fixed popups
+   anchor to the viewport). */
 
 /* ── launch checklist ────────────────────────────────────────────────────── */
 .v2 .v2-launch { padding: 16px 20px 18px; border: 1px solid var(--v2-primary-line); }
@@ -59,3 +60,42 @@
   .v2 .v2-launch-head { gap: 8px; }
   .v2 .v2-launch-meter { max-width: 100px; }
 }
+
+/* ── guided tour ─────────────────────────────────────────────────────────────
+   Rendered in place inside .v2 at z-index 140: over the top bar (20) and modal
+   masks (100), under dropdown popups (150), the palette (160) and toasts (200).
+   The root takes the clicks so the dimmed page stays still; the lit area is a
+   fixed rectangle whose huge spread shadow is the dim. Positioned by left/top
+   only — no transform anywhere. */
+.v2 .v2-tour { position: fixed; inset: 0; z-index: 140; }
+.v2 .v2-tour-dim { position: fixed; inset: 0; background: rgba(29, 33, 41, 0.55); }
+.v2 .v2-tour-spot {
+  position: fixed; border-radius: 10px; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--v2-primary), 0 0 0 9999px rgba(29, 33, 41, 0.55);
+  transition: left 0.24s ease, top 0.24s ease, width 0.24s ease, height 0.24s ease;
+}
+.v2 .v2-tour-card {
+  position: fixed; padding: 14px 18px 14px; border-radius: 10px; background: var(--v2-card);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22); outline: none;
+  animation: v2-tour-in 0.18s ease-out;
+}
+.v2 .v2-tour-card:focus-visible { box-shadow: 0 0 0 2px var(--v2-primary-line), 0 16px 48px rgba(0, 0, 0, 0.22); }
+@keyframes v2-tour-in { from { opacity: 0; } }
+.v2 .v2-tour-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.v2 .v2-tour-count { font-size: 12px; color: var(--v2-primary); font-variant-numeric: tabular-nums; }
+.v2 .v2-tour-x {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; margin-right: -6px;
+  border: 0; border-radius: var(--v2-radius-sm); background: none; color: var(--v2-ink-3); cursor: pointer;
+}
+.v2 .v2-tour-x:hover { background: var(--v2-fill-2); color: var(--v2-ink); }
+.v2 .v2-tour-card h3 { margin: 6px 0; font-size: 16px; font-weight: 600; color: var(--v2-ink); }
+.v2 .v2-tour-card p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--v2-ink-2); }
+.v2 .v2-tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.v2 .v2-tour-keys { flex: 1; display: flex; gap: 2px; justify-content: flex-end; padding-right: 4px; }
+
+/* same selectors as the animated rules, so the guard wins on specificity */
+@media (prefers-reduced-motion: reduce) {
+  .v2 .v2-tour-spot { transition: none; }
+  .v2 .v2-tour-card { animation: none; }
+}
+@media (max-width: 760px) { .v2 .v2-tour-keys { visibility: hidden; } }

@@ -154,10 +154,21 @@ describe("buildEntries", () => {
     expect(hit?.run).toEqual({ glossary: "cedarPolicy" });
     expect(hit?.label).toBe("什么是Cedar 策略？");
   });
-  it("offers the help actions: the whole glossary and the videos", () => {
+  it("offers the help actions: the tour, the whole glossary and the videos", () => {
     const help = entries().filter((e) => e.group === "help");
-    expect(help.map((e) => e.run)).toEqual([{ glossary: null }, { to: "/v2/videos" }]);
+    expect(help.map((e) => e.run)).toEqual([{ action: "tour" }, { glossary: null }, { to: "/v2/videos" }]);
     expect(rank(entries({ zhUi: true }), "glossary")[0]?.id).toBe("help:glossary");
+  });
+  it("replays the tour from a help action that answers in both languages", () => {
+    const tour = entries().find((e) => e.id === "help:tour");
+    expect(tour?.label).toBe("Take the console tour");
+    expect(tour?.run).toEqual({ action: "tour" });
+    expect(routeOf(tour)).toBeUndefined();
+    // listed with an empty query, found by its English name and by 导览 under zh-CN
+    expect(rank(entries(), "").some((e) => e.id === "help:tour")).toBe(true);
+    expect(rank(entries({ zhUi: true }), "tour")[0]?.id).toBe("help:tour");
+    expect(rank(entries({ zhUi: true }), "导览")[0]?.id).toBe("help:tour");
+    expect(entries({ zhUi: true }).find((e) => e.id === "help:tour")?.label).toBe(zh.v2.palette.takeTour);
   });
   it("gives every entry a unique id", () => {
     const list = entries({ agents: [{ id: "x", name: "x" }] });
@@ -239,11 +250,13 @@ describe("palette store", () => {
 describe("palette copy", () => {
   it("has every key in both locales", () => {
     for (const locale of [en, zh as Locale]) {
-      for (const k of ["label", "search", "placeholder", "openAgent", "chatWith", "openGlossary", "openVideos", "none"]) {
+      for (const k of ["label", "search", "placeholder", "openAgent", "chatWith", "openGlossary", "openVideos", "takeTour", "none"]) {
         expect(typeof (locale.v2.palette as Record<string, unknown>)[k]).toBe("string");
       }
       for (const g of PALETTE_GROUPS) expect(typeof locale.v2.palette.group[g]).toBe("string");
-      for (const k of ["label", "palette", "glossary", "videos"] as const) expect(typeof locale.v2.help[k]).toBe("string");
+      for (const k of ["label", "palette", "tour", "launch", "glossary", "videos"] as const) {
+        expect(typeof locale.v2.help[k]).toBe("string");
+      }
     }
   });
 });

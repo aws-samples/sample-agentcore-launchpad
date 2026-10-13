@@ -91,3 +91,59 @@ describe("launch checklist store", () => {
     expect(store.isLaunchHidden("ws-1")).toBe(true);
   });
 });
+
+describe("tour store", () => {
+  it("is not done until finished or skipped, then reads back from storage", async () => {
+    const storage = memoryStorage();
+    const store = await loadStore(storage);
+    expect(store.TOUR_DONE_KEY).toBe("launchpad_v2_tour_done");
+    expect(store.isTourDone()).toBe(false);
+    store.setTourDone();
+    expect(store.isTourDone()).toBe(true);
+    expect(storage.data.get("launchpad_v2_tour_done")).toBe("1");
+    store.setTourDone(false);
+    expect(store.isTourDone()).toBe(false);
+    expect(storage.data.has("launchpad_v2_tour_done")).toBe(false);
+  });
+
+  it("honours a flag a recording or script set before the page loaded", async () => {
+    const store = await loadStore(memoryStorage({ launchpad_v2_tour_done: "1" }));
+    expect(store.isTourDone()).toBe(true);
+  });
+
+  it("ignores any other stored value", async () => {
+    const store = await loadStore(memoryStorage({ launchpad_v2_tour_done: "true" }));
+    expect(store.isTourDone()).toBe(false);
+  });
+
+  it("counts replay requests without touching the done flag", async () => {
+    const storage = memoryStorage({ launchpad_v2_tour_done: "1" });
+    const store = await loadStore(storage);
+    expect(store.getTourRequest()).toBe(0);
+    expect(store.isTourRequested()).toBe(false);
+    store.requestTour();
+    store.requestTour();
+    expect(store.getTourRequest()).toBe(2);
+    expect(store.isTourDone()).toBe(true);
+    // pending until taken, and taken once
+    expect(store.isTourRequested()).toBe(true);
+    expect(store.takeTourRequest()).toBe(true);
+    expect(store.isTourRequested()).toBe(false);
+    expect(store.takeTourRequest()).toBe(false);
+  });
+
+  it("works in memory when storage throws", async () => {
+    const store = await loadStore(throwingStorage);
+    expect(store.isTourDone()).toBe(false);
+    expect(() => store.setTourDone()).not.toThrow();
+    expect(store.isTourDone()).toBe(true);
+    expect(() => store.requestTour()).not.toThrow();
+  });
+
+  it("works in memory when there is no storage at all", async () => {
+    const store = await loadStore(undefined);
+    expect(store.isTourDone()).toBe(false);
+    store.setTourDone();
+    expect(store.isTourDone()).toBe(true);
+  });
+});

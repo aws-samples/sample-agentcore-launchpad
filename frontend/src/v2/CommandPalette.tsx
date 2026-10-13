@@ -3,7 +3,7 @@
 // ranking and the open/close store live in ./palette (pure, unit-tested); this
 // file is the overlay. Rendered in place inside `.v2` (no portal: the --v2-*
 // tokens live there), above modal masks and below toasts.
-import { BookOpen, Bot, MessagesSquare, PlayCircle, Search } from "lucide-react";
+import { BookOpen, Bot, Compass, MessagesSquare, PlayCircle, Search } from "lucide-react";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -22,6 +22,7 @@ import { api } from "../lib/api";
 import { useWorkspace } from "../workspace/workspace-context";
 import { GLOSSARY_TERMS, openGlossary } from "./glossaryTerms";
 import { useLoad } from "./hooks";
+import { useReplayTour } from "./onboarding/useOnboarding";
 import {
   buildEntries,
   closePalette,
@@ -56,6 +57,7 @@ function PaletteBody() {
   const { isAdmin } = useAuth();
   const { current } = useWorkspace();
   const tEn = useMemo(() => i18n.getFixedT("en"), [i18n]);
+  const replayTour = useReplayTour();
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,7 +111,8 @@ function PaletteBody() {
     if (!entry) return;
     closePalette();
     if ("to" in entry.run) navigate(entry.run.to);
-    else openGlossary(entry.run.glossary ?? undefined);
+    else if ("glossary" in entry.run) openGlossary(entry.run.glossary ?? undefined);
+    else if (entry.run.action === "tour") replayTour();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -147,6 +150,7 @@ function PaletteBody() {
     if (PageIcon) return <PageIcon size={15} aria-hidden="true" />;
     if (entry.id.startsWith("chat:")) return <MessagesSquare size={15} aria-hidden="true" />;
     if (entry.id === "help:videos") return <PlayCircle size={15} aria-hidden="true" />;
+    if (entry.id === "help:tour") return <Compass size={15} aria-hidden="true" />;
     if (entry.group === "glossary" || entry.group === "help") return <BookOpen size={15} aria-hidden="true" />;
     return <Bot size={15} aria-hidden="true" />;
   };

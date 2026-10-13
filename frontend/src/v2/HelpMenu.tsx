@@ -1,13 +1,14 @@
-// "?" in the top bar: the command palette, the glossary and the demo videos, any
-// time. Ported from console-v3's HelpMenu (v3/Shell.tsx) as an ARIA menu button.
-// Step 3's tour and launch checklist slot in as further items.
-import { BookOpen, CircleHelp, PlayCircle, Search } from "lucide-react";
+// "?" in the top bar: the command palette, the guided tour, the launch checklist,
+// the glossary and the demo videos, any time. Ported from console-v3's HelpMenu
+// (v3/Shell.tsx) as an ARIA menu button.
+import { BookOpen, CircleHelp, Compass, ListChecks, PlayCircle, Search } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { PALETTE_SHORTCUT } from "./CommandPalette";
 import { openGlossary } from "./glossaryTerms";
+import { useReplayTour, useShowLaunchChecklist } from "./onboarding/useOnboarding";
 import { openPalette, usePaletteOpen } from "./palette";
 
 function menuItems(menu: HTMLElement | null): HTMLElement[] {
@@ -30,6 +31,8 @@ export function HelpMenu() {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const paletteOpen = usePaletteOpen();
+  const replayTour = useReplayTour();
+  const showLaunch = useShowLaunchChecklist();
 
   const items: HelpItem[] = [
     {
@@ -38,6 +41,18 @@ export function HelpMenu() {
       label: t("v2.help.palette"),
       shortcut: PALETTE_SHORTCUT,
       run: openPalette,
+    },
+    {
+      key: "tour",
+      icon: <Compass size={15} aria-hidden="true" />,
+      label: t("v2.help.tour"),
+      run: replayTour,
+    },
+    {
+      key: "launch",
+      icon: <ListChecks size={15} aria-hidden="true" />,
+      label: t("v2.help.launch"),
+      run: showLaunch,
     },
     {
       key: "glossary",
@@ -114,7 +129,7 @@ export function HelpMenu() {
   };
 
   return (
-    <div className="v2-help" ref={rootRef}>
+    <div className="v2-help" ref={rootRef} data-tour="help">
       <button
         ref={buttonRef}
         type="button"

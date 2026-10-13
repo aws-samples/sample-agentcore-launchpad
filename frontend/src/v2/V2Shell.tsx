@@ -17,6 +17,7 @@ import { HelpMenu } from "./HelpMenu";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
 import { isNavItemActive, navGroupsFor } from "./nav";
+import { TourHost } from "./onboarding/Tour";
 import { closePalette, isPaletteToggle, isSlashOpen, openPalette, togglePalette } from "./palette";
 import { ModuleDemoProvider } from "./pages/videos/ModuleDemo";
 import { FilterSelect, V2ToastProvider } from "./ui";
@@ -146,6 +147,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                 aria-keyshortcuts="Meta+K Control+K"
                 title={`${t("v2.palette.search")} (${PALETTE_SHORTCUT})`}
                 data-testid="v2-cmdk-open"
+                data-tour="cmdk"
               >
                 <Search size={14} aria-hidden="true" />
                 <span>{t("v2.palette.search")}</span>
@@ -176,7 +178,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
             </div>
           </header>
           <div className="v2-layout">
-            <aside className="v2-side" aria-label={t("v2.nav.label")}>
+            <aside className="v2-side" aria-label={t("v2.nav.label")} data-tour="modules">
               {navGroups.map((group) => {
                 const items = group.items;
                 const closed = collapsed[group.key] === true;
@@ -244,6 +246,8 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
           {/* opened by a Term click, the palette or the help menu */}
           <GlossaryDialog />
           <CommandPalette />
+          {/* first Home visit, or replayed from the help menu / palette */}
+          <TourHost />
         </ModuleDemoProvider>
       </V2ToastProvider>
     </div>

@@ -3,6 +3,9 @@
 /* explicit track: an implicit `auto` one grows to the tables' max-content and slides under the rail */
 .v2 .v2-home-main, .v2 .v2-home-rail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
 .v2 .v2-home-main > *, .v2 .v2-home-rail > * { margin-bottom: 0; }
+/* a wrapper that carries a tour anchor keeps its card flush too */
+.v2 .v2-home-slot { min-width: 0; }
+.v2 .v2-home-slot > * { margin-bottom: 0; }
 .v2 .v2-home-running { margin: -4px 24px 16px; font-size: 12.5px; }
 
 /* announcement board */

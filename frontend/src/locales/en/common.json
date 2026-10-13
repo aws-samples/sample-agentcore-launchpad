@@ -8231,6 +8231,7 @@
       "chatWith": "Chat with {{name}}",
       "openGlossary": "Open the glossary",
       "openVideos": "Watch the demo videos",
+      "takeTour": "Take the console tour",
       "none": "Nothing matches",
       "move": "move",
       "run": "open",
@@ -8240,6 +8241,8 @@
     "help": {
       "label": "Help",
       "palette": "Command palette",
+      "tour": "Take the tour",
+      "launch": "Launch checklist",
       "glossary": "Glossary",
       "videos": "Demo videos"
     },
@@ -8271,6 +8274,29 @@
         "online": "Watch live traffic",
         "onlineHint": "Score a sample of new sessions as they arrive, so a drop in quality shows up by itself.",
         "onlineCta": "Set up online evaluation"
+      },
+      "tour": {
+        "label": "Console tour",
+        "counter": "{{n}} of {{total}}",
+        "skip": "Skip",
+        "back": "Back",
+        "next": "Next",
+        "done": "Got it",
+        "end": "End the tour",
+        "cmdkTitle": "One keystroke to anywhere",
+        "cmdkBody": "Press {{shortcut}} (or /) and type: a page, an agent, an action, or a word you don't know. It is the fastest way through this console.",
+        "launchTitle": "Your launch checklist",
+        "launchBody": "Five steps from an empty workspace to an agent whose live traffic is scored. Each step ticks itself off from what actually exists; hide it once you no longer need it.",
+        "statsTitle": "The workspace at a glance",
+        "statsBody": "Live agents, sessions in the last 24 hours, registry assets, the evaluation pass rate and online quality. A dash means there is nothing to count yet.",
+        "agentsTitle": "Recent deployments",
+        "agentsBody": "The newest agents with their status; a deploy that is still moving or stuck shows the stage it is on. Open one for its details, endpoint and versions.",
+        "healthTitle": "Service status",
+        "healthBody": "Each AgentCore service this console uses, and whether it is ready in this workspace. A row links to the page that sets it up.",
+        "modulesTitle": "Every module, grouped",
+        "modulesBody": "Development, runtime, evaluation, learning and configuration. Groups fold away, and the switch at the bottom shows only the everyday modules or all of them.",
+        "helpTitle": "Help is always here",
+        "helpBody": "Replay this tour, bring back the launch checklist, or open the glossary and the demo videos from this button."
       }
     }
   },

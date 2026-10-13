@@ -2,8 +2,7 @@
 // (ported from console-v3's onboarding state).
 //
 // None of this is authorization or user data: it only decides whether the
-// launch checklist is folded away (and, with the guided tour, whether the tour
-// starts on its own). Storage can be blocked (private windows) or missing; every
+// launch checklist is folded away and whether the guided tour starts on its own. Storage can be blocked (private windows) or missing; every
 // read then falls back to "not seen", and a tab-local copy keeps a choice
 // working for the session.
 import { useSyncExternalStore } from "react";
@@ -95,4 +94,55 @@ export function takeLaunchScroll(): boolean {
 }
 
 /* ── the guided tour ───────────────────────────────────────────────────── */
-// (next step: `launchpad_v2_tour_done` and the tour request, on the same store)
+
+/**
+ * Set once the tour is finished or skipped, per browser: from then on it never
+ * starts by itself (the help menu and the palette replay it). Recordings and
+ * browser scripts set it before opening /v2 so the tour cannot ambush them.
+ */
+export const TOUR_DONE_KEY = "launchpad_v2_tour_done";
+
+export function isTourDone(): boolean {
+  return get(TOUR_DONE_KEY) === "1";
+}
+
+export function setTourDone(done = true): void {
+  put(TOUR_DONE_KEY, done ? "1" : null);
+}
+
+export function useTourDone(): boolean {
+  return useSyncExternalStore(subscribe, isTourDone, isTourDone);
+}
+
+/**
+ * Replay the tour (help menu, palette). The request stays pending until the
+ * shell-mounted tour takes it on Home — also across the remount when the caller
+ * navigates there from a classic page. Navigating there is the caller's job.
+ */
+let tourRequest = 0;
+let tourPending = false;
+export function requestTour(): void {
+  tourRequest += 1;
+  tourPending = true;
+  notify();
+}
+
+/** A counter bumped by every request; subscribe to it to re-check for one. */
+export function getTourRequest(): number {
+  return tourRequest;
+}
+
+export function useTourRequest(): number {
+  return useSyncExternalStore(subscribe, getTourRequest, getTourRequest);
+}
+
+export function isTourRequested(): boolean {
+  return tourPending;
+}
+
+/** True once per request: the tour takes it when it starts (or drops it on leaving Home). */
+export function takeTourRequest(): boolean {
+  const pending = tourPending;
+  tourPending = false;
+  return pending;
+}

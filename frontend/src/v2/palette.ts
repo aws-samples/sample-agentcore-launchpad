@@ -8,6 +8,9 @@ import { V2_NAV, type V2NavItem } from "./nav";
 
 export type PaletteGroup = "page" | "agent" | "glossary" | "help";
 
+/** What a non-navigating, non-glossary entry does. */
+export type PaletteAction = "tour";
+
 /** The order groups are listed in when the query is empty. */
 export const PALETTE_GROUPS: PaletteGroup[] = ["page", "help", "agent", "glossary"];
 
@@ -21,8 +24,9 @@ export interface PaletteEntry {
   /** extra words it answers to: the English label under another UI language,
    *  the agent's name, the route */
   keywords: string[];
-  /** navigate to a route, or open the glossary (at a term, or the whole list) */
-  run: { to: string } | { glossary: string | null };
+  /** navigate to a route, open the glossary (at a term, or the whole list), or
+   *  run an action (replay the guided tour) */
+  run: { to: string } | { glossary: string | null } | { action: PaletteAction };
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -83,6 +87,13 @@ export function buildEntries({ pages, agents, terms, t, tEn = t }: PaletteInput)
     run: { to: page.to },
   }));
   const help: PaletteEntry[] = [
+    {
+      id: "help:tour",
+      group: "help",
+      label: t("v2.palette.takeTour"),
+      keywords: [tEn("v2.palette.takeTour"), "tour guide onboarding help 导览 引导"],
+      run: { action: "tour" },
+    },
     {
       id: "help:glossary",
       group: "help",
