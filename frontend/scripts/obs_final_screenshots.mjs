@@ -9,6 +9,8 @@ mkdirSync(OUT, { recursive: true });
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+// V2 Home starts its guided tour on a first visit: mark it seen so it never covers a shot
+await page.addInitScript(() => { try { localStorage.setItem("launchpad_v2_tour_done", "1"); } catch { /* storage blocked: nothing to seed */ } });
 await page.goto(`${BASE}/`, { waitUntil: "networkidle" });
 
 // pick a rich platform trace/session from live data

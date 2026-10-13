@@ -111,6 +111,8 @@ export function TourHost() {
   const autoArmed = useRef(true);
 
   const begin = useCallback(() => {
+    // a replay counts as this Home visit's run: no first-visit start after it closes quietly
+    autoArmed.current = false;
     setRun((n) => n + 1);
     setRunning(true);
   }, []);
@@ -118,10 +120,7 @@ export function TourHost() {
   // first visit: while the tour has never been finished or skipped
   useEffect(() => {
     if (!onHome || done || running || !autoArmed.current) return;
-    const timer = window.setTimeout(() => {
-      autoArmed.current = false;
-      begin();
-    }, AUTO_START_MS);
+    const timer = window.setTimeout(begin, AUTO_START_MS);
     return () => window.clearTimeout(timer);
   }, [onHome, done, running, begin]);
 
@@ -303,7 +302,18 @@ function Tour({ onClose }: { onClose: () => void }) {
   const pos = placeCard(rect, { width, height: cardHeight }, { width: vw, height: window.innerHeight });
 
   return (
-    <div className="v2-tour" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={bodyId} data-testid="v2-tour">
+    <div
+      className="v2-tour"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={bodyId}
+      data-testid="v2-tour"
+      // a click on the dim must not drop focus to the page behind (the keys and Tab stay in the card)
+      onMouseDown={(e) => {
+        if (!cardRef.current?.contains(e.target as Node)) e.preventDefault();
+      }}
+    >
       {rect ? (
         <div
           className="v2-tour-spot"
