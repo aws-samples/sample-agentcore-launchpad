@@ -135,7 +135,7 @@ export function CanaryList({
           empty={
             <>
               <Lamp signal={canaries.length ? "ok" : "off"} />
-              {canaries.length ? t("v2.canary.attention.empty") : t("canaryPage.list.empty")}
+              {canaries.length ? t("v2.canary.attention.empty") : t("v2.canary.attention.none")}
             </>
           }
         />

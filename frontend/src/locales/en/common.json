@@ -6571,7 +6571,8 @@
       "attention": {
         "title": "In flight or waiting on you",
         "empty": "No experiment is running or waiting on a decision.",
-        "decide": "A verdict is in: promote or clean up"
+        "decide": "A verdict is in: promote or clean up",
+        "decideCleanup": "Waiting on you to clean up"
       }
     },
     "picker": {
@@ -6649,7 +6650,8 @@
       "attention": {
         "title": "In flight or waiting on you",
         "empty": "No canary is ramping or waiting on a decision.",
-        "decide": "A verdict is in: ramp on, complete or roll back"
+        "decide": "A verdict is in: ramp on, complete or roll back",
+        "none": "No canary has been started yet."
       }
     },
     "chat": {

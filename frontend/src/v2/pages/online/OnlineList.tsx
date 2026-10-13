@@ -83,7 +83,7 @@ export function OnlineList() {
     const { row } = entry;
     const hint =
       entry.kind === "failed"
-        ? row.failure_reason || row.status
+        ? (row.failure_reason?.split("\n")[0] ?? "") || row.status
         : entry.kind === "duplicate"
           ? t("v2.online.duplicateWarn")
           : row.status;
@@ -93,7 +93,9 @@ export function OnlineList() {
       live: entry.kind === "settling",
       title: configName(row),
       hint,
-      meta: `${agentLabel(row)} · ${t(`v2.online.attention.why.${entry.kind}`)}`,
+      meta: [row.agent_name || row.matched_agent ? agentLabel(row) : null, t(`v2.online.attention.why.${entry.kind}`)]
+        .filter(Boolean)
+        .join(" · "),
       onOpen: () => open(row),
       openLabel: t("v2.common.view"),
       testId: `v2-online-att-${entry.kind}-${row.config_id}`,

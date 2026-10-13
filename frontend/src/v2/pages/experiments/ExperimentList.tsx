@@ -61,7 +61,9 @@ export function ExperimentList({
 
   const attention: AttentionItem[] = experimentQueue(experiments).map((entry) => {
     const e = entry.experiment;
-    const next = e.progress || (entry.kind === "decide" ? t("v2.experiments.attention.decide") : null);
+    // ready at the cleanup stage leaves only the cleanup, not "promote or clean up"
+    const decide = e.stage === "cleanup" ? t("v2.experiments.attention.decideCleanup") : t("v2.experiments.attention.decide");
+    const next = e.progress || (entry.kind === "decide" ? decide : null);
     return {
       key: entry.key,
       signal: entry.signal,

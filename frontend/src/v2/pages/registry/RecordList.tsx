@@ -207,7 +207,8 @@ export function RecordList() {
   if (data?.unavailable) return <Unavailable tab="records" message={data.unavailable} />;
 
   const open = (r: RegistryRecord) => setParams({ view: "detail", id: r.record_id });
-  const attention: AttentionItem[] = approvalQueue(records, isAdmin).map((entry) => {
+  const approvals = approvalQueue(records, isAdmin);
+  const attention: AttentionItem[] = approvals.entries.map((entry) => {
     const v = entry.values;
     const id = entry.recordId;
     const inFlight = acting.has(id);
@@ -322,6 +323,7 @@ export function RecordList() {
         <AttentionPanel
           title={t("v2.registry.attention.title")}
           items={attention}
+          count={approvals.total}
           testId="v2-registry-attention"
           empty={
             <>
