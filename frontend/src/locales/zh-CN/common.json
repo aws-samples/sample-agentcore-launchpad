@@ -5292,8 +5292,6 @@
       "title": "工作台",
       "desc": "在 Amazon Bedrock AgentCore 上构建、运行、评估与治理 Agent 的统一入口。",
       "kpiTasksSub": "{{count}} 个运行中",
-      "flowTitle": "Agent 生命周期",
-      "flowSub": "从创建到治理，点击进入对应模块",
       "recentTasks": "最近的评估任务",
       "allTasks": "全部任务",
       "kpi": {
@@ -5307,20 +5305,6 @@
         "quality": "在线质量 · 24h"
       },
       "assistant": "用架构助手从需求开始",
-      "step": {
-        "create": "创建 Agent",
-        "createDesc": "托管 Harness、Strands、其他 Agent SDK 或自带代码。",
-        "chat": "对话调试",
-        "chatDesc": "与已部署的 Agent 对话，查看链路与记忆。",
-        "observe": "可观测",
-        "observeDesc": "会话、链路、延迟、Token 与成本。",
-        "evaluate": "评估",
-        "evaluateDesc": "对历史数据一次性评估，或持续评估新流量。",
-        "optimize": "优化",
-        "optimizeDesc": "推荐改进、A/B 实验并通过金丝雀发布。",
-        "govern": "治理",
-        "governDesc": "Gateway、Cedar 策略、限流与审计。"
-      },
       "agents": {
         "title": "最近部署",
         "all": "全部 Agent",
@@ -8258,6 +8242,36 @@
       "palette": "命令面板",
       "glossary": "术语表",
       "videos": "演示视频"
+    },
+    "onboard": {
+      "launch": {
+        "title": "上线清单",
+        "launched": "已上线",
+        "allDone": "这个工作区已经能构建、运行、评估 Agent，并持续评估线上流量。",
+        "progress": "已完成 {{done}}/{{total}}",
+        "next": "下一步：",
+        "done": "已完成",
+        "expand": "展开步骤",
+        "collapse": "收起步骤",
+        "hideHint": "在这个工作区隐藏清单（可从帮助菜单重新打开）",
+        "askAdmin": "请联系管理员",
+        "workspace": "工作区就绪",
+        "workspaceHint": "这个控制台所使用的 AWS 账号和区域，已完成初始化。",
+        "workspaceHintMember": "由管理员为这个控制台所使用的 AWS 账号和区域完成初始化。",
+        "workspaceCta": "查看",
+        "agent": "首个 Agent 上线",
+        "agentHint": "托管 Harness Agent 约 30 秒上线，无需写代码。",
+        "agentCta": "创建一个",
+        "chat": "和它对话",
+        "chatHint": "一次对话就能看到链路、Token 和花费。",
+        "chatCta": "打开对话",
+        "evaluate": "给它打分",
+        "evaluateHint": "用评估器跑一遍真实会话或数据集，看看哪里还不够好。",
+        "evaluateCta": "运行评估",
+        "online": "持续评估线上流量",
+        "onlineHint": "对新到的会话抽样打分，质量下降时你会第一时间看到。",
+        "onlineCta": "配置在线评估"
+      }
     }
   },
   "identity": {

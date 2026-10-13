@@ -3,7 +3,6 @@
 /* explicit track: an implicit `auto` one grows to the tables' max-content and slides under the rail */
 .v2 .v2-home-main, .v2 .v2-home-rail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
 .v2 .v2-home-main > *, .v2 .v2-home-rail > * { margin-bottom: 0; }
-.v2 .v2-home-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .v2 .v2-home-running { margin: -4px 24px 16px; font-size: 12.5px; }
 
 /* announcement board */
@@ -55,7 +54,4 @@
   /* one column: flatten both stacks so the notices lead instead of trailing both tables */
   .v2 .v2-home-main, .v2 .v2-home-rail { display: contents; }
   .v2 .v2-home-rail > :first-child { order: -1; }
-}
-@media (max-width: 760px) {
-  .v2 .v2-home-flow { grid-template-columns: minmax(0, 1fr); }
 }

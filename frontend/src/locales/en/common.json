@@ -5292,8 +5292,6 @@
       "title": "Workbench",
       "desc": "Your starting point for building, running, evaluating and governing agents on Amazon Bedrock AgentCore.",
       "kpiTasksSub": "{{count}} running",
-      "flowTitle": "Agent lifecycle",
-      "flowSub": "Pick a step to open its module",
       "recentTasks": "Recent tasks",
       "allTasks": "All tasks",
       "kpi": {
@@ -5307,20 +5305,6 @@
         "quality": "Online quality · 24h"
       },
       "assistant": "Start from requirements with the architect assistant",
-      "step": {
-        "create": "Create an agent",
-        "createDesc": "Managed Harness, Strands, another Agent SDK or your own code.",
-        "chat": "Chat and debug",
-        "chatDesc": "Talk to a deployed agent, inspect traces and memory.",
-        "observe": "Observe",
-        "observeDesc": "Sessions, traces, latency, tokens and cost.",
-        "evaluate": "Evaluate",
-        "evaluateDesc": "Score history once, or keep scoring new traffic.",
-        "optimize": "Optimise",
-        "optimizeDesc": "Recommend changes, A/B test them and roll out by canary.",
-        "govern": "Govern",
-        "governDesc": "Gateways, Cedar policies, rate limits and audit."
-      },
       "agents": {
         "title": "Recent deployments",
         "all": "All agents",
@@ -8258,6 +8242,36 @@
       "palette": "Command palette",
       "glossary": "Glossary",
       "videos": "Demo videos"
+    },
+    "onboard": {
+      "launch": {
+        "title": "Launch checklist",
+        "launched": "Launched",
+        "allDone": "This workspace builds, runs, evaluates and watches its agents.",
+        "progress": "{{done}}/{{total}} done",
+        "next": "Next:",
+        "done": "Done",
+        "expand": "Show the steps",
+        "collapse": "Fold the steps away",
+        "hideHint": "Hide the checklist for this workspace (the help menu brings it back)",
+        "askAdmin": "Ask an administrator",
+        "workspace": "Workspace ready",
+        "workspaceHint": "The AWS account and region this console works in, bootstrapped.",
+        "workspaceHintMember": "An administrator bootstraps the AWS account and region this console works in.",
+        "workspaceCta": "Check it",
+        "agent": "First agent live",
+        "agentHint": "A managed Harness agent deploys in about 30 seconds, no code.",
+        "agentCta": "Create one",
+        "chat": "Talk to it",
+        "chatHint": "One conversation gives you a trace, tokens and cost to look at.",
+        "chatCta": "Open chat",
+        "evaluate": "Score it",
+        "evaluateHint": "Run evaluators over real sessions or a dataset to see where it falls short.",
+        "evaluateCta": "Run an evaluation",
+        "online": "Watch live traffic",
+        "onlineHint": "Score a sample of new sessions as they arrive, so a drop in quality shows up by itself.",
+        "onlineCta": "Set up online evaluation"
+      }
     }
   },
   "identity": {

@@ -6,6 +6,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { fmtTime } from "../format";
 import { useLoad } from "../hooks";
+import { LaunchChecklist } from "../onboarding/LaunchChecklist";
 import { sortTasks, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, type V2Task } from "../tasks";
 import { Button, Card, type Column, Kpi, LinkButton, PageHeader, Table, Tag } from "../ui";
 import { AnnouncementBoard } from "./home/AnnouncementBoard";
@@ -31,21 +32,12 @@ function useTick(ms: number): number {
   return tick;
 }
 
-// the lifecycle strip: create → debug → observe → evaluate → optimise → govern
-const LIFECYCLE = [
-  { key: "create", to: "/v2/agents?view=new" },
-  { key: "chat", to: "/v2/chat" },
-  { key: "observe", to: "/v2/observability" },
-  { key: "evaluate", to: "/v2/eval/tasks?view=new" },
-  { key: "optimize", to: "/v2/eval/experiments" },
-  { key: "govern", to: "/v2/governance" },
-] as const;
-
 /**
  * 工作台 — the V2 console's landing page: platform KPIs (the classic Overview's
- * tiles), the create → deploy → invoke → observe → evaluate lifecycle, recent
- * deployments and evaluation tasks, and a right rail with the announcement board
- * and per-service health. Agents poll every 10 s, the overview every 30 s.
+ * tiles), the launch checklist (workspace → live agent → chat → evaluation →
+ * online evaluation, ticked from real data), recent deployments and evaluation
+ * tasks, and a right rail with the announcement board and per-service health.
+ * Agents poll every 10 s, the overview every 30 s.
  */
 export function V2Home() {
   const { t } = useTranslation();
@@ -94,7 +86,16 @@ export function V2Home() {
 
   return (
     <>
-      <PageHeader title={t("v2.home.title")} desc={t("v2.home.desc")} />
+      <PageHeader
+        title={t("v2.home.title")}
+        desc={t("v2.home.desc")}
+        end={
+          <Button size="sm" kind="soft" onClick={() => navigate("/v2/assistant")}>
+            <Sparkles size={13} aria-hidden="true" />
+            {t("v2.home.assistant")}
+          </Button>
+        }
+      />
       <div className="v2-kpis">
         <Kpi
           label={t("v2.home.kpi.agents")}
@@ -134,26 +135,7 @@ export function V2Home() {
 
       <div className="v2-home-grid">
         <div className="v2-home-main">
-          <Card
-            title={t("v2.home.flowTitle")}
-            sub={t("v2.home.flowSub")}
-            end={
-              <Button size="sm" kind="soft" onClick={() => navigate("/v2/assistant")}>
-                <Sparkles size={13} aria-hidden="true" />
-                {t("v2.home.assistant")}
-              </Button>
-            }
-          >
-            <div className="v2-home-flow">
-              {LIFECYCLE.map((step, i) => (
-                <Link key={step.key} to={step.to} className="v2-flow-step" data-testid={`v2-home-step-${step.key}`}>
-                  <span className="n">{i + 1}</span>
-                  <span className="t">{t(`v2.home.step.${step.key}`)}</span>
-                  <span className="d">{t(`v2.home.step.${step.key}Desc`)}</span>
-                </Link>
-              ))}
-            </div>
-          </Card>
+          {list && <LaunchChecklist agents={list} tasks={tasks.data} />}
           <RecentAgents agents={list} loading={agents.data === null && !agents.error} error={agents.error} onRetry={agents.reload} />
           <Card
             title={t("v2.home.recentTasks")}

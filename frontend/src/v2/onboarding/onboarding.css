@@ -1,0 +1,61 @@
+/* V2 onboarding — the launch checklist on Home. Scoped under .v2, V2 tokens only;
+   no transform / filter / contain on containers (fixed popups anchor to the viewport). */
+
+/* ── launch checklist ────────────────────────────────────────────────────── */
+.v2 .v2-launch { padding: 16px 20px 18px; border: 1px solid var(--v2-primary-line); }
+.v2 .v2-launch[data-state="done"] { padding: 10px 16px; border-color: transparent; background: var(--v2-success-soft); }
+.v2 .v2-launch-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.v2 .v2-launch[data-state="open"] .v2-launch-head { margin-bottom: 14px; }
+.v2 .v2-launch-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none;
+  font: inherit; font-size: 15px; font-weight: 600; color: var(--v2-ink); cursor: pointer;
+}
+.v2 .v2-launch-toggle:hover { color: var(--v2-primary); }
+.v2 .v2-launch-toggle svg { color: var(--v2-ink-3); }
+.v2 .v2-launch .v2-launch-tick { color: var(--v2-success); }
+.v2 .v2-launch-count { font-size: 12.5px; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; }
+.v2 .v2-launch-meter { display: flex; gap: 4px; flex: 1; min-width: 80px; max-width: 220px; }
+.v2 .v2-launch-meter i { flex: 1; height: 4px; border-radius: 2px; background: var(--v2-line); }
+.v2 .v2-launch-meter i[data-on="true"] { background: var(--v2-success); }
+.v2 .v2-launch-sum { flex: 1; min-width: 0; font-size: 13px; color: var(--v2-ink-2); }
+.v2 .v2-launch-hide {
+  margin-left: auto; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: var(--v2-radius-sm); background: none; color: var(--v2-ink-3); cursor: pointer;
+}
+.v2 .v2-launch-hide:hover { background: var(--v2-fill-2); color: var(--v2-ink); }
+
+/* collapsed, not yet done: the next step on one line */
+.v2 .v2-launch-next { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; }
+.v2 .v2-launch-next .label { color: var(--v2-ink-3); }
+.v2 .v2-launch-next .v2-btn { margin-left: auto; }
+
+.v2 .v2-launch ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.v2 .v2-launch ol[hidden] { display: none; }
+.v2 .v2-launch[data-state="done"] ol:not([hidden]) { margin-top: 12px; }
+.v2 .v2-launch li {
+  display: grid; gap: 6px; align-content: start; min-height: 128px; padding: 12px 14px;
+  border: 1px solid var(--v2-line); border-radius: var(--v2-radius); background: var(--v2-card);
+}
+.v2 .v2-launch li .top { display: flex; align-items: center; gap: 8px; }
+.v2 .v2-launch li .n { font-family: var(--v2-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--v2-ink-3); }
+.v2 .v2-launch li .v2-launch-tick { margin-left: auto; }
+.v2 .v2-launch li b { font-size: 13.5px; color: var(--v2-ink); }
+.v2 .v2-launch li small { font-size: 12.5px; line-height: 1.5; color: var(--v2-ink-3); }
+.v2 .v2-launch li .v2-btn { justify-self: start; margin-top: 4px; }
+/* `.v2 a` outranks the plain `.v2-btn` colour on a link */
+.v2 .v2-launch a.v2-btn:not(.primary) { color: var(--v2-ink); }
+.v2 .v2-launch a.v2-btn:not(.primary):hover { color: var(--v2-primary); }
+.v2 .v2-launch .v2-launch-noact { margin-top: 4px; font-size: 12.5px; color: var(--v2-ink-2); }
+.v2 .v2-launch li[data-state="done"] { background: var(--v2-fill); }
+.v2 .v2-launch li[data-state="done"] b { color: var(--v2-ink-2); }
+.v2 .v2-launch li[data-state="next"] { border-color: var(--v2-primary-line); box-shadow: 0 0 0 3px var(--v2-primary-soft); }
+.v2 .v2-launch li[data-state="later"] b { color: var(--v2-ink-2); }
+
+@media (max-width: 1180px) {
+  .v2 .v2-launch ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .v2 .v2-launch ol { grid-template-columns: minmax(0, 1fr); }
+  .v2 .v2-launch-head { gap: 8px; }
+  .v2 .v2-launch-meter { max-width: 100px; }
+}
