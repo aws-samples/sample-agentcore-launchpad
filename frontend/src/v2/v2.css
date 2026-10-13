@@ -479,6 +479,79 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 .v2-modal-body { padding: 20px; overflow-y: auto; flex: 1; }
 .v2-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--v2-line-2); }
 
+/* ---------- command palette (⌘K) + help menu ----------
+   The palette is rendered in place inside .v2 (no portal) above modal masks
+   (100) and dropdown popups (150), below toasts (200). No transform / filter /
+   backdrop-filter on these containers: they would re-anchor fixed popups. */
+.v2 kbd {
+  display: inline-block; min-width: 18px; padding: 0 5px; font-family: var(--v2-mono); font-size: 11px;
+  line-height: 18px; text-align: center; color: var(--v2-ink-2); background: #fff;
+  border: 1px solid var(--v2-line); border-bottom-width: 2px; border-radius: 4px;
+}
+.v2-cmdk-trigger {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; min-width: 200px; padding: 0 6px 0 10px;
+  border: 1px solid var(--v2-line); border-radius: 6px; background: var(--v2-fill); color: var(--v2-ink-3);
+  font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.v2-cmdk-trigger:hover { border-color: var(--v2-primary-line); color: var(--v2-ink-2); }
+.v2-cmdk-trigger kbd { margin-left: auto; }
+.v2-cmdk-mask {
+  position: fixed; inset: 0; z-index: 160; background: rgba(29, 33, 41, 0.45);
+  display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px;
+  animation: v2-cmdk-fade 0.12s ease-out;
+}
+@keyframes v2-cmdk-fade { from { opacity: 0; } }
+.v2-cmdk {
+  width: 640px; max-width: 100%; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden;
+  background: #fff; border-radius: 10px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+}
+.v2-cmdk-find { position: relative; flex: none; }
+.v2-cmdk-find svg { position: absolute; left: 18px; top: 18px; color: var(--v2-ink-3); pointer-events: none; }
+.v2-cmdk-find input {
+  width: 100%; height: 52px; padding: 0 18px 0 46px; border: 0; border-bottom: 1px solid var(--v2-line-2);
+  font: inherit; font-size: 15px; color: var(--v2-ink); background: none; outline: none;
+}
+.v2-cmdk-find input::placeholder { color: var(--v2-ink-4); }
+.v2-cmdk-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
+.v2-cmdk-group { padding: 8px 10px 4px; font-size: 12px; font-weight: 500; color: var(--v2-ink-3); }
+.v2-cmdk-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px;
+  font-size: 14px; line-height: 20px; color: var(--v2-ink); cursor: pointer; user-select: none;
+}
+.v2-cmdk-item svg { flex: none; color: var(--v2-ink-3); }
+.v2-cmdk-item .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-cmdk-item.active { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2-cmdk-item.active svg { color: var(--v2-primary); }
+.v2-cmdk-empty { padding: 24px 16px; text-align: center; font-size: 13px; color: var(--v2-ink-3); }
+.v2-cmdk-foot {
+  flex: none; display: flex; align-items: center; gap: 16px; padding: 8px 14px;
+  border-top: 1px solid var(--v2-line-2); font-size: 12px; color: var(--v2-ink-3);
+}
+.v2-cmdk-foot kbd + kbd { margin-left: 2px; }
+.v2-cmdk-loading { margin-left: auto; }
+@media (prefers-reduced-motion: reduce) { .v2-cmdk-mask { animation: none; } }
+
+.v2-help { position: relative; display: flex; }
+.v2-help-btn {
+  width: 30px; height: 30px; display: grid; place-items: center; padding: 0; cursor: pointer;
+  border: 1px solid var(--v2-line); border-radius: 6px; background: #fff; color: var(--v2-ink-2);
+}
+.v2-help-btn:hover, .v2-help-btn[aria-expanded="true"] { color: var(--v2-primary); border-color: var(--v2-primary-line); }
+.v2-help-btn[aria-expanded="true"] { background: var(--v2-primary-soft); }
+.v2-help-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; min-width: 220px; padding: 4px;
+  display: grid; gap: 2px; background: #fff; border: 1px solid var(--v2-line-2); border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+.v2-help-menu button {
+  display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 0; border-radius: 4px;
+  background: none; color: var(--v2-ink); font-size: 14px; line-height: 20px; text-align: left; cursor: pointer; white-space: nowrap;
+}
+.v2-help-menu button svg { flex: none; color: var(--v2-ink-3); }
+.v2-help-menu button .txt { flex: 1; }
+.v2-help-menu button:hover, .v2-help-menu button:focus-visible { background: var(--v2-fill); }
+.v2-help-menu button kbd { margin-left: 16px; }
+
 /* ---------- toast ---------- */
 .v2-toasts { position: fixed; top: 68px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .v2-toast { background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); border-radius: 6px; padding: 9px 16px; font-size: 14px; display: flex; gap: 8px; align-items: center; }
@@ -495,6 +568,8 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 
 @media (max-width: 960px) {
   .v2-side { display: none; }
+  .v2-cmdk-trigger { min-width: 0; }
+  .v2-cmdk-trigger span, .v2-cmdk-trigger kbd { display: none; }
   .v2-main { padding: 16px; }
   .v2-top-tabs { display: none; }
   .v2-form.cols-2, .v2-grid-2, .v2-grid-3, .v2-flow, .v2-stages, .v2-stages.v2-stages-6, .v2-desc { grid-template-columns: 1fr; }

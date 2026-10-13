@@ -8154,6 +8154,32 @@
       "title": "术语表",
       "search": "查找术语",
       "none": "没有匹配的术语"
+    },
+    "palette": {
+      "label": "命令面板",
+      "search": "搜索",
+      "placeholder": "搜索页面、Agent 和术语……",
+      "group": {
+        "page": "页面",
+        "agent": "Agent",
+        "glossary": "术语表",
+        "help": "帮助"
+      },
+      "openAgent": "打开 {{name}}",
+      "chatWith": "与 {{name}} 对话",
+      "openGlossary": "打开术语表",
+      "openVideos": "观看演示视频",
+      "none": "没有匹配项",
+      "move": "移动",
+      "run": "打开",
+      "close": "关闭",
+      "loadingAgents": "正在加载 Agent……"
+    },
+    "help": {
+      "label": "帮助",
+      "palette": "命令面板",
+      "glossary": "术语表",
+      "videos": "演示视频"
     }
   },
   "identity": {

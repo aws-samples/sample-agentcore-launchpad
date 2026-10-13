@@ -8154,6 +8154,32 @@
       "title": "Glossary",
       "search": "Find a term",
       "none": "No term matches"
+    },
+    "palette": {
+      "label": "Command palette",
+      "search": "Search",
+      "placeholder": "Search pages, agents and terms…",
+      "group": {
+        "page": "Pages",
+        "agent": "Agents",
+        "glossary": "Glossary",
+        "help": "Help"
+      },
+      "openAgent": "Open {{name}}",
+      "chatWith": "Chat with {{name}}",
+      "openGlossary": "Open the glossary",
+      "openVideos": "Watch the demo videos",
+      "none": "Nothing matches",
+      "move": "move",
+      "run": "open",
+      "close": "close",
+      "loadingAgents": "Loading agents…"
+    },
+    "help": {
+      "label": "Help",
+      "palette": "Command palette",
+      "glossary": "Glossary",
+      "videos": "Demo videos"
     }
   },
   "identity": {

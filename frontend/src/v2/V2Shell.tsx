@@ -1,7 +1,7 @@
 import "./v2.css";
 import "./v2-classic.css";
 
-import { ChevronDown, LogOut, Repeat } from "lucide-react";
+import { ChevronDown, LogOut, Repeat, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -11,10 +11,13 @@ import { RouteChunk } from "../layout/RouteChunk";
 import { useNavMode } from "../lib/nav-mode";
 import { setUiVersion } from "../lib/ui-version";
 import { useWorkspace } from "../workspace/workspace-context";
+import { CommandPalette, PALETTE_SHORTCUT } from "./CommandPalette";
 import { GlossaryDialog } from "./Glossary";
+import { HelpMenu } from "./HelpMenu";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
 import { isNavItemActive, navGroupsFor } from "./nav";
+import { closePalette, isPaletteToggle, isSlashOpen, openPalette, togglePalette } from "./palette";
 import { ModuleDemoProvider } from "./pages/videos/ModuleDemo";
 import { FilterSelect, V2ToastProvider } from "./ui";
 
@@ -26,6 +29,11 @@ function readCollapsed(): Record<string, boolean> {
   } catch {
     return {};
   }
+}
+
+/** A dialog, drawer, dropdown or menu is open: `/` then belongs to it, not the palette. */
+function overlayOpen(): boolean {
+  return document.querySelector('.v2 [role="dialog"][aria-modal="true"], .v2 .v2-pop, .v2 [role="menu"]') !== null;
 }
 
 function WorkspaceSelect() {
@@ -76,6 +84,25 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
     return () => document.body.classList.remove("v2-body");
   }, []);
 
+  // ⌘K / Ctrl+K toggles the command palette anywhere in V2 (even while typing);
+  // `/` opens it outside text fields and open overlays.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isPaletteToggle(e)) {
+        e.preventDefault();
+        togglePalette();
+      } else if (isSlashOpen(e, document.activeElement as HTMLElement | null, overlayOpen())) {
+        e.preventDefault();
+        openPalette();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      closePalette();
+    };
+  }, []);
+
   const toggle = (key: string) => {
     setCollapsed((prev) => {
       const next = { ...prev, [key]: !prev[key] };
@@ -111,8 +138,22 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
               <span className="on">{t("v2.nav.productAgents")}</span>
             </nav>
             <div className="v2-top-right">
+              <button
+                type="button"
+                className="v2-cmdk-trigger"
+                onClick={openPalette}
+                aria-label={t("v2.palette.search")}
+                aria-keyshortcuts="Meta+K Control+K"
+                title={`${t("v2.palette.search")} (${PALETTE_SHORTCUT})`}
+                data-testid="v2-cmdk-open"
+              >
+                <Search size={14} aria-hidden="true" />
+                <span>{t("v2.palette.search")}</span>
+                <kbd aria-hidden="true">{PALETTE_SHORTCUT}</kbd>
+              </button>
               <WorkspaceSelect />
               <V2Lang />
+              <HelpMenu />
               <button type="button" className="v2-btn sm" onClick={switchToClassic} data-testid="v2-switch-classic">
                 <Repeat size={13} aria-hidden="true" />
                 {t("v2.switchClassic")}
@@ -200,8 +241,9 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
               </div>
             </div>
           </div>
-          {/* opened by a Term click (and later the palette / help menu) */}
+          {/* opened by a Term click, the palette or the help menu */}
           <GlossaryDialog />
+          <CommandPalette />
         </ModuleDemoProvider>
       </V2ToastProvider>
     </div>
