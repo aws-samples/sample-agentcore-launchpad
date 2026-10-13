@@ -39,7 +39,12 @@ export function HelpMenu() {
       shortcut: PALETTE_SHORTCUT,
       run: openPalette,
     },
-    { key: "glossary", icon: <BookOpen size={15} aria-hidden="true" />, label: t("v2.help.glossary"), run: () => openGlossary() },
+    {
+      key: "glossary",
+      icon: <BookOpen size={15} aria-hidden="true" />,
+      label: t("v2.help.glossary"),
+      run: () => openGlossary(),
+    },
     {
       key: "videos",
       icon: <PlayCircle size={15} aria-hidden="true" />,

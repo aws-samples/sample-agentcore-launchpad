@@ -331,7 +331,10 @@ export function SkillsKbCard({
   return (
     <Card title={t("v2.agents.wizard.skillsKb")}>
       <div className="v2-form">
-        <Field label={<HintLabel term="skill">{t("v2.agents.wizard.skills")}</HintLabel>} hint={t("v2.agents.wizard.skillsHintSources")}>
+        <Field
+          label={<HintLabel term="skill">{t("v2.agents.wizard.skills")}</HintLabel>}
+          hint={t("v2.agents.wizard.skillsHintSources")}
+        >
           {cat.loading ? (
             <Spin />
           ) : (
@@ -442,7 +445,10 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
             {t("v2.agents.wizard.longTermOn")}
           </label>
         </Field>
-        <Field label={<HintLabel term="memory">{t("v2.agents.wizard.memoryResource")}</HintLabel>} hint={t("create.configure.memoryResourceHint")}>
+        <Field
+          label={<HintLabel term="memory">{t("v2.agents.wizard.memoryResource")}</HintLabel>}
+          hint={t("create.configure.memoryResourceHint")}
+        >
           <Select
             value={form.memoryId}
             onChange={(v) => set({ memoryId: v })}

@@ -37,8 +37,8 @@ import {
 export const PALETTE_SHORTCUT = shortcutLabel(
   typeof navigator === "undefined"
     ? ""
-    : ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
-        navigator.platform ??
+    : ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+        navigator.platform ||
         navigator.userAgent),
 );
 
@@ -113,6 +113,8 @@ function PaletteBody() {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // an IME is composing: Esc / arrows / Enter belong to its candidate window
+    if (e.nativeEvent.isComposing) return;
     const n = results.length;
     switch (e.key) {
       case "Escape":
@@ -130,7 +132,6 @@ function PaletteBody() {
         if (n) setCursor((active - 1 + n) % n);
         break;
       case "Enter":
-        if (e.nativeEvent.isComposing) return; // an IME is committing a word
         e.preventDefault();
         run(results[active]);
         break;
