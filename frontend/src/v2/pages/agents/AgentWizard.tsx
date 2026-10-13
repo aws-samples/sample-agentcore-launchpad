@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import {
@@ -96,6 +96,9 @@ function editDraft(agent: AgentInfo): Draft {
 export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  // the list's filters at the moment "New" was pressed (they are not in this URL,
+  // because `method` here is the prefill param), so Back lands on the same list
+  const listSearch = (useLocation().state as { listSearch?: string } | null)?.listSearch ?? "";
   const toast = useV2Toast();
   const { can } = useAuth();
   const canDeploy = can("agents.deploy");
@@ -329,7 +332,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     <>
       <FlowHeader
         title={edit ? t("v2.agents.wizard.editTitle", { name: edit.name }) : t("v2.agents.new")}
-        onBack={() => setParams(edit ? { view: "detail", id: edit.id } : {})}
+        onBack={() => setParams(edit ? { view: "detail", id: edit.id } : new URLSearchParams(listSearch))}
         steps={<Steps steps={stepLabels} current={step - firstStep} onSelect={(i) => select(i + firstStep)} />}
         end={
           <>

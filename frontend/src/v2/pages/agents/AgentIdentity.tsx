@@ -6,6 +6,7 @@ import { useAuth } from "../../../auth/auth-context";
 import { useLoad } from "../../hooks";
 import { Alert, Button, Card, type Column, Descriptions, FlowHeader, Spin, Table, Tag } from "../../ui";
 import "../connections/connections.css";
+import { withView } from "./agentsListParams";
 import { InboundSwitchCard } from "./InboundAuthFields";
 
 const WORKLOAD_TONE = { ready: "green", none: "gray", managed: "blue", not_deployed: "gray", missing: "red" } as const;
@@ -67,7 +68,7 @@ export function AgentIdentity({ id }: { id: string }) {
     <>
       <FlowHeader
         title={t("v2.agents.identity.title", { name: data?.name ?? id })}
-        onBack={() => setParams({ view: "detail", id })}
+        onBack={() => setParams((prev) => withView(prev, "detail", id))}
         end={
           <>
             <Button onClick={reload}>{t("v2.common.refresh")}</Button>
@@ -114,7 +115,7 @@ export function AgentIdentity({ id }: { id: string }) {
             busy={false}
             jwt={data.inbound.jwt}
             invokeUrl={data.inbound.invoke_url}
-            onSwitched={() => setParams({ view: "detail", id })}
+            onSwitched={() => setParams((prev) => withView(prev, "detail", id))}
           />
           <Card title={t("v2.agents.identity.downstreamTitle")} sub={t("v2.agents.identity.downstreamSub")} flush>
             <Table
