@@ -3219,6 +3219,56 @@ CloudWatch a couple of minutes after the invoke). Use it to test a custom
 evaluator or investigate one session; a stored, repeatable score is the batch
 run's job (below).
 
+### Spend attribution and threshold alerts
+
+**Spend.** The dashboard already estimates cost per model from the `model_prices` map;
+what it cannot answer is *who spent it*. `services/costs.py` adds two breakdowns over the
+same spans (`SPANS_SOURCE`, the dashboard's `_IS_LLM_FIELDS` token logic): **by agent**,
+from one Logs Insights query grouped by the span's runtime service name, and **by person**,
+from per-session tokens joined to `ChatSession.actor_id`. Sessions the console never
+opened (direct `/v1` traffic, evaluation replays) land in an explicit unattributed row
+rather than being dropped, and a service name that matches no ledger agent is still
+reported (`known: false`) and counted — an imported or deleted agent, or another stack on
+the same AWS account (prod and prod2 share one), spent real money. Every figure is an
+estimate: each row is priced at its latest model's rate, and a model missing from the price
+map adds tokens but no dollars and is named in `unpriced_models`, so the total is never
+quietly short. Month to date is a relative window from 00:00 UTC on the 1st, capped at
+720 h. Results go through the dashboard's 60 s cache. The scan is account-wide, so its
+duration grows with all span volume in the region, not with this console's agents
+(measured 2026-10-14: 34 s for 30 days on us-east-1, against the 55 s query deadline).
+
+**Alerts.** An `alert_rules` row (workspace-scoped) is a threshold on a value the
+platform already computes: `error_rate` and `latency_p95_ms` from the dashboard
+aggregates, `online_quality` from the online-evaluation mean, `spend_usd` and
+`cost_mtd_usd` from the cost report. No new telemetry path. The properties that matter:
+
+- **A direction that could never fire is refused** (`alert.comparison_never_fires`):
+  quality is bad when it drops, an error rate when it rises. The create route defaults the
+  comparison.
+- **An unreadable value is `unknown`, never `ok`.** No traffic in the window, or a failed
+  query, records `unknown` with the reason.
+- **A transition notifies, not a state.** `state` lives on the row, so a rule that stays
+  firing does not re-notify. A failed delivery is recorded in `last_detail` and never hides
+  the breach.
+- **Delivery is one generic https JSON webhook**, which a Slack or Feishu incoming hook
+  already is, so the platform stores no channel credentials. `services/webhook_safety.py`
+  checks the URL on save and again on every send (https only, no credentials in the URL,
+  every resolved address public — IPv4-mapped IPv6 judged as its IPv4 address), connects
+  to the address it checked, refuses redirects and times out after 5 s.
+- **Only the background check notifies.** `POST /api/alerts/evaluate` (the console's
+  "Re-check now") records state but never posts, so opening the page cannot page anyone.
+  `services/alert_scheduler.py` is one daemon thread, started at app startup only when
+  `alerts_scheduler_enabled` (`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED`) is true; every
+  `alerts_scheduler_interval_seconds` (default 300) it evaluates each workspace that has an
+  enabled rule, in its own DB session, with notification on. It is **off by default**:
+  prod and prod2 share AWS, so turning it on for one box only avoids double posts. There is
+  no cross-process claim — the systemd unit runs one uvicorn process; several processes
+  would each run the thread.
+
+Every route is **admin**: the per-person breakdown names who spent what, and an
+online-quality value is an aggregate over all agents, which a member in an isolated
+workspace must not see. The V2 page is `/v2/costs` (`?view=costs|alerts`).
+
 ## Workspaces — multi-account/multi-region environments
 
 Every environment the console manages is a **workspace**: one

@@ -739,6 +739,62 @@ Hub-global — not workspace-scoped; overrides live in this deployment's ledger
 
 A member gets `403 auth.forbidden` on the three admin routes.
 
+## Console Costs and Alerts API
+
+Estimated spend and threshold alert rules (the V2 page `/v2/costs`). Every route is
+**admin**; a member gets `403 auth.forbidden`. Workspace-scoped: spend is read from the
+workspace's account and region, and rules live in the ledger's `alert_rules` table.
+
+Spend is span tokens × the price map (`model_prices`, see [setup.md](setup.md#choosing-models)),
+so every figure is an estimate. A model missing from the map adds tokens but no dollars and
+is named in `unpriced_models`. Spans of **every** runtime in the account and region count:
+a service that matches no agent in this console has `known: false` (another stack on the
+same AWS account, or a deleted agent) and is still in the total. Spend by person joins the
+span `session.id` to the console's Chat sessions; `/v1` and evaluation traffic have none
+and land in the unattributed row (`actor: "—"`, `attributed: false`). Results are cached
+for 60 s per workspace and range; `force=true` bypasses the cache.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d` (default `24h`) `&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`. Another range → `422 costs.bad_range`; a Logs Insights failure or timeout → `502 observability.query_failed` |
+| `GET` | `/api/costs/month-to-date` | `?force=` → `{workspace_id, est_cost_usd, hours, unpriced_models[], estimate: true}` — spend since 00:00 UTC on the 1st, over at most 720 h |
+| `GET` | `/api/alerts` | Ledger read, no AWS call → `{rules[], firing, kinds[]}` |
+| `GET` | `/api/alerts/scheduler` | `{enabled, interval_seconds}` — whether **this** server runs the background check |
+| `POST` | `/api/alerts` | body `{kind, threshold, name?, comparison?, window?, enabled?, webhook_url?}` → `201` rule. `comparison` defaults to the kind's natural direction |
+| `PATCH` | `/api/alerts/{id}` | body: any of `{name, threshold, window, enabled, webhook_url}`; only the fields sent change, and `webhook_url: null` or `""` removes the webhook. `kind` and `comparison` are fixed. Unknown id or another workspace's rule → `404 alert.not_found` |
+| `DELETE` | `/api/alerts/{id}` | `{deleted: id}`; `404 alert.not_found` |
+| `POST` | `/api/alerts/evaluate` | Re-reads every enabled rule now and records the state → `{workspace_id, evaluated_at, rules[], firing, unknown}`. **Never notifies**, whatever the query string |
+
+A rule: `{id, kind, name, comparison, threshold, window, enabled, has_webhook, state, last_value,
+last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_by_name,
+created_at, updated_at}`. The webhook URL is write-only — responses carry `has_webhook`.
+`state` is `ok`, `firing` or `unknown`; a value that cannot be read (no traffic, a failed
+query) is `unknown`, never `ok`.
+
+| `kind` | Value | Direction | Window |
+|---|---|---|---|
+| `error_rate` | failed traces / traces, 0–1 | above | the rule's `window`, `1h`–`7d` |
+| `latency_p95_ms` | p95 trace latency, ms | above | the rule's `window`, `1h`–`7d` |
+| `online_quality` | online-evaluation mean, 0–1 | below | fixed 24 h (`window` ignored) |
+| `spend_usd` | estimated spend, USD | above | the rule's `window`, `1h`–`30d` |
+| `cost_mtd_usd` | estimated spend since the UTC month start, USD | above | the month (`window` ignored) |
+
+Validation errors (`400`): `alert.unknown_kind`, `alert.bad_comparison`,
+`alert.comparison_never_fires` (the inverse direction), `alert.bad_window`,
+`alert.bad_threshold` (negative, or `online_quality` outside 0–1).
+
+**Webhooks.** One generic https JSON webhook per rule; a Slack or Feishu incoming webhook
+renders its `text`. The body is `{text, workspace_id, rule_id, kind, value, threshold,
+comparison, detail}`. It is posted only by the background check
+(`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true`, every `LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS`,
+default 300) and only on a transition into `firing`; the outcome is appended to
+`last_detail`. The URL is checked on save and again on every send:
+`alert.webhook_not_https`, `alert.webhook_credentials` (user or password in the URL),
+`alert.webhook_invalid`, `alert.webhook_unresolvable`, `alert.webhook_non_public` (any
+resolved address is private, loopback, link-local, reserved, multicast or unspecified,
+IPv4-mapped IPv6 included). The request goes to the address that was checked, redirects are
+not followed, and the timeout is 5 s.
+
 ## Console Knowledge Bases API
 
 `/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over

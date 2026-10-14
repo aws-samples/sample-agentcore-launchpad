@@ -1837,6 +1837,44 @@ Logs Insights 查询(`filter ispresent(scope.name) and attributes.session.id =
 几分钟才会到达 CloudWatch)。适合试跑自定义 evaluator 或排查某个会话;需要留档、
 可复现的分数请用下文的批量运行。
 
+### 花费归属与阈值告警
+
+**花费。** 仪表盘已经能按 `model_prices` 价格表估算每个模型的花费，但回答不了*是谁花的*。
+`services/costs.py` 在同一批 span（`SPANS_SOURCE`，沿用仪表盘的 `_IS_LLM_FIELDS` token
+逻辑）上增加两种拆分：**按 Agent**——一条按 span 的运行时服务名分组的 Logs Insights 查询；
+**按人**——按会话统计 token，再关联 `ChatSession.actor_id`。控制台从未打开过的会话（直接的
+`/v1` 流量、评估回放）进入明确的“未归属”行，而不是被丢弃；与台账中任何 Agent 都不匹配的服务名
+仍会列出（`known: false`）并计入总额——导入或已删除的 Agent、同一 AWS 账号上的另一套部署
+（prod 与 prod2 共用一个账号）都真实花了钱。所有数字都是估算：每行按其最近一个模型的单价计价，
+价格表里没有的模型只计 token、不计金额，并列在 `unpriced_models` 中，因此总额不会悄悄偏少。
+本月至今是从当月 1 日 00:00 UTC 起的相对窗口，最长 720 小时。结果走仪表盘的 60 秒缓存。查询扫描
+整个账号，耗时随该区域全部 span 量增长，而不是随本控制台的 Agent 数量增长（2026-10-14 实测：
+us-east-1 上 30 天范围耗时 34 秒，查询截止时间为 55 秒）。
+
+**告警。** 一条 `alert_rules` 记录（按 Workspace 隔离）是对平台已能计算的某个值设定的阈值：
+`error_rate` 与 `latency_p95_ms` 来自仪表盘汇总，`online_quality` 来自在线评估均值，
+`spend_usd` 与 `cost_mtd_usd` 来自花费报表。没有新的遥测通路。关键性质：
+
+- **永远不会触发的方向会被拒绝**（`alert.comparison_never_fires`）：质量是下降才算坏，错误率是
+  上升才算坏。创建路由会自动取默认方向。
+- **读不到的值记为 `unknown`，绝不记为 `ok`。** 窗口内无流量或查询失败时记为 `unknown` 并附原因。
+- **通知的是状态变化，而不是状态本身。** `state` 保存在记录上，持续触发的规则不会反复通知。发送
+  失败记录在 `last_detail` 中，不会掩盖告警本身。
+- **投递方式是一个通用的 https JSON webhook**——Slack 或飞书的传入 webhook 本身就是这种形式，
+  因此平台不保存任何渠道凭证。`services/webhook_safety.py` 在保存时和每次发送时都检查 URL（仅
+  https、URL 中不带凭证、所有解析地址都必须是公网地址——IPv4 映射的 IPv6 按其 IPv4 地址判断），
+  直接连接检查过的地址，拒绝重定向，5 秒超时。
+- **只有后台检查会发送通知。** `POST /api/alerts/evaluate`（控制台的“立即重新检查”）只记录
+  状态、从不发送，因此打开页面不会惊动任何人。`services/alert_scheduler.py` 是一个守护线程，
+  仅当 `alerts_scheduler_enabled`（`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED`）为 true 时在应用启动
+  时启动；每隔 `alerts_scheduler_interval_seconds`（默认 300）秒，它在各自独立的数据库会话中
+  评估每个有已启用规则的 Workspace，并开启通知。它**默认关闭**：prod 与 prod2 共用 AWS，只在
+  一台机器上开启可以避免重复通知。没有跨进程的抢占机制——systemd 单元只运行一个 uvicorn 进程；
+  如果运行多个进程，每个进程都会各自启动这个线程。
+
+所有路由都是 **admin**：按人拆分会暴露谁花了多少钱，而在线质量值是所有 Agent 的汇总，隔离模式
+Workspace 中的成员不应看到。V2 页面为 `/v2/costs`（`?view=costs|alerts`）。
+
 ## Workspaces —— 多账号/多区域环境
 
 控制台管理的每一个环境都是一个 **workspace**:一对 `(account_id, region)`（带 UNIQUE 约束），

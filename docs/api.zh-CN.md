@@ -445,6 +445,55 @@ workspace 划分；覆盖设置保存在本部署的账本（`platform_settings`
 
 成员调用三个管理员路由会得到 `403 auth.forbidden`。
 
+## 控制台成本与告警 API / Console Costs and Alerts API
+
+估算花费与阈值告警规则（V2 页面 `/v2/costs`）。所有路由均为 **admin**；成员调用返回
+`403 auth.forbidden`。按 Workspace 隔离：花费读取该 Workspace 的账号与区域，规则保存在台账的
+`alert_rules` 表中。
+
+花费 = span token × 价格表（`model_prices`，见 [setup.zh-CN.md](setup.zh-CN.md#选择模型)），
+因此所有数字都是估算值。价格表里没有的模型只计 token、不计金额，并列在 `unpriced_models` 中。
+账号与区域内**所有**运行时的 span 都会计入：与本控制台任何 Agent 都不匹配的服务标记为
+`known: false`（同一 AWS 账号上的另一套部署，或已删除的 Agent），仍计入总额。按人统计把 span 的
+`session.id` 与控制台的 Chat 会话关联；`/v1` 与评估流量没有会话，归入未归属行（`actor: "—"`，
+`attributed: false`）。结果按 Workspace 与时间范围缓存 60 秒；`force=true` 跳过缓存。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d`（默认 `24h`）`&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`。其他范围 → `422 costs.bad_range`；Logs Insights 失败或超时 → `502 observability.query_failed` |
+| `GET` | `/api/costs/month-to-date` | `?force=` → `{workspace_id, est_cost_usd, hours, unpriced_models[], estimate: true}`——自当月 1 日 00:00 UTC 起的花费，最多 720 小时 |
+| `GET` | `/api/alerts` | 只读台账，不调用 AWS → `{rules[], firing, kinds[]}` |
+| `GET` | `/api/alerts/scheduler` | `{enabled, interval_seconds}`——**本**服务器是否运行后台检查 |
+| `POST` | `/api/alerts` | body `{kind, threshold, name?, comparison?, window?, enabled?, webhook_url?}` → `201` 规则。`comparison` 默认取该类型的自然方向 |
+| `PATCH` | `/api/alerts/{id}` | body 为 `{name, threshold, window, enabled, webhook_url}` 中任意字段；只修改传入的字段，`webhook_url: null` 或 `""` 删除 webhook。`kind` 与 `comparison` 不可改。未知 id 或其他 Workspace 的规则 → `404 alert.not_found` |
+| `DELETE` | `/api/alerts/{id}` | `{deleted: id}`；`404 alert.not_found` |
+| `POST` | `/api/alerts/evaluate` | 立即重新读取所有已启用的规则并记录状态 → `{workspace_id, evaluated_at, rules[], firing, unknown}`。无论查询参数如何，**从不发送通知** |
+
+规则：`{id, kind, name, comparison, threshold, window, enabled, has_webhook, state, last_value,
+last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_by_name,
+created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webhook`。`state` 为 `ok`、
+`firing` 或 `unknown`；读不到的值（无流量、查询失败）记为 `unknown`，绝不记为 `ok`。
+
+| `kind` | 值 | 方向 | 时间窗口 |
+|---|---|---|---|
+| `error_rate` | 失败 trace / trace 总数，0–1 | above | 规则的 `window`，`1h`–`7d` |
+| `latency_p95_ms` | trace P95 延迟，毫秒 | above | 规则的 `window`，`1h`–`7d` |
+| `online_quality` | 在线评估均值，0–1 | below | 固定 24 小时（忽略 `window`） |
+| `spend_usd` | 估算花费，美元 | above | 规则的 `window`，`1h`–`30d` |
+| `cost_mtd_usd` | 自 UTC 月初起的估算花费，美元 | above | 当月（忽略 `window`） |
+
+校验错误（`400`）：`alert.unknown_kind`、`alert.bad_comparison`、`alert.comparison_never_fires`
+（相反方向）、`alert.bad_window`、`alert.bad_threshold`（负数，或 `online_quality` 超出 0–1）。
+
+**Webhook。** 每条规则一个通用 https JSON webhook；Slack 或飞书的传入 webhook 会显示其中的
+`text`。请求体为 `{text, workspace_id, rule_id, kind, value, threshold, comparison, detail}`。
+只有后台检查会发送（`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true`，间隔
+`LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS`，默认 300），且只在进入 `firing` 时发送一次；结果
+追加到 `last_detail`。URL 在保存时和每次发送时都会检查：`alert.webhook_not_https`、
+`alert.webhook_credentials`（URL 中带用户名或密码）、`alert.webhook_invalid`、
+`alert.webhook_unresolvable`、`alert.webhook_non_public`（任一解析地址为私有、回环、链路本地、
+保留、组播或未指定地址，含 IPv4 映射的 IPv6）。请求直接发往检查过的地址，不跟随重定向，超时 5 秒。
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库
