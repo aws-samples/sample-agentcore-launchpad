@@ -756,7 +756,7 @@ for 60 s per workspace and range; `force=true` bypasses the cache.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d` (default `24h`) `&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`. Another range → `422 costs.bad_range`; a Logs Insights failure or timeout → `502 observability.query_failed` |
+| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d` (default `24h`) `&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, agent_name, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`. Another range → `422 costs.bad_range`; a Logs Insights failure or timeout → `502 observability.query_failed` |
 | `GET` | `/api/costs/month-to-date` | `?force=` → `{workspace_id, est_cost_usd, hours, unpriced_models[], estimate: true}` — spend since 00:00 UTC on the 1st, over at most 720 h |
 | `GET` | `/api/alerts` | Ledger read, no AWS call → `{rules[], firing, kinds[]}` |
 | `GET` | `/api/alerts/scheduler` | `{enabled, interval_seconds}` — whether **this** server runs the background check |

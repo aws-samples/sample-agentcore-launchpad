@@ -58,6 +58,13 @@ describe("navGroupsFor", () => {
     expect(marked).toEqual(BUSINESS);
   });
 
+  it("lists Spend & alerts as an admin-only entry", () => {
+    const item = V2_NAV.flatMap((g) => g.items).find((entry) => entry.to === "/v2/costs");
+    expect(item?.admin).toBe(true);
+    expect(paths(navGroupsFor("expert", true))).toContain("/v2/costs");
+    expect(paths(navGroupsFor("expert", false))).not.toContain("/v2/costs");
+  });
+
   it("does not mutate V2_NAV", () => {
     const before = paths(V2_NAV);
     navGroupsFor("business", false);

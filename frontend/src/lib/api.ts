@@ -4366,6 +4366,124 @@ export interface ModelProbeResult {
   stop_reason?: string | null;
 }
 
+/* ── spend attribution + threshold alerts (`routers/alerts.py`, all ADMIN) ── */
+
+/** `GET /api/costs?range=` — the spend windows (30d exists here, not in observability). */
+export type CostRange = "1h" | "6h" | "24h" | "7d" | "30d";
+
+/** One runtime service's spend (`services/costs.cost_report` `by_agent`). */
+export interface CostRow {
+  /** the span `service.name` (`<runtime>.DEFAULT`, `harness_<name>`, …) */
+  service: string;
+  /** the ledger agent it resolved to; null when `known` is false */
+  agent_id: string | null;
+  /** the ledger agent's name; null when `known` is false */
+  agent_name: string | null;
+  display_name: string | null;
+  /** false: no agent of this console matches (imported, deleted, another stack's) */
+  known: boolean;
+  tokens: number;
+  llm_calls: number;
+  sessions: number;
+  /** null when the model is unpriced — "—", never $0 */
+  est_cost_usd: number | null;
+}
+
+/** One person's spend, from console chat sessions; `actor: "—"` is the unattributed bucket. */
+export interface CostActorRow {
+  actor: string;
+  attributed: boolean;
+  sessions: number;
+  tokens: number;
+  est_cost_usd: number;
+}
+
+export interface CostReport {
+  range: CostRange;
+  hours: number;
+  generated_at: string;
+  total_est_cost_usd: number;
+  total_tokens: number;
+  by_agent: CostRow[];
+  by_actor: CostActorRow[];
+  /** models that burned tokens the price map cannot value */
+  unpriced_models: string[];
+  estimate: true;
+  cache?: { hit: boolean; age_seconds: number };
+}
+
+/** `GET /api/costs/month-to-date` — what a `cost_mtd_usd` rule compares. */
+export interface CostMonthToDate {
+  workspace_id: string;
+  est_cost_usd: number;
+  /** hours since the UTC month start, capped at 720 */
+  hours: number;
+  unpriced_models: string[];
+  estimate: true;
+}
+
+export type AlertKind = "error_rate" | "latency_p95_ms" | "online_quality" | "spend_usd" | "cost_mtd_usd";
+export type AlertComparison = "above" | "below";
+export type AlertState = "ok" | "firing" | "unknown";
+
+/** `services/alerts.rule_out` — never the webhook URL, only `has_webhook`. */
+export interface AlertRuleInfo {
+  id: string;
+  kind: AlertKind;
+  name: string;
+  comparison: AlertComparison;
+  threshold: number;
+  window: CostRange;
+  enabled: boolean;
+  has_webhook: boolean;
+  state: AlertState;
+  last_value: number | null;
+  last_detail: string | null;
+  last_checked_at: string | null;
+  last_fired_at: string | null;
+  last_notified_at: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** set by an evaluate pass on a disabled rule */
+  skipped?: string;
+}
+
+export interface AlertRuleCreate {
+  kind: AlertKind;
+  name?: string;
+  threshold: number;
+  /** omitted: the kind's natural direction */
+  comparison?: AlertComparison;
+  window?: CostRange;
+  enabled?: boolean;
+  webhook_url?: string | null;
+}
+
+/** Only the fields present change; `webhook_url: null` clears the webhook. */
+export interface AlertRulePatch {
+  name?: string;
+  threshold?: number;
+  window?: CostRange;
+  enabled?: boolean;
+  webhook_url?: string | null;
+}
+
+export interface AlertEvaluation {
+  workspace_id: string;
+  evaluated_at: string;
+  rules: AlertRuleInfo[];
+  firing: number;
+  unknown: number;
+}
+
+/** Whether THIS server runs the background check — the only path that notifies. */
+export interface AlertSchedulerInfo {
+  enabled: boolean;
+  interval_seconds: number;
+}
+
 export const api = {
   videoCatalog: () => request<VideoCatalog>("/api/videos"),
   manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
@@ -4769,6 +4887,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ model_id: modelId, check }),
     }),
+  /** Admin: estimated spend for a window, by agent and by person (Logs Insights, 60 s cache). */
+  costs: (range: CostRange, force = false) =>
+    request<CostReport>(
+      `/api/costs?${new URLSearchParams({ range, ...(force ? { force: "true" } : {}) })}`,
+    ),
+  /** Admin: estimated spend since the UTC month start. */
+  costsMonthToDate: (force = false) =>
+    request<CostMonthToDate>(`/api/costs/month-to-date${force ? "?force=true" : ""}`),
+  /** Admin: the workspace's alert rules and their last state (a ledger read). */
+  alertRules: () =>
+    request<{ rules: AlertRuleInfo[]; firing: number; kinds: AlertKind[] }>("/api/alerts"),
+  createAlertRule: (body: AlertRuleCreate) =>
+    request<AlertRuleInfo>("/api/alerts", { method: "POST", body: JSON.stringify(body) }),
+  updateAlertRule: (id: string, patch: AlertRulePatch) =>
+    request<AlertRuleInfo>(`/api/alerts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteAlertRule: (id: string) =>
+    request<{ deleted: string }>(`/api/alerts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Admin: re-read every enabled rule now. Never notifies. */
+  evaluateAlerts: () => request<AlertEvaluation>("/api/alerts/evaluate", { method: "POST" }),
+  /** Admin: whether this server runs the background (notifying) check. */
+  alertScheduler: () => request<AlertSchedulerInfo>("/api/alerts/scheduler"),
   /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
   uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
     const form = new FormData();

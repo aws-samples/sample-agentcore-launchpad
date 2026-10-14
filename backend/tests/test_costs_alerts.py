@@ -126,6 +126,7 @@ def test_spend_is_attributed_to_the_agent_and_the_person(monkeypatch, ctx):
     assert report["total_est_cost_usd"] == pytest.approx(18.0)
     [agent_row] = report["by_agent"]
     assert agent_row["agent_id"] == agent_id
+    assert agent_row["agent_name"] == "priced-agent"
     assert agent_row["known"] is True and agent_row["display_name"] == "计价助手"
     assert agent_row["sessions"] == 2
 

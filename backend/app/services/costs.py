@@ -143,6 +143,7 @@ def cost_report(
                 {
                     "service": service,
                     "agent_id": agent.id if agent else None,
+                    "agent_name": agent.name if agent else None,
                     "display_name": (agent.spec or {}).get("display_name") if agent else None,
                     "known": agent is not None,
                     "tokens": int(tokens),

@@ -22,6 +22,7 @@ import {
   SquareStack,
   Target,
   Users,
+  Wallet,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -174,6 +175,7 @@ export const V2_NAV: V2NavGroup[] = [
       },
       { to: "/v2/connections", labelKey: "nav.connections", icon: KeyRound, v2: true, admin: true },
       { to: "/v2/models", labelKey: "v2.nav.models", icon: Cpu, v2: true, admin: true },
+      { to: "/v2/costs", labelKey: "v2.nav.costs", icon: Wallet, v2: true, admin: true },
       { to: "/v2/announcements", labelKey: "nav.announcements", icon: ScrollText, v2: true, admin: true },
       { to: "/v2/video-management", labelKey: "videoManage.title", icon: Settings, v2: true, admin: true },
     ],

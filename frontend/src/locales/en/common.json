@@ -2418,7 +2418,12 @@
     "identity.external_connection": "This credential was created outside Launchpad. Delete it in AgentCore Identity.",
     "identity.as_user_requires_console": "This tool acts as the signed-in user, so it needs a signed-in console user to authorize it. Use the Chat console.",
     "registry.a2a_demo_jwt_unsupported": "This agent accepts JWT bearer tokens only, and the A2A demo calls with SigV4. Use an IAM-inbound agent, or chat with this one in the Chat console.",
-    "evaluators.list_failed": "The account's evaluators could not be listed."
+    "evaluators.list_failed": "The account's evaluators could not be listed.",
+    "alert.webhook_not_https": "A webhook URL must start with https://.",
+    "alert.webhook_invalid": "The webhook URL is not a valid URL with a host.",
+    "alert.webhook_credentials": "A webhook URL must not contain a user name or password.",
+    "alert.webhook_unresolvable": "The webhook host does not resolve.",
+    "alert.webhook_non_public": "The webhook host resolves to a private or otherwise non-public address."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -5283,7 +5288,8 @@
       "evaluators": "Evaluators",
       "experiments": "A/B experiments",
       "online": "Online evaluation",
-      "models": "Models"
+      "models": "Models",
+      "costs": "Spend & alerts"
     },
     "notFound": {
       "title": "Page not found",
@@ -8400,6 +8406,119 @@
           "name": "Skill Lab target (codex)",
           "desc": "The default model a Skill is evaluated on through the codex CLI. OpenAI only."
         }
+      }
+    },
+    "costs": {
+      "title": "Spend & alerts",
+      "desc": "What this workspace's agents cost, and the thresholds the platform watches.",
+      "tab": {
+        "costs": "Spend",
+        "alerts": "Alerts"
+      },
+      "forbiddenBody": "Only administrators can view spend and manage alert rules.",
+      "range": {
+        "1h": "Last 1 hour",
+        "6h": "Last 6 hours",
+        "24h": "Last 24 hours",
+        "7d": "Last 7 days",
+        "30d": "Last 30 days"
+      },
+      "generatedAt": "Computed {{time}}",
+      "note": "All figures are estimates: span tokens × the platform price table. Direct /v1 API traffic and evaluation runs have no console chat session, so they show as unattributed. Spans of every runtime in this account and Region are counted, including agents not in this console.",
+      "unpriced": "These models used tokens the price table cannot value, so they add no dollars: {{models}}",
+      "kpiMtd": "Month to date",
+      "mtdSub": "Since the 1st, UTC ({{hours}} h)",
+      "mtdError": "Could not read month to date",
+      "kpiTotal": "Estimated cost",
+      "kpiTokens": "Tokens",
+      "kpiSessions": "Sessions",
+      "kpiSessionsSub": "Sessions with model calls",
+      "byAgent": "By agent",
+      "byAgentSub": "From the runtime service name on each span",
+      "byActor": "By person",
+      "byActorSub": "Console chat sessions, joined to the person who opened them",
+      "colAgent": "Agent",
+      "colActor": "Person",
+      "colSessions": "Sessions",
+      "colTokens": "Tokens",
+      "colCalls": "Model calls",
+      "colCost": "Est. cost",
+      "notInConsole": "not in this console",
+      "unattributed": "Unattributed (API or evaluation)",
+      "empty": "No traffic in this window."
+    },
+    "alerts": {
+      "schedulerOn": "The background check runs on this server every {{minutes}} min. A rule with a webhook posts once when it starts firing.",
+      "schedulerOff": "The background check is off on this server: only Re-check now updates the state, and no webhooks are sent. Set LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true on one server to turn it on.",
+      "kpiFiring": "Firing",
+      "kpiUnknown": "Unknown",
+      "unknownSub": "Could not be measured",
+      "kpiTotal": "Rules",
+      "listTitle": "Rules",
+      "listSub": "Each rule compares a value the platform already computes",
+      "empty": "No rules yet.",
+      "new": "New rule",
+      "newTitle": "New alert rule",
+      "editTitle": "Edit alert rule",
+      "created": "Rule created",
+      "saved": "Rule saved",
+      "deleted": "Rule deleted",
+      "enabled": "Rule enabled",
+      "disabled": "Rule disabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "recheck": "Re-check now",
+      "rechecking": "Checking…",
+      "rechecked": "Re-checked: {{firing}} firing, {{unknown}} unknown. A manual check never sends a webhook.",
+      "confirmDeleteTitle": "Delete alert rule",
+      "confirmDeleteBody": "Delete the rule \"{{name}}\"? This cannot be undone.",
+      "colState": "State",
+      "colRule": "Rule",
+      "colCondition": "Fires when",
+      "colValue": "Last value",
+      "colChecked": "Last checked",
+      "colWebhook": "Webhook",
+      "lastFired": "fired {{time}}",
+      "lastNotified": "sent {{time}}",
+      "kind": "What to watch",
+      "name": "Name",
+      "nameHint": "Optional. Defaults to the kind.",
+      "threshold": "Fire when {{direction}} ({{unit}})",
+      "thresholdHint": "The rule fires when the measured value crosses this.",
+      "window": "Window",
+      "windowHint": "How much recent traffic the value is measured over.",
+      "windowFixed24h": "Last 24 hours (fixed)",
+      "windowMonth": "Month to date",
+      "webhook": "Webhook (optional)",
+      "webhookHint": "A public https URL that takes JSON; Slack and Feishu incoming hooks work. It posts once when the rule starts firing, only from the background check. The URL is never shown again.",
+      "webhookMode": {
+        "keep": "Keep the current webhook",
+        "replace": "Replace the webhook",
+        "remove": "Remove the webhook"
+      },
+      "direction": {
+        "above": "above",
+        "below": "below"
+      },
+      "state": {
+        "ok": "OK",
+        "firing": "Firing",
+        "unknown": "Unknown",
+        "disabled": "Disabled"
+      },
+      "kindName": {
+        "error_rate": "Error rate",
+        "latency_p95_ms": "P95 latency",
+        "online_quality": "Online quality",
+        "spend_usd": "Spend in window",
+        "cost_mtd_usd": "Spend this month"
+      },
+      "kindHint": {
+        "error_rate": "Share of traces that failed, typed as a percentage.",
+        "latency_p95_ms": "95th-percentile trace latency, in milliseconds.",
+        "online_quality": "Mean online evaluation score over the last 24 hours, 0 to 1. Fires when it drops.",
+        "spend_usd": "Estimated spend over the rule's window, in US dollars.",
+        "cost_mtd_usd": "Estimated spend since the 1st of the month (UTC), in US dollars."
       }
     }
   },

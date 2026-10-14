@@ -2418,7 +2418,12 @@
     "identity.external_connection": "该凭证是在 Launchpad 之外创建的，请在 AgentCore Identity 中删除。",
     "identity.as_user_requires_console": "该工具以登录用户身份执行，需由已登录控制台的用户授权，请使用 Chat 控制台。",
     "registry.a2a_demo_jwt_unsupported": "该 Agent 仅接受 JWT Bearer 令牌，而 A2A 演示使用 SigV4 调用。请改用 IAM 入站的 Agent，或在 Chat 控制台中与其对话。",
-    "evaluators.list_failed": "无法列出该账号的评估器。"
+    "evaluators.list_failed": "无法列出该账号的评估器。",
+    "alert.webhook_not_https": "Webhook 地址必须以 https:// 开头。",
+    "alert.webhook_invalid": "Webhook 地址无效，或缺少主机名。",
+    "alert.webhook_credentials": "Webhook 地址中不能包含用户名或密码。",
+    "alert.webhook_unresolvable": "无法解析 Webhook 的主机名。",
+    "alert.webhook_non_public": "Webhook 的主机名解析到了私有或其他非公网地址。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -5283,7 +5288,8 @@
       "evaluators": "评估器",
       "experiments": "A/B实验",
       "online": "在线评估",
-      "models": "模型"
+      "models": "模型",
+      "costs": "成本与告警"
     },
     "notFound": {
       "title": "页面不存在",
@@ -8400,6 +8406,119 @@
           "name": "Skill Lab 目标模型（codex）",
           "desc": "通过 codex CLI 评估 Skill 时的默认模型。仅限 OpenAI。"
         }
+      }
+    },
+    "costs": {
+      "title": "成本与告警",
+      "desc": "这个工作区的 Agent 花了多少钱，以及平台在监控哪些阈值。",
+      "tab": {
+        "costs": "成本",
+        "alerts": "告警"
+      },
+      "forbiddenBody": "只有管理员可以查看成本和管理告警规则。",
+      "range": {
+        "1h": "最近 1 小时",
+        "6h": "最近 6 小时",
+        "24h": "最近 24 小时",
+        "7d": "最近 7 天",
+        "30d": "最近 30 天"
+      },
+      "generatedAt": "计算于 {{time}}",
+      "note": "所有数字都是估算：span 的 Token 数 × 平台价格表。直接调用 /v1 API 的流量和评估运行没有控制台对话会话，因此显示为未归集。统计范围是本账号、本区域内所有运行时的 span，包括不在本控制台中的 Agent。",
+      "unpriced": "以下模型消耗了 Token，但价格表中没有对应单价，因此不计入金额：{{models}}",
+      "kpiMtd": "本月至今",
+      "mtdSub": "自本月 1 日起（UTC，{{hours}} 小时）",
+      "mtdError": "无法读取本月至今的花费",
+      "kpiTotal": "预估花费",
+      "kpiTokens": "Token 数",
+      "kpiSessions": "会话数",
+      "kpiSessionsSub": "有模型调用的会话",
+      "byAgent": "按 Agent",
+      "byAgentSub": "依据每条 span 上的运行时服务名归集",
+      "byActor": "按人",
+      "byActorSub": "控制台对话会话，关联到发起会话的人",
+      "colAgent": "Agent",
+      "colActor": "成员",
+      "colSessions": "会话数",
+      "colTokens": "Token 数",
+      "colCalls": "模型调用次数",
+      "colCost": "预估花费",
+      "notInConsole": "不在本控制台中",
+      "unattributed": "未归集（API 或评估流量）",
+      "empty": "该时间窗内没有流量。"
+    },
+    "alerts": {
+      "schedulerOn": "本服务器每 {{minutes}} 分钟在后台检查一次。配置了 Webhook 的规则在开始触发时发送一次通知。",
+      "schedulerOff": "本服务器未开启后台检查：只有“立即重新检查”会更新状态，且不会发送任何 Webhook。在一台服务器上设置 LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true 即可开启。",
+      "kpiFiring": "触发中",
+      "kpiUnknown": "未知",
+      "unknownSub": "未能测得数值",
+      "kpiTotal": "规则数",
+      "listTitle": "规则",
+      "listSub": "每条规则比较一个平台已经能算出的数值",
+      "empty": "还没有规则。",
+      "new": "新建规则",
+      "newTitle": "新建告警规则",
+      "editTitle": "编辑告警规则",
+      "created": "规则已创建",
+      "saved": "规则已保存",
+      "deleted": "规则已删除",
+      "enabled": "规则已启用",
+      "disabled": "规则已停用",
+      "enable": "启用",
+      "disable": "停用",
+      "recheck": "立即重新检查",
+      "rechecking": "正在检查……",
+      "rechecked": "已重新检查：{{firing}} 条触发中，{{unknown}} 条未知。手动检查不会发送 Webhook。",
+      "confirmDeleteTitle": "删除告警规则",
+      "confirmDeleteBody": "确定删除规则“{{name}}”吗？此操作不可撤销。",
+      "colState": "状态",
+      "colRule": "规则",
+      "colCondition": "触发条件",
+      "colValue": "最近数值",
+      "colChecked": "最近检查时间",
+      "colWebhook": "Webhook",
+      "lastFired": "触发于 {{time}}",
+      "lastNotified": "通知于 {{time}}",
+      "kind": "监控对象",
+      "name": "名称",
+      "nameHint": "可选，默认使用监控对象的名称。",
+      "threshold": "{{direction}}此值时触发（{{unit}}）",
+      "thresholdHint": "测得的数值越过这个阈值时，规则触发。",
+      "window": "时间窗",
+      "windowHint": "以多长时间内的流量来计算该数值。",
+      "windowFixed24h": "最近 24 小时（固定）",
+      "windowMonth": "本月至今",
+      "webhook": "Webhook（可选）",
+      "webhookHint": "一个接收 JSON 的公网 https 地址，Slack 和飞书的 incoming hook 都可以。仅由后台检查在规则开始触发时发送一次。保存后不会再显示该地址。",
+      "webhookMode": {
+        "keep": "保留当前 Webhook",
+        "replace": "替换 Webhook",
+        "remove": "移除 Webhook"
+      },
+      "direction": {
+        "above": "高于",
+        "below": "低于"
+      },
+      "state": {
+        "ok": "正常",
+        "firing": "触发中",
+        "unknown": "未知",
+        "disabled": "已停用"
+      },
+      "kindName": {
+        "error_rate": "错误率",
+        "latency_p95_ms": "P95 延迟",
+        "online_quality": "在线质量",
+        "spend_usd": "时间窗内花费",
+        "cost_mtd_usd": "本月花费"
+      },
+      "kindHint": {
+        "error_rate": "失败链路占全部链路的比例，按百分比填写。",
+        "latency_p95_ms": "链路延迟的 95 分位，单位毫秒。",
+        "online_quality": "最近 24 小时的在线评估平均分，0 到 1。分数下跌时触发。",
+        "spend_usd": "规则时间窗内的预估花费，单位美元。",
+        "cost_mtd_usd": "本月 1 日（UTC）以来的预估花费，单位美元。"
       }
     }
   },
