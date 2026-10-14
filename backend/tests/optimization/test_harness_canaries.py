@@ -483,6 +483,7 @@ def test_rollback_republishes_the_control_version(monkeypatch):
     db = SessionLocal()
     row = db.get(RuntimeCanary, canary_id)
     row.artifacts = {**row.artifacts, "setup": _setup_artifact(canary_id)}
+    row.created_by, row.created_by_name = "u-can", "carla"
     db.commit()
     db.close()
     control = MagicMock()
@@ -512,6 +513,14 @@ def test_rollback_republishes_the_control_version(monkeypatch):
         agent = db.get(Agent, agent_id)
         assert agent.version == "4"
         assert agent.spec["system_prompt"] == "original prompt"
+        # the restored prompt is a publish too: snapshotted at the restored version,
+        # attributed to the canary's creator
+        from app.models.ledger import SpecSnapshot
+
+        (snap,) = db.query(SpecSnapshot).filter(SpecSnapshot.agent_id == agent_id).all()
+        assert snap.spec["system_prompt"] == "original prompt"
+        assert (snap.aws_version, snap.note) == ("4", "canary rolled back")
+        assert (snap.created_by, snap.created_by_name) == ("u-can", "carla")
     finally:
         db.close()
     assert _reload(canary_id).status == "rolled_back"

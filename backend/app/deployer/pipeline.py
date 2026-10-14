@@ -24,7 +24,8 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, Deployment, Job
-from app.services import memory_ownership, workspace_bootstrap
+from app.services import memory_ownership, snapshots, workspace_bootstrap
+from app.services.creators import Creator
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 STAGE_ORDER = ["generate", "package", "provision", "deploy", "register"]
@@ -121,6 +122,8 @@ def create_deployment(
     skip_register: bool = False,
     payload_extra: dict[str, Any] | None = None,
     commit: bool = True,
+    actor: Creator | None = None,
+    note: str | None = None,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
@@ -132,7 +135,12 @@ def create_deployment(
     that must pin data to the job — the system-preset release — cannot be left
     with a runnable job and no pin by a crash between two commits). ``commit=False``
     leaves the rows flushed in the caller's transaction so the caller can link the
-    freshly minted ids onto its own rows and commit everything at once."""
+    freshly minted ids onto its own rows and commit everything at once.
+
+    Every call also writes the agent's next spec snapshot (`services/snapshots`) in
+    the same transaction: ``actor`` is who published (default: the agent's creator)
+    and ``note`` a free label such as "rollback to #2". A resumed job never comes
+    back through here, so it never records a second one."""
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
@@ -150,12 +158,16 @@ def create_deployment(
             "deployment_id": deployment.id,
             "mode": mode,
             "skip_register": skip_register,
+            # who published and why (display; the snapshot carries the same)
+            "actor_name": actor.name if actor else None,
+            "note": note,
             **(payload_extra or {}),
         },
     )
     db.add(job)
     db.flush()
     deployment.job_id = job.id
+    snapshots.record_snapshot(db, agent, deployment_id=deployment.id, actor=actor, note=note)
     if commit:
         db.commit()
     else:
@@ -331,6 +343,9 @@ def _finish(
         deployment.status = "succeeded"
         agent.status = "active"
         agent.error = None
+        # the version this publish left live, and the spec as deployed (a stage may
+        # have rewritten it mid-job) — what a later rollback to it re-publishes
+        snapshots.stamp_deployed(db, deployment_id, agent)
     else:
         job.status = "failed"
         job.error = error

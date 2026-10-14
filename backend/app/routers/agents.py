@@ -46,6 +46,7 @@ from app.services import (
     memory_ownership,
     oauth_sessions,
     registry_console,
+    snapshots,
 )
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
@@ -545,6 +546,7 @@ def get_agent_identity(
 def redeploy_agent(
     agent_id: str,
     spec: AgentSpec,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -564,17 +566,23 @@ def redeploy_agent(
     agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
-    return republish_agent(db, agent, spec, ws, viewer=viewer)
+    return republish_agent(
+        db, agent, spec, ws, actor=Creator.of_request(request), viewer=viewer
+    )
 
 
 def republish_agent(
     db: Session, agent: Agent, spec: AgentSpec, ws: WorkspaceScope,
-    *, viewer: Viewer = Viewer.ALL,
+    *, actor: Creator | None = None, note: str | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """The redeploy guards + an update-mode deploy job for an edited spec — shared
-    by the redeploy route and accepting an AI recommendation (a new Harness version).
-    ``viewer`` only decides which *newly added* KB / memory pins the caller may use;
-    the caller has already checked the agent itself is visible."""
+    by the redeploy route, accepting an AI recommendation (a new Harness version) and
+    snapshot rollback, so a rollback is by construction an ordinary redeploy that
+    carries an older spec. ``actor`` / ``note`` land on the Job payload and on the
+    spec snapshot the publish writes. ``viewer`` only decides which *newly added* KB /
+    memory pins the caller may use; the caller has already checked the agent itself
+    is visible."""
     _refuse_redeploy(agent)
     if spec.name != agent.name or spec.method != agent.method:
         raise AppError(
@@ -601,7 +609,7 @@ def republish_agent(
                 status_code=400,
             )
 
-    return _start_redeploy(db, ws, agent, spec, viewer=viewer)
+    return _start_redeploy(db, ws, agent, spec, actor=actor, note=note, viewer=viewer)
 
 
 def _redeployable(
@@ -635,7 +643,8 @@ def _refuse_redeploy(agent: Agent) -> None:
 
 def _start_redeploy(
     db: Session, ws: WorkspaceScope, agent: Agent, spec: AgentSpec,
-    *, viewer: Viewer = Viewer.ALL,
+    *, actor: Creator | None = None, note: str | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     # only pins ADDED relative to the stored spec must be visible: an agent pinned
     # while the workspace was shared keeps re-publishing after a switch to isolated
@@ -654,9 +663,155 @@ def _start_redeploy(
     agent.error = None
     agent.updated_at = datetime.now(UTC)
     db.flush()
-    deployment, job = create_deployment(db, agent, mode="update")
+    deployment, job = create_deployment(db, agent, mode="update", actor=actor, note=note)
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
+
+
+# ── spec snapshots: one per publish, field-level diff, rollback ──────────────────
+
+
+def _snapshot_agent(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer
+) -> Agent:
+    """The agent whose snapshots are read — a deleted agent's history stays readable;
+    a foreign or hidden one is ``agent.not_found``."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    return agent
+
+
+@router.get("/agents/{agent_id}/snapshots")
+def list_agent_snapshots(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The agent's spec snapshots, newest first — without specs (fetch one for it)."""
+    agent = _snapshot_agent(db, ws, agent_id, viewer)
+    rows = snapshots.list_snapshots(db, agent.id)
+    statuses = snapshots.deployment_statuses(db, rows)
+    return {
+        "snapshots": [
+            snapshots.snapshot_out(snap, deployment_status=statuses.get(snap.deployment_id or ""))
+            for snap in rows
+        ]
+    }
+
+
+# Declared before `/snapshots/{seq}`, so "diff" is never parsed as a sequence number.
+@router.get("/agents/{agent_id}/snapshots/diff")
+def diff_agent_snapshots(
+    agent_id: str,
+    from_seq: int | None = None,
+    to_seq: int | None = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Field-level difference between two snapshots' specs. An omitted side is the
+    agent's **current** spec (``from`` / ``to`` read null); omitting both is 422."""
+    agent = _snapshot_agent(db, ws, agent_id, viewer)
+    if from_seq is None and to_seq is None:
+        raise AppError(
+            "snapshot.diff_side_required",
+            "name at least one snapshot (from_seq or to_seq); an omitted side is the "
+            "current spec",
+            status_code=422,
+        )
+    before = snapshots.get_snapshot(db, agent.id, from_seq) if from_seq is not None else None
+    after = snapshots.get_snapshot(db, agent.id, to_seq) if to_seq is not None else None
+    current = agent.spec or {}
+    statuses = snapshots.deployment_statuses(db, [s for s in (before, after) if s is not None])
+
+    def side(snap: Any) -> dict[str, Any] | None:
+        if snap is None:
+            return None
+        return snapshots.snapshot_out(
+            snap, deployment_status=statuses.get(snap.deployment_id or "")
+        )
+
+    return {
+        "from": side(before),
+        "to": side(after),
+        "changes": snapshots.diff_specs(
+            before.spec if before is not None else current,
+            after.spec if after is not None else current,
+        ),
+    }
+
+
+@router.get("/agents/{agent_id}/snapshots/{seq}")
+def get_agent_snapshot(
+    agent_id: str,
+    seq: int,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """One snapshot, with its full spec."""
+    agent = _snapshot_agent(db, ws, agent_id, viewer)
+    snap = snapshots.get_snapshot(db, agent.id, seq)
+    statuses = snapshots.deployment_statuses(db, [snap])
+    return snapshots.snapshot_out(
+        snap, deployment_status=statuses.get(snap.deployment_id or ""), with_spec=True
+    )
+
+
+@router.post("/agents/{agent_id}/snapshots/{seq}/rollback", status_code=202)
+def rollback_agent_snapshot(
+    agent_id: str,
+    seq: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Re-publish a stored spec as a NEW publish (never an AWS-side version revert).
+
+    Goes through `republish_agent`, so every redeploy guard applies unchanged (system
+    preset, discovered runtime, a deploy in flight, an assistant purge, name / method
+    change, a converted agent's baked prompt and model, added KB / memory pins, tool
+    auth). Refused first, before any AWS deploy call: a snapshot that never deployed,
+    a spec that no longer validates, and a knowledge base it would re-add that is gone.
+    """
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    system_agents.refuse_system_mutation(agent, "rollback")
+    _refuse_redeploy(agent)
+    snap = snapshots.get_snapshot(db, agent.id, seq)
+    if not snap.aws_version:
+        raise AppError(
+            "snapshot.never_deployed",
+            f"snapshot #{seq} never deployed successfully, so there is nothing known-good "
+            "to roll back to",
+            {"seq": seq},
+            status_code=409,
+        )
+    try:
+        spec = AgentSpec.model_validate(snap.spec or {})
+    except ValidationError as exc:
+        raise AppError(
+            "snapshot.spec_invalid",
+            f"snapshot #{seq}'s spec no longer validates against the current schema",
+            {"seq": seq, "errors": len(exc.errors())},
+            status_code=409,
+        ) from exc
+    stale = snapshots.stale_kb_ids(ws.context, snap.spec, agent.spec)
+    if stale:
+        raise AppError(
+            "snapshot.stale_reference",
+            f"snapshot #{seq} mounts knowledge base(s) that no longer exist",
+            {"seq": seq, "kb_ids": stale},
+            status_code=409,
+        )
+    return republish_agent(
+        db, agent, spec, ws,
+        actor=Creator.of_request(request), note=f"rollback to #{seq}", viewer=viewer,
+    )
 
 
 class InboundAuthSwitch(BaseModel):
@@ -676,6 +831,7 @@ class InboundAuthSwitch(BaseModel):
 def switch_inbound_auth(
     agent_id: str,
     body: InboundAuthSwitch,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -708,7 +864,10 @@ def switch_inbound_auth(
             )},
             status_code=422,
         ) from exc
-    return _start_redeploy(db, ws, agent, spec, viewer=viewer)
+    return _start_redeploy(
+        db, ws, agent, spec, actor=Creator.of_request(request),
+        note="inbound auth switched", viewer=viewer,
+    )
 
 
 @router.post("/agents/{agent_id}/convert", status_code=202)

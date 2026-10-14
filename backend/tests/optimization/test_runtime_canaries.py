@@ -878,6 +878,18 @@ def test_complete_records_candidate_as_production(monkeypatch):
     stored = _reload(row.id)
     assert stored.status == "completed"
     assert stored.artifacts["complete"]["ab_test_status"] == "STOPPED"
+    # the promoted spec joins the snapshot history like any other publish, stamped
+    # with the version it made live (there is no deployment row behind it)
+    from app.models.ledger import SpecSnapshot
+
+    db = SessionLocal()
+    try:
+        (snap,) = db.query(SpecSnapshot).filter(SpecSnapshot.agent_id == agent_id).all()
+    finally:
+        db.close()
+    assert snap.spec["system_prompt"] == "promoted prompt"
+    assert (snap.seq, snap.aws_version, snap.note) == (1, "2", "canary promoted")
+    assert snap.deployment_id is None
 
 
 def test_rollback_rolls_forward_current_spec(monkeypatch):

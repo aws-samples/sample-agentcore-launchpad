@@ -40,6 +40,7 @@ from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
+from app.routers.environments import router as environments_router
 from app.routers.execution import router as execution_router
 from app.routers.feedback import router as feedback_router
 from app.routers.governance import router as governance_router
@@ -61,6 +62,7 @@ from app.services import alert_scheduler, byoc_uploads, local_exec, model_settin
 from app.services.attachment_body import AttachmentBodyCap
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
+from app.services.snapshots import backfill_baselines as backfill_snapshot_baselines
 from app.skill_lab import task_assets
 from app.skill_lab.jobs import sweep_interrupted_jobs as sweep_skill_lab_jobs
 from app.skill_lab.routers import router as skill_lab_router
@@ -205,6 +207,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(codegen_router)  # studio local-debug: AI fix (diagnose + repair)
     app.include_router(governance_router)
     app.include_router(observability_router)
+    app.include_router(environments_router)  # cross-workspace compare + AWS drift
     app.include_router(evaluation_router)
     app.include_router(online_eval_router)
     app.include_router(eval_pipelines_router)  # V2 数据处理: sessions → datasets
@@ -219,6 +222,13 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(public_router)
     if resume_jobs:
         clear_stale_turn_claims()  # only a live request of THIS process can hold one
+        # snapshot #1 ("baseline") for live agents that predate spec snapshots, so
+        # today's spec is a rollback target; ledger-only, idempotent
+        baselined = backfill_snapshot_baselines()
+        if baselined:
+            logging.getLogger("launchpad").info(
+                "recorded a baseline spec snapshot for %d agent(s)", baselined
+            )
         resumed = resume_pending_jobs()
         if resumed:
             logging.getLogger("launchpad").info(

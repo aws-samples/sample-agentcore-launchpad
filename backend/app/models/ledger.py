@@ -345,6 +345,42 @@ class Deployment(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class SpecSnapshot(Base):
+    """The full agent spec of one publish (`app.services.snapshots`).
+
+    `deployer.pipeline.create_deployment` writes one per create / redeploy / rollback /
+    promotion; the canary paths that change `Agent.spec` without a deployment write
+    their own, and a startup backfill gives an agent that predates the table a
+    `baseline`. Rows are append-only except for the success stamp in `_finish`, which
+    fills `aws_version` and replaces `spec` with the spec as deployed (a deploy stage
+    may rewrite it mid-job). A rollback re-publishes a stored spec as a NEW row.
+
+    The column set is a superset of the console-v3 branch's table of the same name
+    (which lacks `created_by_name`, added by `_migrate_branch_creators`). There
+    `created_by` held a username; here it is `users.id` (`app.services.creators`).
+    """
+
+    __tablename__ = "spec_snapshots"
+    __table_args__ = (UniqueConstraint("agent_id", "seq", name="uq_spec_snapshots_agent_seq"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    seq: Mapped[int]  # 1, 2, … per agent
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # the AWS version the publish left live; NULL until the deploy succeeds (and for
+    # good when it failed)
+    aws_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    # NULL for the canary snapshots and the startup baseline
+    deployment_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    # Who published (`app.services.creators`): `users.id` and the username (display).
+    # Not a FK. Falls back to the agent's creator when the path has no actor.
+    created_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)  # "rollback to #2", …
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
@@ -694,7 +730,7 @@ class AlertRule(Base):
     **once** per firing episode, rather than on every pass.
 
     The column set is a superset of the console-v3 branch's table of the same name
-    (which lacks `created_by_name`, added by `_migrate_alert_rules_creator`). There
+    (which lacks `created_by_name`, added by `_migrate_branch_creators`). There
     `created_by` held a username; here it is `users.id` (`app.services.creators`).
     """
 

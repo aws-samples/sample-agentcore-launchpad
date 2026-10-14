@@ -71,6 +71,10 @@ ASSISTANT_PREPARATION = "assistant_preparation"
 # to a reason instead. Drift-guarded: tests/test_inflight.py parses main.py.
 STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "clear_stale_turn_claims": (ASSISTANT_TURN, ASSISTANT_PREPARATION),
+    "backfill_snapshot_baselines": (
+        "records a baseline spec snapshot for live agents that have none; ledger-only "
+        "and idempotent, no in-flight row"
+    ),
     "resume_pending_jobs": (JOB,),
     "resume_evaluation_assets": (EVAL_ASSET_OPERATION,),
     "resume_interrupted_runs": (EVAL_RUN,),

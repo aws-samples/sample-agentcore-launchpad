@@ -1823,7 +1823,10 @@ def accept_run_recommendation(
     # KB section the deployer appends — keep only the operator-owned part
     spec = current.model_copy(update={"system_prompt": strip_generated_prompt(current, prompt)})
     spec = AgentSpec(**spec.model_dump())
-    result = republish_agent(db, agent, spec, ws, viewer=viewer)
+    result = republish_agent(
+        db, agent, spec, ws, actor=Creator.of_request(request),
+        note="recommendation accepted", viewer=viewer,
+    )
     identity = getattr(request.state, "identity", None)
     recommendations.record_acceptance(
         db, row,
