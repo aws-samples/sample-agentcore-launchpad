@@ -513,7 +513,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`）；`{prompt, session_id?, as_user?}`，不带 id 即开启新会话。`as_user`（仅 JWT 入站智能体）：`true` 发送登录用户的 Cognito JWT，`false` 使用工作区 M2M 令牌，省略时有用户池登录则用用户 JWT，否则用 M2M；未经用户池登录却传 `true` 返回 `409 chat.as_user_unavailable`。`meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`；两种情况下 Memory actor 都是 `scoped_actor`。`auth_required` `{provider, tool, scopes[], url, agent_id}` 是工具发起的 as_user（3LO）授权请求：`url` 为一次性授权 URL（控制台仅在其为 `https:` 时显示链接），`sessionUri` 留在服务端，回答会在其前后继续流式输出。历史中该请求保存为不含 URL 的 `role: "auth"` 行（`text` 为凭证名，`name` 为工具），因此恢复后只能重试；轮询 `GET /api/identity/grants/{connection}/status` 可得知授权何时完成。`policy_denied`（Harness；字段见“流式调用”）保存为 `role: "policy"` 行（`text` 为原因，`name` 为工具），恢复后显示为 V2 Chat 的策略拦截卡片，此时链接指向治理首页而非某个网关 |
+| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`），另在一条已落账的回答收尾事件（tool / error / done，或没有 `done` 时的流结束）之前发出 `saved {message_id}`，供点赞/点踩关联；`/v1` 流不带此事件；`{prompt, session_id?, as_user?}`，不带 id 即开启新会话。`as_user`（仅 JWT 入站智能体）：`true` 发送登录用户的 Cognito JWT，`false` 使用工作区 M2M 令牌，省略时有用户池登录则用用户 JWT，否则用 M2M；未经用户池登录却传 `true` 返回 `409 chat.as_user_unavailable`。`meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`；两种情况下 Memory actor 都是 `scoped_actor`。`auth_required` `{provider, tool, scopes[], url, agent_id}` 是工具发起的 as_user（3LO）授权请求：`url` 为一次性授权 URL（控制台仅在其为 `https:` 时显示链接），`sessionUri` 留在服务端，回答会在其前后继续流式输出。历史中该请求保存为不含 URL 的 `role: "auth"` 行（`text` 为凭证名，`name` 为工具），因此恢复后只能重试；轮询 `GET /api/identity/grants/{connection}/status` 可得知授权何时完成。`policy_denied`（Harness；字段见“流式调用”）保存为 `role: "policy"` 行（`text` 为原因，`name` 为工具），恢复后显示为 V2 Chat 的策略拦截卡片，此时链接指向治理首页而非某个网关 |
 | `POST` | `/api/agents/{agent_id}/inbound-auth` | `agent.deploy`——`202 {agent, job_id, deployment_id}`。请求体 `{inbound_auth: {mode: iam\|jwt, jwt?} \| null}`（`null` 取消固定，改为继承工作区默认值）。以替换后的固定值重新发布已存规格：对同一 Runtime 执行 UpdateAgentRuntime，产生新版本。`422 agent.inbound_auth_unsupported`（harness／A2A 不支持 JWT）、`422 agent.inbound_auth_invalid`、`409 agent.deploy_in_progress` |
 | `GET` | `/api/identity/inbound-auth/default` | 成员——`{workspace_id, default: {mode: iam\|jwt, jwt?}, configured, cognito, cognito_issuer}`；`configured=false` 表示隐式 IAM；`cognito` 是面向工作区用户池的现成 JWT 配置，引导前为 null；`cognito_issuer` 是该用户池的 issuer（控制台、`/v1` 与评估所出示令牌的 issuer），无用户池时为 null |
 | `PUT` | `/api/identity/inbound-auth/default` | `identity.manage`——请求体 `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → 同 GET 形状。`source_connection` 仅用于展示，不进入授权器配置。持久化前先探测发现文档（`422 identity.discovery_unreachable`／`identity.discovery_invalid`）。已部署的智能体在重新部署前保持原授权器 |
@@ -528,7 +528,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | `POST` | `/api/identity/consent-portal` | **管理员**——`202 {gateway_id, portal}`。请求体 `{name, description?, connection, scopes[]（默认 [openid]）, audience?, execution_role_arn}`：为 as_user 网关目标创建门户（`connection` 为入站 IdP，与网关 JWT 授权器同一 issuer；执行角色由运维提供）。不可授予成员：`identity.manage` 不覆盖此接口。`409 identity.gateway_missing`／`identity.consent_portal_exists`，`422 identity.invalid_portal_name`／`identity.invalid_role_arn`／`identity.role_account_mismatch`／`identity.portal_scopes`；见 [identity.md §7.6](identity.md#76-consent-portal-as_user-gateway-targets) |
 | `DELETE` | `/api/identity/consent-portal` | **管理员**——`{deleted: true}`；`404 identity.consent_portal_not_found` |
 | `GET` | `/api/chat/{agent_id}/sessions` | 该 agent 可回放的会话：`{session_id, actor_id, turns, last_at, ended_at, preview}`——`ended_at` 在控制台显式结束 runtime 会话后写入，仍存活或只是空闲时为 `null` |
-| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序 |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序；每条带台账 `id` 和调用者自己的 `verdict`（`up`/`down`/`null`） |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **结束会话**——数据面 `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`。AWS 回 `ResourceNotFoundException`（会话早已结束或因空闲过期）时 `already_ended: true`，视为成功而非错误。台账行保留（历史仍可回放）并打上 `ended_at`；之后若在同一 id 下再发一轮，会开启新的 runtime 会话并清掉该标记。只有 runtime 支撑的 agent 才可结束（`zip_runtime`、`studio`、`container`、已发现的 runtime）；托管 Harness——无论自建还是导入——没有结束会话的操作，返回 409 `chat.session_stop_unsupported`，`detail.reason_code` 为 `harness`。其他 agent 或其他 workspace 的会话返回 404 `chat.session_not_found`。撑过 botocore 重试仍然出现的 `RetryableConflictException` 映射为 409 `aws.conflict` |
 
 结束是显式动作：控制台的「新会话」只在本地忘掉 id，留下的 runtime 会话会自行空闲过期。
@@ -594,6 +594,15 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 错误码:`agent.not_found`(404,未知 id 或其他 workspace 的 Agent)、`agent.no_resource`(409,该行没有可查询的
 AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Runtime 也非 Harness 的形态;`message` 即面板展示的
 人类可读原因)。AWS `ClientError` 映射为标准 4xx 信封。
+
+## 控制台对话反馈 API / Console Chat Feedback API
+
+V2 对话控制台中对 Agent 回答的点赞 / 点踩，存放在台账的 `chat_feedback` 表（按工作区隔离，每人每条消息一个评价）。两个路由都是成员级，并遵循工作区可见性：调用者看不到的 Agent 的消息返回 404，列表不包含被隐藏的 Agent。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/feedback` | `{message_id: int, verdict: "up"\|"down"\|null}` → `{message_id, verdict}`；`null` 撤销评价（原本没有评价时也成功）。未知 id、其他工作区的消息、非 Agent 消息或被隐藏的 Agent → 404 `feedback.message_not_found`；缺少 `verdict` → 422 |
+| `GET` | `/api/feedback` | `?range=1h\|6h\|24h\|7d`（默认 `24h`，按评价最后设置的时间）`&verdict=up\|down` `&agent_id=` `&limit=1..200`（默认 50）→ `{totals: {up, down}, items[{id, agent_id, agent_name, session_id, message_id, verdict, actor, source, question, answer, answered_at, created_at, updated_at}], down_session_ids[]}`。`question` / `answer` 是从消息读取的 500 字预览（问题取同一会话中最近的上一条用户消息）；`down_session_ids`（去重、最新在前、最多 50 个）可直接用于 `POST /api/eval/datasets/from-sessions`。时间为带时区偏移的 UTC |
 
 ## 控制台评估数据集 API / Console Evaluation Datasets API
 
