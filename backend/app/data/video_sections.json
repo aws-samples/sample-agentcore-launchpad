@@ -30,6 +30,7 @@
     {"id": "workspaces", "categoryId": "admin", "title": {"en": "Workspaces", "zh-CN": "工作区"}, "path": "/v2/workspaces"},
     {"id": "connections", "categoryId": "admin", "title": {"en": "Outbound credentials", "zh-CN": "出站凭证"}, "path": "/v2/connections"},
     {"id": "announcements", "categoryId": "admin", "title": {"en": "Announcements", "zh-CN": "公告管理"}, "path": "/v2/announcements"},
+    {"id": "models", "categoryId": "admin", "title": {"en": "Models", "zh-CN": "模型"}, "path": "/v2/models"},
     {"id": "videos", "categoryId": "learn", "title": {"en": "Video introductions", "zh-CN": "视频介绍"}, "path": "/v2/videos"},
     {"id": "video-management", "categoryId": "admin", "title": {"en": "Video management", "zh-CN": "视频管理"}, "path": "/v2/video-management"}
   ]

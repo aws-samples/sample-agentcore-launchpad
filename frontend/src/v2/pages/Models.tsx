@@ -219,7 +219,7 @@ function ModelsManager() {
             ) : (
               <Tag tone="gray">{t("v2.models.isDefault")}</Tag>
             )}
-            {r.constraint && <Tag tone="outline">{t("v2.models.familyOnly", { families: r.constraint.join(" / ") })}</Tag>}
+            {r.constraint && <Tag tone="outline">{t("v2.models.familyOnly", { families: r.constraint.map(familyLabel).join(" / ") })}</Tag>}
             {r.needs_tools && <Tag tone="outline">{t("v2.models.needsTools")}</Tag>}
           </span>
           {r.overridden && (
@@ -279,6 +279,10 @@ function ModelsManager() {
  * probe in the hub's default workspace, and a console override (applied at once to
  * every workspace and member of this deployment, persisted in its ledger).
  */
+// display names for the provider families a role accepts
+const FAMILY_LABEL: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
+const familyLabel = (f: string) => FAMILY_LABEL[f] ?? f;
+
 export function V2Models() {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();

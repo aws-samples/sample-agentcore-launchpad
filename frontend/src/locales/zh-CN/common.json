@@ -8341,10 +8341,10 @@
       "resetHint": "移除控制台覆盖，角色恢复为默认值。",
       "saved": "{{role}}：已保存",
       "resetDone": "{{role}}：已恢复默认",
-      "confirmSaveTitle": "修改{{role}}？",
-      "confirmSaveBody": "{{model}} 将成为{{role}}。",
-      "confirmResetTitle": "将{{role}}恢复为默认值？",
-      "confirmResetBody": "{{role}}将恢复为 {{model}}。",
+      "confirmSaveTitle": "修改{{role}}的模型？",
+      "confirmSaveBody": "{{model}} 将成为{{role}}的模型。",
+      "confirmResetTitle": "将{{role}}的模型恢复为默认值？",
+      "confirmResetBody": "{{role}}的模型将恢复为 {{model}}。",
       "confirmGlobal": "此修改立即作用于本部署的所有工作区和成员。",
       "role": {
         "agent_default_model_id": {
