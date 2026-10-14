@@ -20,10 +20,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
-from app.models.ledger import Agent, ChatFeedback, ChatMessage
+from app.models.ledger import Agent, ChatFeedback, ChatMessage, _now
 from app.services import agent_access
 from app.services.visibility import Viewer
 
@@ -89,9 +90,19 @@ def rate(
             session_id=answer.session_id, message_id=message_id, verdict=verdict,
             actor=actor, source=SOURCE_CONSOLE,
         ))
+        try:
+            db.commit()
+        except IntegrityError:
+            # a concurrent first vote by the same actor (two tabs) won the insert:
+            # the last write still wins, as an update of that row
+            db.rollback()
+            db.query(ChatFeedback).filter(
+                ChatFeedback.message_id == message_id, ChatFeedback.actor == actor
+            ).update({ChatFeedback.verdict: verdict, ChatFeedback.updated_at: _now()})
+            db.commit()
     else:
         row.verdict = verdict
-    db.commit()
+        db.commit()
     return {"message_id": message_id, "verdict": verdict}
 
 

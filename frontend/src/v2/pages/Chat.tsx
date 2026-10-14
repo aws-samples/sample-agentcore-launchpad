@@ -95,6 +95,9 @@ export function V2Chat() {
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const sendInFlight = useRef(false);
+  // answers whose thumbs request is still out: a click is ignored until it answers, so two
+  // requests never race (out-of-order replies would leave the wrong verdict stored)
+  const ratingInFlight = useRef(new Set<number>());
   const historyRequest = useRef(0);
   const restoredRef = useRef(false);
   const [sessions, setSessions] = useState<ChatSessionInfo[]>([]);
@@ -334,7 +337,8 @@ export function V2Chat() {
   // on the ledger id, so a reply landing after a session switch touches nothing.
   const rate = async (messageId: number, verdict: FeedbackVerdict | null) => {
     const target = messages.find((m) => m.kind === "agent" && m.id === messageId);
-    if (!target) return;
+    if (!target || ratingInFlight.current.has(messageId)) return;
+    ratingInFlight.current.add(messageId);
     const previous = target.verdict ?? null;
     setMessages((m) => setVerdict(m, messageId, verdict));
     try {
@@ -342,6 +346,8 @@ export function V2Chat() {
     } catch (err) {
       setMessages((m) => setVerdict(m, messageId, previous));
       toast("error", errorMessage(err));
+    } finally {
+      ratingInFlight.current.delete(messageId);
     }
   };
 

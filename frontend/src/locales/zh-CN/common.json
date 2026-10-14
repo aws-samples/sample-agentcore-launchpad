@@ -2248,6 +2248,7 @@
     "videos.conflict": "视频已被其他操作修改，请重新加载后再保存或发布。",
     "chat.session_stop_unsupported": "无法从控制台结束该 Agent 的会话——Harness 没有结束会话的操作",
     "chat.session_not_found": "未找到该会话",
+    "feedback.message_not_found": "无法评价这条回答：它已被删除，或你无权查看其 Agent。",
     "runtime.discovery_failed": "AgentCore Runtime 扫描失败",
     "job.not_found": "未找到该任务",
     "validation.invalid_request": "请求校验失败",

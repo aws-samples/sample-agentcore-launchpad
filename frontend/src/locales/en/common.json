@@ -2248,6 +2248,7 @@
     "videos.conflict": "This video changed. Reload it before saving or publishing.",
     "chat.session_stop_unsupported": "This agent's sessions cannot be ended from the console — a Harness has no session-stop operation",
     "chat.session_not_found": "Chat session not found",
+    "feedback.message_not_found": "This answer can't be rated: it was removed, or its agent isn't visible to you.",
     "runtime.discovery_failed": "AgentCore Runtime discovery failed",
     "job.not_found": "Job not found",
     "validation.invalid_request": "Request validation failed",

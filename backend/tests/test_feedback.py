@@ -172,6 +172,37 @@ def test_revoting_updates_and_null_withdraws(client):
     assert rate(client, message_id, None).status_code == 200  # withdrawing nothing is fine
 
 
+def test_a_concurrent_first_vote_updates_instead_of_failing(client, monkeypatch):
+    """Two tabs: both see no row, the other insert commits first — the unique
+    constraint must turn this one into an update, not a 500."""
+    agent_id = make_agent()
+    _, message_id = turn(client, agent_id, "q")
+    db = SessionLocal()
+    try:
+        db.add(ChatFeedback(
+            workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id, session_id="s" * 40,
+            message_id=message_id, verdict="up", actor="river",
+        ))
+        db.commit()
+    finally:
+        db.close()
+    db = SessionLocal()
+    try:
+        # `rate`'s one `.first()` is its pre-insert lookup: make it miss the row
+        monkeypatch.setattr(sa.orm.Query, "first", lambda _q: None)
+        out = feedback_service.rate(
+            db, workspace_id=DEFAULT_WORKSPACE_ID, message_id=message_id,
+            verdict="down", actor="river",
+        )
+        monkeypatch.undo()
+        assert out == {"message_id": message_id, "verdict": "down"}
+        rows = db.query(ChatFeedback).filter(ChatFeedback.message_id == message_id).all()
+        assert [(r.verdict, r.actor) for r in rows] == [("down", "river")]
+    finally:
+        monkeypatch.undo()
+        db.close()
+
+
 def test_the_question_is_the_closest_preceding_user_turn(client):
     agent_id = make_agent()
     sid, _ = turn(client, agent_id, "first")
