@@ -1196,6 +1196,43 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
 会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
 从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
+### 配置快照与回滚
+
+`Agent.spec` 每次发布都会被覆盖，所以仅靠账本说不清一个 Agent 两次修改之前是什么样子。
+`services/snapshots.py` 在 `spec_snapshots`（按 Workspace 隔离、每个 Agent 有自己的 `seq`）中为每次发布
+保留一行：
+
+- **只有一个写入点。** `deployer.pipeline.create_deployment` 在与 Deployment、Job 行相同的事务里记录快照
+  （包括自行提交的调用方），因此没有哪条发布路径会漏掉它：创建、重新部署、采纳推荐、切换入站鉴权、转换、
+  实验推广、架构助手批准与预置发布。恢复执行的任务不会再经过这里。两条不经部署就修改配置的金丝雀路径
+  （Runtime 推广与 Harness 回滚）会各自记录一行，并写入它们上线的版本。
+- **记录实际部署的配置。** 发布成功时，`_finish` 写入 AWS 版本，并把保存的配置替换为 Agent 此刻的配置。
+  某个阶段可能在任务中途改写配置（架构助手的 harness 阶段会把 `spec.skills` 固定到不可变副本），回滚必须
+  重新部署真正运行过的内容。发布失败的快照 `aws_version` 为空，不能作为回滚目标。
+- **基线。** 启动时，每个有 AWS 资源、活跃、不是导入运行时、且没有快照的 Agent 会获得 #1（`note: "baseline"`），
+  内容为它当前的配置。这样第一次修改之后，当前配置马上就能作为回滚目标。
+- **差异**按点分路径比较嵌套字段，按成员比较列表，代码、代码包、Studio 流程与系统提示词整体比较；每处变化都
+  归入一个分组（提示词、模型、工具、技能、知识库、Memory、护栏）。超过 2 KB 的内容只返回长度。
+- **回滚通过普通的重新部署路径（`republish_agent`）重新发布保存的配置**，因此需要同样的 `agents.deploy`
+  权限并经过同样的校验。它会生成一个**新的** AWS 版本和一份新快照；控制台从不原地回退 AWS 版本。在调用任何
+  部署接口之前，它还会拒绝：从未部署成功的快照、已无法通过校验的配置，以及要重新挂载的已删除知识库（绑定
+  检查对管理员和共享 Workspace 不生效，所以拦不住这一点）。在共用的 AWS 上（prod 与 prod2），一次回滚会
+  改变所有控制台里的这个 Agent。
+
+### 环境对比与漂移
+
+V2「环境对比」页面（`/v2/environments`）在没有环境分级的情况下回答两个问题。
+
+- **对比**（`services/environments.py`，只读账本）把同名 Agent 在调用方能看到的所有 Workspace 中排成一列：
+  管理员看到全部 Workspace，成员看到被授权的；每个 Workspace 的可见性模式决定成员能否看到那里的 Agent。当前
+  Workspace 是基准，其余各行为 `same`、`differs`（并列出有差异的分组）或 `absent`。比较的是去掉部署时标记后
+  `{method, spec}` 规范化 JSON 的 sha256。按名称匹配，且知识库、Memory 等资源 id 在不同账号间本来就不同，
+  所以 `differs` 是提示你去看一看，而不是错误。
+- **漂移**把当前 Workspace 中可见的活跃 Agent 与 AWS 对照：每个调用一次 `GetAgentRuntime` / `GetHarness`，
+  并发 8 个、最多 100 个，只在请求时执行。账本版本不是 AWS 正在提供的版本时（带外更新）报告
+  `version_changed`，另有 `unhealthy`（不是 READY）与 `resource_missing`；正在变更、无法读取或处于金丝雀分流的
+  Agent 记为 `unknown`。只要有未知项，整体结果就不会显示为正常。它只比较版本与状态，不比较配置内容。
+
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +

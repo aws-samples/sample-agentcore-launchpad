@@ -204,6 +204,50 @@ running, failed first deploy, deleted, or a shape that is neither Runtime nor
 Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
 the standard 4xx envelope.
 
+## Console Agents API — spec snapshots and rollback
+
+Every publish leaves a numbered snapshot of the agent's spec in the ledger
+(`spec_snapshots`, workspace-scoped). That covers create, redeploy, rollback,
+recommendation accept, the inbound-auth switch, convert, experiment promote,
+architect approve and preset releases. The Runtime canary promote and the Harness
+canary rollback record one too. An agent that predates the table gets snapshot #1
+(`note: "baseline"`) at startup. On success a snapshot is stamped with the AWS version
+it left live, and its spec is replaced by the spec **as deployed**, because a stage may
+rewrite it mid-job. A failed publish keeps `aws_version: null`. Every route follows
+workspace visibility: another workspace's agent, or one the caller cannot see, is
+`404 agent.not_found`.
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/agents/{id}/snapshots` | member | `{snapshots[{seq, agent_id, aws_version, deployed, state, deployment_id, note, created_by, created_by_name, created_at}]}`, newest first and without `spec`. `state` is `deployed` \| `deploying` \| `failed` \| `not_deployed` |
+| `GET` | `/api/agents/{id}/snapshots/diff` | member | `?from_seq=&to_seq=`. An omitted side is the agent's **current** spec; both omitted → `422 snapshot.diff_side_required`. Result: `{from, to, changes[{path, group, kind, before, after, added?, removed?, elided?}]}`, where `from`/`to` are a snapshot or `null` (current). `group` is `prompt` \| `model` \| `tools` \| `skills` \| `knowledge_bases` \| `memory` \| `guardrail` \| `other`, and `kind` is `added` \| `removed` \| `changed`. Nested fields are compared by dotted path, lists by membership (`added`/`removed`), and `code`, `code_bundle`, `studio_flow` and `system_prompt` whole. A body over 2 KB is returned as `{length}` with `elided: true` |
+| `GET` | `/api/agents/{id}/snapshots/{seq}` | member | One snapshot, including `spec`. `404 snapshot.not_found` |
+| `POST` | `/api/agents/{id}/snapshots/{seq}/rollback` | `perm:agents.deploy` | `202 {agent, job_id, deployment_id}`, the redeploy response |
+
+**Rollback is an ordinary redeploy of the stored spec.** It is an update-mode deploy job,
+which mints a **new** AWS version and a new snapshot with `note: "rollback to #k"`; an AWS
+version is never reverted in place. Every redeploy guard applies (`agent.system_managed`,
+`agent.redeploy_external`, `agent.deploy_in_progress`, `agent.redeploy_immutable`,
+`agent.converted_locked`, the added KB or memory pins, tool auth). Before any deploy call
+it also refuses:
+
+- `409 snapshot.never_deployed`: the snapshot's publish never succeeded;
+- `409 snapshot.spec_invalid` (`detail.errors`): the stored spec no longer validates;
+- `409 snapshot.stale_reference` (`detail.kb_ids`): a knowledge base it would re-add no
+  longer exists.
+
+On prod and prod2, which share AWS, a rollback changes the agent for both consoles.
+
+## Console Environments API — compare and drift
+
+Two reads behind the V2 Environments page. Both are **member** routes, filtered to what the
+caller can see.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/environments/compare?agent=<name>` | Ledger only, no AWS call. One row per workspace the caller can see (admins: all; members: their granted ones), compared against the **current** workspace. Result: `{agent, baseline_workspace, environments[{workspace{id, name, account_id, region, status}, baseline, present, state, changed_groups[], agent}], summary{workspaces, present, same, differs, absent, distinct_spec_digests, aligned}}`. `state` is `baseline` \| `same` \| `differs` \| `absent` \| `no_baseline` (present here, absent from the current workspace). `agent` is `null` or `{id, name, status, method, version, spec_digest, image_digest, last_deploy, updated_at}`. Rows match by agent **name**. The digest is a sha256 of the canonical JSON of `{method, spec}` without deploy-time stamps (`byoc.provenance`). `changed_groups` uses the snapshot diff groups. In an isolated workspace, an agent hidden from a member reads `absent` |
+| `GET` | `/api/environments/drift[?agent=<name>]` | The current workspace only: the active agents with an AWS resource that the caller can see, at most 100 (`truncated`). One `GetAgentRuntime` / `GetHarness` per agent, 8 at a time, on request only. Result: `{workspace_id, state, checked, counts{in_sync, drift, unknown}, truncated, limit, elapsed_ms, agents[{agent_id, name, method, kind, state, findings[{code, expected, observed}], reason, ledger_version, aws_version, aws_status}]}`. `findings[].code` is `version_changed` (the ledger version differs from AWS), `unhealthy` (not `READY`) or `resource_missing`. An `unknown` row's `reason` is `unreadable` \| `no_status_reported` \| `transitioning` \| `version_not_comparable` \| `canary_active`. The overall `state` is `drift` over `unknown` over `in_sync`. **Versions and status only**: spec contents are not read back |
+
 ## Console Identity API — Connections and bound Gateway targets
 
 The console labels Connections **Outbound credentials** (出站凭证) and the caller's grants **My authorizations** (我的授权); paths, fields and error codes keep `connection`.

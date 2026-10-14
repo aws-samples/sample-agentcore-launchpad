@@ -663,6 +663,42 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Runtime 也非 Harness 的形态;`message` 即面板展示的
 人类可读原因)。AWS `ClientError` 映射为标准 4xx 信封。
 
+## 控制台 Agent API——配置快照与回滚 / Console Agents API: spec snapshots and rollback
+
+每次发布都会在账本中留下 Agent 配置的一份编号快照（`spec_snapshots`，按 Workspace 隔离），包括创建、
+重新部署、回滚、采纳推荐、切换入站鉴权、转换、实验推广、架构助手批准与预置发布。Runtime 金丝雀推广和
+Harness 金丝雀回滚也会各记一份。早于该表存在的 Agent 会在启动时获得 #1 快照（`note: "baseline"`）。发布
+成功时，快照会写入它上线的 AWS 版本，并把配置替换为**实际部署的配置**，因为某个阶段可能在任务中途改写配置。
+发布失败的快照保持 `aws_version: null`。所有路由都遵循 Workspace 可见性：其他 Workspace 的 Agent，或调用方
+看不到的 Agent，返回 `404 agent.not_found`。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/agents/{id}/snapshots` | member | `{snapshots[{seq, agent_id, aws_version, deployed, state, deployment_id, note, created_by, created_by_name, created_at}]}`，最新在前，不含 `spec`。`state` 为 `deployed` \| `deploying` \| `failed` \| `not_deployed` |
+| `GET` | `/api/agents/{id}/snapshots/diff` | member | `?from_seq=&to_seq=`。省略的一侧表示 Agent 的**当前**配置；两侧都省略 → `422 snapshot.diff_side_required`。结果：`{from, to, changes[{path, group, kind, before, after, added?, removed?, elided?}]}`，`from`/`to` 为快照或 `null`（当前配置）。`group` 为 `prompt` \| `model` \| `tools` \| `skills` \| `knowledge_bases` \| `memory` \| `guardrail` \| `other`，`kind` 为 `added` \| `removed` \| `changed`。嵌套字段按点分路径比较，列表按成员比较（`added`/`removed`），`code`、`code_bundle`、`studio_flow` 与 `system_prompt` 整体比较。超过 2 KB 的内容返回为 `{length}` 并带 `elided: true` |
+| `GET` | `/api/agents/{id}/snapshots/{seq}` | member | 单个快照，含 `spec`。`404 snapshot.not_found` |
+| `POST` | `/api/agents/{id}/snapshots/{seq}/rollback` | `perm:agents.deploy` | `202 {agent, job_id, deployment_id}`，与重新部署的响应相同 |
+
+**回滚就是用保存的配置做一次普通的重新部署。** 它是一个 update 模式的部署任务，会生成一个**新的** AWS 版本和
+一份带 `note: "rollback to #k"` 的新快照；AWS 版本永远不会被原地回退。重新部署的所有校验都适用
+（`agent.system_managed`、`agent.redeploy_external`、`agent.deploy_in_progress`、`agent.redeploy_immutable`、
+`agent.converted_locked`、新增的知识库或 Memory 绑定、工具鉴权）。在调用任何部署接口之前，它还会拒绝：
+
+- `409 snapshot.never_deployed`：该快照对应的发布从未成功；
+- `409 snapshot.spec_invalid`（`detail.errors`）：保存的配置已无法通过校验；
+- `409 snapshot.stale_reference`（`detail.kb_ids`）：它要重新挂载的知识库已不存在。
+
+prod 与 prod2 共用 AWS，在任一控制台回滚都会同时改变两边的 Agent。
+
+## 控制台环境 API——对比与漂移 / Console Environments API: compare and drift
+
+V2「环境对比」页面背后的两个只读接口。两者都是 **member** 路由，只返回调用方能看到的内容。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/environments/compare?agent=<name>` | 只读账本，不调用 AWS。调用方能看到的每个 Workspace 一行（管理员：全部；成员：被授权的），以**当前** Workspace 为基准对比。结果：`{agent, baseline_workspace, environments[{workspace{id, name, account_id, region, status}, baseline, present, state, changed_groups[], agent}], summary{workspaces, present, same, differs, absent, distinct_spec_digests, aligned}}`。`state` 为 `baseline` \| `same` \| `differs` \| `absent` \| `no_baseline`（这里有、当前 Workspace 没有）。`agent` 为 `null` 或 `{id, name, status, method, version, spec_digest, image_digest, last_deploy, updated_at}`。各行按 Agent **名称**匹配。摘要是 `{method, spec}` 规范化 JSON 的 sha256，不含部署时写入的标记（`byoc.provenance`）。`changed_groups` 使用快照差异的分组。隔离模式 Workspace 中成员看不到的 Agent 显示为 `absent` |
+| `GET` | `/api/environments/drift[?agent=<name>]` | 只看当前 Workspace：调用方能看到的、有 AWS 资源的活跃 Agent，最多 100 个（`truncated`）。每个 Agent 调用一次 `GetAgentRuntime` / `GetHarness`，并发 8 个，仅在请求时执行。结果：`{workspace_id, state, checked, counts{in_sync, drift, unknown}, truncated, limit, elapsed_ms, agents[{agent_id, name, method, kind, state, findings[{code, expected, observed}], reason, ledger_version, aws_version, aws_status}]}`。`findings[].code` 为 `version_changed`（账本版本与 AWS 不同）、`unhealthy`（不是 `READY`）或 `resource_missing`。`unknown` 行的 `reason` 为 `unreadable` \| `no_status_reported` \| `transitioning` \| `version_not_comparable` \| `canary_active`。整体 `state` 的优先级为 `drift` 高于 `unknown` 高于 `in_sync`。**只比较版本与状态**，不回读配置内容 |
+
 ## 控制台对话反馈 API / Console Chat Feedback API
 
 V2 对话控制台中对 Agent 回答的点赞 / 点踩，存放在台账的 `chat_feedback` 表（按工作区隔离，每人每条消息一个评价）。两个路由都是成员级，并遵循工作区可见性：调用者看不到的 Agent 的消息返回 404，列表不包含被隐藏的 Agent。

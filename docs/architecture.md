@@ -2124,6 +2124,58 @@ so canary leftovers are noticed. It is strictly read-only: it never re-points
 `DEFAULT` and never creates, updates or deletes an endpoint; the canary owns those
 operations.
 
+### Spec snapshots and rollback
+
+`Agent.spec` is overwritten on every publish, so on its own the ledger cannot say what an
+agent looked like two edits ago. `services/snapshots.py` keeps one row per publish in
+`spec_snapshots`, a workspace-scoped table with a per-agent `seq`:
+
+- **One write site.** `deployer.pipeline.create_deployment` records the snapshot in the
+  same transaction as the Deployment and Job rows, including callers that commit
+  themselves. So no publish path can forget it: create, redeploy, recommendation accept,
+  the inbound-auth switch, convert, experiment promote, architect approve and preset
+  releases. A resumed job never passes through there again. The two canary paths that
+  change the spec without a deployment, the Runtime promote and the Harness rollback,
+  record their own row, stamped with the version they leave live.
+- **The spec as deployed.** On success, `_finish` stamps the AWS version and replaces the
+  stored spec with the agent's spec at that moment. A stage may rewrite it mid-job (the
+  architect's harness stage pins `spec.skills` to immutable copies), and a rollback must
+  re-deploy what ran. A failed publish keeps `aws_version` null and cannot be a rollback
+  target.
+- **Baselines.** At startup, every active, non-discovered agent with an AWS resource and
+  no snapshot gets #1, `note: "baseline"`, holding its current spec. That makes today's
+  configuration a rollback target right after the first edit.
+- **The diff** compares nested fields by dotted path, lists by membership, and code,
+  bundles, Studio flows and the system prompt whole. It groups each change (prompt, model,
+  tools, skills, knowledge bases, memory, guardrail). Bodies over 2 KB come back as their
+  length.
+- **Rollback re-publishes a stored spec through the ordinary redeploy path**
+  (`republish_agent`), so it needs the same `agents.deploy` permission and passes the same
+  guards. It mints a **new** AWS version and a new snapshot; the console never reverts an
+  AWS version in place. It also refuses, before any deploy call, a snapshot that never
+  deployed, a spec that no longer validates, and a knowledge base it would re-add that is
+  gone. The pin check skips admins and shared workspaces, so it would not catch that. On
+  shared AWS (prod and prod2) a rollback changes the agent for every console.
+
+### Environment compare and drift
+
+The V2 Environments page (`/v2/environments`) answers two questions without a tier model.
+
+- **Compare** (`services/environments.py`, a ledger read) lines up the agents with one
+  name across every workspace the caller can see: admins see every workspace, members
+  their granted ones. Each workspace's visibility mode decides whether a member sees the
+  agent there. The current workspace is the baseline. Each row is `same`, `differs`
+  (naming the differing diff groups) or `absent`. It compares a sha256 of the canonical
+  `{method, spec}` that leaves out deploy-time stamps. Matching is by name, and resource
+  ids such as a KB or a memory differ naturally across accounts, so `differs` is a prompt
+  to look, not an error.
+- **Drift** checks the current workspace's visible active agents against AWS: one
+  `GetAgentRuntime` / `GetHarness` each, 8 at a time, at most 100, only on request. It
+  reports `version_changed` when the ledger version is not the one AWS serves (an
+  out-of-band update), `unhealthy` (not READY) and `resource_missing`, and `unknown` for a
+  transitioning, unreadable or canary-split agent. The overall result never reads green
+  while anything is unknown. It compares versions and status, not spec contents.
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API
