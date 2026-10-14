@@ -1201,6 +1201,8 @@ def test_dashboard_endpoint_shape(client, mocked_aws):
     assert tiles["latency"] == {"p50_ms": 3100.0, "p95_ms": 11800.0}
     assert tiles["tokens"]["input"] == 386_000 and tiles["tokens"]["output"] == 26_000
     assert tiles["tokens"]["est_cost_usd"] == pytest.approx(1.548)
+    # bucket pins the routing: the totals stub has the same numbers but no bucket
+    assert body["series"][0]["bucket"] == "2026-07-10 00:00:00.000"
     assert body["series"][0]["traces"] == 5
     assert body["tokens_by_model"][0]["model"] == "global.anthropic.claude-sonnet-4-6"
     assert body["top_tools"][0]["success_rate"] == pytest.approx(88.9)
