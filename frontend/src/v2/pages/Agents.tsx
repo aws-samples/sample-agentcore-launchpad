@@ -700,7 +700,9 @@ function AgentDetail({ id }: { id: string }) {
           agentId={agent.id}
           agentName={agent.name}
           currentSpec={spec}
-          refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}`}
+          // a canary promote / rollback records a snapshot without a deployment, but
+          // always moves the version
+          refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}:${agent.version ?? ""}`}
           canRollback={perms.canEdit(agent) && !agent.system}
           onRolledBack={() => setNonce((n) => n + 1)}
         />

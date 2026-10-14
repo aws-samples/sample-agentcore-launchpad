@@ -526,6 +526,49 @@ def test_rollback_republishes_the_control_version(monkeypatch):
     assert _reload(canary_id).status == "rolled_back"
 
 
+def test_rollback_stores_the_prompt_without_the_platform_kb_section(monkeypatch):
+    """The control version's live prompt carries the KB section the deployer appends;
+    the ledger (and the snapshot a later rollback re-publishes) keeps only the
+    operator-owned prompt, or the next publish appends the section twice."""
+    from app.deployer.harness import _kb_prompt
+    from app.models.ledger import SpecSnapshot
+    from app.schemas.agent import AgentSpec
+
+    kb = {"kb_id": "KB12345", "name": "policies", "description": "HR policies"}
+    spec = {"name": "subject-h", "method": "harness", "system_prompt": "accepted",
+            "knowledge_bases": [kb]}
+    agent_id = _agent()
+    canary_id = _canary(agent_id)
+    db = SessionLocal()
+    db.get(Agent, agent_id).spec = spec
+    row = db.get(RuntimeCanary, canary_id)
+    row.artifacts = {**row.artifacts, "setup": _setup_artifact(canary_id)}
+    db.commit()
+    db.close()
+    deployed = "original prompt" + _kb_prompt(AgentSpec(**spec))
+    control = MagicMock()
+    control.get_harness.side_effect = lambda **kw: {"harness": {
+        **_harness_detail("1", deployed), "memory": None,
+    }} if kw.get("harnessVersion") == "1" else {"harness": _harness_detail("4")}
+    control.update_harness.return_value = {"harness": _harness_detail("4")}
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: control)
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: MagicMock())
+    monkeypatch.setattr(exp_svc, "_stop_ab_test",
+                        lambda data, ab, progress, label="": {"executionStatus": "STOPPED"})
+
+    canary_svc.act_rollback(canary_id, lambda _m: None)
+
+    # AWS gets the control version's prompt verbatim; the ledger the operator's part
+    assert control.update_harness.call_args.kwargs["systemPrompt"] == [{"text": deployed}]
+    db = SessionLocal()
+    try:
+        assert db.get(Agent, agent_id).spec["system_prompt"] == "original prompt"
+        (snap,) = db.query(SpecSnapshot).filter(SpecSnapshot.agent_id == agent_id).all()
+        assert snap.spec["system_prompt"] == "original prompt"
+    finally:
+        db.close()
+
+
 def test_cleanup_deletes_both_harness_endpoints_and_trace_delivery(monkeypatch):
     agent_id = _agent()
     canary_id = _canary(agent_id)

@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -91,8 +92,11 @@ def spec_digest(method: str, spec: dict[str, Any] | None) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _iso(value: Any) -> str | None:
-    return value.isoformat() if value is not None else None
+def _iso(value: datetime | None) -> str | None:
+    """SQLite drops the zone; every stored time is UTC, so say so on the wire."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=value.tzinfo or UTC).isoformat()
 
 
 def _last_deploy(db: Session, agent: Agent) -> dict[str, Any] | None:

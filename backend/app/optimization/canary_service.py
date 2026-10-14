@@ -1329,6 +1329,23 @@ def _prompt_text(system_prompt: Any) -> str:
     return str(system_prompt or "")
 
 
+def _ledger_prompt(spec: dict[str, Any], deployed_prompt: str) -> str:
+    """A prompt read back from the live Harness, as the ledger stores it.
+
+    The deployed ``systemPrompt`` is the spec prompt plus the platform-appended KB
+    section (`deployer.harness._kb_prompt`); storing it whole would make the next
+    publish — or a snapshot rollback to this state — append the section twice. An
+    unreadable stored spec keeps the text as read."""
+    from pydantic import ValidationError
+
+    from app.deployer.harness import strip_generated_prompt
+
+    try:
+        return strip_generated_prompt(AgentSpec(**spec), deployed_prompt)
+    except ValidationError:
+        return deployed_prompt
+
+
 def _rollback_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> dict[str, Any]:
     """Harness rollback (roll-forward): stop the test, then re-publish the CONTROL
     version's behaviour (GetHarness at that version → UpdateHarness) so DEFAULT —
@@ -1355,7 +1372,7 @@ def _rollback_harness(canary_id: str, row: RuntimeCanary, progress: Progress) ->
         agent = db.get(Agent, meta["id"])
         if agent is not None:
             spec = dict(agent.spec or {})
-            spec["system_prompt"] = _prompt_text(config.get("systemPrompt"))
+            spec["system_prompt"] = _ledger_prompt(spec, _prompt_text(config.get("systemPrompt")))
             agent.spec = spec
             agent.version = v_restored or agent.version
             # the restored prompt is a publish too: snapshot it at the restored version

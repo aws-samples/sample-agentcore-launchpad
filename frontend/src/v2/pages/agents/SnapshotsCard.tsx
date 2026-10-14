@@ -257,7 +257,8 @@ function RollbackModal({
           <Button onClick={onClose}>{t("v2.common.cancel")}</Button>
           <Button
             kind="danger"
-            disabled={busy || diff.loading}
+            // the confirm IS the diff: never offer the redeploy without it on screen
+            disabled={busy || diff.loading || !diff.data}
             onClick={() => void run()}
             testId="v2-snapshot-rollback-ok"
           >

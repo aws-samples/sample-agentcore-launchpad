@@ -2156,6 +2156,11 @@ agent looked like two edits ago. `services/snapshots.py` keeps one row per publi
   deployed, a spec that no longer validates, and a knowledge base it would re-add that is
   gone. The pin check skips admins and shared workspaces, so it would not catch that. On
   shared AWS (prod and prod2) a rollback changes the agent for every console.
+- **A rollback rebuilds from references, not from stored artifacts.** Code methods rebuild
+  from the spec, and a BYOC zip is re-read from its staged upload. A BYOC `container_image`
+  given by **tag** re-deploys whatever the tag points at now: the old `byoc.provenance`
+  digest in the snapshot is a record, and the generate stage re-stamps it. A missing upload
+  or image fails the job at that stage, as a redeploy would.
 
 ### Environment compare and drift
 

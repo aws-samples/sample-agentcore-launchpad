@@ -120,6 +120,9 @@ def test_compare_judges_every_workspace_against_the_current_one(client):
     agent = rows["ws-b"]["agent"]
     assert agent["version"] == "7" and agent["method"] == "zip_runtime"
     assert agent["last_deploy"]["status"] == "succeeded"
+    # ledger times are UTC; SQLite drops the zone, the wire must not
+    assert agent["last_deploy"]["started_at"].endswith("+00:00")
+    assert agent["updated_at"].endswith("+00:00")
     assert rows["ws-b"]["workspace"] == {
         "id": "ws-b", "name": "Bravo", "account_id": "700000000377", "region": "us-east-1",
         "status": "ready",

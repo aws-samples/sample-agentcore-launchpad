@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -85,7 +86,14 @@ def record_snapshot(
     `actor` is who published; without one the agent's own creator is recorded.
     Flushes, never commits: the row shares the caller's transaction (including the
     `commit=False` callers of `create_deployment`).
+
+    The caller's pending writes are flushed *before* `max(seq)` is read: the session
+    does not autoflush, and on SQLite the first write takes the database write lock, so
+    a concurrent publish of the same agent (a canary action thread next to a redeploy)
+    reads the other's committed row instead of minting the same `seq` and failing the
+    `UNIQUE(agent_id, seq)` index.
     """
+    db.flush()
     last = db.scalar(select(func.max(SpecSnapshot.seq)).where(SpecSnapshot.agent_id == agent.id))
     snap = SpecSnapshot(
         workspace_id=agent.workspace_id,
@@ -161,8 +169,11 @@ def backfill_baselines(db: Session | None = None) -> int:
 # ── read ──────────────────────────────────────────────────────────────────────
 
 
-def _iso(value: Any) -> str | None:
-    return value.isoformat() if value is not None else None
+def _iso(value: datetime | None) -> str | None:
+    """SQLite drops the zone; every stored time is UTC, so say so on the wire."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=value.tzinfo or UTC).isoformat()
 
 
 def _state(snap: SpecSnapshot, deployment_status: str | None) -> str:

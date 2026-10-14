@@ -121,6 +121,8 @@ def test_snapshot_written_on_create_and_every_redeploy(client):
     assert all(r["deployment_id"] for r in rows)
     # auth disabled: the local operator, `(None, name)` — the creators convention
     assert {(r["created_by"], r["created_by_name"]) for r in rows} == {(None, "admin")}
+    # ledger times are UTC; SQLite drops the zone, the wire must not
+    assert all(r["created_at"].endswith("+00:00") for r in rows)
     first = client.get(f"/api/agents/{agent_id}/snapshots/1").json()
     assert first["spec"]["system_prompt"] == "Be brief."
     missing = client.get(f"/api/agents/{agent_id}/snapshots/9")
