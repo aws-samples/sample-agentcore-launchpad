@@ -368,7 +368,10 @@ def test_real_endpoints_preserve_late_harness_failure(
     if entrance in {"chat", "public-stream"}:
         assert response.status_code == 200  # status was sent before the stream failed
         events = sse_events(response)
-        assert [event["event"] for event in events] == ["meta", "delta", "error"]
+        # the console route alone announces the persisted answer before the
+        # event that closed its bubble; `/v1` never carries `saved`
+        saved = ["saved"] if entrance == "chat" else []
+        assert [event["event"] for event in events] == ["meta", "delta", *saved, "error"]
         assert events[1]["data"] == {"text": "partial answer"}
         error = events[-1]["data"]
     else:
@@ -408,7 +411,8 @@ def test_stream_endpoints_complete_normal_tool_cycles(client, monkeypatch, entra
 
     assert response.status_code == 200
     events = sse_events(response)
-    assert [event["event"] for event in events] == ["meta", "tool", "delta", "done"]
+    saved = ["saved"] if entrance == "chat" else []  # console-only (see above)
+    assert [event["event"] for event in events] == ["meta", "tool", "delta", *saved, "done"]
     assert events[1]["data"] == {"name": "kb_search", "id": "tool-1"}
     assert events[2]["data"] == {"text": "final answer"}
     assert stream.drained and stream.closed == 1

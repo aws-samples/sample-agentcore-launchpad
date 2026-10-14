@@ -51,6 +51,7 @@ WORKSPACE_SCOPED_TABLES = (
     "oauth_pending_sessions",
     "user_grants",
     "resource_creators",
+    "chat_feedback",
 )
 
 
@@ -745,6 +746,9 @@ def _migrate_workspace_columns(bind) -> None:
         "resource_creators": (
             "ALTER TABLE resource_creators ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        # born with the column (and so is a console-v3-era table); listed so the
+        # scoped-tables drift test holds and the index is ensured
+        "chat_feedback": "ALTER TABLE chat_feedback ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

@@ -17,6 +17,7 @@ from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest
 from app.services import agent_access, memory_ownership, oauth_sessions, policy_identity
+from app.services import feedback as feedback_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
 from app.services.attachments import prepare_attachments
@@ -87,13 +88,17 @@ def _save_message(
     text: str,
     name: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
-) -> None:
+) -> int:
+    """Persist one thread item; returns its id (the replay order, and what thumbs
+    feedback is keyed on)."""
     db = SessionLocal()
     try:
-        db.add(ChatMessage(workspace_id=workspace_id, agent_id=agent_id,
-                           session_id=session_id,
-                           role=role, text=text[:100000], name=name, attachments=attachments))
+        row = ChatMessage(workspace_id=workspace_id, agent_id=agent_id,
+                          session_id=session_id,
+                          role=role, text=text[:100000], name=name, attachments=attachments)
+        db.add(row)
         db.commit()
+        return row.id
     finally:
         db.close()
 
@@ -211,18 +216,29 @@ def chat(
     def generate():
         # Thread items are persisted in event order (int-pk = replay order) so
         # the playground can restore a session's history exactly as rendered.
+        # Every persisted answer is announced with a `saved {message_id}` event
+        # just before the event that closed its bubble (tool / error / done, or
+        # the stream's end), so the client can attach thumbs feedback to the
+        # message it just watched stream. Console-only: `/v1` and the invoke
+        # chain never see it.
         session_id = req.session_id
         answer_parts: list[str] = []
         pending_asks: list[tuple[str, str | None]] = []
 
-        def close_bubble() -> None:
+        def close_bubble() -> str | None:
+            """Persist the open answer (+ its deferred asks); the `saved` frame, or
+            None when there was no answer to persist."""
+            message_id = None
             if answer_parts and session_id:
-                _save_message(workspace_id, agent.id, session_id, "agent",
-                              "".join(answer_parts))
+                message_id = _save_message(workspace_id, agent.id, session_id, "agent",
+                                           "".join(answer_parts))
             answer_parts.clear()
             for provider, tool in pending_asks:
                 _save_message(workspace_id, agent.id, session_id, "auth", provider, name=tool)
             pending_asks.clear()
+            if message_id is None:
+                return None
+            return sse_encode({"event": "saved", "data": {"message_id": message_id}})
 
         stream_kwargs: dict[str, Any] = {}
         if prepared:
@@ -261,7 +277,9 @@ def chat(
                     attachments=prepared.metadata if prepared else None,
                 )
             elif kind == "tool" and session_id:
-                close_bubble()  # a tool call splits the answer bubble live — mirror it
+                # a tool call splits the answer bubble live — mirror it
+                if saved := close_bubble():
+                    yield saved
                 _save_message(workspace_id, agent.id, session_id, "tool", "",
                               name=data.get("name"))
             elif kind == "auth_required" and session_id:
@@ -284,14 +302,17 @@ def chat(
             elif kind == "delta":
                 answer_parts.append(data.get("text", ""))
             elif kind == "error" and session_id:
-                close_bubble()  # keep the partial answer the user saw
+                if saved := close_bubble():  # keep the partial answer the user saw
+                    yield saved
                 _save_message(workspace_id, agent.id, session_id, "error",
                               data.get("message", ""))
             elif kind == "done" and session_id:
-                close_bubble()
+                if saved := close_bubble():
+                    yield saved
             yield sse_encode(event)
         if session_id:  # a stream that ended without done still keeps its asks
-            close_bubble()
+            if saved := close_bubble():
+                yield saved
 
     return StreamingResponse(
         generate(),
@@ -402,11 +423,15 @@ def stop_session(
 def session_history(
     agent_id: str,
     session_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    """Replay a session's thread exactly as it was rendered (int pk = order)."""
+    """Replay a session's thread exactly as it was rendered (int pk = order).
+
+    Each item carries its `id`; answers also carry the caller's thumbs `verdict`
+    (`up` / `down` / null), so a reloaded thread restores the thumb state."""
     _agent_in(db, ws, agent_id, viewer)
     rows = (
         db.query(ChatMessage)
@@ -419,14 +444,20 @@ def session_history(
         .limit(500)
         .all()
     )
+    mine = feedback_service.verdicts_for(
+        db, ws.id, require_identity(request).username if auth_enabled() else "river",
+        [r.id for r in rows if r.role == "agent"],
+    )
     return {
         "messages": [
             {
+                "id": r.id,
                 "role": r.role,
                 "text": r.text,
                 "name": r.name,
                 "attachments": r.attachments or [],
                 "at": r.created_at.isoformat() if r.created_at else None,
+                "verdict": mine.get(r.id),
             }
             for r in rows
         ]

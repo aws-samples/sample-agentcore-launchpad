@@ -194,6 +194,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
     ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): MEMBER,
+    # thumbs on a chat answer (the agent must be visible) + the Insights list,
+    # which drops agents hidden from the caller
+    ("POST", "/api/feedback"): MEMBER,
+    ("GET", "/api/feedback"): MEMBER,
     # ---- studio local-debug scaffolding: prod refuses these in the handler
     # (local_exec guard) regardless of role ----
     ("GET", "/api/conversations"): MEMBER,

@@ -386,6 +386,39 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ChatFeedback(Base):
+    """One person's thumbs verdict on one agent answer of the console chat.
+
+    A table rather than columns on `ChatMessage`: an answer can be rated by several
+    people and a verdict can change or be withdrawn. One verdict per
+    (message, actor); re-voting updates it.
+
+    The column names and types are a **subset of the console-v3 branch's** table of
+    the same name (which also has `correction`): a ledger that ran that branch
+    already holds the table, `create_all` skips it, and `schema_drift` only reports
+    model columns missing from it. A column added here needs a `_migrate*` ALTER.
+    """
+
+    __tablename__ = "chat_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "actor", name="uq_chat_feedback_actor"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(String(32), index=True)  # not a FK
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    message_id: Mapped[int] = mapped_column(index=True)  # chat_messages.id (an agent answer)
+    verdict: Mapped[str] = mapped_column(String(8), index=True)  # up | down
+    # never written by the console (no free-text comments yet); kept for v3 parity
+    comment: Mapped[str | None] = mapped_column(Text, default=None)
+    actor: Mapped[str] = mapped_column(String(96))  # console username
+    # `console` here; a v3-era row may say `share` / `review`
+    source: Mapped[str] = mapped_column(String(16), default="console")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
 

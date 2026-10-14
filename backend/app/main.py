@@ -40,6 +40,7 @@ from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
 from app.routers.execution import router as execution_router
+from app.routers.feedback import router as feedback_router
 from app.routers.governance import router as governance_router
 from app.routers.identity import router as identity_router
 from app.routers.knowledge import router as knowledge_router
@@ -182,6 +183,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(assistant_router)  # architect assistant (SE-039)
     app.include_router(knowledge_router)  # managed knowledge bases + retrieval playground
     app.include_router(chat_router)
+    app.include_router(feedback_router)  # thumbs on chat answers + the Insights list
     app.include_router(memory_router)  # read-only short-/long-term memory console
     app.include_router(memory_resources_router)  # memory resource lifecycle (create/delete)
     app.include_router(execution_router)  # studio local-debug: run un-deployed code
