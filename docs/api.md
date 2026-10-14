@@ -769,7 +769,8 @@ A rule: `{id, kind, name, comparison, threshold, window, enabled, has_webhook, s
 last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_by_name,
 created_at, updated_at}`. The webhook URL is write-only — responses carry `has_webhook`.
 `state` is `ok`, `firing` or `unknown`; a value that cannot be read (no traffic, a failed
-query) is `unknown`, never `ok`.
+query) is `unknown`, never `ok`. `last_fired_at` is when the rule last *started* firing
+(the current or last episode); `last_notified_at` is the last delivery attempt.
 
 | `kind` | Value | Direction | Window |
 |---|---|---|---|
@@ -781,19 +782,22 @@ query) is `unknown`, never `ok`.
 
 Validation errors (`400`): `alert.unknown_kind`, `alert.bad_comparison`,
 `alert.comparison_never_fires` (the inverse direction), `alert.bad_window`,
-`alert.bad_threshold` (negative, or `online_quality` outside 0–1).
+`alert.bad_threshold` (negative or not finite, or `error_rate` / `online_quality` outside
+0–1 — an error rate is a fraction, `0.05` = 5 %).
 
 **Webhooks.** One generic https JSON webhook per rule; a Slack or Feishu incoming webhook
 renders its `text`. The body is `{text, workspace_id, rule_id, kind, value, threshold,
 comparison, detail}`. It is posted only by the background check
 (`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true`, every `LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS`,
-default 300) and only on a transition into `firing`; the outcome is appended to
-`last_detail`. The URL is checked on save and again on every send:
+default 300), once per firing episode (a transition into `firing`); the outcome is appended
+to `last_detail`. A manual re-check that sees the transition first posts nothing, and the
+next background pass still sends that episode's notification — as it does when a webhook is
+added to a rule that is already firing. The URL is checked on save and again on every send:
 `alert.webhook_not_https`, `alert.webhook_credentials` (user or password in the URL),
 `alert.webhook_invalid`, `alert.webhook_unresolvable`, `alert.webhook_non_public` (any
 resolved address is private, loopback, link-local, reserved, multicast or unspecified,
 IPv4-mapped IPv6 included). The request goes to the address that was checked, redirects are
-not followed, and the timeout is 5 s.
+not followed, the timeout is 5 s, and the response body is never read.
 
 ## Console Knowledge Bases API
 

@@ -1846,7 +1846,11 @@ Logs Insights 查询(`filter ispresent(scope.name) and attributes.session.id =
 `/v1` 流量、评估回放）进入明确的“未归属”行，而不是被丢弃；与台账中任何 Agent 都不匹配的服务名
 仍会列出（`known: false`）并计入总额——导入或已删除的 Agent、同一 AWS 账号上的另一套部署
 （prod 与 prod2 共用一个账号）都真实花了钱。所有数字都是估算：每行按其最近一个模型的单价计价，
-价格表里没有的模型只计 token、不计金额，并列在 `unpriced_models` 中，因此总额不会悄悄偏少。
+价格表里没有的模型只计 token、不计金额，并列在 `unpriced_models` 中（没有模型 id 的 token 记为
+`(unknown model)`），因此总额不会悄悄偏少。非 Bedrock 的提供方（Mantle `openai.*`）只产生 Strands
+包装 span，而仪表盘的 token 逻辑会把它当作重复项丢弃；没有提供方 token 的行改按包装 span 的 token
+计价，与仪表盘按模型统计 token 时的回退规则相同（2026-10-14 在 dev 上实测：30 天内有五个这样的服务
+此前显示为 0 token）。按人统计的查询在 1000 个会话的上限之前先按输出 token 排序，因此被截掉的是用量最小的会话，而不是任意一批。
 本月至今是从当月 1 日 00:00 UTC 起的相对窗口，最长 720 小时。结果走仪表盘的 60 秒缓存。查询扫描
 整个账号，耗时随该区域全部 span 量增长，而不是随本控制台的 Agent 数量增长（2026-10-14 实测：
 us-east-1 上 30 天范围耗时 34 秒，查询截止时间为 55 秒）。
@@ -1858,12 +1862,14 @@ us-east-1 上 30 天范围耗时 34 秒，查询截止时间为 55 秒）。
 - **永远不会触发的方向会被拒绝**（`alert.comparison_never_fires`）：质量是下降才算坏，错误率是
   上升才算坏。创建路由会自动取默认方向。
 - **读不到的值记为 `unknown`，绝不记为 `ok`。** 窗口内无流量或查询失败时记为 `unknown` 并附原因。
-- **通知的是状态变化，而不是状态本身。** `state` 保存在记录上，持续触发的规则不会反复通知。发送
-  失败记录在 `last_detail` 中，不会掩盖告警本身。
+- **通知的是状态变化，而不是状态本身。** `state` 保存在记录上，持续触发的规则不会反复通知：每个
+  触发期只通知一次，触发期从 `last_fired_at` 开始。如果是手动重新检查先发现了状态变化，它只记录、
+  不发送，下一次后台检查仍会补发（`last_notified_at` 早于 `last_fired_at` 即为待发），因此在事故
+  期间点击“立即重新检查”不会让 webhook 失声。发送失败记录在 `last_detail` 中，不会掩盖告警本身。
 - **投递方式是一个通用的 https JSON webhook**——Slack 或飞书的传入 webhook 本身就是这种形式，
   因此平台不保存任何渠道凭证。`services/webhook_safety.py` 在保存时和每次发送时都检查 URL（仅
   https、URL 中不带凭证、所有解析地址都必须是公网地址——IPv4 映射的 IPv6 按其 IPv4 地址判断），
-  直接连接检查过的地址，拒绝重定向，5 秒超时。
+  直接连接检查过的地址，拒绝重定向，5 秒超时，且从不读取响应体。
 - **只有后台检查会发送通知。** `POST /api/alerts/evaluate`（控制台的“立即重新检查”）只记录
   状态、从不发送，因此打开页面不会惊动任何人。`services/alert_scheduler.py` 是一个守护线程，
   仅当 `alerts_scheduler_enabled`（`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED`）为 true 时在应用启动

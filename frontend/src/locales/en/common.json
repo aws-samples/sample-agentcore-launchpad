@@ -8432,7 +8432,7 @@
       "kpiTotal": "Estimated cost",
       "kpiTokens": "Tokens",
       "kpiSessions": "Sessions",
-      "kpiSessionsSub": "Sessions with model calls",
+      "kpiSessionsSub": "Sessions with spans in this window",
       "byAgent": "By agent",
       "byAgentSub": "From the runtime service name on each span",
       "byActor": "By person",

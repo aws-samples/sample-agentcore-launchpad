@@ -187,6 +187,64 @@ def test_an_unpriced_model_is_reported_rather_than_counted_as_free(monkeypatch, 
     assert report["total_est_cost_usd"] == 0.0
 
 
+def test_a_wrapper_only_provider_is_priced_on_its_wrapper_tokens(monkeypatch, ctx):
+    """A Mantle (`openai.*`) provider emits only the Strands wrapper span, which the
+    provider-span sums exclude: without the fallback such an agent showed 0 tokens and
+    $0 (measured on dev, 2026-10-14: five services over 30 days). A row that has
+    provider tokens keeps them — the wrapper duplicate is never added on top."""
+    _stub_insights(
+        monkeypatch,
+        by_service=[
+            {"service": "mantle-agent.DEFAULT", "tokens_in": "0", "tokens_out": "0",
+             "cache_read": "0", "cache_write": "0", "wrapper_in": "1000000",
+             "wrapper_out": "0", "llm_calls": "0", "wrapper_calls": "3",
+             "model": "claude-sonnet"},
+            {"service": "bedrock-agent.DEFAULT", "tokens_in": "1000000", "tokens_out": "0",
+             "cache_read": "0", "cache_write": "0", "wrapper_in": "1000000",
+             "wrapper_out": "0", "llm_calls": "2", "wrapper_calls": "2",
+             "model": "claude-sonnet"},
+        ],
+        by_session=[
+            {"session_id": "s-mantle", "tokens_in": "0", "tokens_out": "0",
+             "cache_read": "0", "cache_write": "0", "wrapper_in": "0",
+             "wrapper_out": "1000000", "model": "claude-sonnet"},
+        ],
+    )
+    db = SessionLocal()
+    try:
+        report = cost_service.cost_report(db, ctx, range_key="24h")
+    finally:
+        db.close()
+    rows = {row["service"]: row for row in report["by_agent"]}
+    assert rows["mantle-agent.DEFAULT"]["tokens"] == 1_000_000
+    assert rows["mantle-agent.DEFAULT"]["est_cost_usd"] == pytest.approx(3.0)
+    assert rows["mantle-agent.DEFAULT"]["llm_calls"] == 3
+    # provider sums present: priced once, not provider + wrapper
+    assert rows["bedrock-agent.DEFAULT"]["tokens"] == 1_000_000
+    assert rows["bedrock-agent.DEFAULT"]["llm_calls"] == 2
+    assert report["total_est_cost_usd"] == pytest.approx(6.0)
+    assert report["by_actor"][0]["est_cost_usd"] == pytest.approx(15.0)
+
+
+def test_tokens_without_a_model_id_are_named_not_free(monkeypatch, ctx):
+    _stub_insights(
+        monkeypatch,
+        by_service=[
+            {"service": "anon", "tokens_in": "2000", "tokens_out": "0", "cache_read": "0",
+             "cache_write": "0", "llm_calls": "1"},
+            # a service with spans but no model and no tokens is nothing to price
+            {"service": "tools-only", "tokens_in": "0", "tokens_out": "0"},
+        ],
+        by_session=[],
+    )
+    db = SessionLocal()
+    try:
+        report = cost_service.cost_report(db, ctx, range_key="24h")
+    finally:
+        db.close()
+    assert report["unpriced_models"] == [cost_service.UNKNOWN_MODEL]
+
+
 def test_a_service_with_no_ledger_agent_is_still_reported(monkeypatch, ctx):
     """An imported or deleted agent — or another console's agent on shared AWS — spent
     real money; hiding it would understate."""
@@ -249,6 +307,10 @@ def test_the_queries_read_both_span_layouts_and_require_a_span():
         assert "SOURCE logGroups(namePrefix:" in query
         assert "ispresent(startTimeUnixNano)" in query
         assert "latest(telemetry_model)" in query
+        assert "sum(wrap_in) as wrapper_in" in query  # the wrapper-only fallback
+    # past the 1000-session cap, the sessions dropped are the smallest, not arbitrary
+    session_query = cost_service.q_cost_by_session()
+    assert session_query.index("| sort tokens_out desc") < session_query.index("| limit 1000")
 
 
 def test_the_range_is_whitelisted(client, monkeypatch):
@@ -334,6 +396,10 @@ def test_a_rule_in_a_direction_that_could_never_fire_is_refused():
         ("error_rate", "above", "99h", 1, "alert.bad_window"),
         ("online_quality", "below", "24h", 7, "alert.bad_threshold"),
         ("cost_mtd_usd", "above", "24h", -1, "alert.bad_threshold"),
+        # a fraction, not a percent: 5 would be 500 % and never fire
+        ("error_rate", "above", "24h", 5, "alert.bad_threshold"),
+        ("latency_p95_ms", "above", "24h", float("inf"), "alert.bad_threshold"),
+        ("spend_usd", "above", "24h", float("nan"), "alert.bad_threshold"),
     ],
 )
 def test_validation_refusals(kind, comparison, window, threshold, code):
@@ -597,18 +663,46 @@ def test_notification_fires_on_the_transition_only(monkeypatch, ctx):
         db.close()
 
 
-def test_a_manual_pass_never_notifies_even_on_a_transition(monkeypatch, ctx):
-    """And a later scheduled pass on a rule already firing does not notify either:
-    the transition happened during the manual check."""
-    _rule(kind="error_rate", threshold=0.1, webhook_url="https://hook.example/x")
+def test_a_manual_pass_never_notifies_but_does_not_swallow_the_notification(
+    monkeypatch, ctx
+):
+    """A manual re-check that sees the transition first posts nothing — and the next
+    scheduled pass still delivers the episode's one notification (an admin clicking
+    Re-check during an incident must not silence the on-call channel)."""
+    rule_id = _rule(kind="error_rate", threshold=0.1, webhook_url="https://hook.example/x")
     sent = _capture_posts(monkeypatch)
     monkeypatch.setattr(alert_service, "read_value", lambda rule, db, ws: (0.9, "bad"))
     db = SessionLocal()
     try:
         result = alert_service.evaluate_rules(db, ctx)  # default: no notification
         assert result["firing"] == 1 and sent == []
-        alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+        started = db.get(AlertRule, rule_id).last_fired_at
+        alert_service.evaluate_rules(db, ctx)  # a second manual pass: still nothing
         assert sent == []
+        alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+        assert len(sent) == 1  # the owed notification
+        alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+        alert_service.evaluate_rules(db, ctx)
+        assert len(sent) == 1  # once per episode
+        # `last_fired_at` is when the episode started, not the latest firing pass
+        assert db.get(AlertRule, rule_id).last_fired_at == started
+    finally:
+        db.close()
+
+
+def test_a_webhook_added_while_firing_is_owed_the_current_episode(monkeypatch, ctx):
+    rule_id = _rule(kind="error_rate", threshold=0.1)
+    sent = _capture_posts(monkeypatch)
+    monkeypatch.setattr(alert_service, "read_value", lambda rule, db, ws: (0.9, "bad"))
+    db = SessionLocal()
+    try:
+        alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+        assert sent == []  # nowhere to send it
+        db.get(AlertRule, rule_id).webhook_url = "https://hook.example/x"
+        db.commit()
+        alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+        alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+        assert len(sent) == 1
     finally:
         db.close()
 

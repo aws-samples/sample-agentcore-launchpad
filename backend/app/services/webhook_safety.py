@@ -17,7 +17,8 @@ the OIDC discovery fetch (`services.public_fetch`), whose address checks it reus
   answer DNS gives at that moment, which is accepted;
 - a redirect is never followed — a 3xx is a failed delivery, since a redirect is
   exactly how a public URL would bounce the request to an internal one;
-- a 5 s timeout and a small JSON body.
+- a 5 s timeout (per connect / write / read step) and a small JSON body; the
+  response body is never read, only the status line.
 
 `check_webhook_url` raises `AppError` (400) for the router; `post_json` never raises.
 """
@@ -127,25 +128,29 @@ def post_json(
     address = addresses[0]
     pinned_host = f"[{address}]" if ":" in address else address
     target = parts._replace(netloc=f"{pinned_host}:{port}").geturl()
-    host_header = host if parts.port in (None, 443) else f"{host}:{port}"
+    # `hostname` drops an IPv6 literal's brackets; the Host header needs them back
+    host_part = f"[{host}]" if ":" in host else host
+    host_header = host_part if parts.port in (None, 443) else f"{host_part}:{port}"
     try:
         with httpx.Client(
             timeout=timeout, follow_redirects=False, transport=transport
-        ) as client:
-            response = client.post(
-                target,
-                content=payload,
-                headers={"Host": host_header, "Content-Type": "application/json"},
-                # TLS SNI + certificate verification against the real host name
-                extensions={"sni_hostname": host},
-            )
+        ) as client, client.stream(
+            "POST",
+            target,
+            content=payload,
+            headers={"Host": host_header, "Content-Type": "application/json"},
+            # TLS SNI + certificate verification against the real host name
+            extensions={"sni_hostname": host},
+        ) as response:
+            # Only the status matters: the response body is never read, so a hostile
+            # endpoint cannot make the (single) scheduler thread buffer or wait on it.
+            status = response.status_code
     except (httpx.HTTPError, OSError) as exc:
         logger.info("webhook to %s failed: %s: %s", host, type(exc).__name__, exc)
         return False, type(exc).__name__
     except Exception as exc:  # noqa: BLE001 - delivery must never raise
         logger.warning("webhook to %s failed: %s", host, type(exc).__name__)
         return False, type(exc).__name__
-    status = response.status_code
     if 300 <= status < 400:
         logger.warning("webhook: refused a %s redirect from %s", status, host)
         return False, f"redirect refused (HTTP {status})"

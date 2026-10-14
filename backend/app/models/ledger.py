@@ -691,7 +691,7 @@ class AlertRule(Base):
     destination rather than a new telemetry path (`app.services.alerts`).
 
     `state` and `last_value` are the evaluation's own memory: a firing rule notifies
-    **once**, on the transition, rather than on every pass.
+    **once** per firing episode, rather than on every pass.
 
     The column set is a superset of the console-v3 branch's table of the same name
     (which lacks `created_by_name`, added by `_migrate_alert_rules_creator`). There
@@ -721,9 +721,11 @@ class AlertRule(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # when the rule last STARTED firing (the current/last episode), not last seen firing
     last_fired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # last delivery attempt; older than last_fired_at = this episode's post is still owed
     last_notified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )

@@ -3231,8 +3231,13 @@ rather than being dropped, and a service name that matches no ledger agent is st
 reported (`known: false`) and counted — an imported or deleted agent, or another stack on
 the same AWS account (prod and prod2 share one), spent real money. Every figure is an
 estimate: each row is priced at its latest model's rate, and a model missing from the price
-map adds tokens but no dollars and is named in `unpriced_models`, so the total is never
-quietly short. Month to date is a relative window from 00:00 UTC on the 1st, capped at
+map adds tokens but no dollars and is named in `unpriced_models` (tokens under no model id
+as `(unknown model)`), so the total is never quietly short. A non-Bedrock provider (Mantle
+`openai.*`) emits only the Strands wrapper span, which the dashboard's token logic drops as
+a duplicate; a row with no provider tokens is priced on its wrapper tokens instead, the same
+fallback the dashboard's tokens-by-model uses (measured on dev 2026-10-14: five such services
+over 30 days had shown 0 tokens). The per-person query is sorted by output tokens before its
+1000-session cap, so the sessions that fall off are the smallest, not an arbitrary set. Month to date is a relative window from 00:00 UTC on the 1st, capped at
 720 h. Results go through the dashboard's 60 s cache. The scan is account-wide, so its
 duration grows with all span volume in the region, not with this console's agents
 (measured 2026-10-14: 34 s for 30 days on us-east-1, against the 55 s query deadline).
@@ -3248,13 +3253,17 @@ aggregates, `online_quality` from the online-evaluation mean, `spend_usd` and
 - **An unreadable value is `unknown`, never `ok`.** No traffic in the window, or a failed
   query, records `unknown` with the reason.
 - **A transition notifies, not a state.** `state` lives on the row, so a rule that stays
-  firing does not re-notify. A failed delivery is recorded in `last_detail` and never hides
-  the breach.
+  firing does not re-notify: one notification per firing episode, which starts at
+  `last_fired_at`. A manual re-check that sees the transition first records it without
+  posting, and the next background pass still delivers it (`last_notified_at` older than
+  `last_fired_at` = owed), so clicking "Re-check now" during an incident cannot silence the
+  webhook. A failed delivery is recorded in `last_detail` and never hides the breach.
 - **Delivery is one generic https JSON webhook**, which a Slack or Feishu incoming hook
   already is, so the platform stores no channel credentials. `services/webhook_safety.py`
   checks the URL on save and again on every send (https only, no credentials in the URL,
   every resolved address public — IPv4-mapped IPv6 judged as its IPv4 address), connects
-  to the address it checked, refuses redirects and times out after 5 s.
+  to the address it checked, refuses redirects, times out after 5 s and never reads the
+  response body.
 - **Only the background check notifies.** `POST /api/alerts/evaluate` (the console's
   "Re-check now") records state but never posts, so opening the page cannot page anyone.
   `services/alert_scheduler.py` is one daemon thread, started at app startup only when

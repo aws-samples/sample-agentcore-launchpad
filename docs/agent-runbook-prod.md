@@ -111,10 +111,13 @@ sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
 printf '[Service]\nEnvironment=LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true\n' \
   | sudo tee /etc/systemd/system/launchpad-backend.service.d/alerts-scheduler.conf
 sudo systemctl daemon-reload && sudo systemctl restart launchpad-backend
-sudo journalctl -u launchpad-backend --since "2 min ago" -q | grep "alert scheduler started"
+sudo systemctl show launchpad-backend -p Environment | grep -c ALERTS_SCHEDULER_ENABLED=true   # want 1
 ```
 
-The banner on the Alerts view says whether the box checks. The interval is
+Then confirm on the Alerts view: its banner (`GET /api/alerts/scheduler`) reads the
+running process's setting, so it says whether this box checks. Don't grep the journal
+for the thread's start line: the backend configures no logging, so its INFO lines
+never reach the journal (only warnings, such as a failed workspace check, do). The interval is
 `LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS` (default 300, minimum 60). Each pass
 runs Logs Insights queries, which are billed. Remove the drop-in and restart to
 turn the thread off.

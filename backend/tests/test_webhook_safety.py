@@ -108,6 +108,16 @@ def test_a_url_without_a_host_or_with_a_bad_port_is_refused(monkeypatch):
         "::ffff:10.0.0.5",  # IPv4-mapped private
         "::ffff:127.0.0.1",  # IPv4-mapped loopback
         "::ffff:169.254.169.254",  # IPv4-mapped metadata
+        "::127.0.0.1",  # IPv4-compatible (deprecated) loopback
+        "2002:a9fe:a9fe::",  # 6to4 wrapping the metadata address
+        "2002:7f00:1::",  # 6to4 wrapping loopback
+        "64:ff9b::a9fe:a9fe",  # NAT64 well-known prefix → metadata
+        "64:ff9b::a00:5",  # NAT64 → 10.0.0.5
+        "64:ff9b:1::a00:5",  # NAT64 local-use prefix
+        "2001:0:4136:e378:8000:63bf:f5ff:fffe",  # Teredo
+        "fec0::1",  # IPv6 site-local (deprecated, still "global" to Python)
+        "fd00:ec2::254",  # the EC2 IPv6 metadata endpoint (unique-local)
+        "2001:db8::1",  # documentation
     ],
 )
 def test_a_non_public_address_is_refused(monkeypatch, address):
@@ -124,6 +134,24 @@ def test_an_ip_literal_is_judged_directly(monkeypatch):
     # getaddrinfo of a literal returns the literal; the stub does the same
     _dns(monkeypatch, "127.0.0.1")
     assert _code("https://127.0.0.1/x") == "alert.webhook_non_public"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://2130706433/x",  # 127.0.0.1 as one decimal number
+        "https://0177.0.0.1/x",  # octal
+        "https://0x7f.1/x",  # hex, short form
+        "https://017700000001/x",  # octal, one number
+        "https://0xa9fea9fe/x",  # 169.254.169.254 in hex
+        "https://[::ffff:7f00:1]/x",  # IPv4-mapped, hex tail
+        "https://[::1]/x",
+    ],
+)
+def test_odd_numeric_hosts_are_judged_by_what_they_resolve_to(url):
+    """The real resolver (numeric forms never touch DNS): the guard judges the address
+    `getaddrinfo` returns — the one the connection would use — not the URL's spelling."""
+    assert _code(url) == "alert.webhook_non_public"
 
 
 def test_an_unresolvable_host_is_refused(monkeypatch):
@@ -162,8 +190,43 @@ def test_a_send_posts_json_to_the_validated_address(monkeypatch):
     assert request.url.host == PUBLIC and request.url.port in (None, 443)
     assert request.url.path == "/services/x" and request.url.query == b"y=1"
     assert request.headers["host"] == "hooks.slack.com"
+    # TLS: SNI and certificate verification use the real name, not the pinned IP
+    assert request.extensions["sni_hostname"] == "hooks.slack.com"
     assert request.headers["content-type"] == "application/json"
     assert json.loads(request.content) == {"text": "hi"}
+
+
+def test_an_ipv6_literal_keeps_its_brackets_in_the_host_header(monkeypatch):
+    _dns(monkeypatch, "2606:4700::1111")
+    recorder = _Recorder(200)
+    assert ws.post_json("https://[2606:4700::1111]/x", {}, transport=recorder.transport) == (
+        True, "HTTP 200",
+    )
+    [request] = recorder.requests
+    assert request.url.host == "2606:4700::1111"
+    assert request.headers["host"] == "[2606:4700::1111]"
+
+
+def test_the_response_body_is_never_read(monkeypatch):
+    """Only the status counts: an endpoint answering with an endless body cannot make
+    the scheduler thread buffer it."""
+    _dns(monkeypatch, PUBLIC)
+    pulled: list[int] = []
+
+    class Endless(httpx.SyncByteStream):
+        def __iter__(self):
+            while True:
+                pulled.append(1)
+                if len(pulled) > 1000:
+                    raise AssertionError("the body was read")
+                yield b"x" * 65536
+
+    def answer(request):
+        return httpx.Response(200, stream=Endless())
+
+    ok, outcome = ws.post_json("https://hook.example/x", {}, transport=httpx.MockTransport(answer))
+    assert (ok, outcome) == (True, "HTTP 200")
+    assert pulled == []
 
 
 def test_a_send_re_checks_the_url(monkeypatch):

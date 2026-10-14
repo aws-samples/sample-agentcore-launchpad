@@ -8432,7 +8432,7 @@
       "kpiTotal": "预估花费",
       "kpiTokens": "Token 数",
       "kpiSessions": "会话数",
-      "kpiSessionsSub": "有模型调用的会话",
+      "kpiSessionsSub": "该时间窗内有 span 的会话",
       "byAgent": "按 Agent",
       "byAgentSub": "依据每条 span 上的运行时服务名归集",
       "byActor": "按人",

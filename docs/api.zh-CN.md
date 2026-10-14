@@ -473,6 +473,8 @@ workspace 划分；覆盖设置保存在本部署的账本（`platform_settings`
 last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_by_name,
 created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webhook`。`state` 为 `ok`、
 `firing` 或 `unknown`；读不到的值（无流量、查询失败）记为 `unknown`，绝不记为 `ok`。
+`last_fired_at` 是规则最近一次*开始*触发的时间（当前或上一次触发期），`last_notified_at` 是最近一次
+发送尝试的时间。
 
 | `kind` | 值 | 方向 | 时间窗口 |
 |---|---|---|---|
@@ -483,16 +485,19 @@ created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webho
 | `cost_mtd_usd` | 自 UTC 月初起的估算花费，美元 | above | 当月（忽略 `window`） |
 
 校验错误（`400`）：`alert.unknown_kind`、`alert.bad_comparison`、`alert.comparison_never_fires`
-（相反方向）、`alert.bad_window`、`alert.bad_threshold`（负数，或 `online_quality` 超出 0–1）。
+（相反方向）、`alert.bad_window`、`alert.bad_threshold`（负数或非有限数，或 `error_rate` /
+`online_quality` 超出 0–1——错误率是比例，`0.05` 即 5%）。
 
 **Webhook。** 每条规则一个通用 https JSON webhook；Slack 或飞书的传入 webhook 会显示其中的
 `text`。请求体为 `{text, workspace_id, rule_id, kind, value, threshold, comparison, detail}`。
 只有后台检查会发送（`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true`，间隔
-`LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS`，默认 300），且只在进入 `firing` 时发送一次；结果
-追加到 `last_detail`。URL 在保存时和每次发送时都会检查：`alert.webhook_not_https`、
+`LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS`，默认 300），每个触发期（进入 `firing`）只发送
+一次；结果追加到 `last_detail`。如果是手动重新检查先发现了状态变化，它不会发送，下一次后台检查
+仍会补发这一次通知；给已在触发中的规则新加 webhook 时也一样。URL 在保存时和每次发送时都会检查：`alert.webhook_not_https`、
 `alert.webhook_credentials`（URL 中带用户名或密码）、`alert.webhook_invalid`、
 `alert.webhook_unresolvable`、`alert.webhook_non_public`（任一解析地址为私有、回环、链路本地、
-保留、组播或未指定地址，含 IPv4 映射的 IPv6）。请求直接发往检查过的地址，不跟随重定向，超时 5 秒。
+保留、组播或未指定地址，含 IPv4 映射的 IPv6）。请求直接发往检查过的地址，不跟随重定向，超时 5 秒，
+且从不读取响应体。
 
 ## 控制台知识库 API / Console Knowledge Bases API
 

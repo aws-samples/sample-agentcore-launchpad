@@ -21,7 +21,8 @@ telemetry path:
 Every figure is an **estimate** and says so: prices are a config map matched by
 substring, a model missing from it contributes tokens but no dollars, and the response
 names those models so the number is never quietly wrong. A row is priced at the last
-model its spans named (`latest(telemetry_model)`).
+model its spans named (`latest(telemetry_model)`). A row with only Strands wrapper tokens
+(a non-Bedrock provider such as Mantle emits no provider span) is priced on those.
 """
 
 from datetime import UTC, datetime
@@ -33,7 +34,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.ledger import Agent, ChatSession
 from app.services.observability import (
+    _INPUT_TOKENS_FIELD,
     _IS_LLM_FIELDS,
+    _NATIVE_AGENT_FIELD,
+    _OPERATION_FIELD,
+    _OUTPUT_TOKENS_FIELD,
     SPANS_SOURCE,
     build_agent_resolver,
     cached,
@@ -50,15 +55,34 @@ DEFAULT_RANGE = "24h"
 MAX_MONTH_HOURS = 720
 
 
+# `_IS_LLM_FIELDS` drops the Strands wrapper span (it duplicates the provider span), but
+# a non-Bedrock provider (Mantle `openai.*`) emits the wrapper span ONLY. The wrapper sums
+# ride alongside so a row whose provider sums are zero falls back to them — the same rule
+# as the dashboard's tokens-by-model (`observability._tokens_by_model_rows`).
+_WRAPPER_FIELDS = f"""fields ((strcontains({_OPERATION_FIELD}, "chat")
+        + strcontains({_OPERATION_FIELD}, "text_completion")
+        + strcontains({_OPERATION_FIELD}, "generate_content"))
+        * strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents")
+        * (1 - {_NATIVE_AGENT_FIELD})) as is_wrap
+| fields {_INPUT_TOKENS_FIELD} * is_wrap as wrap_in,
+         {_OUTPUT_TOKENS_FIELD} * is_wrap as wrap_out"""
+
+# The tokens a row is priced on: provider sums, else the wrapper-only fallback.
+_TOKEN_SUMS = """sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
+        sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
+        sum(wrap_in) as wrapper_in, sum(wrap_out) as wrapper_out"""
+
+
 def q_cost_by_service() -> str:
     """Tokens per runtime service name — the per-agent dimension."""
     return f"""
 {SPANS_SOURCE}
 | filter ispresent(startTimeUnixNano)
 | {_IS_LLM_FIELDS}
-| stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
-        sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
-        sum(is_llm) as llm_calls, latest(telemetry_model) as model,
+| {_WRAPPER_FIELDS}
+| stats {_TOKEN_SUMS},
+        sum(is_llm) as llm_calls, sum(is_wrap) as wrapper_calls,
+        latest(telemetry_model) as model,
         count_distinct(attributes.session.id) as sessions
   by resource.attributes.service.name as service
 | sort tokens_out desc
@@ -67,15 +91,20 @@ def q_cost_by_service() -> str:
 
 
 def q_cost_by_session() -> str:
-    """Tokens per session — joined to `ChatSession.actor_id` for the per-person view."""
+    """Tokens per session — joined to `ChatSession.actor_id` for the per-person view.
+
+    Sorted before the cap so that, past 1000 sessions, the ones dropped are the smallest
+    by provider output tokens (not an arbitrary 1000).
+    """
     return f"""
 {SPANS_SOURCE}
 | filter ispresent(startTimeUnixNano) and ispresent(attributes.session.id)
 | {_IS_LLM_FIELDS}
-| stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
-        sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
+| {_WRAPPER_FIELDS}
+| stats {_TOKEN_SUMS},
         latest(telemetry_model) as model
   by attributes.session.id as session_id
+| sort tokens_out desc
 | limit 1000
 """
 
@@ -87,16 +116,44 @@ def _num(row: dict[str, Any], key: str) -> float:
         return 0.0
 
 
+# What `unpriced_models` names when tokens were burned under no model id at all.
+UNKNOWN_MODEL = "(unknown model)"
+
+
+def _wrapper_only(row: dict[str, Any]) -> bool:
+    """No provider-span tokens, only Strands wrapper ones (a Mantle provider)."""
+    return not (_num(row, "tokens_in") or _num(row, "tokens_out")) and bool(
+        _num(row, "wrapper_in") or _num(row, "wrapper_out")
+    )
+
+
 def _priced(row: dict[str, Any], prices: dict[str, Any]) -> tuple[float, float | None]:
     """(tokens, dollars-or-None) for one aggregate row."""
-    tokens_in = _num(row, "tokens_in")
-    tokens_out = _num(row, "tokens_out")
-    cache_read = _num(row, "cache_read")
-    cache_write = _num(row, "cache_write")
+    if _wrapper_only(row):
+        tokens_in, tokens_out = _num(row, "wrapper_in"), _num(row, "wrapper_out")
+        cache_read = cache_write = 0.0
+    else:
+        tokens_in = _num(row, "tokens_in")
+        tokens_out = _num(row, "tokens_out")
+        cache_read = _num(row, "cache_read")
+        cache_write = _num(row, "cache_write")
     usd = estimate_cost(
         row.get("model"), tokens_in, tokens_out, cache_read, cache_write, prices=prices
     )
     return tokens_in + tokens_out + cache_read + cache_write, usd
+
+
+def _note_unpriced(
+    unpriced: set[str], row: dict[str, Any], tokens: float, usd: float | None
+) -> None:
+    """Name the model of a row that burned tokens no price covers — a row with no
+    model id at all included, so its tokens never count as silently free."""
+    if usd is None and (tokens or row.get("model")):
+        unpriced.add(str(row.get("model") or UNKNOWN_MODEL))
+
+
+def _calls(row: dict[str, Any]) -> int:
+    return int(_num(row, "wrapper_calls" if _wrapper_only(row) else "llm_calls"))
 
 
 def cost_report(
@@ -136,8 +193,7 @@ def cost_report(
         for row in results.get("by_service") or []:
             service = row.get("service") or "—"
             tokens, usd = _priced(row, prices)
-            if usd is None and row.get("model"):
-                unpriced.add(str(row["model"]))
+            _note_unpriced(unpriced, row, tokens, usd)
             agent = agents_by_name.get(service) or resolve(service)
             by_agent.append(
                 {
@@ -147,7 +203,7 @@ def cost_report(
                     "display_name": (agent.spec or {}).get("display_name") if agent else None,
                     "known": agent is not None,
                     "tokens": int(tokens),
-                    "llm_calls": int(_num(row, "llm_calls")),
+                    "llm_calls": _calls(row),
                     "sessions": int(_num(row, "sessions")),
                     "est_cost_usd": usd,
                 }
@@ -168,8 +224,7 @@ def cost_report(
         per_actor: dict[str, dict[str, Any]] = {}
         for row in session_rows:
             tokens, usd = _priced(row, prices)
-            if usd is None and row.get("model"):
-                unpriced.add(str(row["model"]))
+            _note_unpriced(unpriced, row, tokens, usd)
             # An unmatched session is real traffic with no console identity (/v1, an
             # evaluation replay). It gets its own bucket rather than vanishing.
             actor = actors.get(str(row.get("session_id")), "—")
@@ -235,9 +290,8 @@ def month_to_date(
         total = 0.0
         unpriced: set[str] = set()
         for row in results.get("by_service") or []:
-            _, usd = _priced(row, prices)
-            if usd is None and row.get("model"):
-                unpriced.add(str(row["model"]))
+            tokens, usd = _priced(row, prices)
+            _note_unpriced(unpriced, row, tokens, usd)
             total += usd or 0.0
         return {"usd": round(total, 6), "hours": hours, "unpriced_models": sorted(unpriced)}
 

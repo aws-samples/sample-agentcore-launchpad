@@ -72,10 +72,13 @@ def is_public_address(ip: IpAddress) -> bool:
     """Whether one resolved address is safe to connect to from the backend."""
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
+    # deprecated fec0::/10 site-local: still `is_global` to Python, never a public peer
+    site_local = isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local
     return ip.is_global and not (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
+        or site_local
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
