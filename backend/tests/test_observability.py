@@ -481,14 +481,15 @@ SESSION_ROW = {
 
 def _fake_logs():
     return FakeLogs({
+        # dashboard series / totals aggregate per traceId first, so their keys
+        # must route before the trace-aggregates query's "by traceId"
+        "by bucket": [{"bucket": "2026-07-10 00:00:00.000", "traces": 5, "errors": 1,
+                       "p50_nano": 3_100_000_000, "p95_nano": 11_800_000_000}],
+        "sum(err) as errors": [{"traces": 5, "errors": 1, "p50_nano": 3_100_000_000,
+                                "p95_nano": 11_800_000_000}],
         "by traceId": [AGG_ROW],
         "fields name, traceId": [ROOT_ROW],
         "by attributes.session.id as session_id": [SESSION_ROW],
-        "by bin(": [{"bucket": "2026-07-10 00:00:00.000", "traces": 5, "errors": 1,
-                     "p50_nano": 3_100_000_000, "p95_nano": 11_800_000_000}],
-        # totals query: same aggregates as series but no bin() — must come after
-        "pct(durationNano": [{"traces": 5, "errors": 1, "p50_nano": 3_100_000_000,
-                              "p95_nano": 11_800_000_000}],
         "count_distinct(attributes.session.id) as sessions": [
             {"sessions": 3, "agents": 2}],
         "by tool": [
@@ -1545,3 +1546,48 @@ def test_evaluate_session_spans_wrapper_shape():
     assert out[0]["evaluatorId"] == "Builtin.Helpfulness"
     with pytest.raises(ValueError):
         ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness", spans=[])
+
+
+# ── trace roots: parentless or POST /invocations, one trace counted once ─────
+
+
+def test_root_filter_counts_agentcore_invocations():
+    # AgentCore Runtime / Harness never export a parentless span, so a root is
+    # also any `POST /invocations` span (prod read 0 traces on parentless only).
+    assert "not ispresent(parentSpanId)" in obs.ROOT_SPAN_FILTER
+    assert 'name = "POST /invocations"' in obs.ROOT_SPAN_FILTER
+    for query in (obs.q_dashboard_totals(), obs.q_dashboard_series("24h"), obs.q_root_spans()):
+        assert obs.ROOT_SPAN_FILTER in query
+
+
+def test_dashboard_queries_aggregate_per_trace_before_counting():
+    # A Harness trace holds two `POST /invocations` spans; counting rows would
+    # count it twice and skew the percentiles, so both queries group by traceId
+    # first and only then count / take percentiles of the per-trace duration.
+    totals = obs.q_dashboard_totals()
+    series = obs.q_dashboard_series("7d")
+    for query in (totals, series):
+        per_trace, overall = query.split("| stats", 2)[1:]
+        assert "by traceId" in per_trace and "max(durationNano) as dur" in per_trace
+        assert "count(*) as traces" in overall and "pct(dur, 95) as p95_nano" in overall
+    assert "by traceId, bin(6h) as bucket" in series
+    assert series.rstrip().endswith("| limit 200")
+
+
+def test_trace_list_keeps_the_outermost_root_of_a_two_root_trace(monkeypatch):
+    agg = {"traceId": "a" * 32, "start_ns": "1000", "end_ns": "9000000000", "span_count": "6"}
+    roots = [  # newest first, as q_root_spans sorts them
+        {"traceId": "a" * 32, "name": "POST /invocations", "service": "harness_inner",
+         "durationNano": "2000000000", "startTimeUnixNano": "5000"},
+        {"traceId": "a" * 32, "name": "POST /invocations", "service": "harness_outer",
+         "durationNano": "9000000000", "startTimeUnixNano": "1000"},
+    ]
+    monkeypatch.setattr(obs, "run_insights_queries",
+                        lambda *a, **k: {"aggregates": [agg], "roots": roots})
+    db = SessionLocal()
+    try:
+        out = obs.list_traces("24h", db, ws_ctx(), force=True, logs=object())
+    finally:
+        db.close()
+    (row,) = out["traces"]
+    assert row["duration_ms"] == 9000.0 and row["service"] == "harness_outer"

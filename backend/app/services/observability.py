@@ -53,6 +53,14 @@ MAX_ON_DEMAND_EVALUATORS = 5
 CACHE_TTL_SECONDS = 60.0
 QUERY_DEADLINE_SECONDS = 55
 NANOS_PER_MS = 1_000_000
+# A trace's entry span. AgentCore Runtime and Harness invocations never export a
+# parentless span: even `POST /invocations` carries the caller's parentSpanId
+# (measured 2026-10-14: zero parentless spans on the us-east-1 hub over 24h, so
+# "no parent" alone counted no traces there). Parentless spans still count, for
+# OTel sources that emit a true root. A trace can hold two `POST /invocations`
+# spans (a Harness and its backing runtime), so anything that counts traces must
+# aggregate per traceId first (see the dashboard queries).
+ROOT_SPAN_FILTER = '(not ispresent(parentSpanId) or name = "POST /invocations")'
 
 # Anthropic-convention multipliers applied when a price entry has no explicit
 # cache_read / cache_write rate — advisory, like every cost figure here.
@@ -307,7 +315,9 @@ def q_root_spans(trace_ids: list[str] | None = None, limit: int = 3 * TRACE_LIMI
     # `trace_ids` narrows the scan to those traces (an unfiltered roots query
     # over 7d is the slow half of a session view, and its newest-N cap can miss
     # an older session's roots entirely).
-    filters = ["ispresent(startTimeUnixNano)", "not ispresent(parentSpanId)"]
+    # A trace may have two root rows; the consumer keys them by traceId over this
+    # newest-first list, so the earliest-starting (outermost) root wins.
+    filters = ["ispresent(startTimeUnixNano)", ROOT_SPAN_FILTER]
     if trace_ids is not None:
         for trace_id in trace_ids:
             _require(TRACE_ID_RE, trace_id, "trace id")
@@ -344,11 +354,13 @@ def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
 def q_dashboard_series(range_key: str) -> str:
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
+| filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
-| stats count(*) as traces, sum(is_error) as errors,
-        pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
-  by bin({BIN_BY_RANGE[range_key]}) as bucket
+| stats max(durationNano) as dur, max(is_error) as err
+  by traceId, bin({BIN_BY_RANGE[range_key]}) as bucket
+| stats count(*) as traces, sum(err) as errors,
+        pct(dur, 50) as p50_nano, pct(dur, 95) as p95_nano
+  by bucket
 | sort bucket asc
 | limit 200
 """
@@ -357,10 +369,11 @@ def q_dashboard_series(range_key: str) -> str:
 def q_dashboard_totals() -> str:
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
+| filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
-| stats count(*) as traces, sum(is_error) as errors,
-        pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
+| stats max(durationNano) as dur, max(is_error) as err by traceId
+| stats count(*) as traces, sum(err) as errors,
+        pct(dur, 50) as p50_nano, pct(dur, 95) as p95_nano
 """
 
 
