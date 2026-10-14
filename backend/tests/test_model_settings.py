@@ -285,6 +285,21 @@ def test_an_override_survives_settings_cache_clear(client):
     assert get_settings().judge_model_id == GPT_SOL
 
 
+def test_a_concurrent_rebuild_keeps_the_default_and_reset_working(client):
+    """Two threads missing the cleared cache at once both build through the hook; the
+    one lru_cache keeps may not be the one that recorded the baseline. Its default
+    must still be the env / yaml / built-in value, and a reset must still revert."""
+    assert client.put("/api/admin/models/judge_model_id",
+                      json={"model_id": GLM}).status_code == 200
+    get_settings.cache_clear()
+    cached = get_settings()
+    get_settings.__wrapped__()  # the sibling build, hooked last, not cached
+    row = _role(client.get("/api/model-defaults").json(), "judge_model_id")
+    assert row["model_id"] == GLM and row["default"] == GPT_SOL
+    client.delete("/api/admin/models/judge_model_id")
+    assert get_settings() is cached and cached.judge_model_id == GPT_SOL
+
+
 def test_an_override_survives_the_price_refresh(client, monkeypatch, tmp_path):
     import app.core.config as config_module
     from app.services import model_prices as mp

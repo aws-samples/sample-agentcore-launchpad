@@ -172,6 +172,12 @@ function RoleEditor({ role, onSaved }: { role: ModelRoleSetting; onSaved: (row: 
                 : t("v2.models.confirmSaveBody", { role: name, model: value || t("v2.models.none") })}
             </span>
             <span className="v2-muted">{t("v2.models.confirmGlobal")}</span>
+            {confirm === "save" && probe.results.some((r) => !r.ok) && (
+              // not a block: a probe runs in the default workspace only
+              <div data-testid={`v2-models-probe-failed-${role.role}`}>
+                <Alert tone="warn">{t("v2.models.confirmProbeFailed")}</Alert>
+              </div>
+            )}
             {(role.role === "judge_model_id" || role.role === "judge_fallback_model_id") && (
               <Alert tone="warn">{t("v2.models.noteJudge")}</Alert>
             )}
@@ -272,6 +278,10 @@ function ModelsManager() {
   );
 }
 
+// display names for the provider families a role accepts
+const FAMILY_LABEL: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
+const familyLabel = (f: string) => FAMILY_LABEL[f] ?? f;
+
 /**
  * 模型 — admin-only: every model the platform itself calls or pre-selects (the agent
  * default, the evaluation judge, the assistant, the architect preset, the simulated
@@ -279,10 +289,6 @@ function ModelsManager() {
  * probe in the hub's default workspace, and a console override (applied at once to
  * every workspace and member of this deployment, persisted in its ledger).
  */
-// display names for the provider families a role accepts
-const FAMILY_LABEL: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
-const familyLabel = (f: string) => FAMILY_LABEL[f] ?? f;
-
 export function V2Models() {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();

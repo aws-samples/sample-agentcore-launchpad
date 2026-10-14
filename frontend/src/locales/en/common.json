@@ -8346,6 +8346,7 @@
       "confirmResetTitle": "Reset {{role}} to its default?",
       "confirmResetBody": "{{role}} goes back to {{model}}.",
       "confirmGlobal": "This applies immediately to every workspace and member on this deployment.",
+      "confirmProbeFailed": "The last probe of this model failed in the default workspace. You can still save it.",
       "role": {
         "agent_default_model_id": {
           "name": "Agent default",

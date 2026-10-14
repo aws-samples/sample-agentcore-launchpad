@@ -8346,6 +8346,7 @@
       "confirmResetTitle": "将{{role}}的模型恢复为默认值？",
       "confirmResetBody": "{{role}}的模型将恢复为 {{model}}。",
       "confirmGlobal": "此修改立即作用于本部署的所有工作区和成员。",
+      "confirmProbeFailed": "该模型在默认工作区的最近一次探测失败。仍可保存。",
       "role": {
         "agent_default_model_id": {
           "name": "Agent 默认模型",

@@ -138,8 +138,22 @@ def _baseline_of(settings: Settings) -> dict[str, Any]:
     # Every in-place application goes through here first, so an object without a
     # recorded baseline (cached before this module registered its hook) carries no
     # override yet and its current values ARE the baseline.
+    global _baseline
     owner, values = _baseline
-    return values if owner is settings else _record_baseline(settings)
+    if owner is settings:
+        return values
+    if owner is None:
+        return _record_baseline(settings)
+    # A sibling: two threads missed the cleared cache at once, both builds went
+    # through the hook (the last one recorded the baseline), and lru_cache kept the
+    # other. Its overridden fields already carry the override, so their baseline is
+    # the sibling's — built from the same env / yaml — not their current value
+    # (which would make a reset a no-op and report the override as the default).
+    current = {r.field: getattr(settings, r.field) for r in ROLES}
+    for field in _overrides:
+        current[field] = values[field]
+    _baseline = (settings, current)
+    return current
 
 
 def _apply_snapshot(settings: Settings) -> None:
