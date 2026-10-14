@@ -499,6 +499,19 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/admin/models/{role}"): ADMIN,
     # One small real Bedrock call in the hub's default workspace; writes nothing.
     ("POST", "/api/admin/models/probe"): ADMIN,
+    # ---- spend attribution and threshold alerts (routers/alerts.py) ----
+    # All ADMIN: the per-person breakdown names who spent what, and a rule's value
+    # (online quality, error rate) aggregates over every agent of the workspace —
+    # including agents a member cannot see under isolation.
+    ("GET", "/api/costs"): ADMIN,
+    ("GET", "/api/costs/month-to-date"): ADMIN,
+    ("GET", "/api/alerts"): ADMIN,
+    ("POST", "/api/alerts"): ADMIN,
+    ("GET", "/api/alerts/scheduler"): ADMIN,
+    ("PATCH", "/api/alerts/{rule_id}"): ADMIN,
+    ("DELETE", "/api/alerts/{rule_id}"): ADMIN,
+    # A billed read of every rule's value; never notifies (only the scheduler does).
+    ("POST", "/api/alerts/evaluate"): ADMIN,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.

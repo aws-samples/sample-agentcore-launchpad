@@ -382,6 +382,12 @@ class Settings(BaseSettings):
         "model_prices_and_context_window.json"
     )
     model_prices_refresh_hours: int = 24  # 0 disables the periodic refresher
+    # Background alert checks (`app.services.alert_scheduler`). OFF by default and
+    # turned on per box: prod and prod2 share one AWS account, so enabling it on
+    # both would post every webhook twice. One thread per process — the systemd
+    # unit runs a single uvicorn; several processes would each run one.
+    alerts_scheduler_enabled: bool = False
+    alerts_scheduler_interval_seconds: int = 300
 
     @model_validator(mode="after")
     def _seed_model_prices(self) -> "Settings":

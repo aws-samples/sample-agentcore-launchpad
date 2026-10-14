@@ -53,6 +53,7 @@ WORKSPACE_SCOPED_TABLES = (
     "user_grants",
     "resource_creators",
     "chat_feedback",
+    "alert_rules",
 )
 
 
@@ -284,6 +285,7 @@ def _migrate(bind) -> None:
     _migrate_api_key_lifecycle_columns(bind)
     _migrate_creator_columns(bind)
     _migrate_resource_creators_index(bind)
+    _migrate_alert_rules_creator(bind)
 
 
 def _migrate_creator_columns(bind) -> None:
@@ -399,6 +401,39 @@ def _migrate_creator_columns(bind) -> None:
                 "ON managed_memories (created_by)"
             )
         )
+
+
+def _migrate_alert_rules_creator(bind) -> None:
+    """`alert_rules.created_by_name`, for a ledger that ran the console-v3 branch.
+
+    That branch created the table with `created_by` holding a **username**. It is
+    reinterpreted exactly once (guarded on `created_by_name` being absent), the way
+    `managed_memories` was: the username moves to `created_by_name`, and
+    `created_by` becomes the matching `users.id` (NULL when no `users` row has that
+    name — the config admin / auth-disabled operator).
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    if "alert_rules" not in live_tables:
+        return
+    existing = {c["name"] for c in inspector.get_columns("alert_rules")}
+    if "created_by_name" in existing:
+        return
+    with bind.begin() as conn:
+        conn.execute(text("ALTER TABLE alert_rules ADD COLUMN created_by_name VARCHAR(64)"))
+        conn.execute(text("UPDATE alert_rules SET created_by_name = created_by"))
+        if "users" in live_tables:
+            conn.execute(
+                text(
+                    "UPDATE alert_rules SET created_by = ("
+                    "SELECT u.id FROM users u "
+                    "WHERE u.username = alert_rules.created_by_name)"
+                )
+            )
+        else:
+            conn.execute(text("UPDATE alert_rules SET created_by = NULL"))
 
 
 def _migrate_resource_creators_index(bind) -> None:
@@ -752,6 +787,9 @@ def _migrate_workspace_columns(bind) -> None:
         # born with the column (and so is a console-v3-era table); listed so the
         # scoped-tables drift test holds and the index is ensured
         "chat_feedback": "ALTER TABLE chat_feedback ADD COLUMN workspace_id VARCHAR(32)",
+        # born with the column (a console-v3-era table too); listed so the
+        # scoped-tables drift test holds and the index is ensured
+        "alert_rules": "ALTER TABLE alert_rules ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

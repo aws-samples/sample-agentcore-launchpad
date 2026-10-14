@@ -29,6 +29,7 @@ from app.optimization.routers import router as experiments_router
 from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
+from app.routers.alerts import router as alerts_router
 from app.routers.announcements import router as announcements_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.assistant import AssistantBodyCap
@@ -56,7 +57,7 @@ from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.videos import router as videos_router
 from app.routers.workspaces import router as workspaces_router
-from app.services import byoc_uploads, local_exec, model_settings
+from app.services import alert_scheduler, byoc_uploads, local_exec, model_settings
 from app.services.attachment_body import AttachmentBodyCap
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
@@ -213,6 +214,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(users_router)  # admin-only console account management
     app.include_router(workspaces_router)  # environments + the request-boundary grants
     app.include_router(model_defaults_router)  # platform model roles + admin overrides
+    app.include_router(alerts_router)  # spend attribution + threshold alert rules
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:
@@ -260,6 +262,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
                 "reaped %d orphaned studio exec container(s)", reaped
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
+        alert_scheduler.start()  # opt-in background alert checks (real server only)
 
     app.add_api_route("/api/health", health, methods=["GET"])
 

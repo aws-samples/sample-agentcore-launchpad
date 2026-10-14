@@ -81,6 +81,10 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "local_exec.reap_orphan_containers":
         "kills leftover studio exec containers + scratch dirs; transient, no ledger row",
     "start_auto_refresh": "starts the model-price refresh thread; restart-safe, no ledger row",
+    "alert_scheduler.start": (
+        "starts the opt-in alert-check thread (off by default); restart-safe — a rule's "
+        "state is re-read on the next tick, no in-flight row"
+    ),
 }
 
 # Subsystems that fail an interrupted row only when it is next read — a startup

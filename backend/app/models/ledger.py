@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     String,
@@ -675,6 +676,61 @@ class Job(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     log: Mapped[str] = mapped_column(Text, default="")  # JSONL, one event per line
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class AlertRule(Base):
+    """One threshold the platform watches, and what it last saw.
+
+    Deliberately a *rule*, not a subscription: the value is computed from data the
+    platform already collects (spans for error rate and latency, online-evaluation
+    results for quality, the price map for spend), so a rule adds a threshold and a
+    destination rather than a new telemetry path (`app.services.alerts`).
+
+    `state` and `last_value` are the evaluation's own memory: a firing rule notifies
+    **once**, on the transition, rather than on every pass.
+
+    The column set is a superset of the console-v3 branch's table of the same name
+    (which lacks `created_by_name`, added by `_migrate_alert_rules_creator`). There
+    `created_by` held a username; here it is `users.id` (`app.services.creators`).
+    """
+
+    __tablename__ = "alert_rules"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    # error_rate | latency_p95_ms | online_quality | spend_usd | cost_mtd_usd
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    # "above" | "below" — quality fires when it drops, the others when they rise
+    comparison: Mapped[str] = mapped_column(String(8), default="above")
+    threshold: Mapped[float] = mapped_column(Float)
+    # the range key the value is measured over ("1h" … "30d"); see services/alerts
+    window: Mapped[str] = mapped_column(String(8), default="24h")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    # Optional outbound destination: one generic https JSON webhook (a Slack or
+    # Feishu incoming hook already is one). Never returned by the API.
+    webhook_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    # ok | firing | unknown (unknown = the last evaluation could not read the value)
+    state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    last_value: Mapped[float | None] = mapped_column(default=None)
+    last_detail: Mapped[str | None] = mapped_column(Text, default=None)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_fired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # The creating console principal (`app.services.creators`): `users.id` and the
+    # username at creation (display). Not a FK.
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
