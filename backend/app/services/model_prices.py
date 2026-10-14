@@ -7,7 +7,9 @@ public price file (per-token USD costs → per-1M entries):
 - models seen in the account's telemetry get exact full-id entries
   (regional Bedrock prices differ, e.g. us.* carries a premium over global.*),
 - the operator's short fallback keys ("sonnet-4-6") get their numbers
-  refreshed from the most canonical matching source entry,
+  refreshed from the most canonical matching source entry — for a built-in
+  unprefixed key (= the global-profile price) never from a regional
+  (us./eu./apac.) entry, which carries the regional premium,
 - unmatched keys are preserved untouched.
 
 Only the local config file is written — no AWS resource is mutated. The
@@ -121,10 +123,32 @@ def _candidate_ids(model: str) -> list[str]:
     return ids
 
 
+def _builtin_price_keys() -> frozenset[str]:
+    return frozenset(config_module.Settings.model_fields["model_prices"].default or {})
+
+
+def _segment(name: str) -> str:
+    """The model part of a source name (`bedrock_mantle/openai.x` → `openai.x`)."""
+    return name.rsplit("/", 1)[-1].lower()
+
+
 def refresh_map(
-    current: dict[str, Any], seen_models: list[str], source: dict[str, Any]
+    current: dict[str, Any], seen_models: list[str], source: dict[str, Any],
+    *, global_keys: frozenset[str] | None = None,
 ) -> tuple[dict[str, Any], list[str], list[str]]:
-    """Pure merge step: returns (new_prices, updated_keys, added_keys)."""
+    """Pure merge step: returns (new_prices, updated_keys, added_keys).
+
+    ``global_keys`` (default: the built-in price keys) are short keys that stand
+    for the GLOBAL inference-profile price — the built-in map gives the regional
+    profiles their own longer keys (``us.zai.glm-5.3``). Such a key is refreshed
+    only from a ``global.`` source entry when one exists, otherwise from an entry
+    without a regional prefix, otherwise kept as is; the plain "shortest name"
+    pick would land on ``us.*`` (or a bare id litellm prices at the US rate) and
+    cost global traffic ~10% high. Such a key also takes prices only from entries
+    it would itself match under the longest-key rule.
+    """
+    if global_keys is None:
+        global_keys = _builtin_price_keys()
     catalog = _chat_catalog(source)
     by_lower = {name.lower(): (name, entry) for name, entry, _ in catalog}
 
@@ -181,6 +205,17 @@ def refresh_map(
         if key in updated or key in added:
             continue
         candidates = [item for item in catalog if key.lower() in item[0].lower()]
+        if key in global_keys and not key.lower().startswith(REGION_PREFIXES):
+            # only entries this key itself prices: a longer key that also matches
+            # owns them (`glm-5` must not take `global.zai.glm-5.3`'s price)
+            longer = [k.lower() for k in current if len(k) > len(key)]
+            candidates = [
+                c for c in candidates if not any(k in c[0].lower() for k in longer)
+            ]
+            global_hits = [c for c in candidates if _segment(c[0]).startswith("global.")]
+            candidates = global_hits or [
+                c for c in candidates if not _segment(c[0]).startswith(REGION_PREFIXES)
+            ]
         if not candidates:
             continue
         _, entry, _ = min(candidates, key=rank)

@@ -27,10 +27,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
 from app.models.ledger import Agent
 from app.schemas.agent import (
-    DEFAULT_MODEL_ID,
     INFERENCE_PROFILE_PREFIXES,
     AgentSpec,
     byoc_model_target,
@@ -209,10 +209,19 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
 # invoke. Provider strings and the node types that carry a model mirror
 # ``frontend/src/studio`` (``MANTLE_PROVIDER`` in lib/models.ts, the agent-node
 # filter in lib/graph-code-generator.ts); a node without a model id generates
-# the canvas fallback, which equals ``DEFAULT_MODEL_ID``.
+# the canvas fallback, ``studio_fallback_model_id()``.
 STUDIO_MODEL_NODE_TYPES = frozenset({"agent", "orchestrator-agent", "swarm"})
 STUDIO_BEDROCK_PROVIDER = "AWS Bedrock"
 STUDIO_MANTLE_PROVIDER = "Amazon Bedrock (Mantle)"
+
+
+def studio_fallback_model_id() -> str:
+    """The model a canvas node without one generates (settings.studio_fallback_model_id).
+
+    Its own role, deliberately not the agent default: moving it would move every
+    existing flow's model-less nodes. The canvas codegen reads the same value from
+    GET /api/model-defaults, so the role is scoped to the model the code calls."""
+    return get_settings().studio_fallback_model_id.strip()
 
 
 def studio_node_models(spec: AgentSpec) -> list[tuple[str, str]]:
@@ -226,7 +235,7 @@ def studio_node_models(spec: AgentSpec) -> list[tuple[str, str]]:
         data = node.get("data") if isinstance(node.get("data"), dict) else {}
         provider = data.get("modelProvider") or STUDIO_BEDROCK_PROVIDER
         model = data.get("modelId") or (
-            DEFAULT_MODEL_ID if provider == STUDIO_BEDROCK_PROVIDER else ""
+            studio_fallback_model_id() if provider == STUDIO_BEDROCK_PROVIDER else ""
         )
         models.append((str(provider), str(model)))
     return models

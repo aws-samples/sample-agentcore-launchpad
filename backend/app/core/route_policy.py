@@ -491,11 +491,20 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Shared vs isolated member resource visibility (services/visibility.py).
     ("GET", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
     ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
+    # ---- platform model settings (hub-global, services/model_settings.py) ----
+    # The effective model per role: every picker's pre-selection.
+    ("GET", "/api/model-defaults"): MEMBER,
+    # A console override changes a default for every workspace and member at once.
+    ("PUT", "/api/admin/models/{role}"): ADMIN,
+    ("DELETE", "/api/admin/models/{role}"): ADMIN,
+    # One small real Bedrock call in the hub's default workspace; writes nothing.
+    ("POST", "/api/admin/models/probe"): ADMIN,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
 HUB_GLOBAL_PREFIXES = (
     "/api/auth", "/api/users", "/api/workspaces", "/api/announcements", "/api/videos",
+    "/api/model-defaults", "/api/admin/models",
 )
 
 
@@ -564,6 +573,12 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         # The target is the path parameter, like grants.
         ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),
         ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
+        # Platform model settings are one hub-global ledger table; the probe runs
+        # in the hub's default workspace, never the caller's selection.
+        ("GET", "/api/model-defaults"),
+        ("PUT", "/api/admin/models/{role}"),
+        ("DELETE", "/api/admin/models/{role}"),
+        ("POST", "/api/admin/models/probe"),
     }
 )
 

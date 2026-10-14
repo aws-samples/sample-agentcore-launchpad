@@ -2708,17 +2708,20 @@ def test_architect_defaults_are_gpt6_astra_64k_output_high_effort():
 
 
 def test_ordinary_specs_send_exactly_the_request_they_always_did():
+    # a row stored before the agent default moved to GPT-6 Sol carries the old Claude id
+    claude = "global.anthropic.claude-sonnet-5"
     stored = {"name": "plain-harness", "method": "harness", "system_prompt": "hi",
-              "model_id": DEFAULT_MODEL_ID}
+              "model_id": claude}
     spec = AgentSpec(**stored)
     assert spec.max_tokens is None and spec.reasoning_effort is None
     model = build_create_params(spec, "arn:aws:iam::111:role/x", None)["model"]
-    assert model == {"bedrockModelConfig": {"modelId": DEFAULT_MODEL_ID,
+    assert model == {"bedrockModelConfig": {"modelId": claude,
                                             "apiFormat": "converse_stream"}}
 
 
 @pytest.mark.parametrize("over", [
-    {"reasoning_effort": "high"},  # Claude on Converse: the knob would leak
+    # Claude on Converse: the knob would leak
+    {"model_id": "global.anthropic.claude-sonnet-5", "reasoning_effort": "high"},
     {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
     {"model_id": ASTRA, "method": "zip_runtime", "reasoning_effort": "high"},
     {"method": "zip_runtime", "max_tokens": 4096},

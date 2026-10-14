@@ -35,6 +35,10 @@ DEFAULT_CONTEXT_ALLOWED = {
     # a spoke's trust policy must name. The default context is the subject here,
     # not a fallback for a missing one.
     "routers/workspaces.py",
+    # platform model settings are hub-global, and their probe deliberately runs in
+    # the hub's default workspace (the account whose credentials serve the Models
+    # page), never the caller's selected one
+    "routers/model_defaults.py",
 }
 
 

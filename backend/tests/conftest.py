@@ -117,6 +117,18 @@ def isolated_config_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def reset_model_overrides():
+    # Console model overrides live in a process-wide snapshot that every
+    # get_settings() rebuild re-applies; clean_tables wipes their ledger rows, so
+    # drop the snapshot too or one test's override leaks into the next.
+    yield
+    from app.services import model_settings
+
+    if model_settings.overrides():
+        model_settings.reset_overrides()
+
+
+@pytest.fixture(autouse=True)
 def reset_aws_client_cache():
     # Tests that stub aws_clients.get_session still populate the module-level
     # client cache; a fake cached under a real key must not leak across tests.

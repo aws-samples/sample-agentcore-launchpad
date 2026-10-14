@@ -212,7 +212,8 @@ CONVERTED_SPEC = {
 def test_redeploy_of_a_converted_agent_keeps_its_baked_prompt_and_model(client, no_real_deploy):
     agent_id = client.post("/api/agents", json=CONVERTED_SPEC).json()["agent"]["id"]
     _activate(agent_id)
-    for bad, field in (({"model_id": "global.openai.gpt-6-sol"}, "model_id"),
+    # the stored spec has the agent default (GPT-6 Sol), so a change is another id
+    for bad, field in (({"model_id": "global.anthropic.claude-sonnet-5"}, "model_id"),
                        ({"system_prompt": "Now answer in French."}, "system_prompt")):
         res = client.post(f"/api/agents/{agent_id}/redeploy", json={**CONVERTED_SPEC, **bad})
         assert res.status_code == 400
@@ -448,7 +449,8 @@ def test_ordinary_create_without_knobs_reads_back_schema_defaults(client):
     "overrides",
     [
         {"method": "zip_runtime", "max_tokens": 4096},  # harness-only knob
-        {"reasoning_effort": "high"},  # Claude on Converse: the effort has no wire shape
+        # Claude on Converse: the effort has no wire shape
+        {"model_id": "global.anthropic.claude-sonnet-5", "reasoning_effort": "high"},
         {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
         {"max_iterations": 0},
         {"timeout_seconds": 5},

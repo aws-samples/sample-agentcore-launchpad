@@ -1009,7 +1009,7 @@ class JudgeCreate(BaseModel):
     # — neither is managed by the console).
     lambda_arn: str | None = Field(default=None, pattern=_LAMBDA_ARN_PATTERN)
     lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
-    model_id: str = ac.JUDGE_DEFAULT_MODEL_ID
+    model_id: str = Field(default_factory=ac.judge_default_model_id)
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=200)  # AWS EvaluatorDescription max
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
@@ -1180,7 +1180,7 @@ def create_judge(
         "evaluator_id": created.get("evaluatorId"),
         "arn": created.get("evaluatorArn"),
         # set only when AgentCore refused the requested judge model and the
-        # evaluator was created on ac.JUDGE_FALLBACK_MODEL_ID instead
+        # evaluator was created on ac.judge_fallback_model_id() instead
         "model_fallback": created.get("launchpadModelFallback"),
         **creators.fields(creator),
     }
@@ -1207,7 +1207,7 @@ class JudgeUpdate(BaseModel):
     )
     lambda_arn: str | None = Field(default=None, pattern=_LAMBDA_ARN_PATTERN)
     lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
-    model_id: str = ac.JUDGE_DEFAULT_MODEL_ID
+    model_id: str = Field(default_factory=ac.judge_default_model_id)
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=200)  # AWS EvaluatorDescription max
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)

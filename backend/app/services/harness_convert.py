@@ -32,7 +32,13 @@ from uuid import uuid4
 from app.core.config import DATA_DIR
 from app.core.errors import AppError
 from app.harness_tool_access import NATIVE_HARNESS_TOOLS, selected_native_tools
-from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig, ToolRef
+from app.schemas.agent import (
+    AgentSpec,
+    KnowledgeBaseRef,
+    MemoryConfig,
+    ToolRef,
+    agent_default_model_id,
+)
 from app.schemas.requirements import resolve_pins
 from app.services.workspace import WorkspaceContext
 from app.templates.attachment_support import render_attachment_source
@@ -1249,7 +1255,7 @@ def build_conversion_spec(
     return AgentSpec(
         name=new_name,
         method="zip_runtime",
-        model_id=source_spec.get("model_id") or AgentSpec.model_fields["model_id"].default,
+        model_id=source_spec.get("model_id") or agent_default_model_id(),
         model_source=conversion_platform_inputs(source_agent)[1],
         system_prompt=prompt_default or "(baked into exported code)",
         tool_description_overrides=tool_defaults,

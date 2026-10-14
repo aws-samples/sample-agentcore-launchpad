@@ -11,12 +11,14 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
+from app.core.config import Settings, get_settings
 from app.schemas.agent import (
     AgentSpec,
     KnowledgeBaseRef,
     ModelSource,
     ReasoningEffort,
     ToolRef,
+    is_openai_model_id,
 )
 from app.services.skill_ingest import (
     SKILL_BUNDLE_MAX_BYTES,
@@ -56,7 +58,10 @@ class SystemPreset:
     # Inference defaults for a NEW install. An administrator may change every member
     # of ``InstallOptions`` afterwards; these are the values ``InstallOptions()`` and
     # ``default_options`` resolve to, never a constraint on what is stored.
-    model_id: str = "global.openai.gpt-6-astra"
+    # Built-in; ``model_setting`` names the Settings role that overrides it for a new
+    # install (read through ``default_model_id``).
+    model_id: str = Settings.model_fields["architect_model_id"].default
+    model_setting: str | None = None
     model_source: ModelSource = "bedrock"
     # Per model call (``bedrockModelConfig.maxTokens``): 64k output so a full design
     # proposal is never cut at the provider's 4096-token default. Not a spend cap.
@@ -66,13 +71,29 @@ class SystemPreset:
     timeout_seconds: int = 900
     skill_dir: str = ""  # directory name under SKILLS_ROOT
 
+    def default_model_id(self) -> str:
+        """The model of a new install: the ``model_setting`` role (env, launchpad.yaml
+        or the admin Models page) when the preset names one, else ``model_id``."""
+        if self.model_setting:
+            return str(getattr(get_settings(), self.model_setting) or "").strip() or (
+                self.model_id
+            )
+        return self.model_id
+
+    def default_reasoning_effort(self) -> ReasoningEffort | None:
+        """The preset effort, but only while the default model takes one: AgentSpec
+        refuses ``reasoning_effort`` on a non-OpenAI model."""
+        if is_openai_model_id(self.default_model_id()):
+            return self.reasoning_effort
+        return None
+
     def default_options(self) -> "InstallOptions":
         """What a first install with an empty body gets."""
         return InstallOptions(
-            model_id=self.model_id,
+            model_id=self.default_model_id(),
             model_source=self.model_source,
             max_tokens=self.max_tokens,
-            reasoning_effort=self.reasoning_effort,
+            reasoning_effort=self.default_reasoning_effort(),
         )
 
     def skill_path(self) -> Path:
@@ -152,6 +173,7 @@ ARCHITECT = SystemPreset(
         "skill bundle."
     ),
     skill_version="1.5.8",
+    model_setting="architect_model_id",
     system_prompt=ARCHITECT_SYSTEM_PROMPT,
     allowed_tools=("shell", "file_*", f"@{AWS_KNOWLEDGE_TOOL_NAME}"),
 )
@@ -264,7 +286,7 @@ def build_spec(
     return AgentSpec(
         name=preset.name,
         method="harness",
-        model_id=options.model_id or preset.model_id,
+        model_id=options.model_id or preset.default_model_id(),
         model_source=options.model_source or preset.model_source,
         max_tokens=options.max_tokens,
         reasoning_effort=options.reasoning_effort,
@@ -316,7 +338,7 @@ def effective_settings(preset: SystemPreset, spec: dict | None) -> dict:
         return {}
     options = options_from_spec(spec)
     return {
-        "model_id": options.model_id or preset.model_id,
+        "model_id": options.model_id or preset.default_model_id(),
         "model_source": options.model_source or preset.model_source,
         "max_tokens": options.max_tokens,
         "reasoning_effort": options.reasoning_effort,
@@ -331,10 +353,10 @@ def default_settings(preset: SystemPreset) -> dict:
     """This build's catalogue defaults for the same members (``knowledge_bases`` is
     always empty by default)."""
     return {
-        "model_id": preset.model_id,
+        "model_id": preset.default_model_id(),
         "model_source": preset.model_source,
         "max_tokens": preset.max_tokens,
-        "reasoning_effort": preset.reasoning_effort,
+        "reasoning_effort": preset.default_reasoning_effort(),
         "system_prompt": preset.system_prompt,
         "max_iterations": preset.max_iterations,
         "timeout_seconds": preset.timeout_seconds,

@@ -274,3 +274,116 @@ def test_prices_endpoints(client, monkeypatch, tmp_path):
     res = client.post("/api/observability/prices/refresh")
     assert res.status_code == 200
     assert "sonnet-4-6" in res.json()["meta"]["updated"]
+
+
+def _litellm(**entries):
+    """A litellm-shaped source: name → (input $/1M, output $/1M[, cache_read, cache_write])."""
+    out = {}
+    for name, numbers in entries.items():
+        spec = {"input_cost_per_token": numbers[0] / 1e6,
+                "output_cost_per_token": numbers[1] / 1e6,
+                "litellm_provider": "bedrock_converse", "mode": "chat"}
+        if len(numbers) == 4:
+            spec["cache_read_input_token_cost"] = numbers[2] / 1e6
+            spec["cache_creation_input_token_cost"] = numbers[3] / 1e6
+        out[name] = spec
+    return out
+
+
+# The shape measured in litellm's price file on 2026-10-14: GLM-5.3 and Kimi K3 each
+# carry a cheaper global.* entry next to a US one, and K3's bare id is priced at the
+# US rate. The plain "shortest name" pick lands on the US premium for both.
+MEASURED = _litellm(**{
+    "global.zai.glm-5.3": (1.68, 5.28, 0.312, 2.10),
+    "us.zai.glm-5.3": (1.848, 5.808, 0.3432, 2.31),
+    "zai.glm-5": (1.00, 3.20),
+    "global.moonshotai.kimi-k3": (3.00, 15.00, 0.30, 3.75),
+    "us.moonshotai.kimi-k3": (3.30, 16.50, 0.33, 4.125),
+    "moonshotai.kimi-k3": (3.30, 16.50, 0.33, 4.125),
+    "global.openai.gpt-6-astra": (10.0, 50.0, 1.0, 12.5),
+    "openai.gpt-6-astra": (11.0, 55.0, 1.1, 13.75),
+})
+
+
+def test_refresh_keeps_global_prices_of_builtin_short_keys():
+    defaults = Settings.model_fields["model_prices"].default
+    prices, updated, _ = mp.refresh_map(defaults, [], MEASURED)
+
+    for key in ("glm-5.3", "kimi-k3", "gpt-6-astra"):
+        assert prices[key] == defaults[key], key
+        assert key not in updated, key
+    # the regional profiles keep their own premium keys
+    assert prices["us.zai.glm-5.3"]["input"] == pytest.approx(1.848)
+    assert prices["us.moonshotai.kimi-k3"]["input"] == pytest.approx(3.30)
+    # a shorter key never takes a longer key's model: glm-5 stays GLM-5, not GLM-5.3
+    assert prices["glm-5"] == {"input": 1.00, "output": 3.20}
+
+
+def test_refresh_moves_a_builtin_short_key_only_to_a_global_price():
+    current = {"glm-5.3": {"input": 9.0, "output": 9.0}}
+    prices, updated, _ = mp.refresh_map(current, [], MEASURED,
+                                        global_keys=frozenset({"glm-5.3"}))
+    assert prices["glm-5.3"]["input"] == pytest.approx(1.68) and updated == ["glm-5.3"]
+    # only a regional entry: kept as is rather than taking the premium
+    regional_only = _litellm(**{"us.zai.glm-5.3": (1.848, 5.808)})
+    kept, updated, _ = mp.refresh_map(current, [], regional_only,
+                                      global_keys=frozenset({"glm-5.3"}))
+    assert kept["glm-5.3"] == {"input": 9.0, "output": 9.0} and updated == []
+
+
+def test_operator_short_keys_keep_the_old_canonical_pick():
+    """The rule is scoped to the built-in keys; an operator's own key is untouched."""
+    current = {"kimi-k3": {"input": 9.0, "output": 9.0}}
+    prices, _, _ = mp.refresh_map(current, [], MEASURED, global_keys=frozenset())
+    assert prices["kimi-k3"]["input"] == pytest.approx(3.30)  # shortest name, as before
+
+
+def test_yaml_model_prices_merge_with_the_defaults(tmp_path, monkeypatch):
+    """A launchpad.yaml map written before a default existed no longer hides it;
+    an entry the file has still wins."""
+    cfg = tmp_path / "launchpad.yaml"
+    cfg.write_text(yaml.safe_dump({"model_prices": {
+        "sonnet-5": {"input": 9.0, "output": 9.0},
+        "operator-model": {"input": 1.0, "output": 2.0},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(config_module, "CONFIG_FILE", cfg)
+    get_settings.cache_clear()
+    prices = get_settings().model_prices
+    assert prices["sonnet-5"] == {"input": 9.0, "output": 9.0}
+    assert prices["operator-model"] == {"input": 1.0, "output": 2.0}
+    assert prices["nova-2-lite"] == {"input": 0.3, "output": 2.5}
+    assert prices["glm-5.3"]["input"] == 1.68 and prices["gpt-6-luna"]["input"] == 0.10
+
+
+@pytest.mark.parametrize(("model_id", "expected"), [
+    ("global.zai.glm-5.3", (1.68, 5.28)),
+    ("us.zai.glm-5.3", (1.848, 5.808)),
+    ("zai.glm-5", (1.00, 3.20)),
+    ("zai.glm-4.7", (0.60, 2.20)),
+    ("zai.glm-4.7-flash", (0.07, 0.40)),
+    ("global.openai.gpt-6-sol", (2.00, 10.00)),
+    ("us.openai.gpt-6-sol", (2.20, 11.00)),
+    ("global.openai.gpt-6-astra", (10.00, 50.00)),
+    ("global.openai.gpt-6-luna", (0.10, 0.50)),
+    ("deepseek.v3.2", (0.62, 1.85)),
+    ("deepseek.v3-v1:0", (0.58, 1.68)),
+    ("us.deepseek.r1-v1:0", (1.35, 5.40)),
+    ("moonshotai.kimi-k2.5", (0.60, 3.00)),
+    ("moonshot.kimi-k2-thinking", (0.60, 2.50)),
+    ("global.moonshotai.kimi-k3", (3.00, 15.00)),
+    ("us.moonshotai.kimi-k3", (3.30, 16.50)),
+])
+def test_default_prices_cover_the_offered_models(model_id, expected):
+    from app.services.observability import match_price
+
+    defaults = Settings.model_fields["model_prices"].default
+    price = match_price(model_id, defaults)
+    assert (price["input"], price["output"]) == expected
+
+
+def test_glm_5_3_cost_on_the_global_profile():
+    from app.services.observability import estimate_cost
+
+    prices = Settings.model_fields["model_prices"].default
+    # 1M in + 1M out on the global profile = $1.68 + $5.28
+    assert estimate_cost("global.zai.glm-5.3", 1e6, 1e6, prices=prices) == pytest.approx(6.96)

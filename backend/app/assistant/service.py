@@ -1429,8 +1429,19 @@ def _base_of(conversation: AssistantConversation) -> AssistantProposal | None:
     return patch_base(db, conversation.id) if db is not None else None
 
 
+def protocol_preamble() -> str:
+    """``PROTOCOL_PREAMBLE`` announcing the configured proposal default model
+    (settings.assistant_model_id) instead of the built-in one."""
+    configured = proposal_contract.proposal_default_model_id()
+    builtin = proposal_contract.PROPOSAL_DEFAULT_MODEL_ID
+    if configured == builtin:
+        return PROTOCOL_PREAMBLE
+    return PROTOCOL_PREAMBLE.replace(
+        f"`{builtin}` / `\"bedrock\"`", f"`{configured}` / `\"bedrock\"`")
+
+
 def _preamble(conversation: AssistantConversation, *, inline: bool = False) -> str:
-    return (PROTOCOL_PREAMBLE + "\n"
+    return (protocol_preamble() + "\n"
             + catalog_section(owner_catalog(object_session(conversation), conversation))
             + preparation.context(conversation)
             + (submit_tool_section() if inline else "")

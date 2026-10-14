@@ -11,6 +11,9 @@ from app.services.agentcore import harness as hc
 from .conftest import ws_ctx
 
 MEM_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:memory/launchpad_memory-x"
+# A Claude model on Converse: the shape every spec stored before the agent default
+# moved to GPT-6 Sol carries (GPT ids gain a maxTokens default and accept an effort).
+CLAUDE = "global.anthropic.claude-sonnet-5"
 ROLE_ARN = "arn:aws:iam::111:role/launchpad-agent-execution-role"
 
 
@@ -45,11 +48,11 @@ def test_build_params_mantle_source_uses_responses_api_format():
 
 
 def test_build_params_bedrock_source_uses_converse_stream():
-    s = spec(model_source="bedrock")
+    s = spec(model_source="bedrock", model_id=CLAUDE)
     params = build_create_params(s, ROLE_ARN, MEM_ARN)
     assert params["model"] == {
         "bedrockModelConfig": {
-            "modelId": DEFAULT_MODEL_ID,
+            "modelId": CLAUDE,
             "apiFormat": "converse_stream",
         }
     }
@@ -379,7 +382,8 @@ def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
     the raw Converse wire key `additionalModelRequestFields` (the harness merges
     additionalParams into the Converse kwargs, not into a Strands config). Neither key
     appears for a spec that does not set it."""
-    plain = build_create_params(spec(), ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
+    plain = build_create_params(spec(model_id=CLAUDE), ROLE_ARN, MEM_ARN)["model"][
+        "bedrockModelConfig"]
     assert "maxTokens" not in plain and "additionalParams" not in plain
     s = spec(model_id="us.openai.gpt-5.6-sol", max_tokens=65536, reasoning_effort="high")
     params = build_create_params(s, ROLE_ARN, MEM_ARN)
@@ -395,7 +399,7 @@ def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
         "modelId": DEFAULT_MODEL_ID, "apiFormat": "converse_stream", "maxTokens": 8192,
     }
     with pytest.raises(ValueError):  # the knob never leaks onto a Claude request
-        spec(reasoning_effort="high")
+        spec(model_id=CLAUDE, reasoning_effort="high")
 
 
 def test_a_gpt_model_without_max_tokens_gets_the_reasoning_default():
@@ -408,8 +412,12 @@ def test_a_gpt_model_without_max_tokens_gets_the_reasoning_default():
     own = build_create_params(spec(model_id="global.openai.gpt-6-sol", max_tokens=4096),
                               ROLE_ARN, MEM_ARN)
     assert own["model"]["bedrockModelConfig"]["maxTokens"] == 4096
-    claude = build_create_params(spec(), ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
+    claude = build_create_params(spec(model_id=CLAUDE), ROLE_ARN, MEM_ARN)["model"][
+        "bedrockModelConfig"]
     assert "maxTokens" not in claude
+    # the agent default (GPT-6 Sol) is a GPT model, so a spec without one gets it too
+    default = build_create_params(spec(), ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
+    assert default["maxTokens"] == DEFAULT_GPT_MAX_TOKENS
 
 
 def _converse_stream_kwargs(model: dict) -> dict:

@@ -6,12 +6,13 @@ Sources, in ascending precedence: defaults < config/launchpad.yaml < environment
 runnable locally.
 """
 
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -174,6 +175,38 @@ class Settings(BaseSettings):
     # can be re-checked (POST /api/eval/runs/{id}/recheck).
     eval_batch_wait_s: int = Field(default=7200, ge=60, le=86400)
 
+    # Models the platform itself calls or pre-selects (not the models of the agents
+    # users build). Each is a role in app.services.model_settings: overridable as
+    # LAUNCHPAD_<FIELD>, in launchpad.yaml, or by an administrator on the console's
+    # Models page (ledger ``platform_settings``, applied on top of every Settings
+    # build by the hook registered below). Precedence: console > env > yaml >
+    # default. Read them per call through ``get_settings()``, never at import.
+    # Default model of an agent spec submitted without a model_id, and the Create
+    # Agent wizard's pre-selection (served by GET /api/model-defaults).
+    agent_default_model_id: str = "global.openai.gpt-6-sol"
+    # Default of the Claude Agent SDK ("container") method — Claude models only, so a
+    # container spec without a model_id gets this instead of the agent default.
+    claude_sdk_model_id: str = "global.anthropic.claude-sonnet-5"
+    # Default LLM-as-judge model of custom / derived AgentCore evaluators, and the
+    # model to retry on when AgentCore's evaluator validation refuses the judge
+    # (empty = no fallback; the refusal surfaces). See evaluation/agentcore_eval.py.
+    judge_model_id: str = "global.openai.gpt-6-sol"
+    judge_fallback_model_id: str = "global.anthropic.claude-sonnet-5-5"
+    # Default model of agents the architect assistant proposes (managed Harness).
+    assistant_model_id: str = "global.openai.gpt-6-sol"
+    # Model of the system architect agent on a new install. Its preset
+    # reasoning_effort applies only while this is an OpenAI model.
+    architect_model_id: str = "global.openai.gpt-6-astra"
+    # Simulated-user (actor) model the console pre-selects for persona scenarios;
+    # it must accept Converse forced tool choice.
+    actor_model_id: str = "global.openai.gpt-6-luna"
+    # Model of a Strands Studio canvas node that names none. Deliberately its own
+    # setting, not the agent default: the backend scopes a studio agent's IAM role
+    # to it and the canvas codegen bakes it in, so both must agree (the console reads
+    # it from GET /api/model-defaults), and moving it would move every existing
+    # flow's model-less nodes.
+    studio_fallback_model_id: str = "global.anthropic.claude-sonnet-5"
+
     # 3rd-party recommendation providers for the experiment RECOMMEND stage
     # (app/optimization/providers). Model ids are Bedrock Converse
     # inference-profile ids invoked through the workspace client funnel; the list
@@ -301,6 +334,47 @@ class Settings(BaseSettings):
         # report Nova 2 Lite traffic with a null cost. Numbers are litellm's
         # bare amazon.nova-2-lite-v1:0 = the global-profile price.
         "nova-2-lite": {"input": 0.3, "output": 2.5},
+        # Z.AI GLM on Bedrock, from https://aws.amazon.com/bedrock/pricing/
+        # (Standard tier, read 2026-10-08; litellm agrees, 2026-10-14). The longest
+        # matching key wins, so the US cross-region profile gets its own entry over
+        # the global one, and glm-4.7-flash over glm-4.7. GLM-5 / 4.7 / 4.7 Flash are
+        # the US in-region rates; the page lists no cache rates for them.
+        "glm-5.3": {"input": 1.68, "output": 5.28, "cache_read": 0.312, "cache_write": 2.10},
+        "us.zai.glm-5.3": {
+            "input": 1.848, "output": 5.808, "cache_read": 0.3432, "cache_write": 2.31,
+        },
+        "glm-5": {"input": 1.00, "output": 3.20},
+        "glm-4.7": {"input": 0.60, "output": 2.20},
+        "glm-4.7-flash": {"input": 0.07, "output": 0.40},
+        # OpenAI GPT-6 on Bedrock (Standard tier, short context). The unprefixed
+        # keys are the Global CRIS price; US Geo CRIS and Mantle in-Region carry the
+        # 10% premium. Sol from its Bedrock model card (read 2026-10-12), Astra and
+        # Luna from litellm's global.* entries (2026-10-14). The bare Mantle id
+        # `openai.gpt-6-sol` matches the global key (a substring map cannot tell it
+        # from `global.`), so its estimate is 10% low until the refresher writes the
+        # exact id. Long-context (> 272K input) pricing is not modelled.
+        "gpt-6-sol": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+        "us.openai.gpt-6-sol": {
+            "input": 2.20, "output": 11.00, "cache_read": 0.22, "cache_write": 2.75,
+        },
+        "gpt-6-astra": {
+            "input": 10.00, "output": 50.00, "cache_read": 1.00, "cache_write": 12.50,
+        },
+        "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+        # DeepSeek / Moonshot Kimi on Bedrock (Standard tier, on-demand, US East),
+        # read 2026-10-12 from https://aws.amazon.com/bedrock/pricing/ and the AWS
+        # Price List API (service AmazonBedrock, us-east-1); litellm agrees
+        # (2026-10-14). Longest key wins, so the US Kimi K3 profile gets its own
+        # entry over the global one.
+        "deepseek.v3.2": {"input": 0.62, "output": 1.85},
+        "deepseek.v3-v1": {"input": 0.58, "output": 1.68},
+        "deepseek.r1": {"input": 1.35, "output": 5.40},
+        "kimi-k2.5": {"input": 0.60, "output": 3.00},
+        "kimi-k2-thinking": {"input": 0.60, "output": 2.50},
+        "kimi-k3": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+        "us.moonshotai.kimi-k3": {
+            "input": 3.30, "output": 16.50, "cache_read": 0.33, "cache_write": 4.125,
+        },
     }
     model_prices_meta: dict[str, Any] = {}  # written by the price refresher
     model_prices_source_url: str = (
@@ -308,6 +382,19 @@ class Settings(BaseSettings):
         "model_prices_and_context_window.json"
     )
     model_prices_refresh_hours: int = 24  # 0 disables the periodic refresher
+
+    @model_validator(mode="after")
+    def _seed_model_prices(self) -> "Settings":
+        # launchpad.yaml carries its own model_prices map (the refresher persists
+        # the whole map), and a yaml/env dict REPLACES the default instead of
+        # merging with it — which would hide every price added to the defaults
+        # after that file was written. Fill in the default entries it lacks; an
+        # entry it has (refreshed or edited by hand) still wins.
+        defaults = type(self).model_fields["model_prices"].default or {}
+        missing = {k: v for k, v in defaults.items() if k not in self.model_prices}
+        if missing:
+            self.model_prices = {**missing, **self.model_prices}
+        return self
 
     @classmethod
     def settings_customise_sources(
@@ -327,6 +414,23 @@ class Settings(BaseSettings):
         )
 
 
+# Callables run on every freshly built ``Settings`` before ``get_settings`` caches
+# it. The console model overrides register one (app.services.model_settings), so an
+# override survives every ``get_settings.cache_clear()`` — the price refresher and
+# default-workspace resource writes both clear the cache at runtime. A registry
+# rather than an import keeps this module free of app imports.
+_SETTINGS_HOOKS: list[Callable[[Settings], None]] = []
+
+
+def register_settings_hook(hook: Callable[[Settings], None]) -> None:
+    """Run ``hook`` on every Settings ``get_settings`` builds (idempotent)."""
+    if hook not in _SETTINGS_HOOKS:
+        _SETTINGS_HOOKS.append(hook)
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    for hook in _SETTINGS_HOOKS:
+        hook(settings)
+    return settings

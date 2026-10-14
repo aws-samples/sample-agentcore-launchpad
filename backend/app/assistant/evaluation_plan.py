@@ -39,9 +39,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.evaluation.agentcore_eval import (
     ALL_BUILTIN_EVALUATORS,
-    JUDGE_DEFAULT_MODEL_ID,
     MAX_BATCH_EVALUATORS,
     TRAJECTORY_EVALUATORS,
+    judge_default_model_id,
 )
 
 KNOWN_BUILTINS: dict[str, str] = {**ALL_BUILTIN_EVALUATORS, **TRAJECTORY_EVALUATORS}
@@ -65,7 +65,6 @@ def _run_size_error(count: int) -> str:
 MAX_DESCRIPTION = 200
 MAX_SCENARIOS = 40
 MAX_CODE_CHECKS = 20
-DEFAULT_JUDGE_MODEL = JUDGE_DEFAULT_MODEL_ID  # the platform's judge default
 DEFAULT_LAMBDA_TIMEOUT_S = 60
 
 _KEY_RE = r"^[A-Za-z][A-Za-z0-9_-]{0,31}$"
@@ -257,7 +256,7 @@ class JudgeEvaluator(_Entry):
     instructions: str = Field(min_length=10, max_length=4000)
     rating_scale: list[RatingScaleItem] = Field(default_factory=lambda: list(DEFAULT_RATING_SCALE),
                                                 min_length=2, max_length=10)
-    model_id: str = Field(default=DEFAULT_JUDGE_MODEL, pattern=_MODEL_ID_RE)
+    model_id: str = Field(default_factory=judge_default_model_id, pattern=_MODEL_ID_RE)
     level: Literal["TRACE", "SESSION", "TOOL_CALL"] = "TRACE"
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
     # a member-visible flag: the rubric was drafted by the platform from golden-test
@@ -269,7 +268,7 @@ class DerivedEvaluator(_Entry):
     kind: Literal["derived"]
     name: str = Field(pattern=_EVALUATOR_NAME_RE)
     base_evaluator_id: str = Field(pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$")
-    model_id: str = Field(default=DEFAULT_JUDGE_MODEL, pattern=_MODEL_ID_RE)
+    model_id: str = Field(default_factory=judge_default_model_id, pattern=_MODEL_ID_RE)
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
@@ -871,7 +870,7 @@ def draft_plan(
             "name": _slug(f"{agent_name}_gt_assertions", 48),
             "instructions": DRAFT_ASSERTION_RUBRIC,
             "rating_scale": [r.model_dump() for r in DEFAULT_RATING_SCALE],
-            "model_id": DEFAULT_JUDGE_MODEL, "level": "SESSION",
+            "model_id": judge_default_model_id(), "level": "SESSION",
             "description": f"Drafted for proposal revision {revision}: judges a session "
                            "against the assertions of its own scenario (reference input)",
             "golden_test_ids": [],

@@ -6,13 +6,32 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.config import Settings, get_settings
 from app.schemas.attachments import AttachmentRequest
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
 
-# Latest Sonnet inference profile available in the target account (verified via
-# bedrock list-inference-profiles; there is no "sonnet-5" profile).
-DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
+# The BUILT-IN model of a spec submitted without a model_id. The live value is
+# settings.agent_default_model_id (env LAUNCHPAD_AGENT_DEFAULT_MODEL_ID, launchpad.yaml,
+# or the admin Models page) — read it through ``agent_default_model_id()``; this
+# constant is only what that resolves to when nothing overrides it.
+DEFAULT_MODEL_ID = Settings.model_fields["agent_default_model_id"].default
+
+
+def agent_default_model_id() -> str:
+    """The model a new spec without one gets (settings.agent_default_model_id)."""
+    return get_settings().agent_default_model_id.strip() or DEFAULT_MODEL_ID
+
+
+# The Claude Agent SDK (method "container") can only drive Claude, so a container
+# spec that names no model gets settings.claude_sdk_model_id instead of the agent
+# default — which is not a Claude model.
+CLAUDE_SDK_DEFAULT_MODEL_ID = Settings.model_fields["claude_sdk_model_id"].default
+
+
+def claude_sdk_default_model_id() -> str:
+    return get_settings().claude_sdk_model_id.strip() or CLAUDE_SDK_DEFAULT_MODEL_ID
+
 
 Method = Literal["harness", "zip_runtime", "container", "studio", "byoc"]
 
@@ -460,7 +479,7 @@ class ByocConfig(BaseModel):
 class AgentSpec(BaseModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,47}$")
     method: Method
-    model_id: str = DEFAULT_MODEL_ID
+    model_id: str = Field(default_factory=agent_default_model_id)
     # Defaults to "bedrock" for BACKWARD COMPATIBILITY, not because it is the
     # preferred choice: agent specs are stored as JSON in the ledger and every
     # row written before this field existed is a Converse-API model. A "mantle"
@@ -551,6 +570,14 @@ class AgentSpec(BaseModel):
     # is snapshotted onto the Agent row (``inbound_auth_mode`` /
     # ``inbound_auth_config``) by the deploy stage, so consumers never re-derive.
     inbound_auth: InboundAuth | None = None
+
+    # Defined first so every later validator sees the resolved model.
+    @model_validator(mode="after")
+    def _claude_sdk_default_model(self) -> "AgentSpec":
+        # Only when the caller named no model: an explicit id is the caller's call.
+        if self.method == "container" and "model_id" not in self.model_fields_set:
+            self.model_id = claude_sdk_default_model_id()
+        return self
 
     @model_validator(mode="after")
     def _inbound_auth_supported(self) -> "AgentSpec":

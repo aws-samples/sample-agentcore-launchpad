@@ -13,7 +13,7 @@ import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio
 from app.assistant.evaluation_assets import resume_operations as resume_evaluation_assets
 from app.assistant.service import clear_stale_turn_claims
 from app.core.config import get_settings
-from app.core.db import init_db
+from app.core.db import SessionLocal, init_db
 from app.core.errors import register_error_handlers
 from app.core.route_policy import enforce_route_policy
 from app.deployer.pipeline import resume_pending_jobs
@@ -46,6 +46,7 @@ from app.routers.identity import router as identity_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
+from app.routers.model_defaults import router as model_defaults_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
 from app.routers.public_api import router as public_router
@@ -55,7 +56,7 @@ from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.videos import router as videos_router
 from app.routers.workspaces import router as workspaces_router
-from app.services import byoc_uploads, local_exec
+from app.services import byoc_uploads, local_exec, model_settings
 from app.services.attachment_body import AttachmentBodyCap
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
@@ -132,6 +133,17 @@ def _warn_local_return_url(settings) -> bool:
     return True
 
 
+def _load_model_overrides() -> None:
+    """Admin console model overrides (``platform_settings``) win over env: load
+    them into the snapshot ``get_settings`` re-applies on every rebuild, before any
+    route reads a model id."""
+    db = SessionLocal()
+    try:
+        model_settings.load_overrides(db)
+    finally:
+        db.close()
+
+
 def create_app(resume_jobs: bool = False) -> FastAPI:
     settings = get_settings()
     _assert_production_is_authenticated(settings)
@@ -170,6 +182,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     )
     register_error_handlers(app)
     init_db()
+    _load_model_overrides()
     app.include_router(auth_router)
     app.include_router(overview_router)
     app.include_router(announcements_router)
@@ -199,6 +212,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
     app.include_router(workspaces_router)  # environments + the request-boundary grants
+    app.include_router(model_defaults_router)  # platform model roles + admin overrides
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:

@@ -19,7 +19,8 @@ class Base(DeclarativeBase):
 DEFAULT_WORKSPACE_ID = "default"
 
 # Every table whose rows belong to one (account, region) environment. `users`,
-# `workspaces`, `user_workspaces`, `announcements`, and video tables are hub-global.
+# `workspaces`, `user_workspaces`, `announcements`, video tables and
+# `platform_settings` are hub-global.
 WORKSPACE_SCOPED_TABLES = (
     "agents",
     "deployments",
@@ -100,7 +101,9 @@ def init_db(bind=None) -> None:
     they exercise this exact sequence rather than a copy of it.
     """
     bind = bind if bind is not None else engine
-    from app.models import video as _video_models  # noqa: F401 — register tables before create_all
+    # register these tables before create_all
+    from app.models import platform_settings as _platform_settings  # noqa: F401
+    from app.models import video as _video_models  # noqa: F401
 
     Base.metadata.create_all(bind=bind)
     _migrate(bind)
