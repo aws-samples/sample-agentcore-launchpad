@@ -361,6 +361,13 @@ class Settings(BaseSettings):
             "input": 10.00, "output": 50.00, "cache_read": 1.00, "cache_write": 12.50,
         },
         "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+        # GPT-6.1 Sol: litellm's global./us. bedrock_converse entries (read 2026-10-14);
+        # the Price List API carries no GPT-6 rows. Not a substring of `gpt-6-sol` (nor
+        # the reverse), so each family keeps its own rate.
+        "gpt-6.1-sol": {"input": 2.00, "output": 10.00, "cache_read": 0.10, "cache_write": 2.50},
+        "us.openai.gpt-6.1-sol": {
+            "input": 2.20, "output": 11.00, "cache_read": 0.11, "cache_write": 2.75,
+        },
         # DeepSeek / Moonshot Kimi on Bedrock (Standard tier, on-demand, US East),
         # read 2026-10-12 from https://aws.amazon.com/bedrock/pricing/ and the AWS
         # Price List API (service AmazonBedrock, us-east-1); litellm agrees

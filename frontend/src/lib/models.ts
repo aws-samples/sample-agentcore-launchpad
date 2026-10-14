@@ -48,6 +48,13 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
   // every region (probed us-west-2 + us-east-1, 2026-09-26).
   bedrock: [
     { model_id: "global.openai.gpt-6-sol", label: "GPT-6 Sol (global)", api_format: "converse_stream" },
+    // GPT-6.1 Sol and GLM 5.3: global profiles probed (Converse + tool use) in
+    // us-west-2 and us-east-1, 2026-10-14.
+    {
+      model_id: "global.openai.gpt-6.1-sol",
+      label: "GPT-6.1 Sol (global)",
+      api_format: "converse_stream",
+    },
     { model_id: "global.openai.gpt-6-astra", label: "GPT-6 Astra (global)", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-luna", label: "GPT-6 Luna (global)", api_format: "converse_stream" },
     {
@@ -66,6 +73,7 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "converse_stream",
     },
     { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },
+    { model_id: "global.zai.glm-5.3", label: "GLM 5.3 (global)", api_format: "converse_stream" },
     {
       model_id: "global.amazon.nova-2-lite-v1:0",
       label: "Nova 2 Lite (global)",

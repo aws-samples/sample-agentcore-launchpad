@@ -39,6 +39,7 @@ from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.errors import AppError
 from app.models.ledger import AlertRule
@@ -231,19 +232,32 @@ def evaluate_rules(
     (an ok/unknown → firing transition), even when a manual pass saw the transition
     first. A delivery result is recorded in `last_detail` rather than raised: a broken
     webhook must not hide the breach.
+
+    A read can take tens of seconds (Logs Insights), and a rule may be deleted from the
+    console meanwhile. Each rule is therefore re-read before its read, checked again
+    after it, and committed on its own: a rule that vanished is skipped (not written
+    back, not notified) instead of failing the whole pass with a stale UPDATE.
     """
-    rules = db.scalars(
-        select(AlertRule)
-        .where(AlertRule.workspace_id == workspace.id)
-        .order_by(AlertRule.created_at)
-    ).all()
+    rule_ids = list(
+        db.scalars(
+            select(AlertRule.id)
+            .where(AlertRule.workspace_id == workspace.id)
+            .order_by(AlertRule.created_at)
+        )
+    )
     now = datetime.now(UTC)
     evaluated: list[dict[str, Any]] = []
-    for rule in rules:
+    for rule_id in rule_ids:
+        rule = db.get(AlertRule, rule_id)
+        if rule is None:
+            continue  # deleted since the list was read
         if not rule.enabled:
             evaluated.append(rule_out(rule, skipped="disabled"))
             continue
         value, detail = read_value(rule, db, workspace)
+        if not _still_exists(db, rule_id):
+            db.expunge(rule)  # deleted while its value was being read
+            continue
         previous = rule.state
         if value is None:
             rule.state = STATE_UNKNOWN
@@ -260,8 +274,13 @@ def evaluate_rules(
                 if outcome is not None:
                     rule.last_notified_at = now
                     rule.last_detail = f"{detail} · webhook {outcome}"
-        evaluated.append(rule_out(rule))
-    db.commit()
+        row = rule_out(rule)
+        try:
+            db.commit()
+        except StaleDataError:
+            db.rollback()  # deleted between the check and the write
+            continue
+        evaluated.append(row)
     return {
         "workspace_id": workspace.id,
         "evaluated_at": now.isoformat(),
@@ -269,6 +288,11 @@ def evaluate_rules(
         "firing": len([row for row in evaluated if row["state"] == STATE_FIRING]),
         "unknown": len([row for row in evaluated if row["state"] == STATE_UNKNOWN]),
     }
+
+
+def _still_exists(db: Session, rule_id: str) -> bool:
+    """A fresh query, not the identity map: has the rule been deleted meanwhile?"""
+    return db.scalar(select(AlertRule.id).where(AlertRule.id == rule_id)) is not None
 
 
 def _utc(value: datetime | None) -> datetime | None:

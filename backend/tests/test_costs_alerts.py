@@ -946,3 +946,70 @@ def test_a_branch_era_table_is_migrated_to_the_creator_convention(tmp_path):
             )
         )
     assert rows == {"r1": ("u-alice", "alice"), "r2": (None, "admin")}
+
+
+def _delete_rule(rule_id: str) -> None:
+    """Delete a rule from another session — the console's DELETE during a pass."""
+    other = SessionLocal()
+    try:
+        other.delete(other.get(AlertRule, rule_id))
+        other.commit()
+    finally:
+        other.close()
+
+
+def test_a_rule_deleted_while_its_value_is_read_is_skipped(monkeypatch, ctx):
+    """A re-check runs for tens of seconds; deleting a rule meanwhile used to fail the
+    whole pass with a stale UPDATE (500) and drop every other rule's result."""
+    gone = _rule(name="gone", threshold=0.1, webhook_url="https://hook.example/x")
+    kept = _rule(name="kept", threshold=0.1)
+    sent = _capture_posts(monkeypatch)
+
+    def read(rule, db, ws):
+        if rule.id == gone:
+            _delete_rule(gone)
+            return 0.9, "breach"  # would fire and notify, had the rule survived
+        return 0.01, "fine"
+
+    monkeypatch.setattr(alert_service, "read_value", read)
+    db = SessionLocal()
+    try:
+        result = alert_service.evaluate_rules(db, ctx, notify_transitions=True)
+    finally:
+        db.close()
+    assert [row["id"] for row in result["rules"]] == [kept]
+    assert result["rules"][0]["state"] == "ok"
+    assert sent == []  # a deleted rule is never notified
+    db = SessionLocal()
+    try:
+        assert db.get(AlertRule, gone) is None
+        assert db.get(AlertRule, kept).state == "ok"
+    finally:
+        db.close()
+
+
+def test_a_rule_deleted_between_the_check_and_the_write_does_not_fail_the_pass(
+    monkeypatch, ctx
+):
+    gone = _rule(name="gone", threshold=0.1)
+    kept = _rule(name="kept", threshold=0.1)
+
+    def read(rule, db, ws):
+        if rule.id == gone:
+            _delete_rule(gone)
+        return 0.01, "fine"
+
+    monkeypatch.setattr(alert_service, "read_value", read)
+    # the existence check races the DELETE and still sees the row
+    monkeypatch.setattr(alert_service, "_still_exists", lambda db, rule_id: True)
+    db = SessionLocal()
+    try:
+        result = alert_service.evaluate_rules(db, ctx)
+    finally:
+        db.close()
+    assert [row["id"] for row in result["rules"]] == [kept]
+    db = SessionLocal()
+    try:
+        assert db.get(AlertRule, kept).last_checked_at is not None
+    finally:
+        db.close()

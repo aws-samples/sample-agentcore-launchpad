@@ -208,4 +208,19 @@ describe("helpers", () => {
       roleModelOptions(role, ["global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5", "global.anthropic.claude-haiku-5-5"]),
     ).toEqual(["global.anthropic.claude-opus-5", "global.anthropic.claude-sonnet-5", "global.anthropic.claude-haiku-5-5"]);
   });
+
+  it("offers GPT-6.1 Sol and GLM 5.3 from the catalog, each only where its family is accepted", () => {
+    const catalog = MODEL_CATALOG.bedrock.map((m) => m.model_id);
+    expect(catalog).toEqual(expect.arrayContaining(["global.openai.gpt-6.1-sol", "global.zai.glm-5.3"]));
+    // GPT-6 Sol still leads: the first entry is the Bedrock form's fallback default
+    expect(catalog[0]).toBe("global.openai.gpt-6-sol");
+    const any = { model_id: "global.openai.gpt-6-sol", default: "global.openai.gpt-6-sol", constraint: null, allow_empty: false, needs_tools: true };
+    expect(roleModelOptions(any, catalog)).toEqual(expect.arrayContaining(["global.openai.gpt-6.1-sol", "global.zai.glm-5.3"]));
+    const openaiOnly = { ...any, constraint: ["openai"] };
+    const offered = roleModelOptions(openaiOnly, catalog);
+    expect(offered).toContain("global.openai.gpt-6.1-sol");
+    expect(offered).not.toContain("global.zai.glm-5.3");
+    const claudeOnly = { ...any, model_id: "global.anthropic.claude-sonnet-5", default: "global.anthropic.claude-sonnet-5", constraint: ["anthropic"] };
+    expect(roleModelOptions(claudeOnly, catalog)).not.toEqual(expect.arrayContaining(["global.openai.gpt-6.1-sol"]));
+  });
 });

@@ -387,3 +387,18 @@ def test_glm_5_3_cost_on_the_global_profile():
     prices = Settings.model_fields["model_prices"].default
     # 1M in + 1M out on the global profile = $1.68 + $5.28
     assert estimate_cost("global.zai.glm-5.3", 1e6, 1e6, prices=prices) == pytest.approx(6.96)
+
+
+def test_gpt_6_1_sol_and_gpt_6_sol_keep_their_own_rates():
+    """Neither key is a substring of the other's ids, so each family is priced on its
+    own entry (GPT-6.1 Sol reads cache at half GPT-6 Sol's rate), and the US profile
+    gets its premium entry."""
+    from app.services.observability import match_price
+
+    defaults = Settings.model_fields["model_prices"].default
+    assert match_price("global.openai.gpt-6.1-sol", defaults) == defaults["gpt-6.1-sol"]
+    assert match_price("us.openai.gpt-6.1-sol", defaults) == defaults["us.openai.gpt-6.1-sol"]
+    assert match_price("global.openai.gpt-6-sol", defaults) == defaults["gpt-6-sol"]
+    assert defaults["gpt-6.1-sol"]["cache_read"] == pytest.approx(0.10)
+    assert defaults["gpt-6-sol"]["cache_read"] == pytest.approx(0.20)
+    assert match_price("global.zai.glm-5.3", defaults) == defaults["glm-5.3"]
