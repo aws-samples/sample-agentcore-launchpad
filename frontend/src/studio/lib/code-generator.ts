@@ -1,11 +1,11 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { generateGraphCode, MANTLE_ATTACHMENT_ADAPTER } from './graph-code-generator';
 import {
-  DEFAULT_MODEL_ID,
   gptBedrockModelConfig,
   isBedrockOpenAiGpt,
   MANTLE_PROVIDER,
   mantleModelArgs,
+  studioFallbackModelId,
 } from './models';
 
 interface CodeGenerationResult {
@@ -274,7 +274,7 @@ function generateAgentModelOnly(
   const {
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
@@ -311,7 +311,7 @@ function generateAgentCode(
   const {
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are a helpful AI assistant.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
@@ -367,7 +367,7 @@ function generateSwarmAgentCode(
   const {
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are a helpful AI assistant.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
@@ -1096,7 +1096,7 @@ function generateAgentAsToolCode(
   const {
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are a helpful AI assistant.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
@@ -1199,7 +1199,7 @@ function generateOrchestratorAsToolCode(
   const {
     label = `OrchestratorAgent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are an orchestrator agent that coordinates multiple specialized agents.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
@@ -1319,7 +1319,7 @@ function generateOrchestratorModelOnly(
   const {
     label = `OrchestratorAgent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
@@ -1354,7 +1354,7 @@ function generateOrchestratorCode(
   const {
     label = `OrchestratorAgent${index + 1}`,
     modelProvider = 'AWS Bedrock',
-    modelId = DEFAULT_MODEL_ID,
+    modelId = studioFallbackModelId(),
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are an orchestrator agent that coordinates multiple specialized agents.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000

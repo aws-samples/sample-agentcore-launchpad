@@ -5282,7 +5282,8 @@
       "insights": "Evaluation overview",
       "evaluators": "Evaluators",
       "experiments": "A/B experiments",
-      "online": "Online evaluation"
+      "online": "Online evaluation",
+      "models": "Models"
     },
     "notFound": {
       "title": "Page not found",
@@ -8301,6 +8302,103 @@
         "modulesBody": "Development, runtime, evaluation, learning and configuration. Groups fold away, and the switch at the bottom shows only the everyday modules or all of them.",
         "helpTitle": "Help is always here",
         "helpBody": "Replay this tour, bring back the launch checklist, or open the glossary and the demo videos from this button."
+      }
+    },
+    "models": {
+      "title": "Models",
+      "desc": "The models the platform itself calls or pre-selects. An override applies at once, with no restart.",
+      "roles": "Model roles",
+      "noteGlobal": "A change applies at once to every workspace and member on this deployment; each deployment keeps its own overrides. Precedence: console override > LAUNCHPAD_* environment > launchpad.yaml > built-in default.",
+      "noteJudge": "Changing the judge makes evaluation scores incomparable with earlier runs.",
+      "noteStored": "Existing agents, evaluators and installed presets keep the model ids they were created with; only new ones pick up a change.",
+      "forbiddenBody": "Only administrators can view and change the platform's models.",
+      "col": {
+        "role": "Role",
+        "current": "Effective model",
+        "change": "Change"
+      },
+      "overridden": "Overridden",
+      "isDefault": "Default",
+      "defaultValue": "Default:",
+      "updated": "Changed by {{who}} at {{when}}",
+      "none": "None",
+      "custom": "Custom model ID…",
+      "customPlaceholder": "e.g. {{example}}",
+      "invalid": "This role does not accept this model id.",
+      "familyOnly": "{{families}} only",
+      "needsTools": "Needs tool use",
+      "pick": "Model for {{role}}",
+      "probe": "Probe",
+      "probing": "Probing…",
+      "probeOk": "OK · {{ms}} ms · {{region}}",
+      "probeFail": "{{code}}: {{message}} ({{region}})",
+      "check": {
+        "converse": "Converse",
+        "tool_use": "Tool use"
+      },
+      "save": "Save",
+      "reset": "Reset to default",
+      "resetHint": "Remove the console override; the role returns to its default.",
+      "saved": "{{role}}: saved",
+      "resetDone": "{{role}}: back to the default",
+      "confirmSaveTitle": "Change the {{role}} model?",
+      "confirmSaveBody": "{{model}} becomes the {{role}} model.",
+      "confirmResetTitle": "Reset {{role}} to its default?",
+      "confirmResetBody": "{{role}} goes back to {{model}}.",
+      "confirmGlobal": "This applies immediately to every workspace and member on this deployment.",
+      "role": {
+        "agent_default_model_id": {
+          "name": "Agent default",
+          "desc": "What a new agent on native Bedrock starts on in the wizard, and what an agent created through the API without a model gets."
+        },
+        "claude_sdk_model_id": {
+          "name": "Claude Agent SDK default",
+          "desc": "The default of the Other Agent SDK entrance (Claude Agent SDK), and of a container agent created without a model. Claude only."
+        },
+        "judge_model_id": {
+          "name": "Evaluation judge",
+          "desc": "The default judge model of a new LLM evaluator, and of the evaluators the assistant drafts."
+        },
+        "judge_fallback_model_id": {
+          "name": "Judge fallback",
+          "desc": "Retried when AgentCore Evaluation refuses the judge model. None: the refusal surfaces."
+        },
+        "assistant_model_id": {
+          "name": "Assistant proposals",
+          "desc": "The model the architect assistant proposes for a new agent."
+        },
+        "architect_model_id": {
+          "name": "Architect preset",
+          "desc": "The model of the system architect preset when an administrator installs or repairs it."
+        },
+        "actor_model_id": {
+          "name": "Simulated user (actor)",
+          "desc": "Plays the user of a simulated-persona evaluation run; it must accept forced tool choice."
+        },
+        "studio_fallback_model_id": {
+          "name": "Studio fallback",
+          "desc": "What a Studio canvas node without a model generates; the agent's execution role is scoped to it as well."
+        },
+        "codegen_model": {
+          "name": "Studio AI Fix",
+          "desc": "The coding agent behind Studio local debug's AI Fix. Claude only."
+        },
+        "prompt_opt_default_model_id": {
+          "name": "Prompt optimisation",
+          "desc": "The default reflection model of an experiment's prompt optimisation."
+        },
+        "skill_lab_judge_model_id": {
+          "name": "Skill Lab judge",
+          "desc": "Grades Skill Lab tasks: OpenAI models run on the codex CLI, Claude on the Claude CLI."
+        },
+        "skill_lab_target_model_id": {
+          "name": "Skill Lab target (Claude)",
+          "desc": "The default model a Skill is evaluated on through the Claude CLI. Claude only."
+        },
+        "skill_lab_codex_target_model_id": {
+          "name": "Skill Lab target (codex)",
+          "desc": "The default model a Skill is evaluated on through the codex CLI. OpenAI only."
+        }
       }
     }
   },

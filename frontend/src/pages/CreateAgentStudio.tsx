@@ -16,6 +16,7 @@ import {
 } from "../components";
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import { useModelDefaults } from "../lib/model-defaults";
 import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
 import { FlowEditor } from "../studio/FlowEditor";
@@ -111,10 +112,14 @@ export function CreateAgentStudio() {
 
   const selectedNode = selectedId ? (nodes.find((n) => n.id === selectedId) ?? null) : null;
 
-  // Live code generation drives the drawer + the publish summary/guards.
+  // Live code generation drives the drawer + the publish summary/guards. A node
+  // without a model generates the platform's Studio fallback, the model the backend
+  // scopes the execution role to — regenerate once the configured value arrives.
+  const modelDefaults = useModelDefaults();
   const genResult = useMemo(
     () => generateStrandsAgentCode(nodes, edges, graphMode),
-    [nodes, edges, graphMode],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the generators read it through studioFallbackModelId()
+    [nodes, edges, graphMode, modelDefaults],
   );
   const fullCode = genResult.imports.join("\n") + "\n\n" + genResult.code;
 

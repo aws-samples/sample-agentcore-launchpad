@@ -5282,7 +5282,8 @@
       "insights": "评估总览",
       "evaluators": "评估器",
       "experiments": "A/B实验",
-      "online": "在线评估"
+      "online": "在线评估",
+      "models": "模型"
     },
     "notFound": {
       "title": "页面不存在",
@@ -8301,6 +8302,103 @@
         "modulesBody": "开发、运行、评估、学习和配置。分组可以折叠；底部的开关可以只显示常用入口，或显示全部页面。",
         "helpTitle": "帮助随时都在",
         "helpBody": "可以从这个按钮重新开始导览、找回上线清单，或打开术语表和演示视频。"
+      }
+    },
+    "models": {
+      "title": "模型",
+      "desc": "平台自身调用或预选的模型。覆盖设置立即生效，无需重启。",
+      "roles": "模型角色",
+      "noteGlobal": "修改会立即作用于本部署的所有工作区和成员；每个部署各自保存覆盖设置。优先级：控制台覆盖 > LAUNCHPAD_* 环境变量 > launchpad.yaml > 内置默认值。",
+      "noteJudge": "更换评审模型后，评估分数与之前的运行不再可比。",
+      "noteStored": "已有的 Agent、评估器和已安装的预设保留创建时的模型 ID；只有新建的才会采用修改。",
+      "forbiddenBody": "只有管理员可以查看和修改平台模型。",
+      "col": {
+        "role": "角色",
+        "current": "生效模型",
+        "change": "修改"
+      },
+      "overridden": "已覆盖",
+      "isDefault": "默认",
+      "defaultValue": "默认值：",
+      "updated": "{{who}} 于 {{when}} 修改",
+      "none": "无",
+      "custom": "自定义模型 ID…",
+      "customPlaceholder": "例如 {{example}}",
+      "invalid": "该角色不接受此模型 ID。",
+      "familyOnly": "仅限 {{families}}",
+      "needsTools": "需要工具调用",
+      "pick": "{{role}}的模型",
+      "probe": "探测",
+      "probing": "探测中…",
+      "probeOk": "正常 · {{ms}} ms · {{region}}",
+      "probeFail": "{{code}}：{{message}}（{{region}}）",
+      "check": {
+        "converse": "Converse",
+        "tool_use": "工具调用"
+      },
+      "save": "保存",
+      "reset": "恢复默认",
+      "resetHint": "移除控制台覆盖，角色恢复为默认值。",
+      "saved": "{{role}}：已保存",
+      "resetDone": "{{role}}：已恢复默认",
+      "confirmSaveTitle": "修改{{role}}？",
+      "confirmSaveBody": "{{model}} 将成为{{role}}。",
+      "confirmResetTitle": "将{{role}}恢复为默认值？",
+      "confirmResetBody": "{{role}}将恢复为 {{model}}。",
+      "confirmGlobal": "此修改立即作用于本部署的所有工作区和成员。",
+      "role": {
+        "agent_default_model_id": {
+          "name": "Agent 默认模型",
+          "desc": "新建 Agent 在原生 Bedrock 下的预选模型；通过 API 创建且未指定模型的 Agent 也使用它。"
+        },
+        "claude_sdk_model_id": {
+          "name": "Claude Agent SDK 默认模型",
+          "desc": "“其他 Agent SDK”入口（Claude Agent SDK）的默认模型，未指定模型的容器 Agent 也使用它。仅限 Claude。"
+        },
+        "judge_model_id": {
+          "name": "评估评审模型",
+          "desc": "新建 LLM 评估器的默认评审模型，助手起草的评估器也使用它。"
+        },
+        "judge_fallback_model_id": {
+          "name": "评审回退模型",
+          "desc": "AgentCore Evaluation 拒绝评审模型时改用它重试。无：直接报出拒绝原因。"
+        },
+        "assistant_model_id": {
+          "name": "助手方案模型",
+          "desc": "架构助手为新 Agent 推荐的模型。"
+        },
+        "architect_model_id": {
+          "name": "架构师预设模型",
+          "desc": "管理员安装或修复系统架构师预设时使用的模型。"
+        },
+        "actor_model_id": {
+          "name": "模拟用户（actor）",
+          "desc": "在模拟人格评估运行中扮演用户；必须支持强制工具调用（tool choice）。"
+        },
+        "studio_fallback_model_id": {
+          "name": "Studio 回退模型",
+          "desc": "Studio 画布中未指定模型的节点所生成的模型；Agent 的执行角色也按它授权。"
+        },
+        "codegen_model": {
+          "name": "Studio AI 修复",
+          "desc": "Studio 本地调试中 AI 修复所用的编码 Agent。仅限 Claude。"
+        },
+        "prompt_opt_default_model_id": {
+          "name": "提示词优化",
+          "desc": "实验中提示词优化的默认反思模型。"
+        },
+        "skill_lab_judge_model_id": {
+          "name": "Skill Lab 评审模型",
+          "desc": "为 Skill Lab 任务评分：OpenAI 模型走 codex CLI，Claude 走 Claude CLI。"
+        },
+        "skill_lab_target_model_id": {
+          "name": "Skill Lab 目标模型（Claude）",
+          "desc": "通过 Claude CLI 评估 Skill 时的默认模型。仅限 Claude。"
+        },
+        "skill_lab_codex_target_model_id": {
+          "name": "Skill Lab 目标模型（codex）",
+          "desc": "通过 codex CLI 评估 Skill 时的默认模型。仅限 OpenAI。"
+        }
       }
     }
   },

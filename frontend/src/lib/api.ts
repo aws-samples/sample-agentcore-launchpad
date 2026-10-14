@@ -4318,6 +4318,54 @@ export interface V2LogGroup {
   stored_bytes: number | null;
 }
 
+/** A platform model role (backend `services/model_settings.ROLES`): a `Settings`
+ *  field the platform calls or pre-selects, which an administrator can override. */
+export type ModelRole =
+  | "agent_default_model_id"
+  | "claude_sdk_model_id"
+  | "judge_model_id"
+  | "judge_fallback_model_id"
+  | "assistant_model_id"
+  | "architect_model_id"
+  | "actor_model_id"
+  | "studio_fallback_model_id"
+  | "codegen_model"
+  | "prompt_opt_default_model_id"
+  | "skill_lab_judge_model_id"
+  | "skill_lab_target_model_id"
+  | "skill_lab_codex_target_model_id";
+
+/** One row of `GET /api/model-defaults` (and the answer of a PUT / DELETE). */
+export interface ModelRoleSetting {
+  role: ModelRole;
+  /** the effective model (console override > env > launchpad.yaml > built-in) */
+  model_id: string;
+  /** what a reset returns to: env / launchpad.yaml / the built-in default */
+  default: string;
+  overridden: boolean;
+  /** model families the role accepts (`["anthropic"]`, …); null = any */
+  constraint: string[] | null;
+  /** "" is valid (the judge fallback: none) */
+  allow_empty: boolean;
+  /** the role runs tools, so its model must accept Converse toolConfig */
+  needs_tools: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export type ModelProbeCheck = "converse" | "tool_use";
+
+export interface ModelProbeResult {
+  ok: boolean;
+  model_id: string;
+  check: ModelProbeCheck;
+  region: string;
+  latency_ms: number;
+  error_code?: string;
+  message?: string;
+  stop_reason?: string | null;
+}
+
 export const api = {
   videoCatalog: () => request<VideoCatalog>("/api/videos"),
   manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
@@ -4704,6 +4752,23 @@ export const api = {
     }),
   deleteUser: (id: string) =>
     request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
+  /** Every platform model role's effective value (member-readable; pickers seed from it). */
+  modelDefaults: () => request<{ roles: ModelRoleSetting[] }>("/api/model-defaults"),
+  /** Admin: override one role for every workspace and member on this deployment. */
+  adminSetModel: (role: ModelRole, modelId: string) =>
+    request<ModelRoleSetting>(`/api/admin/models/${encodeURIComponent(role)}`, {
+      method: "PUT",
+      body: JSON.stringify({ model_id: modelId }),
+    }),
+  /** Admin: drop the override, back to env / launchpad.yaml / the built-in default. */
+  adminResetModel: (role: ModelRole) =>
+    request<ModelRoleSetting>(`/api/admin/models/${encodeURIComponent(role)}`, { method: "DELETE" }),
+  /** Admin: one small real Converse call in the hub's default workspace. */
+  adminProbeModel: (modelId: string, check: ModelProbeCheck) =>
+    request<ModelProbeResult>("/api/admin/models/probe", {
+      method: "POST",
+      body: JSON.stringify({ model_id: modelId, check }),
+    }),
   /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
   uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
     const form = new FormData();

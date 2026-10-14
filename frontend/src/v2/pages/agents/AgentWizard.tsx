@@ -30,7 +30,8 @@ import {
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage } from "../../../lib/api";
-import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
+import { adoptModelDefault, STATIC_MODEL_DEFAULTS, useModelDefaultsArrival } from "../../../lib/model-defaults";
+import { isCustomModelId, type ModelSource } from "../../../lib/models";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
@@ -109,10 +110,9 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const [step, setStep] = useState(initial.step);
   const [form, setForm] = useState<AgentForm>(initial.form);
   const [ui, setUi] = useState<Omit<WizardUi, "customSkills">>({
-    // a stored id the dropdown does not offer rides the "Custom model ID…" branch
-    customModel: edit
-      ? isCustomModelId(initial.form.modelId, initial.form.modelSource, initial.form.method === "container")
-      : false,
+    // a stored (or configured default) id the dropdown does not offer rides the
+    // "Custom model ID…" branch
+    customModel: isCustomModelId(initial.form.modelId, initial.form.modelSource, initial.form.method === "container"),
     byocUpload: null,
     byocUploading: false,
   });
@@ -182,12 +182,32 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   };
 
   // Switching source re-seeds the model (and the byoc allowed-models list) to that
-  // source's catalog default.
+  // source's default — the platform's configured one on native Bedrock.
   // `forMethod` is the method being switched to — `method` still holds the old one.
   const applySource = (source: ModelSource, forMethod: AgentMethod = method) => {
-    set({ modelSource: source, modelId: defaultModelForMethod(forMethod, source), byocModels: [defaultModelFor(source)] });
-    setUi((prev) => ({ ...prev, customModel: false }));
+    const modelId = defaultModelForMethod(forMethod, source);
+    set({ modelSource: source, modelId, byocModels: [defaultModelForMethod("byoc", source)] });
+    // a configured default the catalog does not list rides the custom branch
+    setUi((prev) => ({ ...prev, customModel: isCustomModelId(modelId, source, forMethod === "container") }));
   };
+  // A new form seeded the static default while the platform's configured one was
+  // loading: adopt it, unless the member already picked a model. A re-publish keeps
+  // the stored model.
+  useModelDefaultsArrival((defaults) => {
+    if (edit) return;
+    const seeded = defaultModelForMethod(form.method, form.modelSource, STATIC_MODEL_DEFAULTS);
+    const modelId = adoptModelDefault(form.modelId, seeded, defaultModelForMethod(form.method, form.modelSource, defaults));
+    const byocSeed = defaultModelForMethod("byoc", form.modelSource, STATIC_MODEL_DEFAULTS);
+    const byocModels =
+      form.byocModels.length === 1 && form.byocModels[0] === byocSeed
+        ? [defaultModelForMethod("byoc", form.modelSource, defaults)]
+        : form.byocModels;
+    if (modelId === form.modelId && byocModels === form.byocModels) return;
+    set({ modelId, byocModels });
+    if (modelId !== form.modelId) {
+      setUi((prev) => ({ ...prev, customModel: isCustomModelId(modelId, form.modelSource, form.method === "container") }));
+    }
+  });
   const pickMethod = (next: AgentMethod) => {
     if (next === method) return;
     set({ method: next });

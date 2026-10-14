@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
 import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
+import { loadModelDefaults, STATIC_MODEL_DEFAULTS, withCurrentModel } from "../../../lib/model-defaults";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { CustomUnavailableNote } from "../../EvaluatorPicker";
 import { fmtTime } from "../../format";
@@ -81,7 +82,8 @@ const EMPTY: Draft = {
   logSessionIds: [],
   logHours: 168,
   dataset: "",
-  actorModelId: ACTOR_MODELS[0],
+  // seedDraft replaces it with the platform's configured actor (GET /api/model-defaults)
+  actorModelId: STATIC_MODEL_DEFAULTS.actor_model_id,
   sampling: 10,
   sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
@@ -94,6 +96,12 @@ const EMPTY: Draft = {
  * assistant's next steps).
  */
 async function seedDraft(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
+  // never rejects: a failed read falls back to the static defaults
+  const actorModelId = (await loadModelDefaults()).actor_model_id;
+  return { ...(await seedDraftFields(from, handoff, copySuffix)), actorModelId };
+}
+
+async function seedDraftFields(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
@@ -498,7 +506,7 @@ export function TaskWizard() {
                         onChange={(v) => set({ actorModelId: v })}
                         testId="v2-task-actor-model"
                         mono
-                        options={ACTOR_MODELS.map((m) => ({ value: m, label: m }))}
+                        options={withCurrentModel(ACTOR_MODELS, draft.actorModelId).map((m) => ({ value: m, label: m }))}
                       />
                     </Field>
                   </div>

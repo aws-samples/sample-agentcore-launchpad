@@ -1,9 +1,10 @@
 /**
  * Shared Bedrock model catalog and default model id.
  *
- * DEFAULT_MODEL_ID is the single source of truth for the fallback model used by
- * every code-generation fallback path — nodes that carry no explicit model id
- * (orchestrator/swarm drops, legacy flows). It is deliberately NOT what a newly
+ * studioFallbackModelId() is the single source of truth for the fallback model used
+ * by every code-generation fallback path — nodes that carry no explicit model id
+ * (orchestrator/swarm drops, legacy flows); DEFAULT_MODEL_ID is its built-in value,
+ * used until the platform defaults load. It is deliberately NOT what a newly
  * dropped agent node gets: that is DEFAULT_NEW_AGENT_MODEL_ID (see FlowEditor).
  * Changing these fallbacks would retroactively change existing flows.
  *
@@ -14,9 +15,23 @@
  * listings — likely requires model access enablement).
  */
 
+import { currentModelDefaults, STATIC_MODEL_DEFAULTS } from '../../lib/model-defaults';
 import { MODEL_CATALOG } from '../../lib/models';
 
-export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5';
+/** The built-in fallback (backend `studio_fallback_model_id`'s default). */
+export const DEFAULT_MODEL_ID = STATIC_MODEL_DEFAULTS.studio_fallback_model_id;
+
+/**
+ * The fallback the generators bake in for a node without a model id: the platform's
+ * `studio_fallback_model_id` (`GET /api/model-defaults`, an admin can change it),
+ * else {@link DEFAULT_MODEL_ID}. It must equal what the backend scopes the agent's
+ * execution role to (`agent_iam.studio_fallback_model_id`), so it is read from the
+ * server rather than hard-coded — the canvas page loads the defaults before it
+ * generates the code it publishes.
+ */
+export function studioFallbackModelId(): string {
+  return currentModelDefaults().studio_fallback_model_id || DEFAULT_MODEL_ID;
+}
 
 /** Sentinel value for the "Custom model ID" option in model dropdowns. */
 export const CUSTOM_MODEL_OPTION = '__custom__';

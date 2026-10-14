@@ -2,7 +2,8 @@
  * The agent creation wizard's pure form model — shared by the classic wizard
  * (`pages/CreateAgent.tsx`) and the native V2 wizard (`v2/pages/agents/`), so both
  * consoles post the exact same `AgentSpecInput` for the same inputs and apply the
- * same per-method validation. Nothing here renders or talks to the network.
+ * same per-method validation. Nothing here renders or talks to the network; the
+ * model a form seeds reads the already-loaded platform defaults (`model-defaults.ts`).
  */
 import type {
   AgentSdk,
@@ -22,6 +23,7 @@ import {
   defaultModelFor,
   SPEC_DEFAULT_MODEL_ID,
 } from "./models";
+import { defaultModelForRole, type ModelDefaults } from "./model-defaults";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import {
   choiceFromSpec,
@@ -134,9 +136,23 @@ export const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
 export const sourceForMethod = (m: AgentMethod): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
-/** The model a form seeds for `method` on `source` — Claude-only for the Claude Agent SDK. */
-export const defaultModelForMethod = (method: AgentMethod, source: ModelSource = sourceForMethod(method)) =>
-  defaultModelFor(source, method === "container");
+/**
+ * The model a form seeds for `method` on `source`. On native Bedrock it is the
+ * platform's configured agent default (`GET /api/model-defaults`, an admin can
+ * change it) — the Claude SDK default for the container method, which drives Claude
+ * only — i.e. what the backend gives a spec without a `model_id`. A configured id the
+ * catalog does not list rides the "Custom model ID…" branch (`isCustomModelId`).
+ * Mantle ids are a different id space, so a Mantle source keeps its catalog's first
+ * entry. `defaults` pins a snapshot (the static ones, to tell a seeded value apart).
+ */
+export const defaultModelForMethod = (
+  method: AgentMethod,
+  source: ModelSource = sourceForMethod(method),
+  defaults?: ModelDefaults,
+) =>
+  source === "bedrock"
+    ? defaultModelForRole("agent_default_model_id", { method, defaults })
+    : defaultModelFor(source, method === "container");
 
 /** The source a method switch lands on: protocol survives a method switch, so
  *  re-entering zip_runtime with A2A still selected lands back on the pinned source. */
@@ -501,7 +517,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   byocPython: "PYTHON_3_13",
   byocInstallReqs: true,
   byocRawContract: false,
-  byocModels: [defaultModelFor(sourceForMethod(method))],
+  byocModels: [defaultModelForMethod("byoc", sourceForMethod(method))],
   byocEnvRows: [],
   byocDescription: "",
   authTools: [],

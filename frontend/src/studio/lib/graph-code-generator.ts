@@ -1,11 +1,11 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { validateGraphStructure } from './graph-validator';
 import {
-  DEFAULT_MODEL_ID,
   gptBedrockModelConfig,
   isBedrockOpenAiGpt,
   MANTLE_PROVIDER,
   mantleModelArgs,
+  studioFallbackModelId,
 } from './models';
 
 // Shared by both canvas generators. Keep the SDK override limited to inline files.
@@ -450,7 +450,7 @@ export function generateGraphCode(
       const data = agentNode.data || {};
       const label = data.label || `Agent${index + 1}`;
       const modelProvider = data.modelProvider || 'AWS Bedrock';
-      const modelId = data.modelId || DEFAULT_MODEL_ID;
+      const modelId = data.modelId || studioFallbackModelId();
       const modelName = data.modelName || 'Claude 3.7 Sonnet';
       const systemPrompt = data.systemPrompt || 'You are a helpful AI assistant.';
       const maxTokens = data.maxTokens || 32000; // launchpad extension: default max output tokens 32000

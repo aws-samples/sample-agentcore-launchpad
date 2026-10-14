@@ -12,7 +12,8 @@ import {
   type JobInfo,
   type StageInfo,
 } from "../../../lib/api";
-import { isFishbone, type ProposalEditDraft } from "../../../lib/assistant";
+import { isFishbone, proposalDefaultModel, type ProposalEditDraft } from "../../../lib/assistant";
+import { useModelDefaults, withCurrentModel } from "../../../lib/model-defaults";
 import { MODEL_CATALOG, type ModelSource } from "../../../lib/models";
 import { fmtTime } from "../../format";
 import { Alert, Descriptions, Field, Select, Table, Tag } from "../../ui";
@@ -267,7 +268,14 @@ export function ProposalEditor({
     set(key, has ? draft[key].filter((x) => x !== value) : [...draft[key], value]);
   };
   const bad = (k: string) => (errors[k] ? t("v2.assistant.fieldInvalid") : null);
+  // loads the platform's model defaults: a switch to Bedrock re-seeds the configured
+  // assistant model (and re-renders once it arrives)
+  useModelDefaults();
   const models = MODEL_CATALOG[draft.model_source];
+  const suggested = withCurrentModel(
+    models.map((m) => m.model_id),
+    draft.model_source === "bedrock" ? proposalDefaultModel("bedrock") : null,
+  );
   const memoryModes: AssistantMemoryMode[] = ["disabled", "workspace"];
   const check = (on: boolean, disabled: boolean, label: string, onToggle: () => void, testId?: string, title?: string) => (
     <label key={label} className={`v2-check${disabled ? " disabled" : ""}`} title={title}>
@@ -292,7 +300,7 @@ export function ProposalEditor({
             ]}
             onChange={(v) => {
               const source = v as ModelSource;
-              onChange({ ...draft, model_source: source, model_id: MODEL_CATALOG[source][0].model_id });
+              onChange({ ...draft, model_source: source, model_id: proposalDefaultModel(source) });
             }}
           />
         </Field>
@@ -305,8 +313,8 @@ export function ProposalEditor({
             data-testid="v2-assistant-edit-model"
           />
           <datalist id="v2-assistant-models">
-            {models.map((m) => (
-              <option key={m.model_id} value={m.model_id}>{m.label}</option>
+            {suggested.map((id) => (
+              <option key={id} value={id}>{models.find((m) => m.model_id === id)?.label ?? id}</option>
             ))}
           </datalist>
         </Field>

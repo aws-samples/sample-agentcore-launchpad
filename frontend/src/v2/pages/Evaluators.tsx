@@ -20,6 +20,13 @@ import {
   JUDGE_MODEL_OPTIONS,
   LEVEL_PLACEHOLDERS,
 } from "../../lib/evaluators";
+import {
+  adoptModelDefault,
+  defaultModelForRole,
+  STATIC_MODEL_DEFAULTS,
+  useModelDefaultsArrival,
+  withCurrentModel,
+} from "../../lib/model-defaults";
 import { creatorLabel } from "../format";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
@@ -330,7 +337,8 @@ const EMPTY: Draft = {
   name: "",
   description: "",
   level: "TRACE",
-  model_id: JUDGE_MODEL_OPTIONS[0],
+  // the platform's judge (GET /api/model-defaults); seeded static, adopted on arrival
+  model_id: STATIC_MODEL_DEFAULTS.judge_model_id,
   instructions: "",
   base_evaluator_id: "",
   lambda_arn: "",
@@ -344,7 +352,7 @@ function draftFrom(d: EvaluatorDetail): Draft {
     name: d.name ?? d.id,
     description: d.description ?? "",
     level: (d.level as EvaluatorLevel) ?? "TRACE",
-    model_id: d.model_id ?? JUDGE_MODEL_OPTIONS[0],
+    model_id: d.model_id ?? defaultModelForRole("judge_model_id"),
     instructions: d.instructions ?? "",
     base_evaluator_id: d.base_evaluator_id ?? "",
     lambda_arn: d.lambda_arn ?? "",
@@ -398,9 +406,26 @@ function EvaluatorEditor({ id }: { id: string | null }) {
     `evaluator-edit:${id ?? "new"}`,
   );
   const catalog = useLoad(() => api.v2Evaluators(), "evaluators");
-  const [draft, setDraft] = useState<Draft | null>(editing ? null : EMPTY);
+  const [draft, setDraft] = useState<Draft | null>(
+    editing ? null : { ...EMPTY, model_id: defaultModelForRole("judge_model_id") },
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // a new judge seeded the static model while the configured one loaded: adopt it
+  // unless the member already picked one (an edited evaluator keeps its stored model)
+  const defaults = useModelDefaultsArrival((d) => {
+    if (editing) return;
+    setDraft((prev) =>
+      prev
+        ? { ...prev, model_id: adoptModelDefault(prev.model_id, STATIC_MODEL_DEFAULTS.judge_model_id, d.judge_model_id) }
+        : prev,
+    );
+  });
+  // the configured judge is always offered, and a stored id is never dropped
+  const judgeOptions = withCurrentModel(
+    withCurrentModel(JUDGE_MODEL_OPTIONS, defaultModelForRole("judge_model_id", { defaults: defaults ?? undefined })),
+    draft?.model_id,
+  );
 
   // seed the edit form once the evaluator arrives
   if (editing && draft === null && detail.data) setDraft(draftFrom(detail.data));
@@ -524,7 +549,7 @@ function EvaluatorEditor({ id }: { id: string | null }) {
             <Field label={t("v2.evaluators.model")} required hint={t("v2.evaluators.modelHint")}>
               <Select
                 value={draft.model_id}
-                options={(JUDGE_MODEL_OPTIONS.includes(draft.model_id) ? JUDGE_MODEL_OPTIONS : [draft.model_id, ...JUDGE_MODEL_OPTIONS]).map((m) => ({ value: m, label: m }))}
+                options={judgeOptions.map((m) => ({ value: m, label: m }))}
                 onChange={(v) => set({ model_id: v })}
               />
             </Field>

@@ -1063,10 +1063,13 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   // is the method the form is landing on — during a switch, state still holds the old one.
   const applyModelSource = (source: ModelSource, forMethod: Method = method) => {
     setModelSource(source);
-    setModelId(defaultModelForMethod(forMethod, source));
-    setCustomModel(false);
-    // the byoc allowed-models list is seeded from the same catalog
-    setByocModels([defaultModelFor(source)]);
+    const seeded = defaultModelForMethod(forMethod, source);
+    setModelId(seeded);
+    // a configured default (GET /api/model-defaults) the catalog does not list
+    // rides the custom branch
+    setCustomModel(isCustomModelId(seeded, source, forMethod === "container"));
+    // the byoc allowed-models list is seeded the same way
+    setByocModels([defaultModelForMethod("byoc", source)]);
     setByocModelCustomOpen(false);
     setByocModelDraft("");
   };

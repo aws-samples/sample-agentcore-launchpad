@@ -23,7 +23,8 @@ export interface ModelOption {
  */
 export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
   // `defaultModelFor` takes the first OFFERED entry, so ORDER PICKS THE DEFAULT
-  // (for the Claude Agent SDK, the first Claude entry). Terra leads
+  // (for the Claude Agent SDK, the first Claude entry) — on Mantle; a native Bedrock
+  // form seeds the platform's configured default instead (`defaultModelForMethod`). Terra leads
   // because Mantle's catalogue differs per region and Terra/Luna are in both
   // us-east-1 and us-west-2 while Sol is us-east-1 only. A Sol default made the
   // Harness entrance fail on a us-west-2 deployment with `404 … The model
@@ -96,8 +97,10 @@ export function supportsReasoningEffort(modelId: string, source: ModelSource): b
  *  selectable; Bedrock leads because its global profiles work in every region. */
 export const DEFAULT_MODEL_SOURCE: ModelSource = "bedrock";
 
-/** Mirrors backend `AgentSpec.model_id`'s default (`DEFAULT_MODEL_ID`) — what a
- *  stored spec without a `model_id` means. Not the form default above. */
+/** What a stored spec without a `model_id` is read back as: the built-in that applied
+ *  before the agent default became a setting. The backend stores every spec with its
+ *  `model_id`, so this only covers rows written out of band. Not a form default — new
+ *  forms seed the platform's configured agent default (`lib/model-defaults.ts`). */
 export const SPEC_DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5";
 
 /** The Claude Agent SDK can only drive Claude models, so it is pinned here. */
