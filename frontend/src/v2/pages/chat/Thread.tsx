@@ -1,13 +1,14 @@
-import { Database, MessagesSquare, Wrench } from "lucide-react";
+import { Database, MessagesSquare, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
+import type { FeedbackVerdict } from "../../../lib/api";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
 import { PolicyDenyCard } from "./PolicyDenyCard";
-import { type ChatMessage, retryPromptFor } from "./messages";
+import { type ChatMessage, nextVerdict, retryPromptFor } from "./messages";
 
 export type { ChatMessage } from "./messages";
 
@@ -18,6 +19,7 @@ export function Thread({
   userLabel,
   agentLabel,
   restoring,
+  onRate,
   onRetry,
   retryDisabled = false,
 }: {
@@ -25,6 +27,8 @@ export function Thread({
   userLabel: string;
   agentLabel: string;
   restoring: boolean;
+  /** thumbs on persisted answers; omitted ⇒ no controls. `null` withdraws. */
+  onRate?: (messageId: number, verdict: FeedbackVerdict | null) => void;
   /** re-send a prompt (an auth card's retry) */
   onRetry?: (prompt: string) => void;
   retryDisabled?: boolean;
@@ -67,6 +71,29 @@ export function Thread({
               <Markdown text={msg.text} />
               {msg.streaming && <span className="v2-chat-caret" />}
             </div>
+            {onRate && msg.id != null && !msg.streaming && (
+              <div className="v2-chat-thumbs" role="group" aria-label={t("v2.chat.rateAnswer")}>
+                {(["up", "down"] as const).map((verdict) => {
+                  const Icon = verdict === "up" ? ThumbsUp : ThumbsDown;
+                  const active = msg.verdict === verdict;
+                  const label = t(verdict === "up" ? "v2.chat.thumbUp" : "v2.chat.thumbDown");
+                  return (
+                    <button
+                      key={verdict}
+                      type="button"
+                      className={active ? `v2-chat-thumb on ${verdict}` : "v2-chat-thumb"}
+                      aria-pressed={active}
+                      aria-label={label}
+                      title={label}
+                      onClick={() => onRate(msg.id as number, nextVerdict(msg.verdict, verdict))}
+                      data-testid={`thumb-${verdict}`}
+                    >
+                      <Icon size={14} aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         ) : msg.kind === "tool" ? (
           <div key={i} className="v2-chat-tool" data-testid="tool-call">

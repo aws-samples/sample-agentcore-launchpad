@@ -11,6 +11,7 @@ import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../ResultsView";
 import { type ResultRow, rowsFromOnline, rowsFromRun, SCORE_BANDS, summarize } from "../results";
 import { loadTasks, TASK_SOURCES, type V2Task } from "../tasks";
 import { Alert, Card, FilterSelect, PageHeader, SearchInput } from "../ui";
+import { FeedbackCard } from "./feedback/FeedbackCard";
 
 /** At most this many completed runs are read per refresh (one results call each). */
 const MAX_RUNS = 12;
@@ -186,6 +187,7 @@ export function V2Insights() {
       <SummaryKpis summary={summary} />
       <EvaluatorBreakdown summary={summary} />
       <InsightsPanel tasks={insightScope} loading={loading} needle={q} />
+      <FeedbackCard range={range} />
       <Card title={t("v2.insights.details")}>
         <ResultsTable rows={rows} loading={loading} error={error} onRetry={reload} range={range} exportName={`insights-${range}`} />
       </Card>

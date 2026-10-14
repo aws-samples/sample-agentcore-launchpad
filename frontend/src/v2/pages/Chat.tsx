@@ -22,6 +22,8 @@ import {
   type ChatTraceInfo,
   type AuthRequiredEvent,
   errorMessage,
+  feedbackApi,
+  type FeedbackVerdict,
   localizedMessage,
 } from "../../lib/api";
 import {
@@ -41,7 +43,7 @@ import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
-import { appendDelta } from "./chat/messages";
+import { appendDelta, setVerdict, stampSaved } from "./chat/messages";
 import { type ChatMessage, Thread } from "./chat/Thread";
 
 const MEMORY_TAG = {
@@ -167,7 +169,7 @@ export function V2Chat() {
           r.role === "user"
             ? { kind: "user", text: r.text, attachments: r.attachments }
             : r.role === "agent"
-              ? { kind: "agent", text: r.text }
+              ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
                 : r.role === "auth"
@@ -294,6 +296,11 @@ export function V2Chat() {
           const open = agentOpen;
           setMessages((m) => appendDelta(m, payload.text ?? "", open));
           agentOpen = true;
+        } else if (event === "saved") {
+          // the open answer was persisted; its closing event (tool / error / done)
+          // follows — attach the ledger id so the answer can be rated
+          const messageId = payload.message_id;
+          if (typeof messageId === "number") setMessages((m) => stampSaved(m, messageId));
         } else if (event === "error") {
           failed = true;
           const message = localizedMessage(payload.code ?? "", payload.message ?? t("chatPage.sendFailed"));
@@ -320,6 +327,21 @@ export function V2Chat() {
       setBusy(false);
       if (activeSessionId) void refreshMemory(activeSessionId);
       if (agentId) void loadSessions(agentId);
+    }
+  };
+
+  // Thumbs: optimistic, reverted (with the reason) when the backend refuses. Keyed
+  // on the ledger id, so a reply landing after a session switch touches nothing.
+  const rate = async (messageId: number, verdict: FeedbackVerdict | null) => {
+    const target = messages.find((m) => m.kind === "agent" && m.id === messageId);
+    if (!target) return;
+    const previous = target.verdict ?? null;
+    setMessages((m) => setVerdict(m, messageId, verdict));
+    try {
+      await feedbackApi.rate(messageId, verdict);
+    } catch (err) {
+      setMessages((m) => setVerdict(m, messageId, previous));
+      toast("error", errorMessage(err));
     }
   };
 
@@ -576,6 +598,7 @@ export function V2Chat() {
               userLabel={userLabel}
               agentLabel={agent?.name ?? "Agent"}
               restoring={restoring}
+              onRate={(messageId, verdict) => void rate(messageId, verdict)}
               onRetry={(prompt) => void send(prompt)}
               retryDisabled={busy || restoring}
             />

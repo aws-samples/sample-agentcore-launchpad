@@ -181,13 +181,19 @@ export interface ChatStreamPayload {
   reason?: string;
   policy_id?: string | null;
   gateway_id?: string | null;
+  /** `saved` (console `/api/chat` only): ledger id of the answer just persisted */
+  message_id?: number;
 }
 
 export interface ChatHistoryMessage {
+  /** ledger id (replay order); an agent answer's id is what thumbs feedback keys on */
+  id?: number;
   role: string;
   text: string;
   name: string | null;
   attachments?: ChatAttachmentMetadata[];
+  /** agent answers: the caller's thumbs verdict, null when unrated */
+  verdict?: FeedbackVerdict | null;
 }
 
 export interface SystemAgentIdentity {
@@ -5719,6 +5725,52 @@ export interface ApiKeyInfo {
   creator_offboarded?: "deleted" | "disabled" | "expired" | "no_workspace_grant" | null;
   key?: string;
 }
+
+// ---- thumbs feedback on console chat answers ----
+export type FeedbackVerdict = "up" | "down";
+
+export interface FeedbackItem {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  session_id: string;
+  message_id: number;
+  verdict: FeedbackVerdict;
+  actor: string;
+  /** `console` here; rows written by other surfaces (e.g. `share` / `review`) may exist */
+  source: string;
+  /** closest preceding user turn of the session, truncated */
+  question: string;
+  /** the rated answer, truncated */
+  answer: string;
+  answered_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** `GET /api/feedback` — feedback whose verdict was last set inside `range`. */
+export interface FeedbackList {
+  /** both verdicts over the range, regardless of the `verdict` filter */
+  totals: Record<FeedbackVerdict, number>;
+  items: FeedbackItem[];
+  /** distinct sessions with a thumbs-down in the range, newest first (≤ 50) — the
+   *  input of `POST /api/eval/datasets/from-sessions` */
+  down_session_ids: string[];
+}
+
+export const feedbackApi = {
+  /** Set the caller's verdict on one agent answer; `null` withdraws it. */
+  rate: (messageId: number, verdict: FeedbackVerdict | null) =>
+    request<{ message_id: number; verdict: FeedbackVerdict | null }>("/api/feedback", {
+      method: "POST",
+      body: JSON.stringify({ message_id: messageId, verdict }),
+    }),
+  list: (params: { range: V2Range; verdict?: FeedbackVerdict; agent_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value != null) q.set(key, String(value));
+    return request<FeedbackList>(`/api/feedback?${q.toString()}`);
+  },
+};
 
 export const chatApi = {
   history: (agentId: string, sessionId: string) =>

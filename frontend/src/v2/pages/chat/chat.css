@@ -144,3 +144,14 @@
   .v2 .v2-chat-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; }
   .v2 .v2-chat-pane-main { min-height: 560px; }
 }
+
+/* ---------- thumbs feedback on a persisted answer ---------- */
+.v2 .v2-chat-thumbs { display: flex; gap: 4px; margin-top: 2px; }
+.v2 .v2-chat-thumb {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--v2-ink-3); cursor: pointer;
+}
+.v2 .v2-chat-thumb:hover { background: var(--v2-fill); color: var(--v2-ink-2); }
+.v2 .v2-chat-thumb:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 1px; }
+.v2 .v2-chat-thumb.on.up { color: var(--v2-success, #1a7f37); border-color: currentColor; }
+.v2 .v2-chat-thumb.on.down { color: var(--v2-danger, #cf222e); border-color: currentColor; }

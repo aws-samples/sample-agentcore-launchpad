@@ -6816,7 +6816,10 @@
       "caller": {
         "user_jwt": "Called as you",
         "m2m": "Called as M2M client"
-      }
+      },
+      "rateAnswer": "Rate this answer",
+      "thumbUp": "Good answer",
+      "thumbDown": "Bad answer"
     },
     "knowledge": {
       "basic": "Basic info",
@@ -8486,6 +8489,24 @@
       "workspace": "Workspace",
       "observability": "Observability",
       "trace": "Trace"
+    }
+  },
+  "feedbackCard": {
+    "title": "Thumbs-down answers",
+    "desc": "Answers rated in Chat during this range. A thumbs-down is a bad case — add its sessions to a dataset to keep it as a regression test.",
+    "up": "Thumbs up",
+    "down": "Thumbs down",
+    "toDataset": "Add to dataset ({{count}})",
+    "toDatasetHint": "Adds the down-rated sessions of this range. Sessions whose trace is gone are skipped, and the result says how many.",
+    "empty": "No thumbs-down answers in this range.",
+    "colAgent": "Agent",
+    "colQuestion": "Question",
+    "colAnswer": "Answer",
+    "colWho": "Rated by",
+    "colSource": "From",
+    "openSession": "Open session",
+    "source": {
+      "console": "Chat"
     }
   }
 }

@@ -6816,7 +6816,10 @@
       "caller": {
         "user_jwt": "以你的身份调用",
         "m2m": "以 M2M 客户端调用"
-      }
+      },
+      "rateAnswer": "评价这条回答",
+      "thumbUp": "回答得好",
+      "thumbDown": "回答得不好"
     },
     "knowledge": {
       "basic": "基本信息",
@@ -8486,6 +8489,24 @@
       "workspace": "工作空间",
       "observability": "可观测性",
       "trace": "链路"
+    }
+  },
+  "feedbackCard": {
+    "title": "被点踩的回答",
+    "desc": "该时间范围内在对话中被评价的回答。点踩即为坏案例，可将其会话加入数据集，作为回归测试保留下来。",
+    "up": "点赞",
+    "down": "点踩",
+    "toDataset": "加入数据集（{{count}}）",
+    "toDatasetHint": "加入该时间范围内被点踩的会话。链路已不存在的会话会被跳过，结果中会显示跳过的数量。",
+    "empty": "该时间范围内暂无被点踩的回答。",
+    "colAgent": "Agent",
+    "colQuestion": "问题",
+    "colAnswer": "回答",
+    "colWho": "评价人",
+    "colSource": "来源",
+    "openSession": "打开会话",
+    "source": {
+      "console": "对话"
     }
   }
 }
