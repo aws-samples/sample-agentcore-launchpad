@@ -8587,11 +8587,7 @@
     },
     "environments": {
       "title": "Environments",
-      "desc": "Line one agent up across the workspaces you can see, and check whether this workspace's agents still match what AWS runs.",
-      "tab": {
-        "compare": "Compare",
-        "drift": "Drift"
-      },
+      "desc": "Line one agent up across the workspaces you can see and compare its configuration with the workspace selected in the header.",
       "agentLabel": "Agent",
       "agentPlaceholder": "Choose an agent of this workspace",
       "baselineNote": "Baseline: {{workspace}}, the workspace selected in the header. Switch it there to compare against another one.",
@@ -8619,42 +8615,6 @@
         "differs": "Differs",
         "absent": "Not present",
         "no_baseline": "No baseline"
-      },
-      "driftTitle": "Ledger vs AWS",
-      "driftSub": "Reads each live agent of this workspace you can see back from AWS. Nothing is changed.",
-      "driftNote": "Drift compares versions and status only, not configuration contents: a prompt edited outside Launchpad shows up only as a version change.",
-      "check": "Check against AWS",
-      "checking": "Checking…",
-      "notChecked": "Not checked yet. This reads one AWS resource per agent, so it runs only when you ask.",
-      "checkedAt": "{{time}} · took {{elapsed}}",
-      "kpiChecked": "Checked",
-      "kpiInSync": "In sync",
-      "kpiDrift": "Drifted",
-      "kpiUnknown": "Unknown",
-      "unknownSub": "Never counted as in sync",
-      "truncated": "Only the first {{limit}} agents (by name) were checked.",
-      "unknownNote": "Unknown means AWS could not be read or the answer cannot be judged. It is never counted as in sync.",
-      "noLiveAgents": "No live agents to check in this workspace.",
-      "colAgent": "Agent",
-      "colVersions": "Ledger → AWS version",
-      "colAwsStatus": "AWS status",
-      "colDetail": "Detail",
-      "state": {
-        "in_sync": "In sync",
-        "drift": "Drifted",
-        "unknown": "Unknown"
-      },
-      "finding": {
-        "version_changed": "Version changed outside Launchpad: recorded {{expected}}, AWS has {{observed}}",
-        "resource_missing": "The AWS resource no longer exists",
-        "unhealthy": "AWS reports status {{observed}}"
-      },
-      "reason": {
-        "unreadable": "AWS could not be read",
-        "no_status_reported": "AWS returned no status",
-        "transitioning": "The resource is updating; check again shortly",
-        "version_not_comparable": "No version to compare",
-        "canary_active": "A canary is running, so a newer version is expected"
       }
     }
   },

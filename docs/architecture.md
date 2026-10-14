@@ -2164,7 +2164,10 @@ agent looked like two edits ago. `services/snapshots.py` keeps one row per publi
 
 ### Environment compare and drift
 
-The V2 Environments page (`/v2/environments`) answers two questions without a tier model.
+The V2 Environments page (`/v2/environments`) shows the compare below. The drift check is
+API-only (`GET /api/environments/drift`): the console hides it because it compares versions
+only, and on a box that shares AWS with another console (prod and prod2) most of what it
+flags is the other console's ordinary redeploys.
 
 - **Compare** (`services/environments.py`, a ledger read) lines up the agents with one
   name across every workspace the caller can see: admins see every workspace, members
@@ -2174,7 +2177,7 @@ The V2 Environments page (`/v2/environments`) answers two questions without a ti
   `{method, spec}` that leaves out deploy-time stamps. Matching is by name, and resource
   ids such as a KB or a memory differ naturally across accounts, so `differs` is a prompt
   to look, not an error.
-- **Drift** checks the current workspace's visible active agents against AWS: one
+- **Drift** (API only) checks the current workspace's visible active agents against AWS: one
   `GetAgentRuntime` / `GetHarness` each, 8 at a time, at most 100, only on request. It
   reports `version_changed` when the ledger version is not the one AWS serves (an
   out-of-band update), `unhealthy` (not READY) and `resource_missing`, and `unknown` for a

@@ -598,43 +598,6 @@ export interface EnvironmentComparison {
   };
 }
 
-export type DriftState = "in_sync" | "drift" | "unknown";
-export type DriftFindingCode = "version_changed" | "unhealthy" | "resource_missing";
-export type DriftReason =
-  | "unreadable"
-  | "no_status_reported"
-  | "transitioning"
-  | "version_not_comparable"
-  | "canary_active";
-
-export interface DriftAgent {
-  agent_id: string;
-  name: string;
-  method: AgentInfo["method"];
-  kind: "runtime" | "harness";
-  state: DriftState;
-  findings: { code: DriftFindingCode; expected: string | null; observed: string | null }[];
-  /** why the state is `unknown` */
-  reason: DriftReason | null;
-  ledger_version: string | null;
-  aws_version: string | null;
-  aws_status: string | null;
-}
-
-/** `GET /api/environments/drift` — the current workspace's visible live agents. */
-export interface DriftReport {
-  workspace_id: string;
-  /** drift beats unknown beats in_sync */
-  state: DriftState;
-  checked: number;
-  counts: Record<DriftState, number>;
-  /** more agents than `limit`; only the first `limit` (by name) were read */
-  truncated: boolean;
-  limit: number;
-  elapsed_ms: number;
-  agents: DriftAgent[];
-}
-
 export interface RuntimeDiscoveryCandidate {
   runtime_id: string;
   runtime_arn: string;
@@ -5344,12 +5307,6 @@ export const api = {
     ),
   /** The current workspace's ledger vs what AWS reports — one control-plane read per
    *  visible live agent, so only on request. */
-  environmentDrift: (agent?: string) =>
-    request<DriftReport>(
-      agent
-        ? `/api/environments/drift?${new URLSearchParams({ agent }).toString()}`
-        : "/api/environments/drift",
-    ),
   agentIdentity: (id: string) => request<AgentIdentityInfo>(`/api/agents/${id}/identity`),
   /** Switch inbound auth in place: pins `inbound_auth` on the stored spec
    * (`null` ⇒ inherit the workspace default) and re-publishes the same runtime. */

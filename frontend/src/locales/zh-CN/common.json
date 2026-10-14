@@ -8587,11 +8587,7 @@
     },
     "environments": {
       "title": "环境对比",
-      "desc": "把同一个 Agent 在你可见的各工作区中并排对比，并核对当前工作区的 Agent 是否仍与 AWS 上运行的一致。",
-      "tab": {
-        "compare": "对比",
-        "drift": "漂移"
-      },
+      "desc": "把同一个 Agent 在你可见的各工作区中并排对比，以页眉中选中的工作区为基准比较配置。",
       "agentLabel": "Agent",
       "agentPlaceholder": "选择当前工作区的一个 Agent",
       "baselineNote": "基准：{{workspace}}，即页头中选中的工作区。在页头切换工作区即可更换基准。",
@@ -8619,42 +8615,6 @@
         "differs": "不同",
         "absent": "不存在",
         "no_baseline": "无基准"
-      },
-      "driftTitle": "账本与 AWS 对比",
-      "driftSub": "从 AWS 回读当前工作区中你可见的每个运行中的 Agent，不做任何更改。",
-      "driftNote": "漂移检查只比较版本和状态，不比较配置内容：在 Launchpad 之外修改的提示词只会表现为版本变化。",
-      "check": "与 AWS 核对",
-      "checking": "正在核对…",
-      "notChecked": "尚未核对。每个 Agent 都会读取一次 AWS 资源，因此只在你点击时运行。",
-      "checkedAt": "{{time}} · 用时 {{elapsed}}",
-      "kpiChecked": "已核对",
-      "kpiInSync": "一致",
-      "kpiDrift": "已漂移",
-      "kpiUnknown": "未知",
-      "unknownSub": "绝不计为一致",
-      "truncated": "仅核对了按名称排序的前 {{limit}} 个 Agent。",
-      "unknownNote": "“未知”表示无法读取 AWS，或结果无法判断。它绝不会被算作一致。",
-      "noLiveAgents": "当前工作区中没有可核对的运行中 Agent。",
-      "colAgent": "Agent",
-      "colVersions": "账本 → AWS 版本",
-      "colAwsStatus": "AWS 状态",
-      "colDetail": "详情",
-      "state": {
-        "in_sync": "一致",
-        "drift": "已漂移",
-        "unknown": "未知"
-      },
-      "finding": {
-        "version_changed": "版本在 Launchpad 之外被更改：记录为 {{expected}}，AWS 上为 {{observed}}",
-        "resource_missing": "AWS 资源已不存在",
-        "unhealthy": "AWS 报告的状态为 {{observed}}"
-      },
-      "reason": {
-        "unreadable": "无法读取 AWS",
-        "no_status_reported": "AWS 未返回状态",
-        "transitioning": "资源正在更新，请稍后再核对",
-        "version_not_comparable": "没有可比较的版本",
-        "canary_active": "正在进行金丝雀发布，出现较新的版本属于预期"
       }
     }
   },

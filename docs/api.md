@@ -240,8 +240,8 @@ On prod and prod2, which share AWS, a rollback changes the agent for both consol
 
 ## Console Environments API — compare and drift
 
-Two reads behind the V2 Environments page. Both are **member** routes, filtered to what the
-caller can see.
+Two reads, both **member** routes filtered to what the caller can see. The V2 Environments
+page shows compare only; drift is API-only (the console does not show it).
 
 | Method | Path | Result |
 |---|---|---|
