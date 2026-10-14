@@ -431,6 +431,20 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 知识库强制删除仍会从每个挂载它的 Agent 上移除该知识库。
 
+## 控制台模型 API / Console Models API
+
+平台自身的模型角色（见 [setup.zh-CN.md](setup.zh-CN.md#选择模型)）。属于中心全局——不按
+workspace 划分；覆盖设置保存在本部署的账本（`platform_settings`）中，立即生效、无需重启。
+
+| 方法 | 路径 | 角色 | 请求体 / 响应 |
+|---|---|---|---|
+| `GET` | `/api/model-defaults` | member | `{"roles": [{role, model_id, default, overridden, constraint, allow_empty, needs_tools, updated_by, updated_at}]}`——每个角色一行；`model_id` 为生效值（控制台覆盖 > `LAUNCHPAD_*` 环境变量 > `launchpad.yaml` > 内置值），`default` 为恢复默认后的值，`constraint` 为可接受的模型家族（`["anthropic"]` 等；`null` = 不限） |
+| `PUT` | `/api/admin/models/{role}` | admin | 请求体 `{"model_id": "<id>"}`（仅 `allow_empty` 的角色可为 `""`）；响应为该角色的行。`404 models.unknown_role`；`400 models.invalid_id` / `models.empty` / `models.wrong_family` / `models.no_tool_use` |
+| `DELETE` | `/api/admin/models/{role}` | admin | 删除覆盖（幂等）；响应为该角色恢复默认后的行。`404 models.unknown_role` |
+| `POST` | `/api/admin/models/probe` | admin | 请求体 `{"model_id": "<id>", "check": "converse" \| "tool_use"}`——在中心的默认工作区发起一次小型真实 Converse 调用（`tool_use` 带一个工具定义），不创建任何资源。响应 `{ok, model_id, check, region, latency_ms, stop_reason}`；AWS 报错时为 `{ok: false, …, error_code, message}`（仍为 `200`）。`400 models.invalid_id` |
+
+成员调用三个管理员路由会得到 `403 auth.forbidden`。
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库

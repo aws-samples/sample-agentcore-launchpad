@@ -535,6 +535,61 @@ through the same workspace client funnel as everything else.
 | `prompt_opt_max_tokens` | `8192` (512–16000) | Output budget of the reflection call. A two-component reflection (prompt plus several tool descriptions) ran past 4096, and the provider doubles this once on its own when a response comes back truncated. |
 | `prompt_opt_read_timeout_s` | `900` | Read timeout of the reflection call. The call streams, so this bounds the gap between chunks rather than the total. botocore's 60 s default is far too low: in production a large model over 30 sessions ran past it and botocore silently re-sent the whole request five times before failing. |
 
+### Choosing models
+
+Every model the platform itself calls or pre-selects is a **model role**: a
+backend setting (`backend/app/services/model_settings.py` lists them with their
+constraints). Agents, evaluators and presets that already exist keep the model id
+they were created with — a role only decides what *new* ones get.
+
+| Role (setting) | Default | Used for |
+|---|---|---|
+| `agent_default_model_id` | `global.openai.gpt-6-sol` | The model a new agent on native Bedrock pre-selects in the wizard, and what an agent created through the API without a `model_id` gets. |
+| `claude_sdk_model_id` | `global.anthropic.claude-sonnet-5` | The same for the Claude Agent SDK (`container`) method, which drives Claude only: a container spec without a `model_id` gets this, never the agent default. Claude only. |
+| `judge_model_id` | `global.openai.gpt-6-sol` | Default judge of a custom / derived LLM evaluator, and of the evaluators the architect assistant drafts. |
+| `judge_fallback_model_id` | `global.anthropic.claude-sonnet-5-5` | Retried when AgentCore Evaluation refuses the judge model. Empty = no fallback; the refusal surfaces. |
+| `assistant_model_id` | `global.openai.gpt-6-sol` | The model the architect assistant proposes for a new agent. |
+| `architect_model_id` | `global.openai.gpt-6-astra` | The system architect preset's model when an admin installs or repairs it. |
+| `actor_model_id` | `global.openai.gpt-6-luna` | The simulated user of a persona evaluation run. Must accept Converse forced tool choice. |
+| `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5` | What a Studio canvas node without a model generates. The backend scopes that agent's execution role to the same value and the canvas reads it from the server, so the two always agree. Deliberately separate from the agent default: moving it moves every existing flow's model-less nodes. |
+| `codegen_model` | `global.anthropic.claude-sonnet-5` | The coding agent behind Studio AI Fix. Claude only. |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | See [Prompt optimization](#prompt-optimization). |
+| `skill_lab_judge_model_id`, `skill_lab_target_model_id`, `skill_lab_codex_target_model_id` | see [Skill Lab](#skill-lab) | The judge is OpenAI or Claude; the Claude-CLI target Claude only; the codex target OpenAI only. |
+
+A role that runs tools refuses a model measured not to support Converse tool use
+(DeepSeek R1). Every id must be a Bedrock id (`[A-Za-z0-9._:/-]`, 3–121 characters).
+
+**Precedence, highest first:** console override > `LAUNCHPAD_<ROLE>` environment
+variable (for example `LAUNCHPAD_JUDGE_MODEL_ID`) > the same key in
+`config/launchpad.yaml` > the built-in default above.
+
+**The Models page** (`/v2/models`, admin only, under *Configuration*) lists each
+role with its effective model, its default (what env / yaml / the built-in
+resolve to), an *Overridden* badge, and who changed it and when. Per role an
+admin can:
+
+- pick a model or type a custom id and **Save** it — a console override, applied
+  at once with no restart and stored in the ledger table `platform_settings`;
+- **Reset to default**, which deletes the override;
+- **Probe** the selected id: one small real Converse call (plus a tool-use call
+  for roles that run tools) in the hub's default workspace, reporting OK with the
+  latency, or the AWS error. The probe creates nothing in the account.
+
+Console pickers (the V2 agent wizard, the evaluator editor, the evaluation task
+wizard's actor, the assistant proposal editor, the Studio codegen fallback) take
+their pre-selection from `GET /api/model-defaults`, so a change needs no frontend
+rebuild; if that read fails they fall back to the built-in defaults.
+
+Things to know before changing a role:
+
+- **An override is global to the deployment.** It applies to every workspace and
+  member at once. Each deployment has its own ledger, so two deployments sharing
+  an AWS account (for example prod and a clone) keep separate overrides.
+- **Changing the judge makes scores incomparable** with earlier evaluation runs:
+  a different judge grades differently. Keep the old judge while you compare.
+- A probe runs in the hub's default workspace; a model available there may still
+  be missing in a spoke workspace's account or Region.
+
 ### Self-service accounts and User Management
 
 While the gate is enabled, the login page also offers **registration**: a

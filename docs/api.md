@@ -724,6 +724,21 @@ system presets are creator-unknown, hence shared):
 
 KB force-delete still strips the KB from every mounting agent.
 
+## Console Models API
+
+The platform's own model roles (see [setup.md](setup.md#choosing-models)).
+Hub-global — not workspace-scoped; overrides live in this deployment's ledger
+(`platform_settings`) and apply at once, with no restart.
+
+| Method | Path | Role | Body / response |
+|---|---|---|---|
+| `GET` | `/api/model-defaults` | member | `{"roles": [{role, model_id, default, overridden, constraint, allow_empty, needs_tools, updated_by, updated_at}]}` — one row per role; `model_id` is the effective value (console override > `LAUNCHPAD_*` env > `launchpad.yaml` > built-in), `default` what a reset returns to, `constraint` the accepted model families (`["anthropic"]`, …; `null` = any) |
+| `PUT` | `/api/admin/models/{role}` | admin | body `{"model_id": "<id>"}` (`""` only where `allow_empty`); response: the role's row. `404 models.unknown_role`; `400 models.invalid_id` / `models.empty` / `models.wrong_family` / `models.no_tool_use` |
+| `DELETE` | `/api/admin/models/{role}` | admin | Removes the override (idempotent); response: the role's row, back on its default. `404 models.unknown_role` |
+| `POST` | `/api/admin/models/probe` | admin | body `{"model_id": "<id>", "check": "converse" \| "tool_use"}` — one small real Converse call (with a tool definition for `tool_use`) in the hub's default workspace; creates nothing. Response `{ok, model_id, check, region, latency_ms, stop_reason}` or, on an AWS error, `{ok: false, …, error_code, message}` (still `200`). `400 models.invalid_id` |
+
+A member gets `403 auth.forbidden` on the three admin routes.
+
 ## Console Knowledge Bases API
 
 `/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over

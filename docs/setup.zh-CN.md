@@ -444,6 +444,54 @@ id 都是 Bedrock Converse 的 inference-profile id，并和其他调用一样�
 | `prompt_opt_max_tokens` | `8192`（512–16000） | 反思调用的输出预算。含提示词与若干工具描述的双组件反思实测超过了 4096；响应被截断时 provider 会自行把该值翻倍一次。 |
 | `prompt_opt_read_timeout_s` | `900` | 反思调用的读超时。该调用是流式的，因此它约束的是两个数据块之间的间隔而不是总时长。botocore 默认的 60 秒在这里远远不够：生产环境里大模型处理 30 个会话时超过了它，botocore 静默重发了整个请求五次才最终失败。 |
 
+### 选择模型
+
+平台自身调用或预选的每一个模型都是一个**模型角色**：一个后端配置项
+（`backend/app/services/model_settings.py` 列出了全部角色及其约束）。已经存在的
+Agent、评估器和预设保留创建时的模型 ID——角色只决定*新建*的对象用什么。
+
+| 角色（配置项） | 默认值 | 用途 |
+|---|---|---|
+| `agent_default_model_id` | `global.openai.gpt-6-sol` | 向导里原生 Bedrock 下新建 Agent 的预选模型；通过 API 创建且未指定 `model_id` 的 Agent 也使用它。 |
+| `claude_sdk_model_id` | `global.anthropic.claude-sonnet-5` | Claude Agent SDK（`container`）方式的同一默认值。该方式只能驱动 Claude：未指定 `model_id` 的容器 spec 使用它，而不是 Agent 默认模型。仅限 Claude。 |
+| `judge_model_id` | `global.openai.gpt-6-sol` | 自定义 / 派生 LLM 评估器的默认评审模型，架构助手起草的评估器也使用它。 |
+| `judge_fallback_model_id` | `global.anthropic.claude-sonnet-5-5` | AgentCore Evaluation 拒绝评审模型时改用它重试。留空 = 不回退，直接报出拒绝原因。 |
+| `assistant_model_id` | `global.openai.gpt-6-sol` | 架构助手为新 Agent 推荐的模型。 |
+| `architect_model_id` | `global.openai.gpt-6-astra` | 管理员安装或修复系统架构师预设时使用的模型。 |
+| `actor_model_id` | `global.openai.gpt-6-luna` | 模拟人格评估运行中扮演用户的模型，必须支持 Converse 强制工具调用。 |
+| `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5` | Studio 画布中未指定模型的节点所生成的模型。后端按同一个值为该 Agent 的执行角色授权，画布也从服务端读取它，因此两边始终一致。它刻意与 Agent 默认模型分开：改它会改动所有已有流程中未指定模型的节点。 |
+| `codegen_model` | `global.anthropic.claude-sonnet-5` | Studio AI 修复所用的编码 Agent。仅限 Claude。 |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | 见[提示词优化](#提示词优化)。 |
+| `skill_lab_judge_model_id`、`skill_lab_target_model_id`、`skill_lab_codex_target_model_id` | 见 [Skill Lab](#skill-lab) | 评审模型为 OpenAI 或 Claude；Claude CLI 目标仅限 Claude；codex 目标仅限 OpenAI。 |
+
+会运行工具的角色拒绝实测不支持 Converse 工具调用的模型（DeepSeek R1）。每个 ID 都必须是
+Bedrock ID（`[A-Za-z0-9._:/-]`，3–121 个字符）。
+
+**优先级（从高到低）：**控制台覆盖 > `LAUNCHPAD_<角色>` 环境变量（例如
+`LAUNCHPAD_JUDGE_MODEL_ID`）> `config/launchpad.yaml` 中的同名键 > 上表的内置默认值。
+
+**模型页面**（`/v2/models`，仅管理员可见，位于“配置”分组下）逐个列出角色：生效模型、
+默认值（环境变量 / yaml / 内置值解析出的结果）、“已覆盖”标记，以及修改人和修改时间。
+管理员可以对每个角色：
+
+- 选择模型或输入自定义 ID 并**保存**——即控制台覆盖，立即生效、无需重启，保存在账本表
+  `platform_settings` 中；
+- **恢复默认**，即删除该覆盖；
+- **探测**所选 ID：在中心的默认工作区发起一次小型真实 Converse 调用（会运行工具的角色另加一次
+  工具调用），返回正常及延迟，或 AWS 错误。探测不会在账号中创建任何资源。
+
+控制台的选择器（V2 Agent 向导、评估器编辑器、评估任务向导的 actor、助手方案编辑器、
+Studio 代码生成的回退模型）从 `GET /api/model-defaults` 取预选值，因此修改无需重新构建前端；
+读取失败时回退到内置默认值。
+
+修改角色前需要了解：
+
+- **覆盖对整个部署生效。**它立即作用于所有工作区和成员。每个部署有自己的账本，因此共享同一
+  AWS 账号的两个部署（例如 prod 与其克隆）各自保存覆盖设置。
+- **更换评审模型后，评分与之前的评估运行不再可比**：不同的评审模型打分不同。对比期间请保持
+  原评审模型不变。
+- 探测在中心的默认工作区运行；在那里可用的模型，在分支工作区的账号或区域中仍可能不可用。
+
 ### 自助注册与用户管理
 
 登录网关开启后,登录页同时提供**注册**:填写用户名、**公司邮箱**和密码提交申请。
