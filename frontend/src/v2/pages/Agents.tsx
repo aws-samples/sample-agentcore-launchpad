@@ -20,6 +20,7 @@ import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { IntegrationCard } from "./agents/IntegrationCard";
+import { SnapshotsCard } from "./agents/SnapshotsCard";
 import { TryChat } from "./agents/TryChat";
 import { AgentWizard } from "./agents/AgentWizard";
 import { v2EditPath } from "./agents/classicUrl";
@@ -694,6 +695,16 @@ function AgentDetail({ id }: { id: string }) {
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
+      {agent.method !== "discovered_runtime" && (
+        <SnapshotsCard
+          agentId={agent.id}
+          agentName={agent.name}
+          currentSpec={spec}
+          refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}`}
+          canRollback={perms.canEdit(agent) && !agent.system}
+          onRolledBack={() => setNonce((n) => n + 1)}
+        />
+      )}
       {agent.invoke_capability.eligible && <IntegrationCard agentId={agent.id} />}
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>

@@ -2423,7 +2423,12 @@
     "alert.webhook_invalid": "Webhook 地址无效，或缺少主机名。",
     "alert.webhook_credentials": "Webhook 地址中不能包含用户名或密码。",
     "alert.webhook_unresolvable": "无法解析 Webhook 的主机名。",
-    "alert.webhook_non_public": "Webhook 的主机名解析到了私有或其他非公网地址。"
+    "alert.webhook_non_public": "Webhook 的主机名解析到了私有或其他非公网地址。",
+    "snapshot.not_found": "未找到该快照。",
+    "snapshot.never_deployed": "该快照从未部署成功，不能作为可靠的回滚目标。",
+    "snapshot.spec_invalid": "该快照的配置已无法通过当前的校验，不能重新发布。",
+    "snapshot.stale_reference": "该快照挂载的知识库已不存在。",
+    "snapshot.diff_side_required": "至少需要指定一份快照进行对比。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -5289,7 +5294,8 @@
       "experiments": "A/B实验",
       "online": "在线评估",
       "models": "模型",
-      "costs": "成本与告警"
+      "costs": "成本与告警",
+      "environments": "环境对比"
     },
     "notFound": {
       "title": "页面不存在",
@@ -5702,6 +5708,64 @@
         "tool": "调用了工具 {{name}}",
         "needsChat": "这一步需要授权登录，或涉及只有完整对话页才能展示的策略判定。请在对话页打开这段对话继续。",
         "openChat": "在对话页打开"
+      },
+      "snapshots": {
+        "title": "配置快照",
+        "sub": "每次发布所部署的完整配置。勾选两份可逐项对比，也可回滚到较早的一份。",
+        "colAwsVersion": "AWS 版本",
+        "by": "发布人",
+        "note": "备注",
+        "current": "当前",
+        "empty": "暂无快照。每次发布都会保存一份。",
+        "pick": "选择快照 #{{seq}} 用于对比",
+        "compare": "对比所选",
+        "compareHint": "勾选两份快照即可对比。",
+        "compareAcross": "跨工作区对比",
+        "diffTitle": "快照 #{{from}} → #{{to}}",
+        "noChanges": "这两份快照完全相同。",
+        "before": "变更前",
+        "after": "变更后",
+        "absent": "（未设置）",
+        "elided": "共 {{length}} 个字符，过长未直接显示。",
+        "showFull": "显示全文",
+        "rollback": "回滚",
+        "rollbackTitle": "回滚到快照 #{{seq}}？",
+        "rollbackWarn": "这是一次真实的重新部署：Agent 会以该快照的配置作为新的 AWS 版本重新发布（不会原地回退），并保存一份新快照。在共享的 AWS 账号上，此变更会影响所有使用该 Agent 的控制台。",
+        "rollbackChanges": "从当前配置变为快照 #{{seq}} 时的变更：",
+        "rollbackSame": "快照 #{{seq}} 与当前配置相同，回滚会将其重新发布。",
+        "rollbackConfirm": "回滚并重新部署",
+        "rollingBack": "正在启动…",
+        "rolledBack": "正在回滚到快照 #{{seq}}：它正作为新版本部署。",
+        "group": {
+          "prompt": "提示词",
+          "model": "模型",
+          "tools": "工具",
+          "skills": "技能",
+          "knowledge_bases": "知识库",
+          "memory": "记忆",
+          "guardrail": "护栏",
+          "other": "其他",
+          "image": "镜像"
+        },
+        "kind": {
+          "added": "新增",
+          "removed": "移除",
+          "changed": "变更"
+        },
+        "state": {
+          "deployed": "已部署",
+          "deploying": "部署中",
+          "failed": "失败",
+          "not_deployed": "未部署"
+        },
+        "noteKind": {
+          "baseline": "基线（启用快照前的配置）",
+          "rollback": "回滚到 #{{seq}}",
+          "canaryPromoted": "金丝雀已全量发布",
+          "canaryRolledBack": "金丝雀已回滚",
+          "inboundAuth": "切换了入站认证",
+          "recommendation": "采纳了推荐"
+        }
       }
     },
     "data": {
@@ -8519,6 +8583,78 @@
         "online_quality": "最近 24 小时的在线评估平均分，0 到 1。分数下跌时触发。",
         "spend_usd": "规则时间窗内的预估花费，单位美元。",
         "cost_mtd_usd": "本月 1 日（UTC）以来的预估花费，单位美元。"
+      }
+    },
+    "environments": {
+      "title": "环境对比",
+      "desc": "把同一个 Agent 在你可见的各工作区中并排对比，并核对当前工作区的 Agent 是否仍与 AWS 上运行的一致。",
+      "tab": {
+        "compare": "对比",
+        "drift": "漂移"
+      },
+      "agentLabel": "Agent",
+      "agentPlaceholder": "选择当前工作区的一个 Agent",
+      "baselineNote": "基准：{{workspace}}，即页头中选中的工作区。在页头切换工作区即可更换基准。",
+      "pickAgent": "选择一个 Agent，即可查看它在你有权访问的各工作区中的情况。",
+      "noAgents": "当前工作区中没有你可见的 Agent。",
+      "compareTitle": "{{agent}} 在各工作区中的情况",
+      "compareSub": "每一行都与基准比较",
+      "aligned": "所有运行 {{agent}} 的工作区都与基准一致。",
+      "notAligned": "配置与基准不同的工作区：{{differs}} 个。",
+      "noBaseline": "基准工作区中没有名为 {{agent}} 的 Agent，因此无法判断其他行。",
+      "nowhere": "你可见的工作区中都没有名为 {{agent}} 的 Agent。",
+      "matchNote": "Agent 按名称匹配：两个工作区中同名但无关的 Agent 也会被当作同一个来比较。知识库、记忆和网关的 ID 在不同账号间本来就不同，因此也会显示为差异。",
+      "colWorkspace": "工作区",
+      "colState": "状态",
+      "colDiffers": "差异",
+      "colStatus": "Agent 状态",
+      "colVersion": "AWS 版本",
+      "colDeploy": "最近部署",
+      "colFingerprint": "配置指纹",
+      "image": "镜像 {{digest}}",
+      "notDeployed": "未部署",
+      "compareState": {
+        "baseline": "基准",
+        "same": "一致",
+        "differs": "不同",
+        "absent": "不存在",
+        "no_baseline": "无基准"
+      },
+      "driftTitle": "账本与 AWS 对比",
+      "driftSub": "从 AWS 回读当前工作区中你可见的每个运行中的 Agent，不做任何更改。",
+      "driftNote": "漂移检查只比较版本和状态，不比较配置内容：在 Launchpad 之外修改的提示词只会表现为版本变化。",
+      "check": "与 AWS 核对",
+      "checking": "正在核对…",
+      "notChecked": "尚未核对。每个 Agent 都会读取一次 AWS 资源，因此只在你点击时运行。",
+      "checkedAt": "{{time}} · 用时 {{elapsed}}",
+      "kpiChecked": "已核对",
+      "kpiInSync": "一致",
+      "kpiDrift": "已漂移",
+      "kpiUnknown": "未知",
+      "unknownSub": "绝不计为一致",
+      "truncated": "仅核对了按名称排序的前 {{limit}} 个 Agent。",
+      "unknownNote": "“未知”表示无法读取 AWS，或结果无法判断。它绝不会被算作一致。",
+      "noLiveAgents": "当前工作区中没有可核对的运行中 Agent。",
+      "colAgent": "Agent",
+      "colVersions": "账本 → AWS 版本",
+      "colAwsStatus": "AWS 状态",
+      "colDetail": "详情",
+      "state": {
+        "in_sync": "一致",
+        "drift": "已漂移",
+        "unknown": "未知"
+      },
+      "finding": {
+        "version_changed": "版本在 Launchpad 之外被更改：记录为 {{expected}}，AWS 上为 {{observed}}",
+        "resource_missing": "AWS 资源已不存在",
+        "unhealthy": "AWS 报告的状态为 {{observed}}"
+      },
+      "reason": {
+        "unreadable": "无法读取 AWS",
+        "no_status_reported": "AWS 未返回状态",
+        "transitioning": "资源正在更新，请稍后再核对",
+        "version_not_comparable": "没有可比较的版本",
+        "canary_active": "正在进行金丝雀发布，出现较新的版本属于预期"
       }
     }
   },

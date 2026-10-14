@@ -497,6 +497,144 @@ export interface AgentVersionsInfo {
   canary_endpoints: string[];
 }
 
+/** deployed = its publish succeeded (it has an AWS version); deploying / failed = its
+ *  deployment is still running / failed; not_deployed = neither (e.g. a job lost
+ *  before it ran). Only a deployed snapshot is a rollback target. */
+export type SnapshotState = "deployed" | "deploying" | "failed" | "not_deployed";
+
+/** One row of `GET /api/agents/{id}/snapshots` — the spec one publish deployed.
+ *  `spec` only on `GET /api/agents/{id}/snapshots/{seq}`. */
+export interface SpecSnapshotInfo {
+  seq: number;
+  agent_id: string;
+  /** the AWS version the publish left live; null until (unless) it succeeded */
+  aws_version: string | null;
+  deployed: boolean;
+  state: SnapshotState;
+  deployment_id: string | null;
+  /** server-written: "baseline", "rollback to #k", "canary promoted", … */
+  note: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string | null;
+  spec?: Record<string, unknown>;
+}
+
+export type SpecChangeGroup =
+  | "prompt"
+  | "model"
+  | "tools"
+  | "skills"
+  | "knowledge_bases"
+  | "memory"
+  | "guardrail"
+  | "other";
+
+/** One field-level difference of `GET /api/agents/{id}/snapshots/diff`. */
+export interface SpecChange {
+  /** dotted spec path, e.g. `memory.long_term` */
+  path: string;
+  group: SpecChangeGroup;
+  kind: "added" | "removed" | "changed";
+  before: unknown;
+  after: unknown;
+  /** list fields: members gained / lost (both empty on a pure re-order) */
+  added?: unknown[];
+  removed?: unknown[];
+  /** a side of a whole-compared field over 2 KB reads `{length: n}` instead */
+  elided?: boolean;
+}
+
+/** An omitted side (`from` / `to` null) is the agent's current spec. */
+export interface SnapshotDiff {
+  from: SpecSnapshotInfo | null;
+  to: SpecSnapshotInfo | null;
+  changes: SpecChange[];
+}
+
+export type EnvironmentCompareState = "baseline" | "same" | "differs" | "absent" | "no_baseline";
+
+/** One workspace of `GET /api/environments/compare`. */
+export interface EnvironmentRow {
+  workspace: { id: string; name: string; account_id: string; region: string; status: string };
+  /** the current workspace (the one selected in the header) */
+  baseline: boolean;
+  present: boolean;
+  state: EnvironmentCompareState;
+  /** spec groups (`SpecChangeGroup`) that differ from the baseline, plus "image" */
+  changed_groups: string[];
+  agent: {
+    id: string;
+    name: string;
+    status: AgentInfo["status"];
+    method: AgentInfo["method"];
+    version: string | null;
+    spec_digest: string;
+    /** 方式A container agents only */
+    image_digest: string | null;
+    last_deploy: {
+      status: string;
+      started_at: string | null;
+      ended_at: string | null;
+      image_digest: string | null;
+    } | null;
+    updated_at: string | null;
+  } | null;
+}
+
+export interface EnvironmentComparison {
+  agent: string;
+  baseline_workspace: string;
+  environments: EnvironmentRow[];
+  summary: {
+    workspaces: number;
+    present: number;
+    same: number;
+    differs: number;
+    absent: number;
+    distinct_spec_digests: number;
+    /** the baseline runs the agent and every other present row is the same */
+    aligned: boolean;
+  };
+}
+
+export type DriftState = "in_sync" | "drift" | "unknown";
+export type DriftFindingCode = "version_changed" | "unhealthy" | "resource_missing";
+export type DriftReason =
+  | "unreadable"
+  | "no_status_reported"
+  | "transitioning"
+  | "version_not_comparable"
+  | "canary_active";
+
+export interface DriftAgent {
+  agent_id: string;
+  name: string;
+  method: AgentInfo["method"];
+  kind: "runtime" | "harness";
+  state: DriftState;
+  findings: { code: DriftFindingCode; expected: string | null; observed: string | null }[];
+  /** why the state is `unknown` */
+  reason: DriftReason | null;
+  ledger_version: string | null;
+  aws_version: string | null;
+  aws_status: string | null;
+}
+
+/** `GET /api/environments/drift` — the current workspace's visible live agents. */
+export interface DriftReport {
+  workspace_id: string;
+  /** drift beats unknown beats in_sync */
+  state: DriftState;
+  checked: number;
+  counts: Record<DriftState, number>;
+  /** more agents than `limit`; only the first `limit` (by name) were read */
+  truncated: boolean;
+  limit: number;
+  elapsed_ms: number;
+  agents: DriftAgent[];
+}
+
 export interface RuntimeDiscoveryCandidate {
   runtime_id: string;
   runtime_arn: string;
@@ -5178,6 +5316,40 @@ export const api = {
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  /** The agent's spec snapshots (one per publish), newest first, without specs. */
+  agentSnapshots: (id: string) =>
+    request<{ snapshots: SpecSnapshotInfo[] }>(`/api/agents/${encodeURIComponent(id)}/snapshots`),
+  /** One snapshot, with the full spec it deployed. */
+  agentSnapshot: (id: string, seq: number) =>
+    request<SpecSnapshotInfo>(`/api/agents/${encodeURIComponent(id)}/snapshots/${seq}`),
+  /** Field-level diff `from → to`; an omitted side is the agent's current spec
+   *  (omitting both is refused with 422 `snapshot.diff_side_required`). */
+  snapshotDiff: (id: string, fromSeq?: number | null, toSeq?: number | null) => {
+    const q = new URLSearchParams();
+    if (fromSeq != null) q.set("from_seq", String(fromSeq));
+    if (toSeq != null) q.set("to_seq", String(toSeq));
+    return request<SnapshotDiff>(`/api/agents/${encodeURIComponent(id)}/snapshots/diff?${q.toString()}`);
+  },
+  /** Re-publish a deployed snapshot's spec as a NEW version (the redeploy path and
+   *  its guards; the AWS version is never reverted in place). */
+  rollbackSnapshot: (id: string, seq: number) =>
+    request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
+      `/api/agents/${encodeURIComponent(id)}/snapshots/${seq}/rollback`,
+      { method: "POST" },
+    ),
+  /** One agent name across every workspace the caller can see (ledger only). */
+  environmentCompare: (agent: string) =>
+    request<EnvironmentComparison>(
+      `/api/environments/compare?${new URLSearchParams({ agent }).toString()}`,
+    ),
+  /** The current workspace's ledger vs what AWS reports — one control-plane read per
+   *  visible live agent, so only on request. */
+  environmentDrift: (agent?: string) =>
+    request<DriftReport>(
+      agent
+        ? `/api/environments/drift?${new URLSearchParams({ agent }).toString()}`
+        : "/api/environments/drift",
+    ),
   agentIdentity: (id: string) => request<AgentIdentityInfo>(`/api/agents/${id}/identity`),
   /** Switch inbound auth in place: pins `inbound_auth` on the stored spec
    * (`null` ⇒ inherit the workspace default) and re-publishes the same runtime. */

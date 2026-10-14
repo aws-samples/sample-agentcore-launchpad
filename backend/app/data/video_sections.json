@@ -16,6 +16,7 @@
     {"id": "knowledge-bases", "categoryId": "build", "title": {"en": "Knowledge Bases", "zh-CN": "知识库"}, "path": "/v2/knowledge-bases"},
     {"id": "chat", "categoryId": "run", "title": {"en": "Chat Playground", "zh-CN": "对话演练场"}, "path": "/v2/chat"},
     {"id": "observability", "categoryId": "run", "title": {"en": "Observability", "zh-CN": "可观测"}, "path": "/v2/observability"},
+    {"id": "environments", "categoryId": "run", "title": {"en": "Environments", "zh-CN": "环境对比"}, "path": "/v2/environments"},
     {"id": "memory", "categoryId": "run", "title": {"en": "Memory", "zh-CN": "记忆"}, "path": "/v2/memory"},
     {"id": "governance", "categoryId": "run", "title": {"en": "Governance", "zh-CN": "治理"}, "path": "/v2/governance"},
     {"id": "my-connections", "categoryId": "run", "title": {"en": "My authorizations", "zh-CN": "我的授权"}, "path": "/v2/my-connections"},

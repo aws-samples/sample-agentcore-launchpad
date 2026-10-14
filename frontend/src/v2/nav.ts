@@ -6,6 +6,7 @@ import {
   Database,
   FlaskConical,
   Gauge,
+  GitCompare,
   House,
   KeyRound,
   Layers,
@@ -110,6 +111,7 @@ export const V2_NAV: V2NavGroup[] = [
         business: true,
         hintKey: "glossary.observability",
       },
+      { to: "/v2/environments", labelKey: "v2.nav.environments", icon: GitCompare, v2: true },
       { to: "/v2/memory", labelKey: "nav.memory", icon: Layers, v2: true, hintKey: "glossary.memory" },
       {
         to: "/v2/governance",

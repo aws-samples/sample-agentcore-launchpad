@@ -65,6 +65,14 @@ describe("navGroupsFor", () => {
     expect(paths(navGroupsFor("expert", false))).not.toContain("/v2/costs");
   });
 
+  it("lists Environments for everyone, in the Run group after Observability", () => {
+    const run = V2_NAV.find((g) => g.key === "run")?.items.map((item) => item.to) ?? [];
+    expect(run.indexOf("/v2/environments")).toBe(run.indexOf("/v2/observability") + 1);
+    const item = V2_NAV.flatMap((g) => g.items).find((entry) => entry.to === "/v2/environments");
+    expect(item?.admin).toBeUndefined();
+    expect(paths(navGroupsFor("expert", false))).toContain("/v2/environments");
+  });
+
   it("does not mutate V2_NAV", () => {
     const before = paths(V2_NAV);
     navGroupsFor("business", false);

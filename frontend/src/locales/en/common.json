@@ -2423,7 +2423,12 @@
     "alert.webhook_invalid": "The webhook URL is not a valid URL with a host.",
     "alert.webhook_credentials": "A webhook URL must not contain a user name or password.",
     "alert.webhook_unresolvable": "The webhook host does not resolve.",
-    "alert.webhook_non_public": "The webhook host resolves to a private or otherwise non-public address."
+    "alert.webhook_non_public": "The webhook host resolves to a private or otherwise non-public address.",
+    "snapshot.not_found": "Snapshot not found.",
+    "snapshot.never_deployed": "This snapshot never deployed successfully, so it is not a known-good rollback target.",
+    "snapshot.spec_invalid": "This snapshot's configuration no longer passes the current validation, so it cannot be re-published.",
+    "snapshot.stale_reference": "This snapshot mounts knowledge bases that no longer exist.",
+    "snapshot.diff_side_required": "Name at least one snapshot to compare."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -5289,7 +5294,8 @@
       "experiments": "A/B experiments",
       "online": "Online evaluation",
       "models": "Models",
-      "costs": "Spend & alerts"
+      "costs": "Spend & alerts",
+      "environments": "Environments"
     },
     "notFound": {
       "title": "Page not found",
@@ -5702,6 +5708,64 @@
         "tool": "Used tool {{name}}",
         "needsChat": "This step needs a sign-in or a policy decision that only the full Chat console can show. Open the conversation in Chat to continue.",
         "openChat": "Open in Chat"
+      },
+      "snapshots": {
+        "title": "Snapshots",
+        "sub": "The full configuration each publish deployed. Pick two to compare, or roll back to an earlier one.",
+        "colAwsVersion": "AWS version",
+        "by": "Published by",
+        "note": "Note",
+        "current": "Current",
+        "empty": "No snapshots yet. One is saved at every publish.",
+        "pick": "Select snapshot #{{seq}} to compare",
+        "compare": "Compare selected",
+        "compareHint": "Tick two snapshots to compare them.",
+        "compareAcross": "Compare across workspaces",
+        "diffTitle": "Snapshot #{{from}} → #{{to}}",
+        "noChanges": "These two snapshots are identical.",
+        "before": "Before",
+        "after": "After",
+        "absent": "(not set)",
+        "elided": "{{length}} characters, too long to show inline.",
+        "showFull": "Show full text",
+        "rollback": "Roll back",
+        "rollbackTitle": "Roll back to snapshot #{{seq}}?",
+        "rollbackWarn": "This is a real redeploy: the agent is re-published with the snapshot's configuration as a new AWS version (nothing is reverted in place), and a new snapshot is saved. On a shared AWS account the change reaches every console that uses this agent.",
+        "rollbackChanges": "What changes from the current configuration to snapshot #{{seq}}:",
+        "rollbackSame": "Snapshot #{{seq}} is the same as the current configuration; rolling back re-publishes it.",
+        "rollbackConfirm": "Roll back and redeploy",
+        "rollingBack": "Starting…",
+        "rolledBack": "Rolling back to snapshot #{{seq}}: it is deploying as a new version.",
+        "group": {
+          "prompt": "Prompt",
+          "model": "Model",
+          "tools": "Tools",
+          "skills": "Skills",
+          "knowledge_bases": "Knowledge bases",
+          "memory": "Memory",
+          "guardrail": "Guardrail",
+          "other": "Other",
+          "image": "Image"
+        },
+        "kind": {
+          "added": "added",
+          "removed": "removed",
+          "changed": "changed"
+        },
+        "state": {
+          "deployed": "Deployed",
+          "deploying": "Deploying",
+          "failed": "Failed",
+          "not_deployed": "Not deployed"
+        },
+        "noteKind": {
+          "baseline": "Baseline (configuration before snapshots)",
+          "rollback": "Rollback to #{{seq}}",
+          "canaryPromoted": "Canary promoted",
+          "canaryRolledBack": "Canary rolled back",
+          "inboundAuth": "Inbound auth switched",
+          "recommendation": "Recommendation accepted"
+        }
       }
     },
     "data": {
@@ -8519,6 +8583,78 @@
         "online_quality": "Mean online evaluation score over the last 24 hours, 0 to 1. Fires when it drops.",
         "spend_usd": "Estimated spend over the rule's window, in US dollars.",
         "cost_mtd_usd": "Estimated spend since the 1st of the month (UTC), in US dollars."
+      }
+    },
+    "environments": {
+      "title": "Environments",
+      "desc": "Line one agent up across the workspaces you can see, and check whether this workspace's agents still match what AWS runs.",
+      "tab": {
+        "compare": "Compare",
+        "drift": "Drift"
+      },
+      "agentLabel": "Agent",
+      "agentPlaceholder": "Choose an agent of this workspace",
+      "baselineNote": "Baseline: {{workspace}}, the workspace selected in the header. Switch it there to compare against another one.",
+      "pickAgent": "Choose an agent to see it in every workspace you can access.",
+      "noAgents": "This workspace has no agents you can see.",
+      "compareTitle": "{{agent}} across workspaces",
+      "compareSub": "Each row is compared with the baseline",
+      "aligned": "Every workspace that runs {{agent}} matches the baseline.",
+      "notAligned": "Workspaces whose configuration differs from the baseline: {{differs}}.",
+      "noBaseline": "The baseline workspace has no agent named {{agent}}, so the other rows cannot be judged.",
+      "nowhere": "No workspace you can see runs an agent named {{agent}}.",
+      "matchNote": "Agents are matched by name: two unrelated agents that share a name in two workspaces compare as one. Knowledge base, memory and gateway ids naturally differ across accounts, so they show up as differences too.",
+      "colWorkspace": "Workspace",
+      "colState": "State",
+      "colDiffers": "What differs",
+      "colStatus": "Status",
+      "colVersion": "AWS version",
+      "colDeploy": "Last deploy",
+      "colFingerprint": "Fingerprint",
+      "image": "image {{digest}}",
+      "notDeployed": "Not deployed",
+      "compareState": {
+        "baseline": "Baseline",
+        "same": "Same",
+        "differs": "Differs",
+        "absent": "Not present",
+        "no_baseline": "No baseline"
+      },
+      "driftTitle": "Ledger vs AWS",
+      "driftSub": "Reads each live agent of this workspace you can see back from AWS. Nothing is changed.",
+      "driftNote": "Drift compares versions and status only, not configuration contents: a prompt edited outside Launchpad shows up only as a version change.",
+      "check": "Check against AWS",
+      "checking": "Checking…",
+      "notChecked": "Not checked yet. This reads one AWS resource per agent, so it runs only when you ask.",
+      "checkedAt": "{{time}} · took {{elapsed}}",
+      "kpiChecked": "Checked",
+      "kpiInSync": "In sync",
+      "kpiDrift": "Drifted",
+      "kpiUnknown": "Unknown",
+      "unknownSub": "Never counted as in sync",
+      "truncated": "Only the first {{limit}} agents (by name) were checked.",
+      "unknownNote": "Unknown means AWS could not be read or the answer cannot be judged. It is never counted as in sync.",
+      "noLiveAgents": "No live agents to check in this workspace.",
+      "colAgent": "Agent",
+      "colVersions": "Ledger → AWS version",
+      "colAwsStatus": "AWS status",
+      "colDetail": "Detail",
+      "state": {
+        "in_sync": "In sync",
+        "drift": "Drifted",
+        "unknown": "Unknown"
+      },
+      "finding": {
+        "version_changed": "Version changed outside Launchpad: recorded {{expected}}, AWS has {{observed}}",
+        "resource_missing": "The AWS resource no longer exists",
+        "unhealthy": "AWS reports status {{observed}}"
+      },
+      "reason": {
+        "unreadable": "AWS could not be read",
+        "no_status_reported": "AWS returned no status",
+        "transitioning": "The resource is updating; check again shortly",
+        "version_not_comparable": "No version to compare",
+        "canary_active": "A canary is running, so a newer version is expected"
       }
     }
   },
