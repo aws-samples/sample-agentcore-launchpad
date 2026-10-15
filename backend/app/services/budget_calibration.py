@@ -17,8 +17,9 @@ sessions touched:
   prod2 share the AWS account, and the metric covers both boxes, so the divisor must
   too. Billable time is each session's trace intervals plus the runtime's idle tail
   (the reconciler's own rule), intersected with the hour.
-- A sample with no metric datapoint, no span session-time, or an implausible factor
-  (beyond the 8 GB / 2 vCPU session ceiling) is dropped. Samples merge into the
+- A sample with no metric datapoint, under ``MIN_SAMPLE_SESSION_HOURS`` of span
+  session-time, or an implausible factor (beyond the 8 GB / 2 vCPU session ceiling)
+  is dropped. Samples merge into the
   stored factor weighted by session count (the history's weight capped, so the
   factor follows a changing agent). The reconciler uses a measured factor only once
   ``calibration_min_sessions`` sessions back it; below that the seeds apply.
@@ -69,6 +70,10 @@ MIN_GB, MAX_GB = 0.128, 8.5
 MAX_VCPU = 2.5
 # the history's weight in a merge, in sessions: newer hours keep moving the factor
 HISTORY_WEIGHT_CAP = 50
+# A runtime-hour with less billable session time than this (an idle tail clipping
+# the hour) is dropped: a few seconds' disagreement between the spans and AWS's own
+# session end would swing its ratio by a large factor.
+MIN_SAMPLE_SESSION_HOURS = 0.05
 # how far back a runtime_compute row may have started and still cover the hour
 _ROW_LOOKBACK = timedelta(hours=9)
 
@@ -241,6 +246,10 @@ def calibrate_workspace(
         metric = measured.get(runtime_id) or {}
         if "gb_hours" not in metric or session_h <= 0:
             dropped.append({"runtime_id": runtime_id, "reason": "no_metric"})
+            continue
+        if session_h < MIN_SAMPLE_SESSION_HOURS:
+            dropped.append({"runtime_id": runtime_id, "reason": "too_small",
+                            "session_hours": round(session_h, 4)})
             continue
         gb = metric["gb_hours"] / session_h
         vcpu = metric.get("vcpu_hours", 0.0) / session_h

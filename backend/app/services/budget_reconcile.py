@@ -28,7 +28,9 @@ prod and prod2 sharing one AWS account never charge each other's sessions:
     session, updated in place** while the session stays alive — the single
     in-place update the append-only ledger allows (a correction is otherwise a new
     row plus ``superseded_by``). Activity after the idle tail expired, past the
-    max lifetime or in a new month starts a new row.
+    max lifetime or in a new month starts a new row; a microVM still alive when the
+    month changed bills its new row from where last month's row stopped
+    (``bill_from``), so the overlap is never charged twice.
 (d) **Evaluations.** A finished batch run's evaluations are counted from its row
     (``scores[].count`` = ``totalEvaluated`` = the result records, live probe), or
     from its result records when the row has no counts; online configs' result
@@ -101,6 +103,10 @@ NEW_SESSION_LOOKBACK = timedelta(minutes=15)
 # A session is re-read for this long after its last settled turn, so spans that
 # end a moment after the turn settled are still counted.
 RECENT_ACTIVITY = timedelta(minutes=15)
+# An estimate settled this soon after the session's watermark, in a window with no
+# tokens, belongs to a turn whose spans the previous window already measured (a turn
+# settles seconds after its last model span ends).
+STRAY_GRACE = timedelta(minutes=5)
 # Never read further back than this in one window (a box down for longer keeps the
 # estimates it charged for the missing span).
 MAX_WINDOW = timedelta(hours=24)
@@ -120,11 +126,21 @@ RUNTIME_INFO_TTL_SECONDS = 3600.0
 EVAL_SETTLE = timedelta(minutes=2)
 # … and is looked at for this long after it finished (each tick re-reads them)
 EVAL_LOOKBACK = timedelta(days=7)
+# A *failed* run is counted only after this long: a run fails locally when its poller
+# gives up (``eval_batch_wait_s``, 2 h by default) or dies, while its batch may keep
+# judging on AWS. Counting it straight away would supersede the judge estimate with
+# a partial (or zero) count, once and for all; a recheck that finishes the run in
+# the meantime bumps ``updated_at`` and it is counted from its scores instead.
+FAILED_SETTLE = timedelta(hours=24)
 EVAL_TERMINAL = ("completed", "stopped", "failed")
 MAX_FAILURES_KEPT = 20
 
 REF_EVAL_RUN = "eval_run"
 REF_ONLINE_CONFIG = "online_eval_config"
+# Online results are read in steps of at most an hour (halved when a step reaches the
+# row limit), at most this many queries per tick; the rest waits for the next tick.
+ONLINE_STEP_MINUTES = 60
+ONLINE_QUERIES_PER_TICK = 8
 BATCH_RESULTS_SOURCE = (
     "SOURCE logGroups(namePrefix: "
     "['/aws/bedrock-agentcore/evaluations/batch-evaluations/results/'])"
@@ -349,11 +365,14 @@ def session_factors(
     return cal["runtime_default_gb"], cal["runtime_default_vcpu"], "default"
 
 
-def billable_seconds(start: float, end: float, tail_s: float, max_lifetime_s: float) -> float:
+def billable_seconds(start: float, end: float, tail_s: float, max_lifetime_s: float,
+                     bill_from: float | None = None) -> float:
     """One microVM lifetime: first activity → last activity + the idle tail, never
-    past the max lifetime."""
+    past the max lifetime. ``bill_from`` (a microVM still alive when a new month
+    began) starts the charge where the previous month's row stopped, so the overlap
+    is never billed twice."""
     stop = min(end + tail_s, start + max_lifetime_s)
-    return max(0.0, stop - start)
+    return max(0.0, stop - max(start, bill_from if bill_from is not None else start))
 
 
 # ── the spans queries ────────────────────────────────────────────────────────
@@ -700,10 +719,15 @@ def _tokens(
     if tokens is None:
         # No tokens in this window. A session already measured on spans still has
         # its stray estimates (a turn settled just after the window that counted its
-        # spans) replaced by its latest priced measurement.
+        # spans) replaced by its latest priced measurement. Only those: a turn that
+        # settled well after that window and left no spans at all (telemetry lost)
+        # keeps its estimate, or it would cost nothing.
         latest = next((row for row in reversed(prior_tokens) if row.usd is not None), None)
-        if latest is not None and replaced:
-            return [], um.supersede([row.id for row in replaced], latest.id, db=db)
+        watermark = _utc(us.reconciled_until)
+        strays = [row for row in replaced if watermark is not None
+                  and watermark <= _utc(row.created_at) < watermark + STRAY_GRACE]
+        if latest is not None and strays:
+            return [], um.supersede([row.id for row in strays], latest.id, db=db)
         return [], 0
     model = m.model
     if not model:
@@ -771,21 +795,33 @@ def _runtime(
         start, end = float(start), float(max(start, end))
         period = budgets.period_of(datetime.fromtimestamp(start, UTC))
         detail = dict(current.detail or {}) if current is not None else None
-        # the same microVM: this month's row, activity resumed before the idle tail
-        # expired, and the max lifetime not yet reached
-        alive = (
-            detail is not None and current is not None and current.period == period
+        # the same microVM: activity resumed before the idle tail expired, and the
+        # max lifetime not yet reached …
+        same_vm = (
+            detail is not None and current is not None
             and start <= float(detail.get("end", 0)) + float(detail.get("tail_s", tail))
             and start < float(detail.get("start", 0)) + float(
                 detail.get("max_lifetime_s", info["max_lifetime_s"]))
         )
+        # … and still this month's row (a new month starts a new row)
+        alive = same_vm and current is not None and current.period == period
         if alive and detail is not None and current is not None:
             detail["start"] = min(float(detail["start"]), start)
             detail["end"] = max(float(detail["end"]), end)
             if id(current) in existing:
                 updated.add(id(current))  # THE in-place update (see the module doc)
         else:
-            detail = {"start": start, "end": end}
+            if same_vm and detail is not None:
+                # The microVM outlived the month: last month's row already bills it
+                # up to its own stop, so this month's row starts billing there (the
+                # same microVM keeps its start for the max-lifetime cap).
+                prev_start = float(detail["start"])
+                prev_stop = min(
+                    float(detail["end"]) + float(detail.get("tail_s", tail)),
+                    prev_start + float(detail.get("max_lifetime_s", info["max_lifetime_s"])))
+                detail = {"start": prev_start, "end": end, "bill_from": prev_stop}
+            else:
+                detail = {"start": start, "end": end}
             current = _event(us, kind=um.KIND_RUNTIME_COMPUTE, period=period, usd=0.0,
                              estimated=True, quantity=0.0, unit="session_hour",
                              detail={}, now=c.now)
@@ -799,7 +835,7 @@ def _runtime(
             "gb": gb, "vcpu": vcpu, "factor": factor,
         })
         seconds = billable_seconds(float(detail["start"]), float(detail["end"]), tail,
-                                   float(info["max_lifetime_s"]))
+                                   float(info["max_lifetime_s"]), detail.get("bill_from"))
         hours = seconds / 3600.0
         current.detail = detail  # a new dict: the JSON column only sees reassignment
         current.quantity = round(hours, 6)
@@ -1059,6 +1095,8 @@ def reconcile_eval_runs(
             refs[row.ref_id].append(row)
         pending: list[tuple[EvalRun, list[str]]] = []
         for run in candidates:
+            if run.status == "failed" and _utc(run.updated_at) > c.now - FAILED_SETTLE:
+                continue  # its batch may still be judging on AWS (FAILED_SETTLE)
             mine = refs.get(run.id, [])
             if any(row.kind in (um.KIND_EVALUATION_BUILTIN, um.KIND_EVALUATION_CUSTOM)
                    and _is_reconciled(row) for row in mine):
@@ -1167,46 +1205,68 @@ def reconcile_online(
     finally:
         db.close()
     start = max(start, c.end - MAX_WINDOW)
-    if start >= c.end:
-        return {"configs": 0, "rows": 0}
-    rows = _insights(logs if logs is not None else logs_client(ctx),
-                     {"online": q_online_results()}, start, c.end)["online"]
-    if len(rows) >= RESULT_LIMIT:
-        raise RuntimeError(f"online results query hit the {RESULT_LIMIT}-row limit")
+    logs = logs if logs is not None else logs_client(ctx)
+    configs: set[str] = set()
+    written = 0
+    step = ONLINE_STEP_MINUTES
+    # A window that catches up after a failure is read in steps, each committed with
+    # its watermark; a step whose result reached the row limit is halved and read
+    # again — so a long backlog drains instead of failing the same way every tick.
+    for _ in range(ONLINE_QUERIES_PER_TICK):
+        if start >= c.end:
+            break
+        stop = min(c.end, start + timedelta(minutes=step))
+        rows = _insights(logs, {"online": q_online_results()}, start, stop)["online"]
+        if len(rows) >= RESULT_LIMIT:
+            if step <= 1:
+                raise RuntimeError(f"online results hit the {RESULT_LIMIT}-row limit "
+                                   "in one minute")
+            step = max(1, step // 2)
+            continue
+        per_config, last_minute = _online_counts(rows, payers, start, stop)
+        db = SessionLocal()
+        try:
+            for config_id, counts in per_config.items():
+                payer = payer_of_config(payers, config_id)
+                if payer is None:
+                    continue
+                new = evaluation_rows(counts, payer, batch=False, c=c,
+                                      period=budgets.period_of(last_minute[config_id]),
+                                      ref=(REF_ONLINE_CONFIG, config_id),
+                                      extra={"window_end": _iso(stop)})
+                db.add_all(new)
+                written += len(new)
+            _stage_online_until(db, workspace_id, stop)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+        configs.update(per_config)
+        start = stop
+    return {"configs": len(configs), "rows": written}
+
+
+def _online_counts(
+    rows: list[dict[str, Any]], payers: dict[str, EvalPayer], start: datetime, stop: datetime,
+) -> tuple[dict[str, dict[str, int]], dict[str, datetime]]:
+    """Per config this box charges: evaluations per evaluator judged in
+    ``[start, stop)``, and the last minute they were judged in."""
     per_config: dict[str, dict[str, int]] = {}
     last_minute: dict[str, datetime] = {}
     for row in rows:
         minute = _minute_of(row.get("minute"))
         config_id = str(row.get("config_id") or "")
         evaluator = str(row.get("evaluator") or "")
-        if minute is None or not (start <= minute < c.end) or not config_id or not evaluator:
+        if minute is None or not (start <= minute < stop) or not config_id or not evaluator:
             continue
         if payer_of_config(payers, config_id) is None:
             continue  # another box's, or an external config: not ours to charge
         counts = per_config.setdefault(config_id, {})
         counts[evaluator] = counts.get(evaluator, 0) + int(_num(row, "evaluations"))
         last_minute[config_id] = max(last_minute.get(config_id, minute), minute)
-    db = SessionLocal()
-    written = 0
-    try:
-        for config_id, counts in per_config.items():
-            payer = payer_of_config(payers, config_id)
-            if payer is None:
-                continue
-            new = evaluation_rows(counts, payer, batch=False, c=c,
-                                  period=budgets.period_of(last_minute[config_id]),
-                                  ref=(REF_ONLINE_CONFIG, config_id),
-                                  extra={"window_end": _iso(c.end)})
-            db.add_all(new)
-            written += len(new)
-        _stage_online_until(db, workspace_id, c.end)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-    return {"configs": len(per_config), "rows": written}
+    return per_config, last_minute
 
 
 # ── the tick ─────────────────────────────────────────────────────────────────

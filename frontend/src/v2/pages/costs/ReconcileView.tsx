@@ -42,7 +42,8 @@ export function ReconcileCard({
   const { t } = useTranslation();
   if (!status) {
     return (
-      <Card title={t("v2.budgets.reconcile.title")} sub={t("v2.budgets.reconcile.sub")} testId="v2-budget-reconcile">
+      // no subtitle until the status names the interval (its copy is templated on it)
+      <Card title={t("v2.budgets.reconcile.title")} testId="v2-budget-reconcile">
         {error ? (
           <Alert tone="error" action={<LinkButton onClick={onRetry}>{t("v2.common.retry")}</LinkButton>}>
             {error}

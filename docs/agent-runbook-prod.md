@@ -134,9 +134,13 @@ Admins stay unlimited unless they are given a level. To unblock someone mid-mont
 override on the Budgets tab; there is no restart.
 
 The budgets reconciliation thread is on by default on every box. It reconciles only that box's
-own sessions, so it is safe on prod and prod2 at once. Each tick runs a few small Logs Insights
-queries over a 10-minute window, plus one CloudWatch metric read per runtime per hour. To switch
-it off:
+own sessions, so it is safe on prod and prod2 at once. Its queries are billed:
+- every tick (10 minutes), a few Logs Insights queries over the span window since the last
+  tick. After an outage the window widens, to at most 24 hours;
+- once an hour, one Logs Insights query over the last ~75 minutes of the account's spans, plus
+  one batched CloudWatch `GetMetricData` per workspace.
+
+To switch it off:
 - add `Environment=LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` in a drop-in, as for the alert
   check;
 - restart the backend.

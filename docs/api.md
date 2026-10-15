@@ -928,7 +928,9 @@ box's* ledger attributed to people. Each source is charged as follows:
   tail on V1, charged to the session's user) × the runtime's calibrated memory and vCPU size ×
   the rates.
 - **Batch and online evaluations** are counted and replace the judge estimates. They are charged
-  to the run's payer, or to the online config's creator.
+  to the run's payer, or to the online config's creator (for an experiment's or canary's config,
+  whoever ran the action that created it). A failed run is counted a day later, because its
+  batch may still be judging on AWS.
 - **Calibration:** the factors are recalibrated hourly from the per-runtime AWS metrics divided
   by the session time seen in spans.
 

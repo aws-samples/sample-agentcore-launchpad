@@ -373,6 +373,22 @@ def test_a_stray_estimate_of_a_measured_session_is_replaced_by_its_measurement()
     assert _rows(id=stray)[0].superseded_by == measured
 
 
+def test_an_estimate_long_after_the_watermark_with_no_spans_keeps_its_charge():
+    """Not a stray: a turn that settled well after the last measured window and left
+    no spans at all must not be zeroed by an older measurement."""
+    member = _user()
+    _session("s-nospan-turn", member, agent_id=_agent(),
+             reconciled_until=E - timedelta(minutes=30))
+    _row(member, 0.04, kind="tokens", estimated=False, session_id="s-nospan-turn",
+         detail={"reconciled": True, "provider_spans": True},
+         created_at=NOW - timedelta(minutes=33))
+    silent = _row(member, 0.01, session_id="s-nospan-turn", created_at=E - timedelta(minutes=8))
+
+    _tick(FakeLogs())
+
+    assert _rows(id=silent)[0].superseded_by is None
+
+
 def test_persona_actor_estimates_are_never_replaced_by_span_tokens():
     member = _user()
     _session("s-persona-001", member, agent_id=_agent(), source="eval")
@@ -660,6 +676,39 @@ def test_the_max_lifetime_ends_a_microvm():
     assert br.billable_seconds(0, 30_000, 900, 28_800) == 28_800
     assert br.billable_seconds(100, 160, 900, 28_800) == 960
     assert br.billable_seconds(100, 160, 120, 28_800) == 180
+    # a new month's row of a microVM still alive bills only past last month's stop
+    assert br.billable_seconds(100, 400, 900, 28_800, bill_from=1_000) == 300
+
+
+def test_a_microvm_alive_across_the_month_boundary_is_billed_once():
+    member = _user()
+    month = (NOW.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
+    _session("s-month-00001", member, agent_id=_agent(),
+             first=month - timedelta(minutes=10), last=month - timedelta(minutes=8))
+    t0 = month - timedelta(minutes=9)
+    _tick(FakeLogs(sessions=[span_row("s-month-00001", "t1", t0, start=t0,
+                                      end=t0 + timedelta(seconds=30))]),
+          month - timedelta(minutes=3))
+    db = SessionLocal()
+    try:
+        db.get(UsageSession, ("s-month-00001", DEFAULT_WORKSPACE_ID)).last_turn_at = (
+            month + timedelta(minutes=2))
+        db.commit()
+    finally:
+        db.close()
+    t1 = month + timedelta(minutes=1)
+    _tick(FakeLogs(sessions=[span_row("s-month-00001", "t2", t1, start=t1,
+                                      end=t1 + timedelta(seconds=30))]),
+          month + timedelta(minutes=7))
+
+    old, new = _compute_rows("s-month-00001")
+    assert old.period == budgets.period_of(t0) and new.period == budgets.period_of(t1)
+    assert old.period != new.period
+    # one microVM from t0 to t1 + 30 s + the 15-minute tail, split at last month's stop
+    whole = (t1 + timedelta(seconds=30) - t0).total_seconds() + 900
+    assert old.quantity == pytest.approx((30 + 900) / 3600, rel=1e-4)
+    assert old.quantity + new.quantity == pytest.approx(whole / 3600, rel=1e-4)
+    assert new.detail["bill_from"] == pytest.approx(t0.timestamp() + 30 + 900)
 
 
 def test_a_session_without_spans_is_charged_from_its_settled_turns():
@@ -703,7 +752,7 @@ def test_runtime_info_reads_the_lifecycle_and_falls_back(monkeypatch):
 
 
 def _run(created_by, *, scores, status="completed", batch="run_abc12345-0011223344",
-         created_at=None) -> str:
+         created_at=None, updated_at=None) -> str:
     db = SessionLocal()
     try:
         run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id="a1", agent_name="target",
@@ -711,7 +760,7 @@ def _run(created_by, *, scores, status="completed", batch="run_abc12345-00112233
                       status=status, batch_eval_id=batch, scores=scores,
                       created_by=created_by, created_by_name="mia",
                       created_at=created_at or NOW - timedelta(minutes=30),
-                      updated_at=NOW - timedelta(minutes=10))
+                      updated_at=updated_at or NOW - timedelta(minutes=10))
         db.add(run)
         db.commit()
         return run.id
@@ -758,7 +807,9 @@ def test_a_finished_run_is_charged_its_evaluation_count_and_the_judge_estimate_s
 
 def test_a_run_without_counts_on_its_row_counts_its_result_records():
     member = _user()
-    run_id = _run(member, status="failed", scores=[], batch="run_def67890-5566778899")
+    # failed long enough ago that its batch has surely finished on AWS
+    run_id = _run(member, status="failed", scores=[], batch="run_def67890-5566778899",
+                  created_at=NOW - timedelta(hours=26), updated_at=NOW - timedelta(hours=25))
     _row(member, 0.5, kind="job_estimate", source="eval", detail={"estimate": "judges"},
          ref=("eval_run", run_id))
     logs = FakeLogs(batch=[
@@ -772,6 +823,31 @@ def test_a_run_without_counts_on_its_row_counts_its_result_records():
     assert row.quantity == 5
     assert any("batch-evaluations/results" in c["queryString"]
                and "run_def67890-5566778899" in c["queryString"] for c in logs.calls)
+
+
+def test_a_just_failed_run_keeps_its_judge_estimate_while_its_batch_may_still_run():
+    """A run fails locally when its poller gives up, while AWS may still be judging:
+    counting its records now would lock in a partial count."""
+    member = _user()
+    run_id = _run(member, status="failed", scores=[], batch="run_fff67890-5566778899")
+    judges = _row(member, 0.5, kind="job_estimate", source="eval",
+                  detail={"estimate": "judges"}, ref=("eval_run", run_id))
+    partial = FakeLogs(batch=[{"batch_id": "run_fff67890-5566778899",
+                               "evaluator": "Builtin.Correctness", "evaluations": "1"}])
+
+    _tick(partial)
+
+    assert _rows(ref_id=run_id, kind="evaluation_builtin") == []
+    assert _rows(id=judges)[0].superseded_by is None
+    assert not any("batch-evaluations/results" in c["queryString"] for c in partial.calls)
+
+    # a day later the batch has finished: counted once, from all its records
+    done = FakeLogs(batch=[{"batch_id": "run_fff67890-5566778899",
+                            "evaluator": "Builtin.Correctness", "evaluations": "8"}])
+    _tick(done, NOW + br.FAILED_SETTLE)
+
+    [row] = _live(ref_id=run_id, kind="evaluation_builtin")
+    assert row.quantity == 8 and _rows(id=judges)[0].superseded_by == row.id
 
 
 def test_a_judge_estimate_with_no_evaluations_is_replaced_by_zero():
@@ -866,6 +942,57 @@ def test_online_evaluations_are_charged_to_the_config_payer():
 
     _tick(FakeLogs(online=online), later + timedelta(minutes=10))  # never twice
     assert len(_rows(ref_id="oe_target_ab12-AbCdEf1234")) == 2
+
+
+def test_an_online_backlog_too_big_for_one_query_drains_in_smaller_steps(monkeypatch):
+    """A window that grew after failures must not fail on the row limit forever."""
+    monkeypatch.setattr(br, "RESULT_LIMIT", 3)
+    member = _user()
+    _online_config("oe_busy_ab12-AbCdEf1234", member)
+    db = SessionLocal()
+    try:
+        br._stage_online_until(db, DEFAULT_WORKSPACE_ID, E - timedelta(hours=2))
+        db.commit()
+    finally:
+        db.close()
+    rows = [{"config_id": "oe_busy_ab12-AbCdEf1234", "evaluator": "Builtin.Helpfulness",
+             "minute": _minute(E - timedelta(minutes=10 * i + 5)), "evaluations": "1"}
+            for i in range(12)]  # one per 10 minutes over the two hours
+
+    class TimedLogs(FakeLogs):
+        """Answers the online query with only the rows inside its time range."""
+
+        def start_query(self, **kwargs):
+            out = super().start_query(**kwargs)
+            if "evaluations/results/" in kwargs["queryString"]:
+                lo, hi = kwargs["startTime"], kwargs["endTime"]
+                self._results[out["queryId"]] = [
+                    r for r in self.online
+                    if lo <= br._minute_of(r["minute"]).timestamp() < hi]
+            return out
+
+    logs = TimedLogs(online=rows)
+    first = _tick(logs)
+
+    assert not first["failures"], first["failures"]
+    db = SessionLocal()
+    try:
+        # progress is committed step by step; what the per-tick cap left waits
+        assert E - timedelta(hours=2) < br.online_until(db, DEFAULT_WORKSPACE_ID) < E
+    finally:
+        db.close()
+
+    later = NOW + timedelta(minutes=10)
+    second = _tick(logs, later)
+
+    assert not second["failures"], second["failures"]
+    charged = sum(r.quantity for r in _rows(ref_id="oe_busy_ab12-AbCdEf1234"))
+    assert charged == 12  # every evaluation once, none twice
+    db = SessionLocal()
+    try:
+        assert br.online_until(db, DEFAULT_WORKSPACE_ID) == br.window_end(later)
+    finally:
+        db.close()
 
 
 # ── the standalone-config pause rule ─────────────────────────────────────────
@@ -1013,6 +1140,27 @@ def test_an_implausible_or_missing_metric_keeps_the_defaults():
         runtime_sessions=spans), cw_for=lambda _ws: FakeCW({RUNTIME_ARN: (40.0, 0.01)}))
 
     assert out["workspaces"][DEFAULT_WORKSPACE_ID]["dropped"][0]["reason"] == "implausible"
+    db = SessionLocal()
+    try:
+        assert rates.runtime_factors(db) == {}
+    finally:
+        db.close()
+
+
+def test_an_hour_with_only_a_sliver_of_session_time_is_not_a_sample():
+    hour = budget_calibration.calibration_hour(NOW)
+    # a session whose idle tail clips the hour by one minute
+    end = hour - timedelta(seconds=840)
+    _compute_row(RUNTIME_ID, RUNTIME_ARN, end - timedelta(minutes=1), end)
+    spans = [{"session_id": "a", "traceId": "t1", "resource": RESOURCE,
+              "start_ns": str(int((end - timedelta(minutes=1)).timestamp() * 1e9)),
+              "end_ns": str(int(end.timestamp() * 1e9))}]
+
+    out = budget_calibration.calibrate(NOW, logs_for=lambda _ws: FakeLogs(
+        runtime_sessions=spans), cw_for=lambda _ws: FakeCW({RUNTIME_ARN: (0.05, 0.001)}))
+
+    [dropped] = out["workspaces"][DEFAULT_WORKSPACE_ID]["dropped"]
+    assert dropped["reason"] == "too_small"
     db = SessionLocal()
     try:
         assert rates.runtime_factors(db) == {}
