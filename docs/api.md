@@ -851,8 +851,34 @@ until an admin creates a level.**
 
 **Refusals.** Every non-GET route is classified billable or free (`core/billing_policy.py`,
 drift-tested). A billable route checks the payer's month-to-date spend first. `/v1` checks the
-API key's creator. Experiment and canary actions are checked per action, and `cleanup`,
-`rollback` and `verdict` are never refused.
+API key's creator. Experiment and canary actions are checked per action (a canary `advance` is
+billable). `cleanup`, `rollback`, `complete` and `verdict` are never refused, so a person over
+budget can always wind work down.
+
+**Long-running jobs** charge the person who started them, or who triggered the action:
+- an eval run → its creator;
+- an experiment or canary action → the caller;
+- a recommendation → `requested_by`;
+- a Skill Lab job → its creator;
+- an online eval config resume → the config's creator.
+
+They are metered exactly where the work reports usage: eval replay on Harness and Claude SDK
+agents, paired canary Harness traffic, the gepa_lite provider. Everything else is charged a
+flagged estimate as it runs:
+- opaque replay turns and traffic prompts, at the agent's recent average;
+- persona actors, at a token factor;
+- batch judges, per evaluation;
+- Skill Lab, per task, step or job.
+
+A Skill Lab eval job replaces its estimate with the exact usage in `results.json`. Once the payer
+is over budget, a job stops at its next safe boundary and keeps what it finished. Its run or job
+shows `stop_reason: budget_exceeded`, and traffic records `skipped` prompts. The boundaries are:
+- before each eval scenario, prompt and `StartBatchEvaluation`;
+- before each traffic prompt;
+- between Skill Lab training steps (the job is resumable).
+
+A Skill Lab eval or task-generation job is only checked before it starts. A create response may
+carry a `budget_notice` when the job's estimate exceeds what is left.
 
 | Status | Code | Detail |
 |---|---|---|
@@ -880,7 +906,7 @@ Prices come from the model price map with admin overrides applied.
 | `DELETE` | `/api/budgets/levels/{level_id}` | admin | `{deleted, id}`; with people assigned → `409 budget.level_in_use` `{users, level_id}` |
 | `GET` | `/api/budgets/people` | admin | `?period=` → `{period, resets_at, people[{user_id, username, role, status, level, assigned_level_id, override_usd, basis, limit_usd, used_usd, remaining_usd, estimated_usd, estimated_share, percent_used, unlimited, top_source, by_source}], unattributed[…]}`. `unattributed` is spend with no account (exempt principals, key-less calls) |
 | `PUT` | `/api/budgets/users/{user_id}` | admin | `{level_id \| null, override_usd \| null}` → the person's assignment and effective limit |
-| `GET` / `PUT` | `/api/budgets/settings` | admin | `{opaque_turn_estimate_usd}` (default `0.01`); `PUT` with `null` resets it |
+| `GET` / `PUT` | `/api/budgets/settings` | admin | Per-unit estimate defaults: `opaque_turn_estimate_usd` (`0.01`), `agent_turn_estimate_usd` (`0.02`, traffic fallback), `persona_actor_input_tokens` / `persona_actor_output_tokens` (`1500` / `200` per turn), `skill_lab_eval_task_usd` (`0.15`), `skill_lab_train_step_usd` (`1.00`), `skill_lab_taskgen_job_usd` (`0.50`), with `defaults`, `updated_by` and `updated_at`. `PUT` takes any subset; `null` resets a key |
 | `GET` | `/api/admin/model-prices` | admin | `{prices[{model_id, rates{input, output, cache_read, cache_write}, base, overridden, updated_by, updated_at}], unpriced_models[{model_id, seen_in[]}], cache_factors}`. Rates are USD per 1M tokens |
 | `PUT` / `DELETE` | `/api/admin/model-prices/{model_id}` | admin | Set `{input, output, cache_read?, cache_write?}` or remove an override. An override wins over yaml, the price refresher and the built-ins, survives restarts and is never written to yaml |
 | `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`, seeded with the public AgentCore rates (read 2026-10-15). `PUT` with `{rates?, calibration?}`, where `null` resets a key. An unknown key → `400 rates.unknown_key` |

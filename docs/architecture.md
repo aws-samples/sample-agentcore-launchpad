@@ -3349,6 +3349,17 @@ one total per person across every workspace.
   they win over yaml, the price refresher and the built-ins. The refresher writes its yaml
   without them, so a reset override does not linger. While a model has no price, a limited
   person is refused it (`budget.model_unpriced`) rather than spending past the limit unseen.
+- **Long jobs pay as they run and stop at a boundary.** Evaluation runs, experiments, canaries,
+  recommendations and Skill Lab charge whoever started them or triggered the action
+  (`services/job_budget.py`). They are metered exactly where the work reports usage, and
+  otherwise charged flagged estimates per unit as it runs: an agent's recent average per opaque
+  turn or traffic prompt, a token factor per persona turn, a per-evaluation figure for batch
+  judges, and a per-task or per-step figure for Skill Lab. Skill Lab eval jobs replace the
+  estimate with their `results.json` usage.
+  - Once the payer is over budget, a job stops at its next safe boundary with `budget_exceeded`
+    and keeps its finished work. A traffic stop is recorded on the traffic result rather than as
+    a failure, because a retry would only be refused.
+  - A Skill Lab eval runs all its tasks in one pool, so it is only checked at start.
 - **Rollout is safe.** With no level defined, everyone is unlimited and the meters only record.
   Admins stay unlimited until given a level.
 

@@ -514,8 +514,31 @@ created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webho
 不受限。**在管理员创建任何等级之前，不会拦截任何请求。**
 
 **拒绝。** 每个非 GET 路由都被归类为计费或免费（`core/billing_policy.py`，有漂移测试）。计费路由会先检查
-付费人当月已花费的金额，`/v1` 检查 API key 的创建者。实验与金丝雀的操作按动作检查，`cleanup`、`rollback`
-与 `verdict` 永远不会被拒绝。
+付费人当月已花费的金额，`/v1` 检查 API key 的创建者。实验与金丝雀的操作按动作检查（金丝雀的 `advance`
+也计费）。`cleanup`、`rollback`、`complete` 与 `verdict` 永远不会被拒绝，因此超出预算的人始终可以收尾。
+
+**长时间运行的作业**计入启动它或触发该操作的人：
+- 评估运行 → 其创建者；
+- 实验或金丝雀操作 → 调用者；
+- 推荐 → `requested_by`；
+- Skill Lab 作业 → 其创建者；
+- 恢复在线评估配置 → 该配置的创建者。
+
+作业报告了用量的部分会精确计量：Harness 与 Claude SDK Agent 的评估回放、金丝雀的成对 Harness 流量、
+gepa_lite 提供方。其余部分在运行过程中记入带标记的估算：
+- 不透明运行时的回放轮次与流量提示词，按该 Agent 近期的平均成本；
+- 模拟用户，按 token 系数；
+- 批量评审，按每次评估；
+- Skill Lab，按任务、步骤或作业。
+
+Skill Lab 评估作业结束后，用 `results.json` 中的实际用量替换估算。付费人超出预算后，作业会在下一个安全的
+边界停止，并保留已完成的部分；运行或作业显示 `stop_reason: budget_exceeded`，流量记录 `skipped` 的提示词。
+这些边界是：
+- 每个评估场景、每个提示词以及 `StartBatchEvaluation` 之前；
+- 每个流量提示词之前；
+- Skill Lab 训练的步骤之间（作业可以恢复）。
+
+Skill Lab 评估与任务生成作业只在启动前检查。当作业的估算超过剩余额度时，创建响应可能带有 `budget_notice`。
 
 | 状态 | 代码 | 详情 |
 |---|---|---|
@@ -542,7 +565,7 @@ created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webho
 | `DELETE` | `/api/budgets/levels/{level_id}` | admin | `{deleted, id}`；仍有人被分配 → `409 budget.level_in_use` `{users, level_id}` |
 | `GET` | `/api/budgets/people` | admin | `?period=` → `{period, resets_at, people[{user_id, username, role, status, level, assigned_level_id, override_usd, basis, limit_usd, used_usd, remaining_usd, estimated_usd, estimated_share, percent_used, unlimited, top_source, by_source}], unattributed[…]}`。`unattributed` 为没有账号的花费（豁免主体、没有创建者的 key） |
 | `PUT` | `/api/budgets/users/{user_id}` | admin | `{level_id \| null, override_usd \| null}` → 此人的分配与生效额度 |
-| `GET` / `PUT` | `/api/budgets/settings` | admin | `{opaque_turn_estimate_usd}`（默认 `0.01`）；`PUT` 传 `null` 恢复默认 |
+| `GET` / `PUT` | `/api/budgets/settings` | admin | 各单位估算的默认值：`opaque_turn_estimate_usd`（`0.01`）、`agent_turn_estimate_usd`（`0.02`，流量的兜底值）、`persona_actor_input_tokens` / `persona_actor_output_tokens`（每轮 `1500` / `200`）、`skill_lab_eval_task_usd`（`0.15`）、`skill_lab_train_step_usd`（`1.00`）、`skill_lab_taskgen_job_usd`（`0.50`），另有 `defaults`、`updated_by` 与 `updated_at`。`PUT` 可传任意子集；`null` 恢复某一项的默认值 |
 | `GET` | `/api/admin/model-prices` | admin | `{prices[{model_id, rates{input, output, cache_read, cache_write}, base, overridden, updated_by, updated_at}], unpriced_models[{model_id, seen_in[]}], cache_factors}`。单价为每 100 万 token 的美元数 |
 | `PUT` / `DELETE` | `/api/admin/model-prices/{model_id}` | admin | 设置 `{input, output, cache_read?, cache_write?}` 或删除覆盖。覆盖优先于 yaml、价格刷新器与内置价格，重启后保留，且永远不会写入 yaml |
 | `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`，以 AgentCore 公开价格（2026-10-15 读取）为初始值。`PUT` 传 `{rates?, calibration?}`，`null` 恢复某一项的默认值。未知键 → `400 rates.unknown_key` |
