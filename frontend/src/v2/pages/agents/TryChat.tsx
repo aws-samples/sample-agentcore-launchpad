@@ -7,6 +7,7 @@ import { chatApi, errorMessage, localizedMessage } from "../../../lib/api";
 import { budgetRefusalOf } from "../../../lib/budgets";
 import { sseEvents } from "../../../lib/chat";
 import { BudgetRefusalLink } from "../../BudgetBanner";
+import { refreshMyUsageIfLimited } from "../../myUsage";
 import { Alert, Button, Card } from "../../ui";
 import { applyStreamEvent, awaitingReply, closeOpen, pushTurn, type Turn } from "./tryChatTurns";
 
@@ -76,6 +77,7 @@ export function TryChat({ agentId }: { agentId: string }) {
         if (failed) setText((cur) => cur || prompt);
         setTurns(closeOpen);
         setBusy(false);
+        refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
       }
       inFlight.current = false;
     }

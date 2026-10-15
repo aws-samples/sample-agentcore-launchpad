@@ -2033,6 +2033,8 @@ def evaluate_session(
             continue
         if meter is not None:
             for raw in raw_results:
+                if raw.get("errorCode") and not raw.get("tokenUsage"):
+                    continue  # an error row: nothing scored, no judge ran, nothing billed
                 meter.evaluate_usage(
                     evaluator_id, raw.get("tokenUsage"), evaluated_session=session_id,
                 )

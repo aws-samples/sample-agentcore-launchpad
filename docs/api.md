@@ -866,7 +866,8 @@ Work that is already running finishes, so a person can end slightly over their l
 - **Claude Agent SDK containers:** `complete.usage`.
 - **On-demand Evaluate:** `tokenUsage`.
 - **Studio AI fix:** the result usage.
-- **Opaque runtimes** (Strands, BYOC, Studio, A2A): a flagged per-turn estimate.
+- **Opaque runtimes** (Strands, BYOC, Studio, A2A): a flagged per-turn estimate, also when the
+  tokens they report cannot be priced (no known model).
 
 Prices come from the model price map with admin overrides applied.
 

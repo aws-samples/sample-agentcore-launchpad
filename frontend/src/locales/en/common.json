@@ -9069,7 +9069,7 @@
     "exceeded": "Monthly budget reached ({{used}} of {{limit}}). It resets on {{date}} (00:00 UTC).",
     "exceededPlain": "Monthly budget reached. New billable work is refused until the budget resets or an administrator raises your limit.",
     "modelUnpriced": "Model {{model}} has no price yet — ask an administrator to set one on the Models page.",
-    "modelUnpricedUnknown": "This agent's model has no known price yet — ask an administrator to set one on the Models page.",
+    "modelUnpricedUnknown": "The platform cannot price this agent's model, so its usage cannot be counted against your budget — ask an administrator.",
     "openModels": "Set a price"
   }
 }

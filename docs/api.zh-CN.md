@@ -529,7 +529,7 @@ created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webho
 - **Claude Agent SDK 容器：**`complete.usage`。
 - **即时 Evaluate：**`tokenUsage`。
 - **Studio AI 修复：**结果中的用量。
-- **不透明运行时**（Strands、BYOC、Studio、A2A）：每轮一份带标记的估算。
+- **不透明运行时**（Strands、BYOC、Studio、A2A）：每轮一份带标记的估算；上报的 Token 无法计价（模型未知）时也是如此。
 
 价格取自模型价格表，并应用管理员覆盖。
 

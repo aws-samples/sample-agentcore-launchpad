@@ -270,6 +270,11 @@ class UsageMeter:
             if failed:
                 detail["failed"] = True
             row_id = self.record_tokens(usage, detail=detail, upsert_session=False)
+            if self.opaque and rates.price_of(self.model_id) is None:
+                # Reported tokens the map cannot price (an imported runtime with no
+                # known model) would cost the payer nothing: the gate let the turn in
+                # as estimate-charged, so it is charged the estimate after all.
+                self.turn_estimate(upsert_session=False)
             self._upsert_session()
             return row_id
         except Exception:  # noqa: BLE001

@@ -54,6 +54,13 @@ export function refreshMyUsage(): Promise<void> {
   return request;
 }
 
+/** After a billable turn ended (Chat, TryChat, the Architect): re-read when a limit
+ *  applies, so the 80 % banner shows without a reload. An unlimited person, or one
+ *  whose usage was never read, costs no request. */
+export function refreshMyUsageIfLimited(): void {
+  if (state.data && !state.data.unlimited) void refreshMyUsage();
+}
+
 /** A fresh read of the current period from another surface (the My usage page). */
 export function primeMyUsage(data: MyUsage): void {
   if (data.period === currentPeriod()) set({ data, loading: false });

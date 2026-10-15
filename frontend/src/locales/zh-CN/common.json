@@ -9069,7 +9069,7 @@
     "exceeded": "已达到本月预算（已用 {{used}}，上限 {{limit}}）。预算将于 {{date}}（UTC 0 点）重置。",
     "exceededPlain": "已达到本月预算。在预算重置或管理员提高你的上限之前，新的计费操作都会被拒绝。",
     "modelUnpriced": "模型 {{model}} 还没有价格，请联系管理员在「模型」页面设置。",
-    "modelUnpricedUnknown": "这个 Agent 的模型还没有已知价格，请联系管理员在「模型」页面设置。",
+    "modelUnpricedUnknown": "平台还无法为这个 Agent 的模型计价，因此无法把它的用量计入你的预算，请联系管理员。",
     "openModels": "设置价格"
   }
 }

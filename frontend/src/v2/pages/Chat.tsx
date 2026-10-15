@@ -39,6 +39,7 @@ import {
 import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
+import { refreshMyUsageIfLimited } from "../myUsage";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
 import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
@@ -333,6 +334,7 @@ export function V2Chat() {
       setBusy(false);
       if (activeSessionId) void refreshMemory(activeSessionId);
       if (agentId) void loadSessions(agentId);
+      refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
     }
   };
 

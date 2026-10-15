@@ -86,11 +86,16 @@ async def fix_code_stream(request: FixCodeRequest, http_request: Request) -> Str
         len(request.error),
     )
     # The coding agent's model calls are charged to the caller (the route-level
-    # billing gate checked their budget); every agent round reports its usage.
+    # billing gate checked their spend); every agent round reports its usage. The
+    # gate has no agent to read a model from, so the coding model's price is checked
+    # here: an unpriced one would otherwise be spent past a budgeted caller's limit.
     scope = getattr(http_request.state, "workspace", None)
+    payer = budgets.payer_of_request(http_request)
+    model_id = codegen_config.get_model()
+    budgets.check_model(payer, model_id)
     meter = UsageMeter.for_payer(
-        budgets.payer_of_request(http_request), SOURCE_CODEGEN,
-        origin_workspace_id=getattr(scope, "id", None), model_id=codegen_config.get_model(),
+        payer, SOURCE_CODEGEN,
+        origin_workspace_id=getattr(scope, "id", None), model_id=model_id,
     )
 
     async def metered():

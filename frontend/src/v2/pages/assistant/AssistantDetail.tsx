@@ -29,6 +29,7 @@ import {
 } from "../../../lib/assistant";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
+import { refreshMyUsageIfLimited } from "../../myUsage";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
 import { PROPOSAL_TONE, ReadOnlyContext, SECTION_IDS, shortId, useApiMessage } from "./common";
 import { COMPOSER_ID, DiscussionCard } from "./Discussion";
@@ -342,6 +343,7 @@ export function AssistantDetail({
     } finally {
       if (alive.current) setBusy(false);
       if (abortRef.current === controller) abortRef.current = null;
+      refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
     }
   };
 

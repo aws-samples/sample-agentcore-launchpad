@@ -253,14 +253,13 @@ def _exceeded(payer: Payer, used: float, period: str) -> AppError:
 
 
 def _unpriced(model_id: str | None) -> AppError:
-    named = model_id or "this agent's model"
-    return AppError(
-        "budget.model_unpriced",
-        f"model {named} has no price yet, so usage of it cannot be counted against "
-        "your budget; ask an administrator to price it on the Models page",
-        {"model_id": model_id},
-        status_code=402,
-    )
+    if model_id:
+        message = (f"model {model_id} has no price yet, so usage of it cannot be counted "
+                   "against your budget; ask an administrator to price it on the Models page")
+    else:  # an imported Harness: no model id an administrator could price
+        message = ("this agent's model is not known to the platform, so its usage cannot "
+                   "be counted against your budget; ask an administrator")
+    return AppError("budget.model_unpriced", message, {"model_id": model_id}, status_code=402)
 
 
 def check(
@@ -280,6 +279,14 @@ def check(
     if used >= float(payer.limit_usd or 0.0):
         raise _exceeded(payer, used, period)
     if model_unknown or (model_id and rates.is_unpriced(model_id)):
+        raise _unpriced(model_id)
+
+
+def check_model(payer: Payer, model_id: str | None) -> None:
+    """The unpriced-model half of ``check``, for an agent-less billable route that
+    knows its model (the Studio AI fix's coding agent): the route gate already
+    checked the spend, so this needs no query. Exempt and unlimited payers pass."""
+    if payer.budgeted and model_id and rates.is_unpriced(model_id):
         raise _unpriced(model_id)
 
 

@@ -509,6 +509,28 @@ def test_an_opaque_turn_without_usage_is_charged_the_estimate():
     assert len(_rows()) == 2
 
 
+def test_an_opaque_turn_whose_tokens_cannot_be_priced_is_still_charged_the_estimate():
+    """An imported runtime with no known model passes the gate as estimate-charged;
+    if it reports tokens the map cannot price, the turn must not cost $0."""
+    meter = _meter(opaque=True, model=None)
+    meter.on_usage({"inputTokens": 500, "outputTokens": 50}, "turn")
+    meter.settle()
+    by_kind = {row.kind: row for row in _rows()}
+    tokens, estimate = by_kind["tokens"], by_kind["turn_estimate"]
+    assert len(by_kind) == 2 and tokens.usd is None and tokens.detail["unpriced"] is True
+    assert estimate.kind == "turn_estimate" and estimate.estimated and estimate.usd == 0.01
+    db = SessionLocal()
+    try:
+        assert budgets.spend(db, "u-1", budgets.period_of()) == pytest.approx(0.01)
+    finally:
+        db.close()
+    # a priced opaque turn is charged its tokens only, and a Harness never the estimate
+    for meter in (_meter(opaque=True), _meter(opaque=False, model=UNPRICED)):
+        meter.on_usage({"inputTokens": 1, "outputTokens": 1})
+        meter.settle()
+    assert sorted(r.kind for r in _rows()) == ["tokens", "tokens", "tokens", "turn_estimate"]
+
+
 def test_usage_sessions_are_upserted_and_keep_the_first_payer():
     _meter("u-1").settle()
     second = _meter("u-2")
@@ -559,6 +581,23 @@ def test_observability_evaluate_meters_each_result(monkeypatch):
     [row] = _rows()
     assert (row.tokens_in, row.tokens_out) == (1200, 80)  # the canned tokenUsage
     assert row.source == "observability" and row.ref_id == SCORE_SESSION
+
+
+def test_observability_evaluate_never_charges_an_error_result():
+    """An Evaluate error row (no score, no tokens) ran no judge: a custom evaluator's
+    per-evaluation fee is not charged for it, as the builtin branch already does."""
+    from app.services import observability as obs
+    from tests.conftest import ws_ctx
+    from tests.test_observability import SCORE_SESSION, SCORE_SPANS, FakeDataPlane, _score_logs
+
+    meter = UsageMeter(user_id="u-1", user_name="mia", source="observability")
+    rows = [{"@message": json.dumps(s)} for s in SCORE_SPANS]
+    data = FakeDataPlane({"my-judge-abc": [{"errorCode": "ValidationException",
+                                            "errorMessage": "no trace in scope"}]})
+    out = obs.evaluate_session(SCORE_SESSION, "24h", ["my-judge-abc"], ws_ctx(),
+                               logs=_score_logs(rows), data=data, meter=meter)
+    assert out["results"][0]["error_code"] == "ValidationException"
+    assert _rows() == []
 
 
 def test_a_meter_that_cannot_write_never_raises(monkeypatch):
@@ -925,6 +964,41 @@ def test_a_budgeted_admin_is_refused_the_probe(app):
     _spent(boss, 1.0)
     response = client.post("/api/admin/models/probe", json={"model_id": SONNET})
     assert response.status_code == 402
+
+
+def test_the_studio_fix_refuses_an_unpriced_coding_model_for_budgeted_callers(app, monkeypatch):
+    """The fix route has no agent for the gate to read a model from: it checks the
+    coding agent's model itself, before the stream opens. Unlimited callers pass."""
+    from app.codegen import config as codegen_config
+    from app.routers import codegen as codegen_router
+
+    async def fake_events(**_kwargs):
+        yield {"event": "done", "data": {}}
+
+    monkeypatch.setattr(codegen_router, "fix_code_events", fake_events)
+    monkeypatch.setattr(codegen_config, "get_model", lambda: UNPRICED)
+    body = {"code": "print(1)", "error": "boom", "flow_data": {"nodes": [], "edges": []}}
+    member, client = _member(app, "fixer")
+    assert client.post("/api/fix-code/stream", json=body).status_code == 200  # unlimited
+    _assign(member, _level("plenty", 100.0))
+    refused = client.post("/api/fix-code/stream", json=body)
+    assert refused.status_code == 402, refused.text
+    assert refused.json()["code"] == "budget.model_unpriced"
+    assert refused.json()["detail"] == {"model_id": UNPRICED}
+
+
+def test_an_unknown_model_refusal_does_not_point_at_the_price_editor():
+    payer = _payer(_user(level_id=_level("small", 2.0)))
+    discovered = _load_agent(_agent(method="discovered_runtime", model=None, name="imported"))
+    discovered.spec = {"discovery": {"resource_type": "harness"}}
+    db = SessionLocal()
+    try:
+        with pytest.raises(AppError) as refused:
+            budgets.check_agent(db, payer, discovered)
+    finally:
+        db.close()
+    assert refused.value.detail == {"model_id": None}
+    assert "not known" in refused.value.message and "Models page" not in refused.value.message
 
 
 def test_assignments_survive_a_ledger_upgrade(tmp_path):
