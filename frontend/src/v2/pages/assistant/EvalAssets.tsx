@@ -25,6 +25,7 @@ import {
 } from "../../../lib/assistant";
 import { Alert, Button, Confirm, LinkButton, Select, Table, Tag, type TagTone } from "../../ui";
 import { NextStepsCard } from "./NextSteps";
+import { evalResourceV2Link } from "./classicUrl";
 import { SECTION_IDS, useReadOnly } from "./common";
 
 /**
@@ -939,9 +940,10 @@ function ResourceDetails({ res }: { res: AssistantEvalResource }) {
   const { t } = useTranslation();
   const r = asRecord(res.result);
   const readback = asRecord(r.readback);
+  const link = evalResourceV2Link(res);
   return (
     <div className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
-      {res.link && <div><Link to={res.link}>{t("assistantEval.open")} ›</Link></div>}
+      {link && <div><Link to={link}>{t("assistantEval.open")} ›</Link></div>}
       {res.kind === "dataset" && r.dataset_id ? (
         <div>{String(r.dataset_id)} · {t("assistantEval.items", { n: Number(r.item_count ?? 0) })}</div>
       ) : null}

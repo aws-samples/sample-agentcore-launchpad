@@ -508,8 +508,10 @@ needs are never treated as verified; nothing downstream runs) and `422
 run.evaluator_not_found` when it does not exist in the workspace; Observability SCORE NOW answers
 `422 observability.evaluator_needs_ground_truth` before any Evaluate call; online evaluation
 refuses such evaluators (`…evaluator_unsupported`). A cloud/existing evaluator mapped to a
-subset of golden tests is refused at plan validation (selection is global). `link` is the existing console
-deep link (`/evaluation?view=datasets&ds=…` / `?view=evaluators&ev=…`). The ordinary
+subset of golden tests is refused at plan validation (selection is global). `link` is the classic console
+deep link (`/evaluation?view=datasets&ds=…` / `?view=evaluators&ev=…`); the V2 architect builds
+its own link from the same ids (`/v2/eval/data?tab=datasets&view=dataset&id=…` /
+`/v2/eval/evaluators?view=detail&id=…`). The ordinary
 `DELETE /api/eval/evaluators/{id}` answers `409 evaluator.managed_by_operation`
 (`detail.operation_id`) for an evaluator an operation owns. `GET /api/assistant/architect`
 gained `can_materialize_evaluation_assets` (= the caller holds `agents.deploy`).
