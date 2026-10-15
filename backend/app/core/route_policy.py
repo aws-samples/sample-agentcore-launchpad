@@ -533,6 +533,11 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("PUT", "/api/budgets/users/{user_id}"): ADMIN,
     ("GET", "/api/budgets/settings"): ADMIN,
     ("PUT", "/api/budgets/settings"): ADMIN,
+    # Reconciliation status (every runtime's calibration, spend by kind) and the
+    # report-only Cost Explorer comparison: a billed ($0.01) read of the whole
+    # account's AgentCore bill, which names other boxes' spend too.
+    ("GET", "/api/budgets/reconcile-status"): ADMIN,
+    ("GET", "/api/budgets/calibration-report"): ADMIN,
     # A model price or an AgentCore rate changes every person's spend at once.
     ("GET", "/api/admin/model-prices"): ADMIN,
     ("PUT", "/api/admin/model-prices/{model_id}"): ADMIN,
@@ -633,6 +638,8 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("PUT", "/api/budgets/users/{user_id}"),
         ("GET", "/api/budgets/settings"),
         ("PUT", "/api/budgets/settings"),
+        ("GET", "/api/budgets/reconcile-status"),
+        ("GET", "/api/budgets/calibration-report"),
         ("GET", "/api/admin/model-prices"),
         ("PUT", "/api/admin/model-prices/{model_id}"),
         ("DELETE", "/api/admin/model-prices/{model_id}"),

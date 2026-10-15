@@ -354,6 +354,13 @@ DEFAULT_CALIBRATION: dict[str, float] = {
     "runtime_default_vcpu": 0.02,
     "builtin_eval_input_tokens": 10000,
     "builtin_eval_output_tokens": 250,
+    # One agent-started Code Interpreter session (dev, 30 d: 3.74 GB-h and 0.048
+    # vCPU-h over 10 sessions; the tool session runs to its own timeout)
+    "code_interpreter_gb_hours_per_session": 0.37,
+    "code_interpreter_vcpu_hours_per_session": 0.005,
+    # A runtime's measured factors (hourly calibration, services/budget_calibration.py)
+    # replace the seeds above once this many sessions back them
+    "calibration_min_sessions": 3,
 }
 CALIBRATION_UNITS: dict[str, str] = {
     "runtime_idle_timeout_seconds": "seconds",
@@ -361,7 +368,15 @@ CALIBRATION_UNITS: dict[str, str] = {
     "runtime_harness_vcpu": "vCPU average", "runtime_default_vcpu": "vCPU average",
     "builtin_eval_input_tokens": "tokens per evaluation",
     "builtin_eval_output_tokens": "tokens per evaluation",
+    "code_interpreter_gb_hours_per_session": "GB-hours per session",
+    "code_interpreter_vcpu_hours_per_session": "vCPU-hours per session",
+    "calibration_min_sessions": "sessions",
 }
+# Per-runtime measured factors live beside the flat calibration keys, under
+# ``agentcore_rates.calibration.runtimes`` — written by the hourly calibration only,
+# never by the admin PUT (a "runtimes" key there is refused as unknown), and kept by
+# it (``set_agentcore_rates`` merges into the stored calibration dict).
+RUNTIME_FACTORS_KEY = "runtimes"
 _MAX_RATE = 1_000_000.0
 
 
@@ -398,6 +413,49 @@ def calibration(db: Session) -> dict[str, float]:
             except (TypeError, ValueError):
                 continue
     return out
+
+
+def runtime_factors(db: Session) -> dict[str, dict[str, Any]]:
+    """Measured Runtime factors per runtime id (``{gb, vcpu, sessions, hours,
+    session_hours, last_hour, updated_at, runtime_name}``), as the hourly calibration
+    stored them. Malformed entries are skipped."""
+    _, stored, _ = _stored_agentcore(db)
+    raw = stored.get(RUNTIME_FACTORS_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for runtime_id, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            gb, vcpu = float(entry["gb"]), float(entry["vcpu"])
+            sessions = int(entry.get("sessions") or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(gb) and math.isfinite(vcpu)):
+            continue
+        out[str(runtime_id)] = {**entry, "gb": gb, "vcpu": vcpu, "sessions": sessions}
+    return out
+
+
+def store_runtime_factors(db: Session, factors: dict[str, dict[str, Any]]) -> None:
+    """Replace the measured per-runtime factors, leaving every other stored rate and
+    calibration key as it is (a re-read just before the write, so an admin edit made
+    since the caller last read the row survives). Commits."""
+    value, row = _load_json(db, AGENTCORE_RATES_KEY)
+    value = value if isinstance(value, dict) else {}
+    stored_rates = value.get("rates") if isinstance(value.get("rates"), dict) else {}
+    stored_cal = (dict(value["calibration"]) if isinstance(value.get("calibration"), dict)
+                  else {})
+    stored_cal[RUNTIME_FACTORS_KEY] = factors
+    if row is None:
+        row = PlatformSetting(key=AGENTCORE_RATES_KEY)
+        db.add(row)
+    # updated_by / updated_at name the last *admin* edit on the Models page; the
+    # calibration's own timestamp is on each runtime entry
+    row.value = json.dumps({**value, "rates": stored_rates, "calibration": stored_cal},
+                           sort_keys=True)
+    db.commit()
 
 
 def agentcore_rates_view(db: Session) -> dict[str, Any]:

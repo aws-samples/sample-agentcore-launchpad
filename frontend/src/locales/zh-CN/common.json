@@ -8572,7 +8572,10 @@
           "runtime_harness_vcpu": "Harness 会话 CPU",
           "runtime_default_vcpu": "Runtime 会话 CPU（其他 Agent）",
           "builtin_eval_input_tokens": "内置评估器每次评估的输入 Token",
-          "builtin_eval_output_tokens": "内置评估器每次评估的输出 Token"
+          "builtin_eval_output_tokens": "内置评估器每次评估的输出 Token",
+          "code_interpreter_gb_hours_per_session": "每个 Code Interpreter 会话的内存",
+          "code_interpreter_vcpu_hours_per_session": "每个 Code Interpreter 会话的 CPU",
+          "calibration_min_sessions": "采用实测 Runtime 系数所需的会话数"
         },
         "unit": {
           "vcpu_hour": "vCPU 小时",
@@ -8587,7 +8590,10 @@
           "seconds": "秒",
           "gb_resident": "GB 常驻",
           "vcpu_average": "vCPU 平均",
-          "tokens_per_evaluation": "Token / 次评估"
+          "tokens_per_evaluation": "Token / 次评估",
+          "gb_hours_per_session": "GB 小时 / 会话",
+          "vcpu_hours_per_session": "vCPU 小时 / 会话",
+          "sessions": "个会话"
         }
       }
     },
@@ -8894,7 +8900,96 @@
       "userCardTitle": "花费预算",
       "userCardSub": "所有工作区共用一份预算",
       "openBudgets": "全部预算",
-      "currentLine": "本月：已用 {{used}}，上限 {{limit}}"
+      "currentLine": "本月：已用 {{used}}，上限 {{limit}}",
+      "kpiEstimatedReconciled": "按估算计费 · 上次对账 {{when}}",
+      "reconcile": {
+        "title": "对账",
+        "sub": "每 {{minutes}} 分钟一次：用实测的 span 成本替换估算，并把 AgentCore 费用计入每个人",
+        "health": {
+          "off": "已关闭",
+          "waiting": "尚未运行",
+          "failing": "失败",
+          "lagging": "滞后",
+          "ok": "已同步"
+        },
+        "offNote": "此服务器已关闭对账（LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false）。估算会一直计费，不透明的运行时不会被实测，AgentCore 费用（Runtime 计算、Memory、Gateway、Web Search、评估）在重新开启之前都不会计费。",
+        "lastRun": "上次运行",
+        "never": "从未运行",
+        "lag": "落后",
+        "lagValue": "{{count}} 分钟",
+        "pending": "待对账的会话",
+        "lastTick": "上次对账",
+        "lastTickValue": "{{sessions}} 个会话，写入 {{rows}} 行，替换 {{superseded}} 条估算，耗时 {{seconds}} 秒",
+        "replaced": "本月被替换的估算",
+        "paused": "已暂停的在线评估",
+        "failures": "上次对账有 {{count}} 个部分失败，下次对账会重新读取：",
+        "byKind": "按类型的花费，{{period}}",
+        "byKindHint": "实测：精确计数和 span Token。估算：尚未对账的轮次和任务估算、Runtime 计算（会话时长加空闲尾段，× 校准系数）以及内置评估器 Token。",
+        "byKindEmpty": "本月没有任何计费。",
+        "colKind": "类型",
+        "colTotal": "合计",
+        "colMeasured": "实测",
+        "colEstimated": "估算占比",
+        "agentcoreFee": "AgentCore 费用"
+      },
+      "kind": {
+        "tokens": "模型 Token",
+        "turn_estimate": "轮次估算",
+        "job_estimate": "任务估算",
+        "runtime_compute": "Runtime 计算",
+        "evaluation_builtin": "内置评估",
+        "evaluation_custom": "自定义评估",
+        "web_search": "Web Search",
+        "memory_event": "Memory 事件",
+        "memory_retrieval": "Memory 检索",
+        "gateway_call": "Gateway 和 Policy 调用",
+        "kb_query": "知识库查询",
+        "code_interpreter": "Code Interpreter"
+      },
+      "calibration": {
+        "title": "Runtime 校准",
+        "sub": "每小时按运行时计算：AWS 内存和 CPU 指标 ÷ span 中的计费会话小时数。实测系数有 {{count}} 个会话支撑后才会替换种子值。",
+        "lastRun": "上次校准的是从 {{hour}} 开始的一小时（于 {{when}}）：{{samples}} 个运行时样本",
+        "neverRun": "尚未校准：所有运行时都使用模型页上的种子值。",
+        "failures": "{{count}} 个工作区无法校准：",
+        "empty": "还没有实测系数。",
+        "colRuntime": "运行时",
+        "colGb": "常驻 GB",
+        "colVcpu": "vCPU",
+        "colSessions": "样本",
+        "colUsed": "采用",
+        "harness": "Harness",
+        "runtime": "Runtime Agent",
+        "seed": "种子值 {{value}}",
+        "sessionsValue": "{{sessions}} 个会话，{{hours}} 小时",
+        "used": "实测值",
+        "seedUsed": "种子值（会话不足）",
+        "loadReport": "与 Cost Explorer 对比",
+        "refreshReport": "刷新对比",
+        "reportNote": "仅供参考。Cost Explorer 覆盖整个 AWS 账号：所有区域，以及共用该账号的所有控制台（例如 prod 和 prod2），因此通常会高于本控制台的账本。它不会向任何人计费。每次刷新每个账号花费 $0.01，结果缓存一小时。",
+        "account": "账号 {{account}}（{{regions}}）",
+        "accountError": "无法读取 Cost Explorer：{{error}}",
+        "totals": "本控制台账本 {{ledger}} · 该账号的 Cost Explorer {{bill}} · 账本占比 {{share}}",
+        "colCategory": "类别",
+        "colLedger": "本控制台账本",
+        "colCostExplorer": "Cost Explorer（整个账号）",
+        "reportEmpty": "本月没有 AgentCore 费用。",
+        "generated": "读取于 {{when}}",
+        "generatedCached": "读取于 {{when}}（缓存）",
+        "category": {
+          "runtime": "Runtime 计算",
+          "evaluations_builtin": "内置评估",
+          "evaluations_custom": "自定义评估",
+          "web_search": "Web Search",
+          "memory": "Memory",
+          "gateway": "Gateway 和 Policy",
+          "knowledge_base": "知识库",
+          "code_interpreter": "Code Interpreter",
+          "browser": "Browser",
+          "other": "其他",
+          "overhead": "工作区开销（从不计入个人）"
+        }
+      }
     }
   },
   "identity": {

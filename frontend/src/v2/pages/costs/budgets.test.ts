@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentCoreRates, BudgetLevelInfo, BudgetPerson, ModelPriceEntry } from "../../../lib/api";
+import type {
+  AgentCoreRates,
+  BudgetLevelInfo,
+  BudgetPerson,
+  CalibrationReport,
+  ModelPriceEntry,
+  ReconcileStatus,
+  ReconcileTick,
+} from "../../../lib/api";
 import { BUDGET_ESTIMATE_KEYS } from "../../../lib/budgets";
 import {
+  AGENTCORE_FEE_KINDS,
+  factorRows,
+  kindRows,
+  lagMinutes,
+  RECONCILE_SIGNAL,
+  reconcileHealth,
+  reportShare,
   amountFromInput,
   amountToInput,
   ESTIMATE_FIELDS,
@@ -319,5 +334,135 @@ describe("job estimates", () => {
     expect(estimateFromInput("1500", "tokens", MAX_ESTIMATE_TOKENS)).toBe(1500);
     expect(estimateFromInput("1500.5", "tokens", MAX_ESTIMATE_TOKENS)).toBeNull();
     expect(estimateFromInput("", "usd", 100)).toBeNull();
+  });
+});
+
+/* ---------- reconciliation ---------- */
+
+function tick(over: Partial<ReconcileTick> = {}): ReconcileTick {
+  return {
+    started_at: "2026-10-15T12:00:00+00:00",
+    finished_at: "2026-10-15T12:00:05+00:00",
+    duration_s: 5,
+    window_end: "2026-10-15T11:58:00+00:00",
+    sessions: 3,
+    rows: 9,
+    updated: 1,
+    superseded: 2,
+    runs: 0,
+    configs: 0,
+    paused: 0,
+    failures: [],
+    ...over,
+  };
+}
+
+function status(over: Partial<ReconcileStatus> = {}): ReconcileStatus {
+  return {
+    enabled: true,
+    running: true,
+    interval_seconds: 600,
+    first_tick_at: "2026-10-15T10:00:00+00:00",
+    last_tick: tick(),
+    last_failure_at: null,
+    lag_seconds: 300,
+    pending_sessions: 0,
+    oldest_pending_at: null,
+    workspaces: [],
+    calibration: {
+      min_sessions: 3,
+      defaults: { runtime_harness_gb: 8, runtime_harness_vcpu: 0.08, runtime_default_gb: 1.5, runtime_default_vcpu: 0.02 },
+      factors: [],
+    },
+    period: "2026-10",
+    by_kind: [],
+    superseded_usd: 0,
+    ...over,
+  };
+}
+
+describe("reconcileHealth", () => {
+  it("is off when the escape hatch switched it off, whatever ran before", () => {
+    expect(reconcileHealth(status({ enabled: false }))).toBe("off");
+    expect(RECONCILE_SIGNAL.off).toBe("act");
+  });
+
+  it("waits for the first tick", () => {
+    expect(reconcileHealth(status({ last_tick: null, lag_seconds: null }))).toBe("waiting");
+  });
+
+  it("fails when the last tick had a failed part", () => {
+    const failing = status({ last_tick: tick({ failures: [{ workspace_id: "default", part: "sessions", error: "x" }] }) });
+    expect(reconcileHealth(failing)).toBe("failing");
+  });
+
+  it("lags past three intervals plus the two-minute window lag", () => {
+    expect(reconcileHealth(status({ lag_seconds: 3 * 600 + 120 }))).toBe("ok");
+    expect(reconcileHealth(status({ lag_seconds: 3 * 600 + 121 }))).toBe("lagging");
+    expect(RECONCILE_SIGNAL.ok).toBe("ok");
+  });
+});
+
+describe("lagMinutes", () => {
+  it("rounds to whole minutes and never goes negative", () => {
+    expect(lagMinutes(null)).toBeNull();
+    expect(lagMinutes(89)).toBe(1);
+    expect(lagMinutes(-30)).toBe(0);
+  });
+});
+
+describe("kindRows", () => {
+  it("splits measured from estimated and lists the AgentCore fees in a fixed order", () => {
+    const rows = kindRows([
+      { kind: "memory_event", usd: 0.001, estimated_usd: 0, events: 4 },
+      { kind: "runtime_compute", usd: 0.5, estimated_usd: 0.5, events: 2 },
+      { kind: "tokens", usd: 2, estimated_usd: 0, events: 10 },
+      { kind: "turn_estimate", usd: 0.3, estimated_usd: 0.3, events: 30 },
+      { kind: "web_search", usd: 0, estimated_usd: 0, events: 0 },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["tokens", "turn_estimate", "runtime_compute", "memory_event"]);
+    expect(rows[0]).toMatchObject({ measuredUsd: 2, estimatedShare: 0, agentcore: false });
+    expect(rows[2]).toMatchObject({ estimatedShare: 1, agentcore: true });
+    expect(AGENTCORE_FEE_KINDS[0]).toBe("runtime_compute");
+  });
+});
+
+describe("factorRows", () => {
+  it("shows each measured factor next to the seed of its kind", () => {
+    const rows = factorRows(
+      status({
+        calibration: {
+          ...status().calibration,
+          factors: [
+            { runtime_id: "harness_a-1", runtime_name: "harness_a", gb: 7.6, vcpu: 0.06, sessions: 4, hours: 2, session_hours: 0.5, last_hour: null, updated_at: null, used: true },
+            { runtime_id: "rt_b-2", runtime_name: "rt_b", gb: 1.4, vcpu: 0.02, sessions: 1, hours: 1, session_hours: 0.2, last_hour: null, updated_at: null, used: false },
+          ],
+        },
+      }),
+    );
+    expect(rows.map((r) => [r.harness, r.seedGb, r.seedVcpu, r.used])).toEqual([
+      [true, 8, 0.08, true],
+      [false, 1.5, 0.02, false],
+    ]);
+  });
+});
+
+describe("reportShare", () => {
+  const account: CalibrationReport["accounts"][number] = {
+    account_id: "111122223333",
+    workspaces: [],
+    ledger_total_usd: 25,
+    cost_explorer_total_usd: 100,
+    overhead_usd: 1,
+    by_region: {},
+    estimated: true,
+    error: null,
+    rows: [],
+  };
+
+  it("is the ledger's part of the account-wide bill, or null with nothing to compare", () => {
+    expect(reportShare(account)).toBe(0.25);
+    expect(reportShare({ ...account, cost_explorer_total_usd: null, error: "AccessDenied" })).toBeNull();
+    expect(reportShare({ ...account, cost_explorer_total_usd: 0 })).toBeNull();
   });
 });

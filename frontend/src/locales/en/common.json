@@ -8572,7 +8572,10 @@
           "runtime_harness_vcpu": "Harness session CPU",
           "runtime_default_vcpu": "Runtime session CPU (other agents)",
           "builtin_eval_input_tokens": "Built-in evaluator input tokens per evaluation",
-          "builtin_eval_output_tokens": "Built-in evaluator output tokens per evaluation"
+          "builtin_eval_output_tokens": "Built-in evaluator output tokens per evaluation",
+          "code_interpreter_gb_hours_per_session": "Code Interpreter memory per tool session",
+          "code_interpreter_vcpu_hours_per_session": "Code Interpreter CPU per tool session",
+          "calibration_min_sessions": "Sessions before a measured Runtime factor applies"
         },
         "unit": {
           "vcpu_hour": "vCPU-hour",
@@ -8587,7 +8590,10 @@
           "seconds": "seconds",
           "gb_resident": "GB resident",
           "vcpu_average": "vCPU on average",
-          "tokens_per_evaluation": "tokens per evaluation"
+          "tokens_per_evaluation": "tokens per evaluation",
+          "gb_hours_per_session": "GB-hours per session",
+          "vcpu_hours_per_session": "vCPU-hours per session",
+          "sessions": "sessions"
         }
       }
     },
@@ -8894,7 +8900,96 @@
       "userCardTitle": "Spend budget",
       "userCardSub": "one budget across every workspace",
       "openBudgets": "All budgets",
-      "currentLine": "This month: {{used}} of {{limit}}"
+      "currentLine": "This month: {{used}} of {{limit}}",
+      "kpiEstimatedReconciled": "Charged as an estimate · last reconciled {{when}}",
+      "reconcile": {
+        "title": "Reconciliation",
+        "sub": "Every {{minutes}} min, measured span cost replaces estimates and AgentCore fees are charged per person",
+        "health": {
+          "off": "Switched off",
+          "waiting": "Not run yet",
+          "failing": "Failing",
+          "lagging": "Behind",
+          "ok": "Up to date"
+        },
+        "offNote": "Reconciliation is switched off on this server (LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false). Estimates stay charged, opaque runtimes are never measured, and AgentCore fees (Runtime compute, Memory, Gateway, Web Search, evaluations) are not charged until it is back on.",
+        "lastRun": "Last run",
+        "never": "Never",
+        "lag": "Behind by",
+        "lagValue": "{{count}} min",
+        "pending": "Sessions waiting",
+        "lastTick": "Last tick",
+        "lastTickValue": "{{sessions}} sessions, {{rows}} rows, {{superseded}} estimates replaced, {{seconds}} s",
+        "replaced": "Estimates replaced this month",
+        "paused": "Online evaluations paused",
+        "failures": "The last tick had {{count}} failed part(s); each is read again on the next tick:",
+        "byKind": "Spend by kind, {{period}}",
+        "byKindHint": "Measured: exact counts and span tokens. Estimated: turn and job estimates not reconciled yet, Runtime compute (session lifetime plus the idle tail, × the calibrated factors) and built-in evaluator tokens.",
+        "byKindEmpty": "Nothing charged this month.",
+        "colKind": "Kind",
+        "colTotal": "Total",
+        "colMeasured": "Measured",
+        "colEstimated": "Estimated share",
+        "agentcoreFee": "AgentCore fee"
+      },
+      "kind": {
+        "tokens": "Model tokens",
+        "turn_estimate": "Turn estimates",
+        "job_estimate": "Job estimates",
+        "runtime_compute": "Runtime compute",
+        "evaluation_builtin": "Built-in evaluations",
+        "evaluation_custom": "Custom evaluations",
+        "web_search": "Web Search",
+        "memory_event": "Memory events",
+        "memory_retrieval": "Memory retrievals",
+        "gateway_call": "Gateway and Policy calls",
+        "kb_query": "Knowledge base queries",
+        "code_interpreter": "Code Interpreter"
+      },
+      "calibration": {
+        "title": "Runtime calibration",
+        "sub": "Hourly, per runtime: the AWS memory and CPU metrics ÷ the billable session-hours in spans. A measured factor replaces the seed once {{count}} sessions back it.",
+        "lastRun": "Last calibrated the hour from {{hour}} (at {{when}}): {{samples}} runtime sample(s)",
+        "neverRun": "Not calibrated yet: every runtime uses the seeds on the Models page.",
+        "failures": "{{count}} workspace(s) could not be calibrated:",
+        "empty": "No measured factors yet.",
+        "colRuntime": "Runtime",
+        "colGb": "GB resident",
+        "colVcpu": "vCPU",
+        "colSessions": "Samples",
+        "colUsed": "Applied",
+        "harness": "Harness",
+        "runtime": "Runtime agent",
+        "seed": "seed {{value}}",
+        "sessionsValue": "{{sessions}} sessions, {{hours}} h",
+        "used": "Measured",
+        "seedUsed": "Seed (too few sessions)",
+        "loadReport": "Compare with Cost Explorer",
+        "refreshReport": "Refresh comparison",
+        "reportNote": "Report only. Cost Explorer covers the whole AWS account: every region and every console that shares it (for example prod and prod2), so it is expected to be higher than this console's ledger. It never charges anyone. Each refresh costs $0.01 per account; results are cached for an hour.",
+        "account": "Account {{account}} ({{regions}})",
+        "accountError": "Cost Explorer could not be read: {{error}}",
+        "totals": "This console's ledger {{ledger}} · Cost Explorer {{bill}} for the account · ledger share {{share}}",
+        "colCategory": "Category",
+        "colLedger": "This console's ledger",
+        "colCostExplorer": "Cost Explorer (whole account)",
+        "reportEmpty": "No AgentCore fees this month.",
+        "generated": "Read at {{when}}",
+        "generatedCached": "Read at {{when}} (cached)",
+        "category": {
+          "runtime": "Runtime compute",
+          "evaluations_builtin": "Built-in evaluations",
+          "evaluations_custom": "Custom evaluations",
+          "web_search": "Web Search",
+          "memory": "Memory",
+          "gateway": "Gateway and Policy",
+          "knowledge_base": "Knowledge bases",
+          "code_interpreter": "Code Interpreter",
+          "browser": "Browser",
+          "other": "Other",
+          "overhead": "Workspace overhead (never charged to people)"
+        }
+      }
     }
   },
   "identity": {

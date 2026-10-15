@@ -49,6 +49,16 @@ KIND_TURN_ESTIMATE = "turn_estimate"
 KIND_JOB_ESTIMATE = "job_estimate"
 KIND_EVALUATION_BUILTIN = "evaluation_builtin"
 KIND_EVALUATION_CUSTOM = "evaluation_custom"
+# written by reconciliation (services/budget_reconcile.py): AgentCore fees per session
+KIND_RUNTIME_COMPUTE = "runtime_compute"
+KIND_MEMORY_EVENT = "memory_event"
+KIND_MEMORY_RETRIEVAL = "memory_retrieval"
+KIND_GATEWAY_CALL = "gateway_call"
+KIND_WEB_SEARCH = "web_search"
+KIND_KB_QUERY = "kb_query"
+KIND_CODE_INTERPRETER = "code_interpreter"
+# what reconciliation may replace with measured span tokens
+ESTIMATE_KINDS = (KIND_TURN_ESTIMATE, KIND_JOB_ESTIMATE)
 
 # on_usage kinds: one model call (summed) or one whole-turn aggregate (which,
 # when present, is the turn's usage — adding the per-call events too would count
@@ -524,25 +534,38 @@ class UsageMeter:
             logger.warning("usage meter: could not record the session", exc_info=True)
 
 
-def supersede(row_ids: Any, by: str) -> int:
+def supersede(row_ids: Any, by: str, *, db: Any = None) -> int:
     """Mark estimate rows as replaced by row ``by`` (a measured row, or a better
     estimate): spend stops counting them. Rows another row already superseded
-    keep their first replacement. Returns how many rows changed; never raises."""
+    keep their first replacement. Returns how many rows changed.
+
+    With its own session (the default) it commits and never raises. Given the
+    caller's ``db`` it only flushes the update into that transaction — and lets
+    a failure raise — so a caller that must write a replacement row, supersede
+    and advance a watermark atomically (reconciliation) commits all three or
+    none."""
     ids = [str(row_id) for row_id in (row_ids or []) if row_id and str(row_id) != by]
     if not ids or not by:
         return 0
+
+    def apply(session: Any) -> int:
+        return int(
+            session.query(UsageEvent)
+            .filter(UsageEvent.id.in_(ids), UsageEvent.superseded_by.is_(None))
+            .update({UsageEvent.superseded_by: by}, synchronize_session=False)
+            or 0
+        )
+
+    if db is not None:
+        return apply(db)
     try:
-        db = SessionLocal()
+        own = SessionLocal()
         try:
-            changed = (
-                db.query(UsageEvent)
-                .filter(UsageEvent.id.in_(ids), UsageEvent.superseded_by.is_(None))
-                .update({UsageEvent.superseded_by: by}, synchronize_session=False)
-            )
-            db.commit()
-            return int(changed or 0)
+            changed = apply(own)
+            own.commit()
+            return changed
         finally:
-            db.close()
+            own.close()
     except Exception:  # noqa: BLE001
         logger.warning("usage meter: could not supersede %s", ids, exc_info=True)
         return 0

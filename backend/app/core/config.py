@@ -395,6 +395,13 @@ class Settings(BaseSettings):
     # unit runs a single uvicorn; several processes would each run one.
     alerts_scheduler_enabled: bool = False
     alerts_scheduler_interval_seconds: int = 300
+    # Budget reconciliation (`app.services.budget_scheduler`): measured span tokens
+    # replace estimates and AgentCore fees are charged per person. ON by default —
+    # enforcement depends on it — with LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false as the
+    # emergency off switch. Each box reconciles only the sessions in its own ledger,
+    # so prod and prod2 sharing one AWS account never charge each other's sessions.
+    budgets_reconcile_enabled: bool = True
+    budgets_reconcile_interval_seconds: int = 600
 
     @model_validator(mode="after")
     def _seed_model_prices(self) -> "Settings":

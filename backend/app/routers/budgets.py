@@ -15,6 +15,10 @@ Administrator routes (``ROUTE_POLICY``: ADMIN):
   the price editor — a model id may carry dots, colons and slashes, so the route
   takes the rest of the path.
 - ``GET/PUT /api/admin/agentcore-rates``: AgentCore fee rates and calibration.
+- ``GET /api/budgets/reconcile-status``: the reconciliation thread's last tick, lag,
+  failures and calibration factors.
+- ``GET /api/budgets/calibration-report?refresh=``: report only — the ledger's
+  AgentCore fees vs Cost Explorer month to date (account-wide, cached an hour).
 
 Member route (MEMBER): ``GET /api/me/usage`` — the caller's own usage, never anyone
 else's.
@@ -223,6 +227,30 @@ def put_agentcore_rates(
         db, rates=body.rates, calibration_values=body.calibration,
         actor=require_identity(request).username,
     )
+
+
+# ── reconciliation (services/budget_reconcile.py, budget_scheduler.py) ───────
+
+
+@router.get("/api/budgets/reconcile-status")
+def reconcile_status(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Whether reconciliation runs, its last tick, lag and failures, the calibration
+    factors with their sample sizes, and this month's spend by kind."""
+    from app.services import budget_scheduler
+
+    return budget_scheduler.status(db)
+
+
+@router.get("/api/budgets/calibration-report")
+def calibration_report(refresh: bool = False, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Report only: this month's ledger AgentCore fees vs Cost Explorer's
+    month-to-date AgentCore bill, per AWS account. Cost Explorer covers the whole
+    account (every region, every box sharing it) and charges nobody. Each read
+    costs $0.01 per account, so it is cached for an hour (``refresh`` re-reads) and
+    the console only calls it when an administrator asks."""
+    from app.services import budget_calibration
+
+    return budget_calibration.cost_explorer_report(db, refresh=refresh)
 
 
 # ── my usage ─────────────────────────────────────────────────────────────────

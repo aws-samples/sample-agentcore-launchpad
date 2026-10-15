@@ -4762,6 +4762,131 @@ export interface AgentCoreRatesPatch {
   calibration?: Record<string, number | null>;
 }
 
+/** One failed part of a reconcile tick or a calibration pass. */
+export interface ReconcileFailure {
+  workspace_id: string | null;
+  /** `context` | `sessions` | `evaluations` | `online` | `pause` (absent for calibration) */
+  part?: string;
+  at?: string | null;
+  error: string;
+}
+
+/** The last reconcile tick (`services/budget_reconcile.tick`). */
+export interface ReconcileTick {
+  started_at: string;
+  finished_at: string;
+  duration_s: number;
+  /** exclusive end of the windows read (now − 2 min, minute-aligned) */
+  window_end: string;
+  sessions: number;
+  /** rows written: measured tokens, AgentCore fees, new Runtime compute rows, evaluations */
+  rows: number;
+  /** Runtime compute rows extended in place */
+  updated: number;
+  /** estimates replaced by measured cost */
+  superseded: number;
+  runs: number;
+  configs: number;
+  /** standalone online evaluations paused because their creator is over budget */
+  paused: number;
+  failures: ReconcileFailure[];
+}
+
+/** One runtime's measured Runtime factors (hourly calibration). */
+export interface RuntimeFactor {
+  runtime_id: string;
+  runtime_name: string;
+  /** GB resident per billable session-hour */
+  gb: number;
+  /** vCPU on average per billable session-hour */
+  vcpu: number;
+  sessions: number;
+  hours: number;
+  session_hours: number | null;
+  last_hour: string | null;
+  updated_at: string | null;
+  /** enough sessions back it: reconciliation uses it instead of the seed */
+  used: boolean;
+}
+
+/** This period's spend of one `usage_events.kind`, measured vs estimated. */
+export interface UsageByKind {
+  kind: string;
+  usd: number;
+  estimated_usd: number;
+  events: number;
+}
+
+/** `GET /api/budgets/reconcile-status` (admin). */
+export interface ReconcileStatus {
+  /** off only through `LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` */
+  enabled: boolean;
+  /** the thread is alive in this process */
+  running: boolean;
+  interval_seconds: number;
+  first_tick_at: string | null;
+  last_tick: ReconcileTick | null;
+  last_failure_at: string | null;
+  /** now − the last window end; null before the first tick */
+  lag_seconds: number | null;
+  /** sessions with activity not read yet */
+  pending_sessions: number;
+  oldest_pending_at: string | null;
+  workspaces: {
+    workspace_id: string;
+    last_ok_at: string | null;
+    window_end: string | null;
+    last_error: ReconcileFailure | null;
+  }[];
+  calibration: {
+    last_hour?: string;
+    at?: string;
+    runtimes?: number;
+    samples?: number;
+    failures?: ReconcileFailure[];
+    min_sessions: number;
+    defaults: Record<string, number>;
+    factors: RuntimeFactor[];
+  };
+  period: string;
+  by_kind: UsageByKind[];
+  /** what the estimates that reconciliation replaced this period had charged */
+  superseded_usd: number;
+}
+
+/** One category of the Cost Explorer comparison. */
+export interface CalibrationReportRow {
+  /** `runtime`, `evaluations_builtin`, `evaluations_custom`, `web_search`, `memory`,
+   *  `gateway`, `knowledge_base`, `code_interpreter`, `browser`, `other`, `overhead` */
+  category: string;
+  ledger_usd: number;
+  /** null when Cost Explorer could not be read for the account */
+  cost_explorer_usd: number | null;
+}
+
+/** `GET /api/budgets/calibration-report?refresh=` (admin, report only). */
+export interface CalibrationReport {
+  period: string;
+  generated_at: string;
+  /** Cost Explorer covers the whole account: every region, every box sharing it */
+  account_wide: true;
+  charges_anyone: false;
+  cached: boolean;
+  age_seconds: number;
+  accounts: {
+    account_id: string;
+    workspaces: { id: string; name: string; region: string }[];
+    ledger_total_usd: number;
+    cost_explorer_total_usd: number | null;
+    /** storage, tool indexing, data transfer: never charged to people */
+    overhead_usd: number | null;
+    by_region: Record<string, number>;
+    estimated: boolean | null;
+    error: string | null;
+    rows: CalibrationReportRow[];
+  }[];
+}
+
 export const api = {
   videoCatalog: () => request<VideoCatalog>("/api/videos"),
   manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
@@ -5234,6 +5359,12 @@ export const api = {
   agentcoreRates: () => request<AgentCoreRates>("/api/admin/agentcore-rates"),
   putAgentcoreRates: (patch: AgentCoreRatesPatch) =>
     request<AgentCoreRates>("/api/admin/agentcore-rates", { method: "PUT", body: JSON.stringify(patch) }),
+  /** Admin: the reconciliation thread's last tick, lag, failures and calibration. */
+  budgetReconcileStatus: () => request<ReconcileStatus>("/api/budgets/reconcile-status"),
+  /** Admin, report only: the ledger's AgentCore fees vs Cost Explorer month to date.
+   *  Each uncached read costs $0.01 per account — call it only when asked. */
+  budgetCalibrationReport: (refresh = false) =>
+    request<CalibrationReport>(`/api/budgets/calibration-report${refresh ? "?refresh=true" : ""}`),
   /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
   uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
     const form = new FormData();

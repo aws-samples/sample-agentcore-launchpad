@@ -16,6 +16,10 @@ os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
 # after 90 seconds, makes network requests and races tests that replace price YAML.
 # Manual refresh and price-merge behavior remain covered by test_model_prices.py.
 os.environ["LAUNCHPAD_MODEL_PRICES_REFRESH_HOURS"] = "0"
+# Same for the budget reconciliation thread, which is ON by default in a real
+# server: it would wake after 60 s and query Logs Insights in the middle of a test.
+# tests/test_budget_reconcile.py drives tick() / start() directly.
+os.environ["LAUNCHPAD_BUDGETS_RECONCILE_ENABLED"] = "false"
 
 # Isolate configuration reads before db/main bind settings or seed the default
 # workspace. Host YAML may select another Region or Docker execution in production.

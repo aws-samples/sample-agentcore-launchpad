@@ -89,6 +89,11 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
         "starts the opt-in alert-check thread (off by default); restart-safe — a rule's "
         "state is re-read on the next tick, no in-flight row"
     ),
+    "budget_scheduler.start": (
+        "starts the budget reconciliation thread (on by default); restart-safe — a "
+        "session's rows and its watermark commit together, so an interrupted window is "
+        "read again on the next tick, no in-flight row"
+    ),
 }
 
 # Subsystems that fail an interrupted row only when it is next read — a startup

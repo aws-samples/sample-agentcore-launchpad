@@ -5,6 +5,10 @@
 // `services/rates.py` (MAX_PRICE_PER_MTOK, the cache factors) so vitest covers it.
 import type {
   AgentCoreRates,
+  CalibrationReport,
+  ReconcileStatus,
+  RuntimeFactor,
+  UsageByKind,
   BudgetAssignmentInput,
   BudgetEstimateKey,
   BudgetBasis,
@@ -18,6 +22,7 @@ import type {
   UnpricedModel,
 } from "../../../lib/api";
 import { usageTone } from "../../../lib/budgets";
+import type { Signal } from "../../signals";
 
 export const MAX_BUDGET_USD = 1_000_000;
 export const MAX_PRICE_PER_MTOK = 10_000;
@@ -371,4 +376,111 @@ export function ratePatch(group: RateGroup, key: string, value: number | null): 
  *  an unknown unit falls back to the server's own text. */
 export function unitKey(unit: string): string {
   return `v2.models.rates.unit.${unit.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}`;
+}
+
+/* ---------- reconciliation (services/budget_reconcile.py, budget_scheduler.py) ---------- */
+
+export type ReconcileHealth = "off" | "waiting" | "failing" | "lagging" | "ok";
+
+/** A window more than this many intervals behind (plus the 2-minute lag) is late. */
+export const LAG_INTERVALS = 3;
+
+/**
+ * How the reconcile card reads: switched off (the env escape hatch), waiting for its
+ * first tick, failing (the last tick had a failed part), lagging (its last window ended
+ * more than `LAG_INTERVALS` ticks ago), or healthy.
+ */
+export function reconcileHealth(status: ReconcileStatus): ReconcileHealth {
+  if (!status.enabled) return "off";
+  if (!status.last_tick) return "waiting";
+  if (status.last_tick.failures.length > 0) return "failing";
+  const late = LAG_INTERVALS * status.interval_seconds + 120;
+  if (status.lag_seconds != null && status.lag_seconds > late) return "lagging";
+  return "ok";
+}
+
+export const RECONCILE_SIGNAL: Record<ReconcileHealth, Signal> = {
+  off: "act",
+  waiting: "wait",
+  failing: "act",
+  lagging: "wait",
+  ok: "ok",
+};
+
+/** Whole minutes behind, at least 0; null before the first tick. */
+export function lagMinutes(seconds: number | null | undefined): number | null {
+  if (seconds == null || !Number.isFinite(seconds)) return null;
+  return Math.max(0, Math.round(seconds / 60));
+}
+
+/** The kinds reconciliation writes (AgentCore fees), in the order the card lists them. */
+export const AGENTCORE_FEE_KINDS = [
+  "runtime_compute",
+  "evaluation_builtin",
+  "evaluation_custom",
+  "web_search",
+  "memory_event",
+  "memory_retrieval",
+  "gateway_call",
+  "kb_query",
+  "code_interpreter",
+];
+
+export interface KindRow {
+  kind: string;
+  usd: number;
+  measuredUsd: number;
+  estimatedUsd: number;
+  /** 0–1 */
+  estimatedShare: number;
+  agentcore: boolean;
+}
+
+/** This period's spend by kind: model tokens and estimates first, then the AgentCore
+ *  fees in their fixed order; kinds with nothing charged are dropped. */
+export function kindRows(byKind: UsageByKind[]): KindRow[] {
+  const order = (kind: string) => {
+    const index = AGENTCORE_FEE_KINDS.indexOf(kind);
+    return index < 0 ? -1 : index;
+  };
+  return byKind
+    .filter((row) => row.usd > 0 || row.events > 0)
+    .map((row) => ({
+      kind: row.kind,
+      usd: row.usd,
+      estimatedUsd: row.estimated_usd,
+      measuredUsd: Math.max(0, row.usd - row.estimated_usd),
+      estimatedShare: row.usd > 0 ? row.estimated_usd / row.usd : 0,
+      agentcore: AGENTCORE_FEE_KINDS.includes(row.kind),
+    }))
+    .sort((a, b) => order(a.kind) - order(b.kind) || b.usd - a.usd || a.kind.localeCompare(b.kind));
+}
+
+export interface FactorRow extends RuntimeFactor {
+  harness: boolean;
+  /** the seed this runtime would use without a measurement */
+  seedGb: number;
+  seedVcpu: number;
+}
+
+/** The measured factors next to the seed each would replace (Harness vs other). */
+export function factorRows(status: ReconcileStatus): FactorRow[] {
+  const d = status.calibration.defaults;
+  return status.calibration.factors.map((f) => {
+    const harness = f.runtime_name.startsWith("harness_");
+    return {
+      ...f,
+      harness,
+      seedGb: harness ? d.runtime_harness_gb : d.runtime_default_gb,
+      seedVcpu: harness ? d.runtime_harness_vcpu : d.runtime_default_vcpu,
+    };
+  });
+}
+
+/** One account of the Cost Explorer comparison: the totals and the ledger's share of the
+ *  bill (null when Cost Explorer could not be read or shows nothing). */
+export function reportShare(account: CalibrationReport["accounts"][number]): number | null {
+  const bill = account.cost_explorer_total_usd;
+  if (bill == null || bill <= 0) return null;
+  return account.ledger_total_usd / bill;
 }
