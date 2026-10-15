@@ -160,14 +160,25 @@ def _record_auth_sessions(
     return out
 
 
-def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
+def _usage_kw(on_usage: Any) -> dict[str, Any]:
+    """Forward a meter's sink only when there is one, so a caller that passes none
+    keeps the exact wrapper call it made before metering existed."""
+    return {"on_usage": on_usage} if on_usage is not None else {}
+
+
+def _parse_gateway_text(
+    raw_text: str, session_id: str, on_usage: Any = None,
+) -> dict[str, Any]:
     """Parse a gateway HTTP response body the SAME way ``rt.invoke_runtime_text``
     parses ``invoke_agent_runtime``: JSON ``{"result": ...}`` or an SSE stream via
     ``rt.flatten_sse_text``."""
     try:
         body = json.loads(raw_text)
     except (ValueError, TypeError):
-        body = {"result": rt.flatten_sse_text(raw_text) or raw_text}
+        body = {"result": rt.flatten_sse_text(raw_text, **_usage_kw(on_usage)) or raw_text}
+    else:
+        if isinstance(body, dict):
+            rt.report_usage(on_usage, body.get("usage"), "turn")
     if isinstance(body, dict) and body.get("error"):
         raise RuntimeError(f"runtime returned error: {body['error']}")
     text = body.get("result", "") if isinstance(body, dict) else str(body)
@@ -253,6 +264,7 @@ def _invoke_via_stable_endpoint(
     workspace: WorkspaceContext,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    on_usage: Any = None,
 ) -> dict[str, Any]:
     """Direct-invoke the runtime pinned to the stable endpoint (= v_current).
 
@@ -268,6 +280,7 @@ def _invoke_via_stable_endpoint(
     }
     if gateway_access_token:
         kwargs["gateway_access_token"] = gateway_access_token
+    kwargs.update(_usage_kw(on_usage))
     return rt.invoke_runtime_text(data_client(workspace), route["arn"], prompt, **kwargs)
 
 
@@ -279,6 +292,7 @@ def _invoke_via_canary(
     workspace: WorkspaceContext,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    on_usage: Any = None,
 ) -> dict[str, Any]:
     """Route a real invocation for an active canary.
 
@@ -300,6 +314,7 @@ def _invoke_via_canary(
             workspace,
             runtime_user_id,
             gateway_access_token,
+            **_usage_kw(on_usage),
         )
     # Runtime session ids must be ≥33 chars (spike); mint one when absent/short.
     sticky = session_id if (session_id and len(session_id) >= 33) else rt.new_session_id()
@@ -315,7 +330,7 @@ def _invoke_via_canary(
         )
         if response.status_code != 200:
             raise RuntimeError(f"gateway route returned HTTP {response.status_code}")
-        return _parse_gateway_text(response.text, sticky)
+        return _parse_gateway_text(response.text, sticky, on_usage)
     except Exception as exc:
         logger.warning(
             "canary gateway route failed (%s); falling back to stable endpoint %s",
@@ -330,6 +345,7 @@ def _invoke_via_canary(
             workspace,
             runtime_user_id,
             gateway_access_token,
+            **_usage_kw(on_usage),
         )
 
 
@@ -340,6 +356,7 @@ def _invoke_harness_via_canary(
     actor_id: str,
     workspace: WorkspaceContext,
     harness_kwargs: dict[str, Any],
+    on_usage: Any = None,
 ) -> dict[str, Any]:
     """Route a real Harness invocation for an active Harness canary.
 
@@ -354,7 +371,7 @@ def _invoke_harness_via_canary(
         return hc.invoke_harness_text(
             data_client(workspace), route["arn"], prompt,
             session_id=sticky, actor_id=actor_id, qualifier=route["stable_endpoint"],
-            **harness_kwargs,
+            **harness_kwargs, **_usage_kw(on_usage),
         )
 
     if not (route.get("gateway_url") and route.get("control_target")):
@@ -372,7 +389,8 @@ def _invoke_harness_via_canary(
         )
         if response.status_code != 200:
             raise RuntimeError(f"gateway route returned HTTP {response.status_code}")
-        return {"text": hc.event_stream_text(response.content), "session_id": sticky}
+        return {"text": hc.event_stream_text(response.content, **_usage_kw(on_usage)),
+                "session_id": sticky}
     except Exception as exc:
         logger.warning(
             "harness canary gateway route failed (%s); falling back to control endpoint %s",
@@ -463,10 +481,14 @@ def invoke_agent_text(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    on_usage: Any = None,
 ) -> dict[str, Any]:
     """One synchronous turn. ``console_user=False`` marks a caller with no
     signed-in console user (public /v1): an as_user consent ask is then refused
-    by name instead of recorded (see ``_record_auth_sessions``)."""
+    by name instead of recorded (see ``_record_auth_sessions``).
+
+    ``on_usage`` is a ``UsageMeter.on_usage`` sink (services/usage_meter.py): the
+    token usage each path reports in-band reaches it; the caller settles the turn."""
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
@@ -481,6 +503,7 @@ def invoke_agent_text(
         kwargs, ledger_user = _bearer_kwargs(
             agent, actor_id, runtime_user_id, gateway_access_token, attachments,
         )
+        kwargs.update(_usage_kw(on_usage))
         try:
             result = rt.invoke_runtime_text_bearer(
                 workspace.region,
@@ -513,6 +536,7 @@ def invoke_agent_text(
         if route is not None and route.get("kind") == "harness":
             return _invoke_harness_via_canary(
                 route, prompt, session_id, actor_id, workspace, harness_kwargs,
+                **_usage_kw(on_usage),
             )
         return hc.invoke_harness_text(
             data_client(workspace),
@@ -521,6 +545,7 @@ def invoke_agent_text(
             session_id=session_id,
             actor_id=actor_id,
             **harness_kwargs,
+            **_usage_kw(on_usage),
         )
     if agent.method in ("zip_runtime", "studio", "container", "byoc", DISCOVERED_METHOD):
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
@@ -549,6 +574,7 @@ def invoke_agent_text(
                 workspace,
                 runtime_user_id,
                 gateway_access_token,
+                **_usage_kw(on_usage),
             )
         resolved_user = _runtime_user_id(agent, actor_id, runtime_user_id)
         kwargs: dict[str, Any] = {
@@ -563,6 +589,7 @@ def invoke_agent_text(
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
+        kwargs.update(_usage_kw(on_usage))
         result = rt.invoke_runtime_text(
             data_client(workspace), agent.arn, prompt, **kwargs
         )
@@ -630,6 +657,7 @@ def invoke_agent_events(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -638,7 +666,7 @@ def invoke_agent_events(
     parsed incrementally. A zip runtime deployed before its template streamed
     still answers a JSON ``{"result": ...}`` body, which the same parser turns
     into one delta — so the switch is safe for existing agents.
-    ``console_user`` as on ``invoke_agent_text``.
+    ``console_user`` and ``on_usage`` as on ``invoke_agent_text``.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -653,6 +681,7 @@ def invoke_agent_events(
         kwargs, ledger_user = _bearer_kwargs(
             agent, actor_id, runtime_user_id, gateway_access_token, attachments,
         )
+        kwargs.update(_usage_kw(on_usage))
         try:
             for event in rt.stream_runtime_events_bearer(
                 workspace.region,
@@ -695,6 +724,7 @@ def invoke_agent_events(
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
+        kwargs.update(_usage_kw(on_usage))
         for event in rt.stream_runtime_events(
             data_client(workspace), agent.arn, prompt, **kwargs
         ):
@@ -711,6 +741,7 @@ def invoke_agent_events(
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
     if not console_user:
         extra["console_user"] = False
+    extra.update(_usage_kw(on_usage))
     result = invoke_agent_text(
         agent,
         prompt,

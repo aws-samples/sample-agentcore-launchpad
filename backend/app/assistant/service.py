@@ -61,7 +61,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from botocore.exceptions import ClientError
 from sqlalchemy import delete, select, update
@@ -91,6 +91,9 @@ from app.services.workspace import WorkspaceContext
 from app.system_agents import service as system_agents
 from app.system_agents.presets import ARCHITECT
 from app.system_agents.presets import is_reserved_name as _reserved
+
+if TYPE_CHECKING:  # passed in by the turn route, never built here
+    from app.services.usage_meter import UsageMeter
 
 logger = logging.getLogger("launchpad.assistant")
 
@@ -1947,6 +1950,7 @@ def run_turn(
     prompt: str,
     run: TurnRun | None = None,
     retry_of: int | None = None,
+    meter: "UsageMeter | None" = None,
 ) -> Iterator[dict[str, Any]]:
     """One assistant turn as SSE-ready events:
     ``meta → (tool|delta)* → (proposal)? → done`` or ``error``.
@@ -1960,6 +1964,10 @@ def run_turn(
     times in a fresh Harness session: the failed attempt's partial text and tool rows
     are discarded, any inline submission it made is forgotten, and a ``retry`` event
     tells the client to clear what it streamed.
+
+    ``meter`` (services/usage_meter.py) receives every Harness model call's usage,
+    from every attempt and inline-function round trip of the turn — a replay
+    re-spends, and the payer is charged for it. The caller settles it.
     """
     run = run or TurnRun()
     agent = _require_available(db, row)
@@ -1969,6 +1977,12 @@ def run_turn(
     conversation = db.get(AssistantConversation, conversation_id)
     ids = (conversation_id, conversation.workspace_id)  # plain values for the finalizer
     session_id = hc.new_session_id()
+    if meter is not None:
+        from app.services import budgets
+
+        meter.agent_id, meter.resource_id = agent.id, agent.arn
+        meter.model_id = budgets.agent_model(agent)[0]
+        meter.session_id = session_id
     parts: list[str] = []
     terminal = False  # True once a terminal row (reply or error) was persisted
     producer: threading.Thread | None = None
@@ -2025,6 +2039,8 @@ def run_turn(
             if overrides is not None:
                 invoke_extra = {"tools": overrides[0], "allowed_tools": overrides[1],
                                 "inline_tools": frozenset({submission.TOOL_NAME})}
+            if meter is not None:
+                invoke_extra["on_usage"] = meter.on_usage
 
             # plain values: the producer thread must never lazy-load through ``db``
             # (the consumer's session), which a rollback below has already expired

@@ -17,18 +17,20 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
+from app.core.billing_policy import SOURCE_V1
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.attachments import AttachmentRequest
-from app.services import agent_access, visibility
+from app.services import agent_access, budgets, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import invoke_capability, require_invoke_capability
+from app.services.usage_meter import UsageMeter
 from app.services.workspace import get_workspace_row
 
 router = APIRouter(prefix="/v1", tags=["public-v1"])
@@ -87,6 +89,19 @@ def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
     return agent
 
 
+def _metered(db: Session, key: ApiKey, agent: Agent) -> UsageMeter:
+    """The billing gate of a /v1 turn, and its meter. The payer is the key's
+    creator (``ApiKey.created_by``); a key with no recorded creator is exempt.
+    Refused with ``402 budget.exceeded`` / ``budget.model_unpriced`` before any
+    work starts (core/billing_policy.py classifies both invoke routes)."""
+    payer = budgets.payer_for_api_key(db, key)
+    budgets.check_agent(db, payer, agent)
+    return UsageMeter.for_agent(
+        payer, SOURCE_V1, agent, workspace_id=key.workspace_id, ref_type="api_key",
+        ref_id=key.id,
+    )
+
+
 @router.get("/agents", summary="List active agents")
 def v1_list_agents(
     db: Session = Depends(get_db), key: ApiKey = Depends(require_api_key)
@@ -119,6 +134,7 @@ def v1_invoke(
     key: ApiKey = Depends(require_api_key),
 ) -> dict[str, Any]:
     agent = _active_agent(db, key, agent_id)
+    meter = _metered(db, key, agent)
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
@@ -127,12 +143,20 @@ def v1_invoke(
     # No signed-in console user behind an API key: an as_user tool's consent
     # could never complete, so the invoke layer answers such an ask with 409
     # identity.as_user_requires_console instead of a dead-end consent URL.
-    result = invoke_agent_text(
-        agent, req.prompt, session_id=req.session_id,
-        actor_id=scoped_actor(agent.id, req.actor_id),
-        console_user=False,
-        **extra,
-    )
+    meter.session_id = req.session_id
+    result: dict[str, Any] | None = None
+    try:
+        result = invoke_agent_text(
+            agent, req.prompt, session_id=req.session_id,
+            actor_id=scoped_actor(agent.id, req.actor_id),
+            console_user=False,
+            on_usage=meter.on_usage,
+            **extra,
+        )
+    finally:
+        # the session ledger /v1 never had: who pays for this session
+        meter.settle(failed=result is None,
+                     session_id=result.get("session_id") if result else None)
     body = {
         "agent": agent.name,
         "text": result["text"],
@@ -151,6 +175,7 @@ def v1_invoke_stream(
 ) -> StreamingResponse:
     agent = _active_agent(db, key, agent_id)
     refuse_assistant_session(agent, req.session_id)  # 404 before the stream opens
+    meter = _metered(db, key, agent)
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
@@ -162,7 +187,7 @@ def v1_invoke_stream(
         # `error` event (identity.as_user_requires_console) — see v1_invoke
         for event in chat_stream(
             agent, req.prompt, session_id=req.session_id, actor_id=mem_actor,
-            console_user=False, **extra,
+            console_user=False, meter=meter, **extra,
         ):
             yield sse_encode(event)
 

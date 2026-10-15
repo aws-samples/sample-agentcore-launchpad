@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.assistant import purge as assistant_purge
+from app.core import billing_policy
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.online_evaluators import refuse_hidden_evaluators
@@ -270,12 +271,15 @@ AGENT_FREE_ACTIONS = frozenset({"verdict", "cleanup"})
 
 @router.post("/{exp_id}/action")
 def experiment_action(
-    exp_id: str, req: ActionRequest, response: Response,
+    exp_id: str, req: ActionRequest, response: Response, request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     exp = _experiment_in(db, ws, exp_id, viewer=viewer)
+    # the spend-budget gate for the billable actions only (traffic, recommend,
+    # gateway, abtest) — accept / verdict / cleanup never spend, so never refused
+    billing_policy.gate_action(request, req.action)
     if req.action not in AGENT_FREE_ACTIONS:
         # A visible experiment does not make its agent the caller's: every action
         # that reads, invokes or re-publishes it needs the agent visible too

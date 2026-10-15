@@ -16,14 +16,16 @@ from sqlalchemy.orm import Session
 
 from app.assistant.principal import principal_of
 from app.assistant.sessions import PrivateSessions
+from app.core.billing_policy import SOURCE_OBSERVABILITY
 from app.core.config import get_settings
 from app.core.db import SessionLocal, get_db
 from app.core.errors import NotFoundError
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import model_prices, observability
+from app.services import budgets, model_prices, observability
 from app.services.agent_access import HiddenAgents
+from app.services.usage_meter import UsageMeter
 from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
@@ -236,6 +238,10 @@ def session_evaluate(
             require_visible_evaluators(db, ws.id, viewer, body.evaluator_ids)
         finally:
             db.close()
+    # every judge inference is charged to the caller (Evaluate reports exact tokens)
+    meter = UsageMeter.for_payer(
+        budgets.payer_of_request(request), SOURCE_OBSERVABILITY, origin_workspace_id=ws.id,
+    )
     return observability.evaluate_session(
-        session_id, body.range, body.evaluator_ids, ws.context
+        session_id, body.range, body.evaluator_ids, ws.context, meter=meter,
     )

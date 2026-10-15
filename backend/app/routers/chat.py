@@ -9,6 +9,7 @@ from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
+from app.core.billing_policy import SOURCE_CHAT
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError, envelope, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
@@ -16,7 +17,7 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest
-from app.services import agent_access, memory_ownership, oauth_sessions, policy_identity
+from app.services import agent_access, budgets, memory_ownership, oauth_sessions, policy_identity
 from app.services import feedback as feedback_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
@@ -24,6 +25,7 @@ from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
+from app.services.usage_meter import UsageMeter
 from app.services.visibility import Viewer, require_viewer
 from app.templates import gateway_support
 
@@ -207,6 +209,11 @@ def chat(
         else None
     )
     bearer_token = _chat_bearer_token(agent, req.as_user, ws, identity, gateway_access_token)
+    # The turn is charged to the signed-in caller's users.id (the gate already
+    # checked their budget) — never to the username the chat ledger records.
+    meter = UsageMeter.for_agent(
+        budgets.payer_of_request(request), SOURCE_CHAT, agent, workspace_id=ws.id,
+    )
 
     # The stream outlives the request scope, so it carries the plain id and the
     # already-built context rather than reaching back for the resolved scope.
@@ -240,7 +247,7 @@ def chat(
                 return None
             return sse_encode({"event": "saved", "data": {"message_id": message_id}})
 
-        stream_kwargs: dict[str, Any] = {}
+        stream_kwargs: dict[str, Any] = {"meter": meter}
         if prepared:
             stream_kwargs["attachments"] = prepared
         if needs_gateway_identity:

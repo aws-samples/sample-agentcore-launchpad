@@ -9,7 +9,7 @@ import json
 import time
 from collections.abc import Iterator
 from contextlib import closing
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, envelope
@@ -28,6 +28,9 @@ from app.services.invoke import (
 from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
+if TYPE_CHECKING:  # the meter is passed in, never built here
+    from app.services.usage_meter import UsageMeter
+
 
 def chat_stream(
     agent: Agent,
@@ -40,6 +43,7 @@ def chat_stream(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    meter: "UsageMeter | None" = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -52,8 +56,45 @@ def chat_stream(
     the workspace M2M token or fails with a named error).
     ``console_user=False`` (public /v1) refuses as_user consent asks by name —
     see ``invoke._record_auth_sessions``.
+
+    ``meter`` (services/usage_meter.py) receives the turn's in-band usage and is
+    settled exactly once when the stream ends — completed, failed, or closed by the
+    client — so the payer is charged for what the turn consumed.
     """
     session_id = session_id or new_session_id()
+    if meter is None:
+        yield from _chat_events(
+            agent, prompt, session_id, actor_id, runtime_user_id, gateway_access_token,
+            workspace, attachments, bearer_token, console_user, None,
+        )
+        return
+    meter.session_id = session_id
+    failed = [True]
+    try:
+        for event in _chat_events(
+            agent, prompt, session_id, actor_id, runtime_user_id, gateway_access_token,
+            workspace, attachments, bearer_token, console_user, meter,
+        ):
+            if event["event"] == "done":
+                failed[0] = False
+            yield event
+    finally:
+        meter.settle(failed=failed[0])
+
+
+def _chat_events(
+    agent: Agent,
+    prompt: str,
+    session_id: str,
+    actor_id: str,
+    runtime_user_id: str | None,
+    gateway_access_token: str | None,
+    workspace: WorkspaceContext | None,
+    attachments: PreparedAttachments | None,
+    bearer_token: str | None,
+    console_user: bool,
+    meter: "UsageMeter | None",
+) -> Iterator[dict[str, Any]]:
     workspace = workspace if workspace is not None else context_for_workspace(
         agent.workspace_id
     )
@@ -86,9 +127,12 @@ def chat_stream(
                 workspace,
                 runtime_user_id=runtime_user_id,
                 gateway_access_token=gateway_access_token,
+                on_usage=meter.on_usage if meter is not None else None,
             )
         else:
             invoke_kwargs: dict[str, Any] = {}
+            if meter is not None:
+                invoke_kwargs["on_usage"] = meter.on_usage
             if runtime_user_id:
                 invoke_kwargs["runtime_user_id"] = runtime_user_id
             if gateway_access_token:
@@ -128,6 +172,7 @@ def _harness_events(
     *,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     params: dict[str, Any] = {
         "harnessArn": agent.arn,
@@ -146,7 +191,7 @@ def _harness_events(
     # index): a Cedar denial only shows up in a result's text (policy_denials)
     tool_names: dict[Any, str] = {}
     results: dict[Any, dict[str, Any]] = {}
-    with closing(hc.iter_harness_stream(response["stream"])) as events:
+    with closing(hc.iter_harness_stream(response["stream"], on_usage=on_usage)) as events:
         for event in events:
             if "contentBlockStart" in event:
                 block = event["contentBlockStart"]

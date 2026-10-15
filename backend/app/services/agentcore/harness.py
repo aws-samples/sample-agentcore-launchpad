@@ -217,11 +217,12 @@ def decode_event_stream(raw: bytes) -> list[dict[str, Any]]:
     return events
 
 
-def event_stream_text(raw: bytes) -> str:
+def event_stream_text(raw: bytes, *, on_usage: Any = None) -> str:
     """Concatenated assistant text of a raw Harness event stream (raises on a
-    stream error event, like the boto3 path)."""
+    stream error event, like the boto3 path). ``on_usage`` as on
+    :func:`iter_harness_stream`."""
     parts: list[str] = []
-    with closing(iter_harness_stream(decode_event_stream(raw))) as events:
+    with closing(iter_harness_stream(decode_event_stream(raw), on_usage=on_usage)) as events:
         for event in events:
             delta = event.get("contentBlockDelta", {}).get("delta", {})
             if delta.get("text"):
@@ -404,8 +405,21 @@ def _stop_error(reason: Any) -> AppError | None:
     return AppError(code, message, {"stop_reason": reason}, status_code=status)
 
 
+def _report_usage(on_usage: Any, metadata: Any) -> None:
+    """Hand one ``metadata`` event's token usage to the caller's meter. A meter
+    must never fail the invocation, so nothing it raises escapes."""
+    usage = metadata.get("usage") if isinstance(metadata, dict) else None
+    if usage is None:
+        return
+    try:
+        on_usage(usage)
+    except Exception:  # noqa: BLE001 — metering is best effort by contract
+        pass
+
+
 def iter_harness_stream(
     stream: Any, *, on_stream: Any = None, allow_handoff: bool = False,
+    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Drain and validate raw Harness events, always releasing the transport.
 
@@ -414,6 +428,10 @@ def iter_harness_stream(
     diagnosis; once a failure is seen, later text cannot make the call successful.
     ``allow_handoff``: a final ``tool_use`` stop is the inline-function handoff (the
     caller owes a ``toolResult``), not an unfinished response.
+
+    ``on_usage(usage)`` receives the ``usage`` of every ``metadata`` event — one per
+    **model call** (measured live 2026-10-15), so a turn's tokens are their sum.
+    It is called even after a failure was seen: those calls were billed too.
     """
     failure: AppError | None = None
     last_stop: Any = None
@@ -422,6 +440,8 @@ def iter_harness_stream(
         if on_stream is not None:
             on_stream(stream)
         for event in stream:
+            if on_usage is not None and "metadata" in event:
+                _report_usage(on_usage, event["metadata"])
             if "messageStop" in event:
                 last_stop = event["messageStop"].get("stopReason")
                 error = _stop_error(last_stop)
@@ -477,6 +497,7 @@ def invoke_harness_events(
     allowed_tools: list[str] | None = None,
     inline_tools: frozenset[str] = frozenset(),
     qualifier: str | None = None,
+    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
     replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
@@ -505,7 +526,7 @@ def invoke_harness_events(
         **overrides,
     )
     stream = iter_harness_stream(response["stream"], on_stream=on_stream,
-                                 allow_handoff=bool(inline_tools))
+                                 allow_handoff=bool(inline_tools), on_usage=on_usage)
     with closing(stream) as events:
         # toolUse input arrives as partial-JSON deltas per content block; the joined,
         # bounded text is emitted once at the block's stop so the ledger can record
@@ -568,15 +589,19 @@ def invoke_harness_text(
     tools: list[dict[str, Any]] | None = None,
     allowed_tools: list[str] | None = None,
     qualifier: str | None = None,
+    on_usage: Any = None,
 ) -> dict[str, Any]:
     """Synchronous invoke: send one user message, drain the event stream,
     return the concatenated assistant text plus session id. ``qualifier`` pins a
-    named endpoint (a canary's control endpoint); omitted ⇒ DEFAULT."""
+    named endpoint (a canary's control endpoint); omitted ⇒ DEFAULT.
+    ``on_usage`` as on :func:`iter_harness_stream`."""
     session_id = session_id or new_session_id()
     text_parts: list[str] = []
     overrides: dict[str, Any] = {}
     if qualifier:
         overrides["qualifier"] = qualifier
+    if on_usage is not None:
+        overrides["on_usage"] = on_usage
     if runtime_user_id:
         overrides["runtime_user_id"] = runtime_user_id
     if tools is not None:

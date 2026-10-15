@@ -188,6 +188,12 @@ class ClaudeSdkBackend(CodingAgentBackend):
                         summary = _summarize_tool_use(block.name, block.input or {})
                         await on_progress(f"[tool] {summary}")
             elif isinstance(message, ResultMessage):
+                usage = getattr(message, "usage", None)
+                if task.on_usage is not None and isinstance(usage, dict):
+                    try:  # metering never fails a fix round
+                        task.on_usage(usage)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"usage report failed: {e}")
                 if message.is_error:
                     raise GenerationError(
                         f"Claude agent session ended with error: "

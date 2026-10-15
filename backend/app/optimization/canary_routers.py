@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.assistant import purge as assistant_purge
+from app.core import billing_policy
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.online_evaluators import (
@@ -359,11 +360,15 @@ def runtime_canary_action(
     canary_id: str,
     req: RuntimeCanaryAction,
     response: Response,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     row = _canary_in(db, ws, canary_id, viewer=viewer)
+    # the spend-budget gate for setup / traffic only: rolling back or completing a
+    # canary must stay possible for a payer over budget
+    billing_policy.gate_action(request, req.action)
     if req.action not in AGENT_FREE_ACTIONS:
         # setup / advance / complete / rollback re-publish the champion and traffic
         # invokes it: a visible canary does not make a hidden agent the caller's

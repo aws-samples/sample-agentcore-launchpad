@@ -1964,6 +1964,7 @@ def fetch_session_spans(
 def evaluate_session(
     session_id: str, range_key: str, evaluator_ids: list[str],
     workspace: WorkspaceContext, *, logs: Any = None, data: Any = None,
+    meter: Any = None,
 ) -> dict[str, Any]:
     """Score one session synchronously with each evaluator via ``Evaluate``.
 
@@ -1972,6 +1973,8 @@ def evaluate_session(
     ``errorCode`` is returned as an error row; an AWS ``ClientError`` from
     ``Evaluate`` (e.g. ``ValidationException`` on unsupported spans) propagates
     to the shared 4xx envelope handler.
+
+    ``meter`` (a ``UsageMeter``) is charged each result's exact ``tokenUsage``.
     """
     hours = RANGE_HOURS[range_key]
     ids = list(dict.fromkeys(evaluator_ids))  # de-dupe, keep order
@@ -2028,6 +2031,11 @@ def evaluate_session(
                 )
             )
             continue
+        if meter is not None:
+            for raw in raw_results:
+                meter.evaluate_usage(
+                    evaluator_id, raw.get("tokenUsage"), evaluated_session=session_id,
+                )
         results.extend(
             agentcore_evaluation.normalize_result(r, evaluator_id=evaluator_id)
             for r in raw_results

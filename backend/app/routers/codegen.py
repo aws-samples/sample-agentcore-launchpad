@@ -15,11 +15,15 @@ separate from the platform Chat (``/api/chat/*`` = deployed AgentCore runtimes).
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.codegen import config as codegen_config
 from app.codegen.service import fix_code_events, get_status
+from app.core.billing_policy import SOURCE_CODEGEN
+from app.services import budgets
+from app.services.usage_meter import UsageMeter
 from app.utils.sse_formatter import SSEFormatter
 
 logger = logging.getLogger("launchpad.codegen")
@@ -72,7 +76,7 @@ def _sse_response(event_iterator) -> StreamingResponse:
 
 
 @router.post("/fix-code/stream")
-async def fix_code_stream(request: FixCodeRequest) -> StreamingResponse:
+async def fix_code_stream(request: FixCodeRequest, http_request: Request) -> StreamingResponse:
     """Diagnose and fix a failed local execution via the coding agent (SSE)."""
     logger.info(
         "AI fix request: %d nodes, %d edges, graph_mode=%s, error_len=%d",
@@ -81,15 +85,29 @@ async def fix_code_stream(request: FixCodeRequest) -> StreamingResponse:
         request.graph_mode,
         len(request.error),
     )
-    return _sse_response(
-        fix_code_events(
-            code=request.code,
-            error=request.error,
-            flow_data=request.flow_data.model_dump(),
-            graph_mode=request.graph_mode,
-            input_data=request.input_data,
-        )
+    # The coding agent's model calls are charged to the caller (the route-level
+    # billing gate checked their budget); every agent round reports its usage.
+    scope = getattr(http_request.state, "workspace", None)
+    meter = UsageMeter.for_payer(
+        budgets.payer_of_request(http_request), SOURCE_CODEGEN,
+        origin_workspace_id=getattr(scope, "id", None), model_id=codegen_config.get_model(),
     )
+
+    async def metered():
+        try:
+            async for event in fix_code_events(
+                code=request.code,
+                error=request.error,
+                flow_data=request.flow_data.model_dump(),
+                graph_mode=request.graph_mode,
+                input_data=request.input_data,
+                on_usage=meter.on_usage,
+            ):
+                yield event
+        finally:
+            meter.settle()
+
+    return _sse_response(metered())
 
 
 @router.get("/generate-code/status")

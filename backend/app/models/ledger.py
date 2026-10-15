@@ -319,6 +319,12 @@ class User(Base):
         DateTime(timezone=True), default=None
     )
     login_count: Mapped[int] = mapped_column(default=0)
+    # Spend budget assignment (services/budgets.py): a `budget_levels.id` (not a
+    # FK — a level cannot be deleted while assigned, the service refuses it) and an
+    # optional per-person amount that replaces the level's. Both NULL = the default
+    # level if one is marked, else unlimited; admins stay exempt until assigned.
+    budget_level_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    budget_override_usd: Mapped[float | None] = mapped_column(Float, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

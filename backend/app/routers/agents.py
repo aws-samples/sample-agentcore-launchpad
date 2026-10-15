@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
 from app.assistant import purge as assistant_purge
+from app.core.billing_policy import SOURCE_INVOKE
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
@@ -40,6 +41,7 @@ from app.services import (
     agent_iam,
     agent_identity,
     agent_names,
+    budgets,
     byoc_uploads,
     creators,
     identity_providers,
@@ -65,6 +67,7 @@ from app.services.runtime_discovery import (
     scan_harnesses,
     scan_runtimes,
 )
+from app.services.usage_meter import UsageMeter
 from app.services.visibility import Viewer, require_viewer
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
@@ -974,6 +977,7 @@ def convert_agent(
 def invoke_agent(
     agent_id: str,
     req: InvokeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -987,12 +991,23 @@ def invoke_agent(
     )
     started = time.monotonic()
     extra = {"attachments": prepared} if prepared else {}
-    result = invoke_agent_text(
-        agent, req.prompt, session_id=req.session_id,
-        actor_id=scoped_actor(agent.id, req.actor_id),
-        workspace=ws.context,
-        **extra,
+    # charged to the caller (the route-level billing gate checked the budget)
+    meter = UsageMeter.for_agent(
+        budgets.payer_of_request(request), SOURCE_INVOKE, agent, workspace_id=ws.id,
+        session_id=req.session_id,
     )
+    result: dict[str, Any] | None = None
+    try:
+        result = invoke_agent_text(
+            agent, req.prompt, session_id=req.session_id,
+            actor_id=scoped_actor(agent.id, req.actor_id),
+            workspace=ws.context,
+            on_usage=meter.on_usage,
+            **extra,
+        )
+    finally:
+        meter.settle(failed=result is None,
+                     session_id=result.get("session_id") if result else None)
     return InvokeResponse(
         text=result["text"],
         session_id=result["session_id"],

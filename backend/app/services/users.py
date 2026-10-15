@@ -229,6 +229,9 @@ def serialize(
         "created_by": user.created_by,
         "permissions": effective_permissions(user),
         "workspaces": workspaces or [],
+        # spend budget assignment (services/budgets.py); both null = default / unlimited
+        "budget_level_id": user.budget_level_id,
+        "budget_override_usd": user.budget_override_usd,
     }
 
 

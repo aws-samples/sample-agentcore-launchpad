@@ -316,7 +316,13 @@ def refresh_model_prices(
         # region is priced on its next appearance here.
         workspace = default_workspace_context()
         seen = sorted({*_seen_models(workspace, cw), *_span_models(workspace, logs)})
-        prices, updated, added = refresh_map(settings.model_prices, seen, source)
+        # the map WITHOUT console price overrides (services/rates.py): what is
+        # persisted to yaml must never carry an override past its own reset
+        from app.services import rates
+
+        prices, updated, added = refresh_map(
+            rates.base_model_prices(settings), seen, source
+        )
         meta = {
             "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "source": url,

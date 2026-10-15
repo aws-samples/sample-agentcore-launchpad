@@ -122,10 +122,12 @@ def reset_model_overrides():
     # get_settings() rebuild re-applies; clean_tables wipes their ledger rows, so
     # drop the snapshot too or one test's override leaks into the next.
     yield
-    from app.services import model_settings
+    from app.services import model_settings, rates
 
     if model_settings.overrides():
         model_settings.reset_overrides()
+    if rates.overrides():  # admin model price overrides: the same snapshot pattern
+        rates.reset_overrides()
 
 
 @pytest.fixture(autouse=True)

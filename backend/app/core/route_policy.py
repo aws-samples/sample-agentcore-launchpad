@@ -47,6 +47,9 @@ names the hub-global routes; every other entry is workspace-scoped, and
 `enforce_route_policy` resolves + authorizes the caller's workspace for it
 before the handler runs (`routers/workspaces.resolve_workspace`). Absence from
 the exempt set *is* the classification, so a new route cannot ship without one.
+Since 2026-10-15 a **third** table rides on the same dependency: every non-GET route
+is billable or free in `core/billing_policy.BILLING`, and a billable one passes the
+spend-budget gate (402 `budget.exceeded`) after the role and workspace checks.
 
 Consequences worth knowing before editing this table:
 
@@ -74,6 +77,7 @@ from typing import Any
 
 from fastapi import Request
 
+from app.core import billing_policy
 from app.core.errors import AppError
 from app.routers.auth import require_admin, require_permission
 from app.routers.workspaces import resolve_workspace
@@ -518,12 +522,33 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/alerts/{rule_id}"): ADMIN,
     # A billed read of every rule's value; never notifies (only the scheduler does).
     ("POST", "/api/alerts/evaluate"): ADMIN,
+    # ---- spend budgets (hub-global, services/budgets.py) ----
+    # Levels, assignments and every person's spend are administrator business: the
+    # people table names who spent what, like the Spend page.
+    ("GET", "/api/budgets/levels"): ADMIN,
+    ("POST", "/api/budgets/levels"): ADMIN,
+    ("PATCH", "/api/budgets/levels/{level_id}"): ADMIN,
+    ("DELETE", "/api/budgets/levels/{level_id}"): ADMIN,
+    ("GET", "/api/budgets/people"): ADMIN,
+    ("PUT", "/api/budgets/users/{user_id}"): ADMIN,
+    ("GET", "/api/budgets/settings"): ADMIN,
+    ("PUT", "/api/budgets/settings"): ADMIN,
+    # A model price or an AgentCore rate changes every person's spend at once.
+    ("GET", "/api/admin/model-prices"): ADMIN,
+    ("PUT", "/api/admin/model-prices/{model_id}"): ADMIN,
+    ("DELETE", "/api/admin/model-prices/{model_id}"): ADMIN,
+    ("GET", "/api/admin/agentcore-rates"): ADMIN,
+    ("PUT", "/api/admin/agentcore-rates"): ADMIN,
+    # The caller's own usage and remaining budget — nobody else's.
+    ("GET", "/api/me/usage"): MEMBER,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
 HUB_GLOBAL_PREFIXES = (
     "/api/auth", "/api/users", "/api/workspaces", "/api/announcements", "/api/videos",
     "/api/model-defaults", "/api/admin/models",
+    # one budget per person across workspaces; prices and rates are hub config
+    "/api/budgets", "/api/me", "/api/admin/model-prices", "/api/admin/agentcore-rates",
 )
 
 
@@ -598,6 +623,22 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("PUT", "/api/admin/models/{role}"),
         ("DELETE", "/api/admin/models/{role}"),
         ("POST", "/api/admin/models/probe"),
+        # Budgets are one per person across workspaces; the usage ledger, the price
+        # overrides and the AgentCore rates are hub-global tables.
+        ("GET", "/api/budgets/levels"),
+        ("POST", "/api/budgets/levels"),
+        ("PATCH", "/api/budgets/levels/{level_id}"),
+        ("DELETE", "/api/budgets/levels/{level_id}"),
+        ("GET", "/api/budgets/people"),
+        ("PUT", "/api/budgets/users/{user_id}"),
+        ("GET", "/api/budgets/settings"),
+        ("PUT", "/api/budgets/settings"),
+        ("GET", "/api/admin/model-prices"),
+        ("PUT", "/api/admin/model-prices/{model_id}"),
+        ("DELETE", "/api/admin/model-prices/{model_id}"),
+        ("GET", "/api/admin/agentcore-rates"),
+        ("PUT", "/api/admin/agentcore-rates"),
+        ("GET", "/api/me/usage"),
     }
 )
 
@@ -659,3 +700,7 @@ def enforce_route_policy(request: Request) -> None:
         # router remembering to declare the dependency. Handlers read the result
         # back through `require_workspace`.
         resolve_workspace(request)
+    # The spend-budget gate (core/billing_policy.py): a billable route refuses a
+    # payer at or over their monthly limit before the handler starts any work.
+    # Last, so a refusal never answers a caller the checks above would turn away.
+    billing_policy.enforce(request, path_format)

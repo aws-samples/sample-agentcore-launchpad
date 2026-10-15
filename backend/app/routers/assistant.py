@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.assistant import evaluation_repair, preparation, service
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import principal_of
+from app.core.billing_policy import SOURCE_ARCHITECT
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError
 from app.models.ledger import Job, Workspace
@@ -32,7 +33,9 @@ from app.routers.agents import _agent_out
 from app.routers.auth import Identity, require_identity, require_permission, resolve_identity
 from app.routers.auth import enabled as auth_enabled
 from app.routers.workspaces import WorkspaceScope, _authorize, require_workspace
+from app.services import budgets
 from app.services.chat import sse_encode
+from app.services.usage_meter import UsageMeter
 
 router = APIRouter(prefix="/api/assistant/architect", tags=["assistant"])
 
@@ -295,7 +298,12 @@ def turn(
     identity = _caller(request)
     principal = principal_of(identity)
     conversation = service.accessible_conversation(db, ws.id, principal, conversation_id)
-    service._require_available(db, ws.row)
+    preset = service._require_available(db, ws.row)
+    # the turn's caller pays (in a shared conversation, the collaborator who typed);
+    # the route gate checked spend, this adds the preset model's price
+    payer = budgets.payer_of_request(request)
+    budgets.check_agent(db, payer, preset)
+    meter = UsageMeter.for_payer(payer, SOURCE_ARCHITECT, origin_workspace_id=ws.id)
     service.require_turn_capacity(conversation)
     service.check_prompt(conversation, req.prompt)
     if req.retry_of_turn is not None:
@@ -313,21 +321,24 @@ def turn(
     def generate() -> Iterator[str]:
         # The stream outlives the request scope → its own session.
         session = SessionLocal()
+        completed = False
         try:
             conversation = service.accessible_conversation(
                 session, ws.id, principal, conversation_id
             )
             run.inner = service.run_turn(
                 session, conversation, workspace_row, workspace, identity, prompt, run=run,
-                retry_of=req.retry_of_turn,
+                retry_of=req.retry_of_turn, meter=meter,
             )
             for event in run.inner:
+                completed = completed or event.get("event") == "done"
                 yield sse_encode(event)
         except AppError as exc:  # a claim refusal after the response started
             yield sse_encode({"event": "error", "data": {"code": exc.code,
                                                         "message": exc.message}})
         finally:
             session.close()
+            meter.settle(failed=not completed)
 
     run.generator = generate()
     return TurnResponse(

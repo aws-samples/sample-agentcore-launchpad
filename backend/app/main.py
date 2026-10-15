@@ -37,6 +37,7 @@ from app.routers.assistant import router as assistant_router
 from app.routers.auth import OPEN_CONSOLE_REMEDY, auth_middleware
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import router as auth_router
+from app.routers.budgets import router as budgets_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
@@ -57,7 +58,7 @@ from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.videos import router as videos_router
 from app.routers.workspaces import router as workspaces_router
-from app.services import alert_scheduler, byoc_uploads, local_exec, model_settings
+from app.services import alert_scheduler, byoc_uploads, local_exec, model_settings, rates
 from app.services.attachment_body import AttachmentBodyCap
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
@@ -142,6 +143,8 @@ def _load_model_overrides() -> None:
     db = SessionLocal()
     try:
         model_settings.load_overrides(db)
+        # admin model price overrides (services/rates.py), merged over the price map
+        rates.load_overrides(db)
     finally:
         db.close()
 
@@ -216,6 +219,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(workspaces_router)  # environments + the request-boundary grants
     app.include_router(model_defaults_router)  # platform model roles + admin overrides
     app.include_router(alerts_router)  # spend attribution + threshold alert rules
+    app.include_router(budgets_router)  # spend budgets, model prices, AgentCore rates
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:

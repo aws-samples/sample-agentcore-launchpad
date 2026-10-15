@@ -69,6 +69,7 @@ def _visible_records(
 @router.post("/a2a-demo")
 def a2a_demo(
     req: A2ADemoRequest,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
@@ -80,10 +81,14 @@ def a2a_demo(
     """
     import json as _json
 
+    from app.core.billing_policy import SOURCE_INVOKE
     from app.core.db import SessionLocal
+    from app.services import budgets
     from app.services.agent_access import agent_in
+    from app.services.agentcore import runtime as rt
     from app.services.agentcore.client import data_client
     from app.services.agentcore.harness import new_session_id
+    from app.services.usage_meter import UsageMeter
 
     db = SessionLocal()
     try:
@@ -108,17 +113,28 @@ def a2a_demo(
                            "agent, or chat with this one in the Chat console",
                            status_code=409)
         arn = agent.arn
+        # the agent comes from the body, so the route-level gate checked spend only:
+        # the model check (an unpriced model for a budgeted caller) happens here
+        payer = budgets.payer_of_request(request)
+        budgets.check_agent(db, payer, agent)
+        meter = UsageMeter.for_agent(payer, SOURCE_INVOKE, agent, workspace_id=ws.id)
     finally:
         db.close()
 
     started = time.monotonic()
     session_id = new_session_id()
-    response = data_client(ws.context).invoke_agent_runtime(
-        agentRuntimeArn=arn,
-        runtimeSessionId=session_id,
-        payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
-    )
-    body = _json.loads(response["response"].read())
+    body: Any = None
+    try:
+        response = data_client(ws.context).invoke_agent_runtime(
+            agentRuntimeArn=arn,
+            runtimeSessionId=session_id,
+            payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
+        )
+        body = _json.loads(response["response"].read())
+        if isinstance(body, dict):
+            rt.report_usage(meter.on_usage, body.get("usage"), "turn")
+    finally:
+        meter.settle(failed=body is None, session_id=session_id)
     if isinstance(body, dict) and body.get("error"):
         raise AppError("registry.a2a_demo_failed", str(body["error"])[:300],
                        status_code=502)
