@@ -1303,6 +1303,14 @@ def _run_job(job_id: str, command: list[str]) -> None:
         with _procs_lock:
             _procs.pop(job_id, None)
 
+    if job_type == "eval":
+        # before the terminal transition: a reader that sees the job finished (the
+        # detail page re-reading My usage) must already see the estimate replaced
+        try:
+            _true_up_eval(job_id, budget, params, estimates)
+        except Exception:  # noqa: BLE001 — a lost true-up leaves the estimate standing
+            logger.warning("skill-lab %s: true-up failed", job_id, exc_info=True)
+
     if _cancel_requested(job_id):
         _set_status(job_id, status="cancelled", finished_at=datetime.now(UTC))
     elif stop is not None:
@@ -1317,8 +1325,6 @@ def _run_job(job_id: str, command: list[str]) -> None:
             error=f"process exited {returncode}\n…{tail}",
             finished_at=datetime.now(UTC),
         )
-    if job_type == "eval":
-        _true_up_eval(job_id, budget, params, estimates)
 
     try:
         workspace = context_for_workspace(workspace_id)

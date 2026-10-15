@@ -202,7 +202,12 @@ class JobBudget:
 
 def recent_turn_cost(db: Session, agent_id: str | None) -> float | None:
     """The mean ``usd`` of the agent's last ``RECENT_TURNS`` measured turns (exact
-    ``tokens`` rows, any payer, any source), or None when it has none."""
+    ``tokens`` rows, any payer, any source), or None when it has none.
+
+    Only rows on a session are turns: a recommendation provider's model calls
+    (gepa_lite) are also an exact ``tokens`` row carrying the agent's id, but one
+    row is a whole optimizer job with no session — averaging it in would charge
+    each opaque turn or traffic prompt a whole optimization."""
     if not agent_id:
         return None
     rows = (
@@ -210,6 +215,7 @@ def recent_turn_cost(db: Session, agent_id: str | None) -> float | None:
         .filter(
             UsageEvent.agent_id == agent_id,
             UsageEvent.kind == KIND_TOKENS,
+            UsageEvent.session_id.is_not(None),
             UsageEvent.estimated.is_(False),
             UsageEvent.superseded_by.is_(None),
             UsageEvent.usd.is_not(None),

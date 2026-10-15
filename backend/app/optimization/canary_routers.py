@@ -21,7 +21,7 @@ from app.optimization import canary_harness, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import agent_access, creators, visibility
+from app.services import agent_access, budgets, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.harness_convert import graft_config_bundle
@@ -413,6 +413,14 @@ def runtime_canary_action(
             "dataset_id": dataset.id,
             "dataset_name": dataset.name,
         }
+        if canary_service.is_harness(row):
+            # paired calls are metered by tokens at each arm's model: a budgeted caller
+            # is refused an arm with no price (or no known model, an imported Harness)
+            # rather than spending past the limit unseen
+            payer = budgets.payer_of_request(request)
+            if payer.budgeted:
+                for model in dict.fromkeys(canary_service.arm_models(row).values()):
+                    budgets.check(db, payer, model_id=model, model_unknown=model is None)
     elif req.action in {"advance", "complete"}:
         canary_service.assert_verdict_allows(
             row, allow_non_significant=req.allow_non_significant

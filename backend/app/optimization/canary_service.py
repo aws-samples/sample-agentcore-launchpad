@@ -843,7 +843,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     return result
 
 
-def _arm_models(row: RuntimeCanary) -> dict[str, str | None]:
+def arm_models(row: RuntimeCanary) -> dict[str, str | None]:
     """The model each Harness arm's tokens are priced at: the champion's for the
     control endpoint, the candidate spec's (when it changed it) for the treatment."""
     db = SessionLocal()
@@ -898,7 +898,7 @@ def _paired_harness_traffic(
         for arm in ("control", "treatment"):
             jobs.put((i, arm))
     done: queue.SimpleQueue[tuple[int, str, str | None, str | None]] = queue.SimpleQueue()
-    models = _arm_models(row) if budget is not None else {}
+    models = arm_models(row) if budget is not None else {}
     # per pair: may it run (decided once, by its first arm to start)
     allowed: dict[int, bool] = {}
     decide = threading.Lock()
@@ -1149,7 +1149,8 @@ def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progr
         **verdict,
         **_scoring_keys(configured, metrics),
         "mode": canary_harness.PAIRED_MODE,
-        "pairs_sent": len(pairs),
+        # a pair the caller's spend budget skipped was never sent
+        "pairs_sent": sum(1 for p in pairs if not p.get("skipped")),
         "pairs_complete": len(complete),
         "pairs": rows_out,
         "baseline_n": 0,

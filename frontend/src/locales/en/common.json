@@ -8763,7 +8763,7 @@
       },
       "jobNotice": "This job's estimated cost ({{estimate}}) is more than what is left of your monthly budget ({{remaining}}). It runs anyway, and stops at its next safe point once the budget is reached. The budget resets on {{date}}.",
       "stop": {
-        "run": "Stopped by the spend budget: the monthly budget of the person who started this run was reached, so it stopped before its next scenario. The sessions replayed so far are kept.",
+        "run": "Stopped by the spend budget: the monthly budget of the person who started this run was reached, so it stopped at its next safe point, before replaying more or starting the judges. The sessions replayed so far are kept, unscored.",
         "traffic": "Cut short by the spend budget: the monthly budget of the person who sent this traffic was reached, so {{count}} more were not sent. What was already answered is kept.",
         "train": "Stopped by the spend budget: the monthly budget of the person who started this job was reached, so training stopped after its last completed step. Resume it once the budget resets or an administrator raises the limit.",
         "notStarted": "Not started: the monthly budget of the person who started this job was reached while it waited in the queue. Submit it again once the budget resets or an administrator raises the limit."

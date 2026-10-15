@@ -77,11 +77,12 @@ def _limit(user_id: str, usd: float) -> None:
 
 
 def _spent(user_id, usd, *, source="chat", agent_id=None, kind="tokens",
-           estimated=False) -> str:
+           estimated=False, session_id=None) -> str:
     db = SessionLocal()
     try:
         row = UsageEvent(user_id=user_id, period=budgets.period_of(), source=source,
-                         usd=usd, kind=kind, estimated=estimated, agent_id=agent_id)
+                         usd=usd, kind=kind, estimated=estimated, agent_id=agent_id,
+                         session_id=session_id)
         db.add(row)
         db.commit()
         return row.id
@@ -233,8 +234,9 @@ def test_eval_harness_replay_turns_are_exact_rows_charged_to_the_run_creator(mon
 def test_eval_opaque_replay_turns_are_estimated_at_the_agents_recent_average(monkeypatch):
     member = _user()
     agent = _agent(method="zip_runtime")
-    _spent(None, 0.04, agent_id=agent)  # two measured turns of this agent, any payer
-    _spent(None, 0.06, agent_id=agent)
+    # two measured turns of this agent, any payer
+    _spent(None, 0.04, agent_id=agent, session_id="chat-sess-1")
+    _spent(None, 0.06, agent_id=agent, session_id="chat-sess-2")
     run_id = _run(created_by=member, agent_id=agent)
     _eval_env(monkeypatch)
     counter = {"n": 0}
@@ -253,6 +255,22 @@ def test_eval_opaque_replay_turns_are_estimated_at_the_agents_recent_average(mon
     assert len(turns) == 3 and all(r.usd == pytest.approx(0.05) for r in turns)
     assert all(r.estimated and r.user_id == member for r in turns)
     assert not _rows(ref_type="eval_run", ref_id=run_id, kind="tokens")
+
+
+def test_a_recommendation_job_is_not_averaged_as_an_agent_turn():
+    # a gepa_lite job is one exact tokens row on the agent with no session: a whole
+    # optimization, not a turn — it must not become the agent's per-turn estimate
+    agent = _agent(method="zip_runtime")
+    _spent(None, 1.50, source="eval", agent_id=agent)
+    db = SessionLocal()
+    try:
+        assert job_budget.recent_turn_cost(db, agent) is None
+        assert job_budget.turn_estimate(db, agent, fallback="opaque_turn_estimate_usd") == (
+            budgets.DEFAULT_SETTINGS["opaque_turn_estimate_usd"], "opaque_turn_estimate_usd")
+        _spent(None, 0.02, agent_id=agent, session_id="chat-sess-1")
+        assert job_budget.recent_turn_cost(db, agent) == pytest.approx(0.02)
+    finally:
+        db.close()
 
 
 def test_a_claude_sdk_turn_that_reports_usage_gets_no_estimate(monkeypatch):
@@ -810,6 +828,43 @@ def test_a_canary_stage_advance_is_refused_for_a_caller_over_budget(app, monkeyp
                                json={"action": action})
         assert response.status_code == 202, (action, response.text)
     assert dispatched == ["rollback", "complete"]
+
+
+def _harness_canary_model(canary_id: str, model: str) -> None:
+    db = SessionLocal()
+    try:
+        row = db.get(RuntimeCanary, canary_id)
+        row.artifacts = {**row.artifacts, "kind": "harness", "edited_spec": {"model_id": model}}
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_paired_canary_traffic_on_an_unpriced_arm_is_refused_for_a_budgeted_caller(
+        app, monkeypatch):
+    # paired calls are metered by tokens at each arm's model: an unpriced candidate
+    # would otherwise cost a budgeted caller nothing (usd NULL rows)
+    member, client = _member(app, "pairer")
+    _limit(member, 10.0)
+    canary_id = _canary(member, _agent(created_by=member))
+    _harness_canary_model(canary_id, UNPRICED)
+    dataset = _dataset([{"prompt": "q1"}], created_by=member)
+    dispatched: list = []
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: dispatched.append(action))
+    monkeypatch.setattr(canary_svc, "stage_not_ready_reason", lambda *_a: None)
+
+    refused = client.post(f"/api/runtime-canaries/{canary_id}/action",
+                          json={"action": "traffic", "dataset_id": dataset})
+    assert refused.status_code == 402, refused.text
+    assert refused.json()["code"] == "budget.model_unpriced"
+    assert refused.json()["detail"]["model_id"] == UNPRICED and dispatched == []
+
+    _harness_canary_model(canary_id, SONNET)
+    allowed = client.post(f"/api/runtime-canaries/{canary_id}/action",
+                          json={"action": "traffic", "dataset_id": dataset})
+    assert allowed.status_code == 202, allowed.text
+    assert dispatched == ["traffic"]
 
 
 def test_resuming_an_online_config_is_refused_while_its_creator_is_over_budget(monkeypatch):
