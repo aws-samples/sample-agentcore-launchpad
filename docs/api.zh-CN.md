@@ -690,15 +690,6 @@ Harness 金丝雀回滚也会各记一份。早于该表存在的 Agent 会在�
 
 prod 与 prod2 共用 AWS，在任一控制台回滚都会同时改变两边的 Agent。
 
-## 控制台环境 API——对比与漂移 / Console Environments API: compare and drift
-
-两个只读接口，都是 **member** 路由，只返回调用方能看到的内容。V2「环境对比」页面只展示对比；漂移检查仅以 API 提供，控制台不展示。
-
-| 方法 | 路径 | 结果 |
-|---|---|---|
-| `GET` | `/api/environments/compare?agent=<name>` | 只读账本，不调用 AWS。调用方能看到的每个 Workspace 一行（管理员：全部；成员：被授权的），以**当前** Workspace 为基准对比。结果：`{agent, baseline_workspace, environments[{workspace{id, name, account_id, region, status}, baseline, present, state, changed_groups[], agent}], summary{workspaces, present, same, differs, absent, distinct_spec_digests, aligned}}`。`state` 为 `baseline` \| `same` \| `differs` \| `absent` \| `no_baseline`（这里有、当前 Workspace 没有）。`agent` 为 `null` 或 `{id, name, status, method, version, spec_digest, image_digest, last_deploy, updated_at}`。各行按 Agent **名称**匹配。摘要是 `{method, spec}` 规范化 JSON 的 sha256，不含部署时写入的标记（`byoc.provenance`）。`changed_groups` 使用快照差异的分组；两行都带镜像摘要（方式A）且不同时，另加 `image`。隔离模式 Workspace 中成员看不到的 Agent 显示为 `absent` |
-| `GET` | `/api/environments/drift[?agent=<name>]` | 只看当前 Workspace：调用方能看到的、有 AWS 资源的活跃 Agent，最多 100 个（`truncated`）。每个 Agent 调用一次 `GetAgentRuntime` / `GetHarness`，并发 8 个，仅在请求时执行。结果：`{workspace_id, state, checked, counts{in_sync, drift, unknown}, truncated, limit, elapsed_ms, agents[{agent_id, name, method, kind, state, findings[{code, expected, observed}], reason, ledger_version, aws_version, aws_status}]}`。`findings[].code` 为 `version_changed`（账本版本与 AWS 不同）、`unhealthy`（不是 `READY`）或 `resource_missing`。`unknown` 行的 `reason` 为 `unreadable` \| `no_status_reported` \| `transitioning` \| `version_not_comparable` \| `canary_active`。整体 `state` 的优先级为 `drift` 高于 `unknown` 高于 `in_sync`。**只比较版本与状态**，不回读配置内容 |
-
 ## 控制台对话反馈 API / Console Chat Feedback API
 
 V2 对话控制台中对 Agent 回答的点赞 / 点踩，存放在台账的 `chat_feedback` 表（按工作区隔离，每人每条消息一个评价）。两个路由都是成员级，并遵循工作区可见性：调用者看不到的 Agent 的消息返回 404，列表不包含被隐藏的 Agent。

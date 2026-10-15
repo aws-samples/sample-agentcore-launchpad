@@ -37,9 +37,9 @@ describe("groups", () => {
     ]);
   });
 
-  it("labels every group, compare's image group, and folds unknowns into other", () => {
+  it("labels every group and folds unknowns into other", () => {
     expect(groupLabelKey("knowledge_bases")).toBe("v2.agents.snapshots.group.knowledge_bases");
-    expect(groupLabelKey("image")).toBe("v2.agents.snapshots.group.image");
+    expect(groupLabelKey("image")).toBe("v2.agents.snapshots.group.other");
     expect(groupLabelKey("mystery")).toBe("v2.agents.snapshots.group.other");
   });
 

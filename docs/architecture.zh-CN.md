@@ -1222,22 +1222,6 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
   读取。按**标签**引用的 BYOC `container_image` 会部署该标签此刻指向的镜像：快照里旧的 `byoc.provenance`
   摘要只是记录，generate 阶段会重新写入。上传或镜像已不存在时，任务会像重新部署一样在该阶段失败。
 
-### 环境对比与漂移
-
-V2「环境对比」页面（`/v2/environments`）展示下面的对比。漂移检查仅以 API 提供（`GET /api/environments/drift`）：
-控制台不展示它，因为它只比较版本，而在与另一套控制台共用 AWS 的机器上（prod 与 prod2），它报出的大多是另一套
-控制台的正常重新部署。
-
-- **对比**（`services/environments.py`，只读账本）把同名 Agent 在调用方能看到的所有 Workspace 中排成一列：
-  管理员看到全部 Workspace，成员看到被授权的；每个 Workspace 的可见性模式决定成员能否看到那里的 Agent。当前
-  Workspace 是基准，其余各行为 `same`、`differs`（并列出有差异的分组）或 `absent`。比较的是去掉部署时标记后
-  `{method, spec}` 规范化 JSON 的 sha256。按名称匹配，且知识库、Memory 等资源 id 在不同账号间本来就不同，
-  所以 `differs` 是提示你去看一看，而不是错误。
-- **漂移**（仅 API）把当前 Workspace 中可见的活跃 Agent 与 AWS 对照：每个调用一次 `GetAgentRuntime` / `GetHarness`，
-  并发 8 个、最多 100 个，只在请求时执行。账本版本不是 AWS 正在提供的版本时（带外更新）报告
-  `version_changed`，另有 `unhealthy`（不是 READY）与 `resource_missing`；正在变更、无法读取或处于金丝雀分流的
-  Agent 记为 `unknown`。只要有未知项，整体结果就不会显示为正常。它只比较版本与状态，不比较配置内容。
-
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +

@@ -5294,8 +5294,7 @@
       "experiments": "A/B实验",
       "online": "在线评估",
       "models": "模型",
-      "costs": "成本与告警",
-      "environments": "环境对比"
+      "costs": "成本与告警"
     },
     "notFound": {
       "title": "页面不存在",
@@ -5720,7 +5719,6 @@
         "pick": "选择快照 #{{seq}} 用于对比",
         "compare": "对比所选",
         "compareHint": "勾选两份快照即可对比。",
-        "compareAcross": "跨工作区对比",
         "diffTitle": "快照 #{{from}} → #{{to}}",
         "noChanges": "这两份快照完全相同。",
         "before": "变更前",
@@ -5744,8 +5742,7 @@
           "knowledge_bases": "知识库",
           "memory": "记忆",
           "guardrail": "护栏",
-          "other": "其他",
-          "image": "镜像"
+          "other": "其他"
         },
         "kind": {
           "added": "新增",
@@ -8583,38 +8580,6 @@
         "online_quality": "最近 24 小时的在线评估平均分，0 到 1。分数下跌时触发。",
         "spend_usd": "规则时间窗内的预估花费，单位美元。",
         "cost_mtd_usd": "本月 1 日（UTC）以来的预估花费，单位美元。"
-      }
-    },
-    "environments": {
-      "title": "环境对比",
-      "desc": "把同一个 Agent 在你可见的各工作区中并排对比，以页眉中选中的工作区为基准比较配置。",
-      "agentLabel": "Agent",
-      "agentPlaceholder": "选择当前工作区的一个 Agent",
-      "baselineNote": "基准：{{workspace}}，即页头中选中的工作区。在页头切换工作区即可更换基准。",
-      "pickAgent": "选择一个 Agent，即可查看它在你有权访问的各工作区中的情况。",
-      "noAgents": "当前工作区中没有你可见的 Agent。",
-      "compareTitle": "{{agent}} 在各工作区中的情况",
-      "compareSub": "每一行都与基准比较",
-      "aligned": "所有运行 {{agent}} 的工作区都与基准一致。",
-      "notAligned": "配置与基准不同的工作区：{{differs}} 个。",
-      "noBaseline": "基准工作区中没有名为 {{agent}} 的 Agent，因此无法判断其他行。",
-      "nowhere": "你可见的工作区中都没有名为 {{agent}} 的 Agent。",
-      "matchNote": "Agent 按名称匹配：两个工作区中同名但无关的 Agent 也会被当作同一个来比较。知识库、记忆和网关的 ID 在不同账号间本来就不同，因此也会显示为差异。",
-      "colWorkspace": "工作区",
-      "colState": "状态",
-      "colDiffers": "差异",
-      "colStatus": "Agent 状态",
-      "colVersion": "AWS 版本",
-      "colDeploy": "最近部署",
-      "colFingerprint": "配置指纹",
-      "image": "镜像 {{digest}}",
-      "notDeployed": "未部署",
-      "compareState": {
-        "baseline": "基准",
-        "same": "一致",
-        "differs": "不同",
-        "absent": "不存在",
-        "no_baseline": "无基准"
       }
     }
   },

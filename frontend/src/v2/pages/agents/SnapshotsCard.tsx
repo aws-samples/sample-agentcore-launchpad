@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
 import { ApiError, api, errorMessage, type SnapshotDiff, type SpecChange, type SpecSnapshotInfo } from "../../../lib/api";
 import { creatorLabel, fmtTime } from "../../format";
@@ -304,14 +303,12 @@ function RollbackModal({
  */
 export function SnapshotsCard({
   agentId,
-  agentName,
   currentSpec,
   refreshKey,
   canRollback,
   onRolledBack,
 }: {
   agentId: string;
-  agentName: string;
   /** the agent's stored spec — the "current" side of a rollback diff */
   currentSpec: Record<string, unknown>;
   /** changes whenever the agent (re)publishes, so the list follows */
@@ -390,13 +387,6 @@ export function SnapshotsCard({
       sub={t("v2.agents.snapshots.sub")}
       end={
         <span className="v2-row">
-          <Link
-            className="v2-link"
-            to={`/v2/environments?view=compare&agent=${encodeURIComponent(agentName)}`}
-            data-testid="v2-snapshot-compare-envs"
-          >
-            {t("v2.agents.snapshots.compareAcross")}
-          </Link>
           <Button
             size="sm"
             disabled={!pair}

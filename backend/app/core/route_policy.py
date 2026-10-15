@@ -473,10 +473,6 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/traces/{trace_id}"): MEMBER,
     ("GET", "/api/observability/prices"): MEMBER,
     ("POST", "/api/observability/prices/refresh"): MEMBER,  # rewrites shared config
-    # ---- environments (routers/environments.py): reads filtered by grants and by
-    # each workspace's visibility mode; drift reads AWS only for visible agents ----
-    ("GET", "/api/environments/compare"): MEMBER,  # ledger only
-    ("GET", "/api/environments/drift"): MEMBER,  # one Get* per visible live agent
     # ---- console account management ----
     ("GET", "/api/users"): ADMIN,
     ("GET", "/api/users/stats"): ADMIN,

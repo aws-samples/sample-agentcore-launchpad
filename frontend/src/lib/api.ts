@@ -552,52 +552,6 @@ export interface SnapshotDiff {
   changes: SpecChange[];
 }
 
-export type EnvironmentCompareState = "baseline" | "same" | "differs" | "absent" | "no_baseline";
-
-/** One workspace of `GET /api/environments/compare`. */
-export interface EnvironmentRow {
-  workspace: { id: string; name: string; account_id: string; region: string; status: string };
-  /** the current workspace (the one selected in the header) */
-  baseline: boolean;
-  present: boolean;
-  state: EnvironmentCompareState;
-  /** spec groups (`SpecChangeGroup`) that differ from the baseline, plus "image" */
-  changed_groups: string[];
-  agent: {
-    id: string;
-    name: string;
-    status: AgentInfo["status"];
-    method: AgentInfo["method"];
-    version: string | null;
-    spec_digest: string;
-    /** 方式A container agents only */
-    image_digest: string | null;
-    last_deploy: {
-      status: string;
-      started_at: string | null;
-      ended_at: string | null;
-      image_digest: string | null;
-    } | null;
-    updated_at: string | null;
-  } | null;
-}
-
-export interface EnvironmentComparison {
-  agent: string;
-  baseline_workspace: string;
-  environments: EnvironmentRow[];
-  summary: {
-    workspaces: number;
-    present: number;
-    same: number;
-    differs: number;
-    absent: number;
-    distinct_spec_digests: number;
-    /** the baseline runs the agent and every other present row is the same */
-    aligned: boolean;
-  };
-}
-
 export interface RuntimeDiscoveryCandidate {
   runtime_id: string;
   runtime_arn: string;
@@ -5301,10 +5255,6 @@ export const api = {
       { method: "POST" },
     ),
   /** One agent name across every workspace the caller can see (ledger only). */
-  environmentCompare: (agent: string) =>
-    request<EnvironmentComparison>(
-      `/api/environments/compare?${new URLSearchParams({ agent }).toString()}`,
-    ),
   /** The current workspace's ledger vs what AWS reports — one control-plane read per
    *  visible live agent, so only on request. */
   agentIdentity: (id: string) => request<AgentIdentityInfo>(`/api/agents/${id}/identity`),

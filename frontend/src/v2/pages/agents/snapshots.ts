@@ -18,10 +18,9 @@ export const SNAPSHOT_GROUPS: SpecChangeGroup[] = [
   "other",
 ];
 
-/** The i18n key of a change group. Environment compare adds "image" (the 方式A image
- *  digest); anything else unknown reads as "other". */
+/** The i18n key of a change group; anything unknown reads as "other". */
 export function groupLabelKey(group: string): string {
-  const known = group === "image" || (SNAPSHOT_GROUPS as string[]).includes(group);
+  const known = (SNAPSHOT_GROUPS as string[]).includes(group);
   return `v2.agents.snapshots.group.${known ? group : "other"}`;
 }
 

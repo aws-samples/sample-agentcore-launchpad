@@ -109,7 +109,6 @@ const V2KnowledgeBases = lazy(() => import("./v2/pages/KnowledgeBases").then((m)
 const V2SkillLab = lazy(() => import("./v2/pages/SkillLab").then((m) => ({ default: m.V2SkillLab })));
 const V2Chat = lazy(() => import("./v2/pages/Chat").then((m) => ({ default: m.V2Chat })));
 const V2Observability = lazy(() => import("./v2/pages/Observability").then((m) => ({ default: m.V2Observability })));
-const V2Environments = lazy(() => import("./v2/pages/Environments").then((m) => ({ default: m.V2Environments })));
 const V2Memory = lazy(() => import("./v2/pages/Memory").then((m) => ({ default: m.V2Memory })));
 const V2Governance = lazy(() => import("./v2/pages/Governance").then((m) => ({ default: m.V2Governance })));
 const V2Users = lazy(() => import("./v2/pages/Users").then((m) => ({ default: m.V2Users })));
@@ -307,7 +306,6 @@ export default function App() {
               <Route path="skill-lab" element={<V2SkillLab />} />
               <Route path="chat" element={<V2Chat />} />
               <Route path="observability" element={<V2Observability />} />
-              <Route path="environments" element={<V2Environments />} />
               <Route path="memory" element={<V2Memory />} />
               <Route path="governance" element={<V2Governance />} />
               <Route path="users" element={<V2Users />} />

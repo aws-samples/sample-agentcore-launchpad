@@ -2162,28 +2162,6 @@ agent looked like two edits ago. `services/snapshots.py` keeps one row per publi
   digest in the snapshot is a record, and the generate stage re-stamps it. A missing upload
   or image fails the job at that stage, as a redeploy would.
 
-### Environment compare and drift
-
-The V2 Environments page (`/v2/environments`) shows the compare below. The drift check is
-API-only (`GET /api/environments/drift`): the console hides it because it compares versions
-only, and on a box that shares AWS with another console (prod and prod2) most of what it
-flags is the other console's ordinary redeploys.
-
-- **Compare** (`services/environments.py`, a ledger read) lines up the agents with one
-  name across every workspace the caller can see: admins see every workspace, members
-  their granted ones. Each workspace's visibility mode decides whether a member sees the
-  agent there. The current workspace is the baseline. Each row is `same`, `differs`
-  (naming the differing diff groups) or `absent`. It compares a sha256 of the canonical
-  `{method, spec}` that leaves out deploy-time stamps. Matching is by name, and resource
-  ids such as a KB or a memory differ naturally across accounts, so `differs` is a prompt
-  to look, not an error.
-- **Drift** (API only) checks the current workspace's visible active agents against AWS: one
-  `GetAgentRuntime` / `GetHarness` each, 8 at a time, at most 100, only on request. It
-  reports `version_changed` when the ledger version is not the one AWS serves (an
-  out-of-band update), `unhealthy` (not READY) and `resource_missing`, and `unknown` for a
-  transitioning, unreadable or canary-split agent. The overall result never reads green
-  while anything is unknown. It compares versions and status, not spec contents.
-
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API

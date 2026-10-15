@@ -698,7 +698,6 @@ function AgentDetail({ id }: { id: string }) {
       {agent.method !== "discovered_runtime" && (
         <SnapshotsCard
           agentId={agent.id}
-          agentName={agent.name}
           currentSpec={spec}
           // a canary promote / rollback records a snapshot without a deployment, but
           // always moves the version
