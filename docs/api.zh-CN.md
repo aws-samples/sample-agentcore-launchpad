@@ -568,7 +568,26 @@ Skill Lab 评估与任务生成作业只在启动前检查。当作业的估算�
 | `GET` / `PUT` | `/api/budgets/settings` | admin | 各单位估算的默认值：`opaque_turn_estimate_usd`（`0.01`）、`agent_turn_estimate_usd`（`0.02`，流量的兜底值）、`persona_actor_input_tokens` / `persona_actor_output_tokens`（每轮 `1500` / `200`）、`skill_lab_eval_task_usd`（`0.15`）、`skill_lab_train_step_usd`（`1.00`）、`skill_lab_taskgen_job_usd`（`0.50`），另有 `defaults`、`updated_by` 与 `updated_at`。`PUT` 可传任意子集；`null` 恢复某一项的默认值 |
 | `GET` | `/api/admin/model-prices` | admin | `{prices[{model_id, rates{input, output, cache_read, cache_write}, base, overridden, updated_by, updated_at}], unpriced_models[{model_id, seen_in[]}], cache_factors}`。单价为每 100 万 token 的美元数 |
 | `PUT` / `DELETE` | `/api/admin/model-prices/{model_id}` | admin | 设置 `{input, output, cache_read?, cache_write?}` 或删除覆盖。覆盖优先于 yaml、价格刷新器与内置价格，重启后保留，且永远不会写入 yaml |
-| `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`，以 AgentCore 公开价格（2026-10-15 读取）为初始值。`PUT` 传 `{rates?, calibration?}`，`null` 恢复某一项的默认值。未知键 → `400 rates.unknown_key` |
+| `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`，以 AgentCore 公开价格（2026-10-15 读取）为初始值。`PUT` 传 `{rates?, calibration?}`，`null` 恢复某一项的默认值。未知键 → `400 rates.unknown_key`。实测的按运行时系数（`calibration.runtimes`）只由校准流程写入，不能手动设置 |
+| `GET` | `/api/budgets/reconcile-status` | admin | 对账线程：是否启用、上次运行、延迟、失败、待处理会话数，以及带样本数的校准系数 |
+| `GET` | `/api/budgets/calibration-report` | admin | `?refresh=`——**仅供参考**。把本月台账中的 AgentCore 费用与账号在 Cost Explorer 中当月至今的 AgentCore 费用并列。Cost Explorer 覆盖整个 AWS 账号（包括同一账号上的其他机器），永远不会用于向任何人计费。每次调用 Cost Explorer 收费 $0.01，所以结果缓存一小时；`refresh=true` 重新读取 |
+
+**对账。** 一个后台线程（每 10 分钟一次，默认开启；`LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` 关闭）读取
+**本机**台账中归属到具体人的会话的 span。各项按以下方式计费：
+- **Token：**实测 token 替换该会话的每轮与每个作业的估算，已有的精确记录永远不会重复计算。
+- **按会话计数的费用**，按 AgentCore 费率计价：
+  - Memory 事件与检索；
+  - Gateway 调用与 Policy 判定（按 trace id 关联）；
+  - Web Search；
+  - 知识库查询；
+  - Code Interpreter 会话。
+- **Runtime 计算**按会话时长加上运行时的空闲超时（V1 为 15 分钟的空闲尾巴，计入该会话的用户）× 运行时校准后的
+  内存与 vCPU 规格 × 费率计算。
+- **批量与在线评估**按次数计数，替换评审估算，计入运行的付费人或在线配置的创建者。
+- **校准：**这些系数每小时用按运行时的 AWS 指标除以 span 中看到的会话时长重新校准。
+
+一个独立的在线评估配置在其创建者超出预算后会被暂停；属于实验或金丝雀的配置会一直运行，直到所属对象结束。
+
 
 ## 控制台知识库 API / Console Knowledge Bases API
 

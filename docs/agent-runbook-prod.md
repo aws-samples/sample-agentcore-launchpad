@@ -133,6 +133,16 @@ billable request is only metered. Before turning them on:
 Admins stay unlimited unless they are given a level. To unblock someone mid-month, give them an
 override on the Budgets tab; there is no restart.
 
+The budgets reconciliation thread is on by default on every box. It reconciles only that box's
+own sessions, so it is safe on prod and prod2 at once. Each tick runs a few small Logs Insights
+queries over a 10-minute window, plus one CloudWatch metric read per runtime per hour. To switch
+it off:
+- add `Environment=LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` in a drop-in, as for the alert
+  check;
+- restart the backend.
+
+Budgets → Reconciliation shows its last run, lag and failures.
+
 ### Update recipe (verified sequence)
 
 ```bash

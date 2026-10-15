@@ -3360,6 +3360,21 @@ one total per person across every workspace.
     and keeps its finished work. A traffic stop is recorded on the traffic result rather than as
     a failure, because a retry would only be refused.
   - A Skill Lab eval runs all its tasks in one pool, so it is only checked at start.
+- **A reconciliation pass turns estimates and AgentCore fees into measured cost.**
+  `services/budget_reconcile.py` runs every 10 minutes on one daemon thread, on by default. It
+  reads only the sessions this box's ledger attributed to people, so prod and prod2 never charge
+  each other's sessions.
+  - **Tokens:** measured span tokens replace the per-turn and per-job estimates.
+  - **Per-session fees:** Memory, Gateway and Policy (joined by trace id), Web Search,
+    knowledge-base queries and Code Interpreter are counted per session.
+  - **Runtime compute:** charged per session as its lifetime plus the runtime's idle timeout,
+    because a session is never stopped after its turn and keeps billing memory for that tail.
+  - **Evaluations:** counted and charged to the run's payer or the online config's creator.
+  - **Calibration (`services/budget_calibration.py`):** the per-session memory and vCPU size
+    comes from the per-runtime AWS metrics divided by the session time seen in spans. Spans see
+    every box's sessions, so the factor holds on a shared account.
+  - **Cost Explorer** is shown only as an account-wide comparison and never used to charge
+    anyone.
 - **Rollout is safe.** With no level defined, everyone is unlimited and the meters only record.
   Admins stay unlimited until given a level.
 

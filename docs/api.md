@@ -909,7 +909,32 @@ Prices come from the model price map with admin overrides applied.
 | `GET` / `PUT` | `/api/budgets/settings` | admin | Per-unit estimate defaults: `opaque_turn_estimate_usd` (`0.01`), `agent_turn_estimate_usd` (`0.02`, traffic fallback), `persona_actor_input_tokens` / `persona_actor_output_tokens` (`1500` / `200` per turn), `skill_lab_eval_task_usd` (`0.15`), `skill_lab_train_step_usd` (`1.00`), `skill_lab_taskgen_job_usd` (`0.50`), with `defaults`, `updated_by` and `updated_at`. `PUT` takes any subset; `null` resets a key |
 | `GET` | `/api/admin/model-prices` | admin | `{prices[{model_id, rates{input, output, cache_read, cache_write}, base, overridden, updated_by, updated_at}], unpriced_models[{model_id, seen_in[]}], cache_factors}`. Rates are USD per 1M tokens |
 | `PUT` / `DELETE` | `/api/admin/model-prices/{model_id}` | admin | Set `{input, output, cache_read?, cache_write?}` or remove an override. An override wins over yaml, the price refresher and the built-ins, survives restarts and is never written to yaml |
-| `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`, seeded with the public AgentCore rates (read 2026-10-15). `PUT` with `{rates?, calibration?}`, where `null` resets a key. An unknown key → `400 rates.unknown_key` |
+| `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`, seeded with the public AgentCore rates (read 2026-10-15). `PUT` with `{rates?, calibration?}`, where `null` resets a key. An unknown key → `400 rates.unknown_key`. The measured per-runtime factors (`calibration.runtimes`) are written only by the calibration pass and can't be set |
+| `GET` | `/api/budgets/reconcile-status` | admin | The reconciliation thread: enabled, last tick, lag, failures, sessions pending, and the calibration factors with their sample counts |
+| `GET` | `/api/budgets/calibration-report` | admin | `?refresh=` — **report only**. This month's ledger AgentCore fees next to the account's Cost Explorer month-to-date AgentCore charges. Cost Explorer covers the whole AWS account, including every other box on it, and is never used to charge anyone. One Cost Explorer call costs $0.01, so the result is cached for an hour; `refresh=true` re-reads it |
+
+**Reconciliation.** A background thread (every 10 minutes, on by default;
+`LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` turns it off) reads the spans of the sessions *this
+box's* ledger attributed to people. Each source is charged as follows:
+- **Tokens:** measured tokens replace that session's per-turn and per-job estimates. Exact in-band
+  rows are never duplicated.
+- **Fees counted per session** and priced from the AgentCore rates:
+  - Memory events and retrievals;
+  - Gateway calls and Policy decisions, joined by trace id;
+  - Web Search;
+  - knowledge-base queries;
+  - Code Interpreter sessions.
+- **Runtime compute** is the session's lifetime plus the runtime's idle timeout (the 15-minute
+  tail on V1, charged to the session's user) × the runtime's calibrated memory and vCPU size ×
+  the rates.
+- **Batch and online evaluations** are counted and replace the judge estimates. They are charged
+  to the run's payer, or to the online config's creator.
+- **Calibration:** the factors are recalibrated hourly from the per-runtime AWS metrics divided
+  by the session time seen in spans.
+
+Once its creator is over budget, a standalone online evaluation config is paused; experiment- and
+canary-owned configs keep running until their owner ends.
+
 
 ## Console Knowledge Bases API
 
