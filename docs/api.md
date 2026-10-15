@@ -833,6 +833,57 @@ resolved address is private, loopback, link-local, reserved, multicast or unspec
 IPv4-mapped IPv6 included). The request goes to the address that was checked, redirects are
 not followed, the timeout is 5 s, and the response body is never read.
 
+## Console Budgets API
+
+Per-person monthly spend budgets (V2 Spend & alerts → **Budgets**, **My usage**, and the price
+editors on **Models**). Budgets are **hub-global**: one budget per person across every workspace,
+over a calendar month in UTC.
+
+**Who is limited.** A person's limit is resolved in this order:
+1. their `override_usd`;
+2. their assigned level;
+3. the default level, if one is marked;
+4. otherwise unlimited.
+
+Admins are unlimited until they are given a level or an override. The config admin, the
+auth-disabled operator and API keys with no creator are always unlimited. **Nothing is enforced
+until an admin creates a level.**
+
+**Refusals.** Every non-GET route is classified billable or free (`core/billing_policy.py`,
+drift-tested). A billable route checks the payer's month-to-date spend first. `/v1` checks the
+API key's creator. Experiment and canary actions are checked per action, and `cleanup`,
+`rollback` and `verdict` are never refused.
+
+| Status | Code | Detail |
+|---|---|---|
+| `402` | `budget.exceeded` | `{used_usd, limit_usd, period, resets_at, level}` — the limit is reached; not retryable |
+| `402` | `budget.model_unpriced` | `{model_id}` — the agent's model has no price (only for a limited payer); an admin sets one under model prices |
+
+Work that is already running finishes, so a person can end slightly over their limit.
+
+**Usage.** Spend is the sum of the person's `usage_events` for the month:
+- **Harness turns:** every per-model-call usage event.
+- **Claude Agent SDK containers:** `complete.usage`.
+- **On-demand Evaluate:** `tokenUsage`.
+- **Studio AI fix:** the result usage.
+- **Opaque runtimes** (Strands, BYOC, Studio, A2A): a flagged per-turn estimate.
+
+Prices come from the model price map with admin overrides applied.
+
+| Method | Path | Role | Notes |
+|---|---|---|---|
+| `GET` | `/api/me/usage` | member | `?period=YYYY-MM` → `{user_id, username, level, basis, limit_usd, used_usd, remaining_usd, estimated_usd, estimated_share, percent_used, unlimited, period, resets_at, by_source[{source, usd, estimated_usd, events}]}`. `basis` is `override` \| `level` \| `default_level` \| `unlimited` \| `exempt_admin` \| `exempt_principal`. Returns the caller's own usage only |
+| `GET` | `/api/budgets/levels` | admin | `{levels[{id, name, monthly_budget_usd, is_default, user_count, created_by, created_by_name, created_at, updated_at}], default_level_id}` |
+| `POST` | `/api/budgets/levels` | admin | `{name, monthly_budget_usd, is_default?}` → `201` level. A duplicate name → `409 budget.level_name_taken`. At most one level is the default |
+| `PATCH` | `/api/budgets/levels/{level_id}` | admin | Any of `{name, monthly_budget_usd, is_default}` |
+| `DELETE` | `/api/budgets/levels/{level_id}` | admin | `{deleted, id}`; with people assigned → `409 budget.level_in_use` `{users, level_id}` |
+| `GET` | `/api/budgets/people` | admin | `?period=` → `{period, resets_at, people[{user_id, username, role, status, level, assigned_level_id, override_usd, basis, limit_usd, used_usd, remaining_usd, estimated_usd, estimated_share, percent_used, unlimited, top_source, by_source}], unattributed[…]}`. `unattributed` is spend with no account (exempt principals, key-less calls) |
+| `PUT` | `/api/budgets/users/{user_id}` | admin | `{level_id \| null, override_usd \| null}` → the person's assignment and effective limit |
+| `GET` / `PUT` | `/api/budgets/settings` | admin | `{opaque_turn_estimate_usd}` (default `0.01`); `PUT` with `null` resets it |
+| `GET` | `/api/admin/model-prices` | admin | `{prices[{model_id, rates{input, output, cache_read, cache_write}, base, overridden, updated_by, updated_at}], unpriced_models[{model_id, seen_in[]}], cache_factors}`. Rates are USD per 1M tokens |
+| `PUT` / `DELETE` | `/api/admin/model-prices/{model_id}` | admin | Set `{input, output, cache_read?, cache_write?}` or remove an override. An override wins over yaml, the price refresher and the built-ins, survives restarts and is never written to yaml |
+| `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`, seeded with the public AgentCore rates (read 2026-10-15). `PUT` with `{rates?, calibration?}`, where `null` resets a key. An unknown key → `400 rates.unknown_key` |
+
 ## Console Knowledge Bases API
 
 `/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over

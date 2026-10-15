@@ -122,6 +122,17 @@ never reach the journal (only warnings, such as a failed workspace check, do). T
 runs Logs Insights queries, which are billed. Remove the drop-in and restart to
 turn the thread off.
 
+### Budgets (per-person monthly spend limits)
+
+Budgets are inert until an admin creates a level on Spend & alerts → Budgets. Until then every
+billable request is only metered. Before turning them on:
+- price every model listed as unpriced on the Models page, because a limited person is refused
+  an unpriced model (`402 budget.model_unpriced`);
+- check the per-turn estimate for runtimes that report no usage (Budgets → settings).
+
+Admins stay unlimited unless they are given a level. To unblock someone mid-month, give them an
+override on the Budgets tab; there is no restart.
+
 ### Update recipe (verified sequence)
 
 ```bash

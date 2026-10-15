@@ -3316,6 +3316,42 @@ Every route is **admin**: the per-person breakdown names who spent what, and an
 online-quality value is an aggregate over all agents, which a member in an isolated
 workspace must not see. The V2 page is `/v2/costs` (`?view=costs|alerts`).
 
+### Per-person budgets
+
+The Spend page answers what was spent. Budgets cap it per person. An admin defines **levels**,
+each a USD budget per calendar month (UTC), and assigns people. Once a person's month-to-date
+spend reaches their limit, the platform refuses their new billable work with `402
+budget.exceeded` until the month resets or an admin raises the limit. Budgets are hub-global:
+one total per person across every workspace.
+
+- **Every billable entry is gated in one place.** `core/billing_policy.py` classifies every
+  non-GET route as billable or free. A drift test fails on an unclassified route and on a stale
+  row, so a new endpoint can't slip past. The route-policy dependency resolves the payer and
+  checks the spend for billable routes. `/v1` charges the API key's creator. An experiment or
+  canary action is checked per action, so cleanup and rollback always run.
+- **Exact usage where a call reports it, a flagged estimate where it doesn't.** The meter
+  (`services/usage_meter.py`) is passed explicitly down the invoke chain and writes through its
+  own short DB session. A metering failure is logged and never fails the turn.
+  - **Harness** reports one usage event per model call (verified live: a turn with one tool
+    call sent two), so a turn is charged their sum.
+  - **Claude Agent SDK containers** report `complete.usage`, priced from the price map rather
+    than the CLI's own `total_cost_usd`.
+  - **Runtimes that report nothing** (Strands, BYOC, Studio, A2A) are charged a flagged per-turn
+    estimate. Estimates and measured rows live in one ledger (`usage_events`), and a later
+    measured row supersedes the estimate it replaces.
+- **The ledger is hub-global.** `usage_events` and `usage_sessions` record the originating
+  workspace as `origin_workspace_id`, not `workspace_id`, so deleting a workspace never erases a
+  person's spend. `usage_sessions` maps every billable session id to the payer's `users.id`;
+  Chat's own ledger keys on usernames, so it can't serve. It also covers `/v1` and console invoke,
+  which recorded no session before.
+- **Prices are one admin-editable source.** Model price overrides and the AgentCore fee rates
+  live in `platform_settings`. A settings hook re-applies the overrides on every rebuild, so
+  they win over yaml, the price refresher and the built-ins. The refresher writes its yaml
+  without them, so a reset override does not linger. While a model has no price, a limited
+  person is refused it (`budget.model_unpriced`) rather than spending past the limit unseen.
+- **Rollout is safe.** With no level defined, everyone is unlimited and the meters only record.
+  Admins stay unlimited until given a level.
+
 ## Workspaces — multi-account/multi-region environments
 
 Every environment the console manages is a **workspace**: one

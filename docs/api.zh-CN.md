@@ -499,6 +499,54 @@ created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webho
 保留、组播或未指定地址，含 IPv4 映射的 IPv6）。请求直接发往检查过的地址，不跟随重定向，超时 5 秒，
 且从不读取响应体。
 
+## 控制台预算 API / Console Budgets API
+
+按人设置的月度花费预算（V2「成本与告警」→ **预算**、**我的用量**，以及**模型**页上的价格编辑）。预算是
+**中心全局**的：每人一份预算，覆盖所有 Workspace，按 UTC 自然月计。
+
+**谁受限制。** 一个人的额度按以下顺序确定：
+1. 本人的 `override_usd`；
+2. 本人被分配的等级；
+3. 被标为默认的等级（如果有）；
+4. 否则不受限。
+
+管理员在被分配等级或单独额度之前不受限；配置管理员、关闭认证时的操作者以及没有创建者的 API key 始终
+不受限。**在管理员创建任何等级之前，不会拦截任何请求。**
+
+**拒绝。** 每个非 GET 路由都被归类为计费或免费（`core/billing_policy.py`，有漂移测试）。计费路由会先检查
+付费人当月已花费的金额，`/v1` 检查 API key 的创建者。实验与金丝雀的操作按动作检查，`cleanup`、`rollback`
+与 `verdict` 永远不会被拒绝。
+
+| 状态 | 代码 | 详情 |
+|---|---|---|
+| `402` | `budget.exceeded` | `{used_usd, limit_usd, period, resets_at, level}`——已达额度；不可重试 |
+| `402` | `budget.model_unpriced` | `{model_id}`——Agent 使用的模型没有价格（仅对受限付费人）；由管理员在模型价格中设置 |
+
+已经开始的工作会运行完，因此一个人最终可能略超额度。
+
+**用量。** 花费 = 本人当月 `usage_events` 之和：
+- **Harness 轮次：**每次模型调用的用量事件。
+- **Claude Agent SDK 容器：**`complete.usage`。
+- **即时 Evaluate：**`tokenUsage`。
+- **Studio AI 修复：**结果中的用量。
+- **不透明运行时**（Strands、BYOC、Studio、A2A）：每轮一份带标记的估算。
+
+价格取自模型价格表，并应用管理员覆盖。
+
+| 方法 | 路径 | 角色 | 说明 |
+|---|---|---|---|
+| `GET` | `/api/me/usage` | member | `?period=YYYY-MM` → `{user_id, username, level, basis, limit_usd, used_usd, remaining_usd, estimated_usd, estimated_share, percent_used, unlimited, period, resets_at, by_source[{source, usd, estimated_usd, events}]}`。`basis` 为 `override` \| `level` \| `default_level` \| `unlimited` \| `exempt_admin` \| `exempt_principal`。只返回调用者本人的用量 |
+| `GET` | `/api/budgets/levels` | admin | `{levels[{id, name, monthly_budget_usd, is_default, user_count, created_by, created_by_name, created_at, updated_at}], default_level_id}` |
+| `POST` | `/api/budgets/levels` | admin | `{name, monthly_budget_usd, is_default?}` → `201` 等级。重名 → `409 budget.level_name_taken`。最多一个默认等级 |
+| `PATCH` | `/api/budgets/levels/{level_id}` | admin | `{name, monthly_budget_usd, is_default}` 中任意字段 |
+| `DELETE` | `/api/budgets/levels/{level_id}` | admin | `{deleted, id}`；仍有人被分配 → `409 budget.level_in_use` `{users, level_id}` |
+| `GET` | `/api/budgets/people` | admin | `?period=` → `{period, resets_at, people[{user_id, username, role, status, level, assigned_level_id, override_usd, basis, limit_usd, used_usd, remaining_usd, estimated_usd, estimated_share, percent_used, unlimited, top_source, by_source}], unattributed[…]}`。`unattributed` 为没有账号的花费（豁免主体、没有创建者的 key） |
+| `PUT` | `/api/budgets/users/{user_id}` | admin | `{level_id \| null, override_usd \| null}` → 此人的分配与生效额度 |
+| `GET` / `PUT` | `/api/budgets/settings` | admin | `{opaque_turn_estimate_usd}`（默认 `0.01`）；`PUT` 传 `null` 恢复默认 |
+| `GET` | `/api/admin/model-prices` | admin | `{prices[{model_id, rates{input, output, cache_read, cache_write}, base, overridden, updated_by, updated_at}], unpriced_models[{model_id, seen_in[]}], cache_factors}`。单价为每 100 万 token 的美元数 |
+| `PUT` / `DELETE` | `/api/admin/model-prices/{model_id}` | admin | 设置 `{input, output, cache_read?, cache_write?}` 或删除覆盖。覆盖优先于 yaml、价格刷新器与内置价格，重启后保留，且永远不会写入 yaml |
+| `GET` / `PUT` | `/api/admin/agentcore-rates` | admin | `{rates, defaults, units, calibration, calibration_defaults, calibration_units, …}`，以 AgentCore 公开价格（2026-10-15 读取）为初始值。`PUT` 传 `{rates?, calibration?}`，`null` 恢复某一项的默认值。未知键 → `400 rates.unknown_key` |
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库
