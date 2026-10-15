@@ -75,7 +75,17 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-lang { display: flex; border: 1px solid var(--v2-line); border-radius: 6px; overflow: hidden; }
 .v2-lang button { border: 0; background: #fff; padding: 3px 10px; font-size: 12px; color: var(--v2-ink-2); cursor: pointer; white-space: nowrap; }
 .v2-lang button.on { background: var(--v2-primary-soft); color: var(--v2-primary); }
-.v2-user { display: flex; align-items: center; gap: 8px; color: var(--v2-ink-2); font-size: 13px; }
+.v2-user { position: relative; display: flex; align-items: center; gap: 8px; color: var(--v2-ink-2); font-size: 13px; }
+/* the user menu button (UserMenu.tsx); its popup reuses .v2-help-menu */
+.v2-user-btn {
+  display: flex; align-items: center; gap: 8px; padding: 2px 6px 2px 2px; border: 0; border-radius: 16px;
+  background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.v2-user-btn:hover, .v2-user-btn[aria-expanded="true"] { background: var(--v2-fill); }
+.v2-user-btn svg { color: var(--v2-ink-3); }
+.v2-user-pct { margin-left: 16px; font-size: 12px; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; }
+.v2-user-pct.warn { color: #d25f00; }
+.v2-user-pct.over { color: var(--v2-danger); }
 .v2-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--v2-primary-soft); color: var(--v2-primary); display: grid; place-items: center; font-weight: 600; font-size: 12px; }
 
 /* ---------- body layout ---------- */
@@ -399,6 +409,20 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 .v2-grid-3 { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .v2-bar { height: 8px; background: var(--v2-fill-2); border-radius: 4px; overflow: hidden; }
 .v2-bar > span { display: block; height: 100%; border-radius: 4px; background: var(--v2-primary); }
+/* spend against a monthly budget (budgets: My usage, the people table) */
+.v2-bar.warn > span { background: var(--v2-warning); }
+.v2-bar.over > span { background: var(--v2-danger); }
+.v2-usage-bar { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.v2-usage-bar .v2-bar { flex: 1; min-width: 60px; }
+.v2-usage-bar .pct { font-size: 12px; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v2-usage-bar .pct.warn { color: #d25f00; }
+.v2-usage-bar .pct.over { color: var(--v2-danger); }
+.v2-budget-banner { max-width: 1480px; margin: 0 auto; }
+.v2-budget-banner-x {
+  display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: inherit; cursor: pointer; opacity: 0.8;
+}
+.v2-budget-banner-x:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
 .v2-score { font-weight: 600; font-variant-numeric: tabular-nums; }
 .v2-score.good { color: var(--v2-success); }
 .v2-score.mid { color: var(--v2-warning); }

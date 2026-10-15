@@ -11,6 +11,7 @@ import type {
   CostActorRow,
   CostRange,
 } from "../../../lib/api";
+import { fmtUsd } from "../../../lib/budgets";
 import type { Signal } from "../../signals";
 
 export const ALERT_KINDS: AlertKind[] = [
@@ -59,12 +60,8 @@ export function coerceWindow(kind: AlertKind, window: CostRange): CostRange {
   return options.length === 0 || options.includes(window) ? window : "24h";
 }
 
-/** Dollars; a null price is "—", never $0. Sub-cent amounts keep four decimals. */
-export function fmtUsd(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  if (value > 0 && value < 0.01) return `$${value.toFixed(4)}`;
-  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+/** Dollars; a null price is "—", never $0 (shared with the budgets: lib/budgets.ts). */
+export { fmtUsd };
 
 /** A rule's value (threshold or last reading) in the unit an operator thinks in. */
 export function fmtRuleValue(kind: AlertKind, value: number | null | undefined): string {

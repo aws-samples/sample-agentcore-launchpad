@@ -11,6 +11,7 @@ import {
   api,
   AUTH_UNAUTHORIZED_EVENT,
   HARNESS_NATIVE_TOOLS,
+  localizedMessage,
   type AssistantConversationDetail,
   type AssistantConversationFootprint,
   type AssistantConversationPurgeResult,
@@ -23,6 +24,7 @@ import {
   type AssistantTurnRequest,
   type HarnessNativeTool,
 } from "./api";
+import { notifyBudgetRefused } from "./budgets";
 import { defaultModelForRole } from "./model-defaults";
 import { MODEL_CATALOG, type ModelSource } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
@@ -84,8 +86,11 @@ export async function openAssistantTurn(
   );
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
-    const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string };
-    throw new ApiError(body.code ?? `http.${res.status}`, body.message ?? res.statusText, null);
+    const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string; detail?: unknown };
+    const code = body.code ?? `http.${res.status}`;
+    // `402 budget.*`: final, never replayed; the shell re-reads My usage
+    if (res.status === 402) notifyBudgetRefused(code);
+    throw new ApiError(code, localizedMessage(code, body.message ?? res.statusText, body.detail), body.detail ?? null);
   }
   return res;
 }

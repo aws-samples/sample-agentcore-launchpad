@@ -1,7 +1,7 @@
 import "./v2.css";
 import "./v2-classic.css";
 
-import { ChevronDown, LogOut, Repeat, Search } from "lucide-react";
+import { ChevronDown, Repeat, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -11,6 +11,7 @@ import { RouteChunk } from "../layout/RouteChunk";
 import { useNavMode } from "../lib/nav-mode";
 import { setUiVersion } from "../lib/ui-version";
 import { useWorkspace } from "../workspace/workspace-context";
+import { BudgetBanner } from "./BudgetBanner";
 import { CommandPalette, PALETTE_SHORTCUT } from "./CommandPalette";
 import { GlossaryDialog } from "./Glossary";
 import { HelpMenu } from "./HelpMenu";
@@ -21,6 +22,7 @@ import { TourHost } from "./onboarding/Tour";
 import { closePalette, isPaletteToggle, isSlashOpen, openPalette, togglePalette } from "./palette";
 import { ModuleDemoProvider } from "./pages/videos/ModuleDemo";
 import { FilterSelect, V2ToastProvider } from "./ui";
+import { UserMenu } from "./UserMenu";
 
 const COLLAPSE_KEY = "launchpad_v2_nav_collapsed";
 
@@ -160,21 +162,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                 <Repeat size={13} aria-hidden="true" />
                 {t("v2.switchClassic")}
               </button>
-              <div className="v2-user">
-                <span className="v2-avatar">{displayName.slice(0, 1).toUpperCase()}</span>
-                <span>{displayName}</span>
-                {authRequired && (
-                  <button
-                    type="button"
-                    className="v2-link"
-                    onClick={() => void logout()}
-                    title={t("auth.logout")}
-                    aria-label={t("auth.logout")}
-                  >
-                    <LogOut size={14} />
-                  </button>
-                )}
-              </div>
+              <UserMenu displayName={displayName} authRequired={authRequired} onLogout={() => void logout()} />
             </div>
           </header>
           <div className="v2-layout">
@@ -225,6 +213,8 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
               </button>
             </aside>
             <div className="v2-main">
+              {/* own spend at 80 % of the monthly budget or over it (myUsage.ts) */}
+              <BudgetBanner who={displayName} />
               {/* Workspace-bound pages refetch on selection; hub-global content
                   and admin drafts survive a workspace switch. */}
               <div

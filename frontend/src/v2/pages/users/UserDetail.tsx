@@ -8,11 +8,12 @@ import { fmtTime } from "../../format";
 import { useLoad } from "../../hooks";
 import { Alert, Button, Card, Descriptions, FlowHeader, LinkButton, Spin } from "../../ui";
 import { useUserActions } from "./actions";
+import { BudgetCard } from "./BudgetCard";
 import { GrantChip, RoleTag, StateTag, ValidityCell } from "./tags";
 
 /**
- * One account (`?view=detail&user=<username>`): profile, validity, role, agent
- * permissions and workspace grants. There is no GET-by-id route, so the account
+ * One account (`?view=detail&user=<username>`): profile, validity, role, spend
+ * budget, agent permissions and workspace grants. There is no GET-by-id route, so the account
  * is read back through the list search and matched on the exact username
  * (usernames are unique).
  */
@@ -141,6 +142,13 @@ export function UserDetail({ username }: { username: string }) {
           </div>
         </Card>
       </div>
+
+      {/* remounted on a reload, so the form starts from the stored assignment */}
+      <BudgetCard
+        key={`${user.id}:${user.budget_level_id ?? ""}:${user.budget_override_usd ?? ""}:${user.role}`}
+        user={user}
+        onSaved={loaded.reload}
+      />
 
       <Card title={t("v2.users.permTitle")} sub={t("v2.users.permSub")} testId="v2-users-perms">
         {isAdminRole ? (

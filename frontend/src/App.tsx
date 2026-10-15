@@ -115,6 +115,7 @@ const V2Users = lazy(() => import("./v2/pages/Users").then((m) => ({ default: m.
 const V2Workspaces = lazy(() => import("./v2/pages/Workspaces").then((m) => ({ default: m.V2Workspaces })));
 const V2Models = lazy(() => import("./v2/pages/Models").then((m) => ({ default: m.V2Models })));
 const V2Costs = lazy(() => import("./v2/pages/Costs").then((m) => ({ default: m.V2Costs })));
+const V2MyUsage = lazy(() => import("./v2/pages/MyUsage").then((m) => ({ default: m.V2MyUsage })));
 const V2Connections = lazy(() => import("./v2/pages/Connections").then((m) => ({ default: m.V2Connections })));
 const V2MyConnections = lazy(() => import("./v2/pages/MyConnections").then((m) => ({ default: m.V2MyConnections })));
 // as_user consent return page: signed in (the binding leg needs the caller) but
@@ -312,6 +313,7 @@ export default function App() {
               <Route path="workspaces" element={<V2Workspaces />} />
               <Route path="models" element={<V2Models />} />
               <Route path="costs" element={<V2Costs />} />
+              <Route path="usage" element={<V2MyUsage />} />
               <Route path="connections" element={<V2Connections />} />
               <Route path="my-connections" element={<V2MyConnections />} />
               <Route path="announcements" element={<V2Announcements />} />

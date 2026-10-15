@@ -13,6 +13,7 @@ import {
   type CostRow,
   errorMessage,
 } from "../../lib/api";
+import { currentPeriod, isPeriod } from "../../lib/budgets";
 import { creatorLabel, fmtNumber, fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
 import {
@@ -34,6 +35,7 @@ import {
   Tag,
 } from "../ui";
 import { SIGNAL_TONE } from "../signals";
+import { BudgetsView } from "./costs/BudgetsView";
 import {
   ALERT_KINDS,
   coerceWindow,
@@ -55,7 +57,8 @@ import {
   windowOptions,
 } from "./costs/alertRules";
 
-type CostsTab = "costs" | "alerts";
+type CostsTab = "costs" | "alerts" | "budgets";
+const TABS: CostsTab[] = ["costs", "alerts", "budgets"];
 
 function asRange(value: string | null): CostRange {
   return COST_RANGES.includes(value as CostRange) ? (value as CostRange) : "24h";
@@ -601,15 +604,20 @@ function AlertsView() {
 /**
  * 成本与告警 — admin-only: what this workspace's agents cost (by agent and by person,
  * for a range and for the month to date; estimates from span tokens × the price map),
- * and threshold alerts on error rate, p95 latency, online quality and spend.
- * `?view=costs` (default) | `?view=alerts`; `range=` keeps the spend window.
+ * threshold alerts on error rate, p95 latency, online quality and spend, and the
+ * per-person monthly spend budgets (hub-global: levels, limits, metered usage).
+ * `?view=costs` (default) | `?view=alerts` | `?view=budgets`; `range=` keeps the spend
+ * window, `period=YYYY-MM` the budgets month.
  */
 export function V2Costs() {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
   const [params, setParams] = useSearchParams();
-  const view: CostsTab = params.get("view") === "alerts" ? "alerts" : "costs";
+  const rawView = params.get("view");
+  const view: CostsTab = TABS.includes(rawView as CostsTab) ? (rawView as CostsTab) : "costs";
   const range = asRange(params.get("range"));
+  const rawPeriod = params.get("period");
+  const period = isPeriod(rawPeriod) ? rawPeriod : currentPeriod();
 
   // Members never fire the admin page's requests (every route is ADMIN).
   if (!isAdmin) {
@@ -623,12 +631,14 @@ export function V2Costs() {
     );
   }
 
-  const go = (next: { view?: CostsTab; range?: CostRange }) => {
+  const go = (next: { view?: CostsTab; range?: CostRange; period?: string }) => {
     const p: Record<string, string> = {};
     const v = next.view ?? view;
     if (v !== "costs") p.view = v;
     const r = next.range ?? range;
     if (r !== "24h") p.range = r;
+    const m = next.period ?? period;
+    if (v === "budgets" && m !== currentPeriod()) p.period = m;
     setParams(p);
   };
 
@@ -641,11 +651,17 @@ export function V2Costs() {
           <SubTabs
             value={view}
             onChange={(next) => go({ view: next })}
-            tabs={(["costs", "alerts"] as const).map((value) => ({ value, label: t(`v2.costs.tab.${value}`) }))}
+            tabs={TABS.map((value) => ({ value, label: t(`v2.costs.tab.${value}`) }))}
           />
         }
       />
-      {view === "costs" ? <CostsView range={range} onRange={(r) => go({ range: r })} /> : <AlertsView />}
+      {view === "costs" ? (
+        <CostsView range={range} onRange={(r) => go({ range: r })} />
+      ) : view === "alerts" ? (
+        <AlertsView />
+      ) : (
+        <BudgetsView period={period} onPeriod={(m) => go({ period: m })} />
+      )}
     </>
   );
 }

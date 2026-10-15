@@ -16,6 +16,7 @@ import type {
 import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
+import { budgetRefusalText, modelPricePath, notifyBudgetRefused } from "./budgets";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
 export interface AnnouncementContent {
@@ -1010,8 +1011,16 @@ export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
  * toast `err.message` show a translated string without each one mapping codes.
  * Pages that map codes themselves (`t(`apiErrors.${code}`, err.message)`) keep
  * working — they resolve the same key.
+ *
+ * A budget refusal (`402 budget.exceeded` / `budget.model_unpriced`) gets its
+ * amounts, reset date or model filled in from `detail` (lib/budgets.ts).
  */
-export function localizedMessage(code: string, fallback: string): string {
+export function localizedMessage(code: string, fallback: string, detail?: unknown): string {
+  // A budget refusal carries its amounts and reset date in `detail`; its copy lives
+  // outside `apiErrors` so the pages mapping `apiErrors.<code>` themselves fall back
+  // to this already-filled message instead of an unfilled template.
+  const budget = budgetRefusalText(code, detail, (k, options) => i18n.t(k, options));
+  if (budget !== null) return budget;
   const key = `apiErrors.${code}`;
   return i18n.exists(key) ? i18n.t(key) : fallback;
 }
@@ -1028,7 +1037,9 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     }
     const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
     const code = env.code ?? `http.${res.status}`;
-    throw new ApiError(code, localizedMessage(code, env.message ?? res.statusText), env.detail);
+    // a budget refusal is final (not a throttle to retry): the shell re-reads My usage
+    if (res.status === 402) notifyBudgetRefused(code);
+    throw new ApiError(code, localizedMessage(code, env.message ?? res.statusText, env.detail), env.detail);
   }
   if (body === undefined) {
     // A 200 whose body isn't JSON (backend mid-restart behind the dev proxy,
@@ -3578,6 +3589,10 @@ export interface ConsoleUser {
   permissions: Record<AgentPermission, boolean>;
   /** granted workspace ids; empty for an admin, who reaches every workspace */
   workspaces: string[];
+  /** assigned spend level (`PUT /api/budgets/users/{id}`); null = none */
+  budget_level_id?: string | null;
+  /** personal monthly amount replacing the level's; null = none */
+  budget_override_usd?: number | null;
   /** only present on a password reset the platform generated */
   generated_password?: string;
 }
@@ -4539,6 +4554,188 @@ export interface AlertSchedulerInfo {
   interval_seconds: number;
 }
 
+/* ── spend budgets, model prices and AgentCore rates (`routers/budgets.py`) ── */
+
+/** How a person's effective limit was reached (`services/budgets.BASIS_*`). The last
+ *  three mean unlimited: no level and no default level, an admin without a level, a
+ *  principal with no account (the config admin, the auth-disabled operator). */
+export type BudgetBasis =
+  | "override"
+  | "level"
+  | "default_level"
+  | "unlimited"
+  | "exempt_admin"
+  | "exempt_principal";
+
+/** A level: one USD budget per calendar month (UTC), hub-global. */
+export interface BudgetLevelInfo {
+  id: string;
+  name: string;
+  monthly_budget_usd: number;
+  /** at most one level is the default (members with no level fall into it) */
+  is_default: boolean;
+  /** accounts assigned to it explicitly (not those on it by default) */
+  user_count: number;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BudgetLevelRef {
+  id: string;
+  name: string;
+}
+
+/** Spend of one `usage_events.source` (`chat`, `v1`, `eval`, …) in the period. */
+export interface UsageBySource {
+  source: string;
+  usd: number;
+  /** the part charged as an estimate (opaque runtimes, long jobs) */
+  estimated_usd: number;
+  events: number;
+}
+
+/** `services/budgets._totals` — every spend row carries these. */
+export interface BudgetTotals {
+  /** null = unlimited */
+  limit_usd: number | null;
+  used_usd: number;
+  remaining_usd: number | null;
+  estimated_usd: number;
+  /** 0–1 */
+  estimated_share: number;
+  /** 0–100; null when unlimited */
+  percent_used: number | null;
+  unlimited: boolean;
+}
+
+/** `GET /api/me/usage?period=` — the caller's own spend, never anyone else's. */
+export interface MyUsage extends BudgetTotals {
+  user_id: string | null;
+  username: string | null;
+  level: BudgetLevelRef | null;
+  basis: BudgetBasis;
+  /** `YYYY-MM`, UTC */
+  period: string;
+  /** 00:00 UTC on the next month's 1st */
+  resets_at: string;
+  by_source: UsageBySource[];
+}
+
+/** One account in `GET /api/budgets/people`. */
+export interface BudgetPerson extends BudgetTotals {
+  user_id: string;
+  username: string;
+  role: ConsoleRole;
+  status: ConsoleUser["status"];
+  /** the level the limit comes from (assigned or default); null when none applies */
+  level: BudgetLevelRef | null;
+  assigned_level_id: string | null;
+  override_usd: number | null;
+  basis: BudgetBasis;
+  top_source: string | null;
+  by_source: UsageBySource[];
+}
+
+/** Spend charged to no current account: a deleted account (`user_id`, no name) or a
+ *  principal with none (`user_name`: the config admin, the operator, a NULL-creator key). */
+export interface BudgetUnattributed extends BudgetTotals {
+  user_id: string | null;
+  user_name: string | null;
+  by_source: UsageBySource[];
+}
+
+export interface BudgetPeople {
+  period: string;
+  resets_at: string;
+  people: BudgetPerson[];
+  unattributed: BudgetUnattributed[];
+}
+
+/** `PUT /api/budgets/users/{user_id}` — both keys are the full assignment (null clears). */
+export interface BudgetAssignmentInput {
+  level_id: string | null;
+  override_usd: number | null;
+}
+
+export interface BudgetAssignment {
+  user_id: string;
+  username: string;
+  assigned_level_id: string | null;
+  override_usd: number | null;
+  level: BudgetLevelRef | null;
+  limit_usd: number | null;
+  basis: BudgetBasis;
+  unlimited: boolean;
+}
+
+/** `GET/PUT /api/budgets/settings` — what one turn on an opaque runtime is charged. */
+export interface BudgetSettings {
+  opaque_turn_estimate_usd: number;
+  defaults: { opaque_turn_estimate_usd: number };
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+/** USD per 1M tokens; a null cache rate means input × the cache factor. */
+export interface ModelPriceRates {
+  input: number | null;
+  output: number | null;
+  cache_read: number | null;
+  cache_write: number | null;
+}
+
+/** One key of the merged price map (substring-matched against model ids). */
+export interface ModelPriceEntry {
+  model_id: string;
+  /** effective (override over yaml / refresher / built-in); null = no price */
+  rates: ModelPriceRates | null;
+  /** before the console override; null = the key exists only as an override */
+  base: ModelPriceRates | null;
+  overridden: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+/** A model the platform uses that the merged map cannot price. */
+export interface UnpricedModel {
+  model_id: string;
+  /** `usage`, `agents`, `roles` (server) — the page adds `spans` from the cost report */
+  seen_in: string[];
+}
+
+export interface ModelPriceTable {
+  prices: ModelPriceEntry[];
+  unpriced_models: UnpricedModel[];
+  cache_factors: { cache_read: number; cache_write: number };
+}
+
+export interface ModelPriceInput {
+  input: number;
+  output: number;
+  cache_read?: number;
+  cache_write?: number;
+}
+
+/** `GET /api/admin/agentcore-rates` — fee rates (USD per unit) and calibration factors. */
+export interface AgentCoreRates {
+  rates: Record<string, number>;
+  defaults: Record<string, number>;
+  units: Record<string, string>;
+  calibration: Record<string, number>;
+  calibration_defaults: Record<string, number>;
+  calibration_units: Record<string, string>;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+/** Keys to change; a null value resets that key to its default. */
+export interface AgentCoreRatesPatch {
+  rates?: Record<string, number | null>;
+  calibration?: Record<string, number | null>;
+}
+
 export const api = {
   videoCatalog: () => request<VideoCatalog>("/api/videos"),
   manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
@@ -4966,6 +5163,51 @@ export const api = {
   evaluateAlerts: () => request<AlertEvaluation>("/api/alerts/evaluate", { method: "POST" }),
   /** Admin: whether this server runs the background (notifying) check. */
   alertScheduler: () => request<AlertSchedulerInfo>("/api/alerts/scheduler"),
+  /** The caller's own spend this period (any signed-in user). */
+  myUsage: (period?: string) =>
+    request<MyUsage>(`/api/me/usage${period ? `?${new URLSearchParams({ period })}` : ""}`),
+  /** Admin: every spend level and the default one. */
+  budgetLevels: () =>
+    request<{ levels: BudgetLevelInfo[]; default_level_id: string | null }>("/api/budgets/levels"),
+  createBudgetLevel: (body: { name: string; monthly_budget_usd: number; is_default?: boolean }) =>
+    request<BudgetLevelInfo>("/api/budgets/levels", { method: "POST", body: JSON.stringify(body) }),
+  updateBudgetLevel: (
+    id: string,
+    patch: { name?: string; monthly_budget_usd?: number; is_default?: boolean },
+  ) =>
+    request<BudgetLevelInfo>(`/api/budgets/levels/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  /** 409 `budget.level_in_use` while accounts are assigned to it. */
+  deleteBudgetLevel: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/budgets/levels/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /** Admin: every account's level, limit and spend, plus spend with no account. */
+  budgetPeople: (period?: string) =>
+    request<BudgetPeople>(`/api/budgets/people${period ? `?${new URLSearchParams({ period })}` : ""}`),
+  /** Admin: an account's level and personal amount (both keys: null clears). */
+  assignBudget: (userId: string, body: BudgetAssignmentInput) =>
+    request<BudgetAssignment>(`/api/budgets/users/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  budgetSettings: () => request<BudgetSettings>("/api/budgets/settings"),
+  /** `null` resets a key to its default. */
+  putBudgetSettings: (body: { opaque_turn_estimate_usd: number | null }) =>
+    request<BudgetSettings>("/api/budgets/settings", { method: "PUT", body: JSON.stringify(body) }),
+  /** Admin: the merged price map, the models with no price, and the cache factors. */
+  modelPrices: () => request<ModelPriceTable>("/api/admin/model-prices"),
+  /** Admin: price any model id (unpriced, or an override of a built-in / yaml rate). */
+  setModelPrice: (modelId: string, body: ModelPriceInput) =>
+    request<ModelPriceEntry>(modelPricePath(modelId), { method: "PUT", body: JSON.stringify(body) }),
+  /** Admin: drop the console override (404 `rates.override_not_found` when there is none). */
+  clearModelPrice: (modelId: string) =>
+    request<ModelPriceEntry>(modelPricePath(modelId), { method: "DELETE" }),
+  agentcoreRates: () => request<AgentCoreRates>("/api/admin/agentcore-rates"),
+  putAgentcoreRates: (patch: AgentCoreRatesPatch) =>
+    request<AgentCoreRates>("/api/admin/agentcore-rates", { method: "PUT", body: JSON.stringify(patch) }),
   /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
   uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
     const form = new FormData();
@@ -6077,16 +6319,18 @@ export const chatApi = {
       method: "POST",
     }),
   /** `POST /api/chat/{agent_id}` — returns the raw SSE response (read it with
-   *  `sseEvents`); a non-2xx answer throws with the localized envelope message.
-   *  `signal` aborts the request and the body read (TryChat aborts on unmount). */
+   *  `sseEvents`); a non-2xx answer throws an `ApiError` (localized message, the
+   *  envelope's `code` and `detail` — a `402 budget.*` refusal arrives here, before
+   *  any stream). `signal` aborts the request and the body read (TryChat aborts on unmount). */
   stream: async (agentId: string, body: ChatRequest, signal?: AbortSignal): Promise<Response> => {
-    const res = await fetch(`/api/chat/${encodeURIComponent(agentId)}`, {
+    const path = `/api/chat/${encodeURIComponent(agentId)}`;
+    const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal,
     });
-    if (!res.ok) throw new Error(await responseMessage(res));
+    if (!res.ok) await parseResponse<never>(path, res);
     return res;
   },
 };

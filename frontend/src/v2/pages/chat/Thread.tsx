@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
 import type { FeedbackVerdict } from "../../../lib/api";
+import { BudgetRefusalLink } from "../../BudgetBanner";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
 import { PolicyDenyCard } from "./PolicyDenyCard";
@@ -119,7 +120,9 @@ export function Thread({
           </div>
         ) : (
           <div key={i} className="v2-chat-error">
-            <Alert tone="error">{msg.text}</Alert>
+            <Alert tone="error" action={msg.budget ? <BudgetRefusalLink code={msg.budget} /> : undefined}>
+              {msg.text}
+            </Alert>
           </div>
         ),
       )}

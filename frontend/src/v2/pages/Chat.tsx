@@ -26,6 +26,7 @@ import {
   type FeedbackVerdict,
   localizedMessage,
 } from "../../lib/api";
+import { budgetRefusalOf } from "../../lib/budgets";
 import {
   agentMemoryState,
   type AsUserChoice,
@@ -321,7 +322,9 @@ export function V2Chat() {
     } catch (err) {
       failed = true;
       const message = errorMessage(err);
-      setMessages((m) => [...m, { kind: "error", text: message }]);
+      // a 402 is final: the row says why and links to My usage, no retry
+      const budget = budgetRefusalOf(err) ?? undefined;
+      setMessages((m) => [...m, { kind: "error", text: message, budget }]);
       if (files.length) setAttachmentError(message);
     } finally {
       if (failed && !retrying) setInput(prompt);
