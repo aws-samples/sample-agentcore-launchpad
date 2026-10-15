@@ -558,7 +558,11 @@ def start(
     tools: dict[str, str] | None,
     provider: str | None = None,
     model_id: str | None = None,
+    requester: Any = None,
 ) -> list[EvalRecommendation]:
+    """Start the requested kinds. ``requester`` (a ``services.creators.Creator``)
+    is recorded on every row as ``requested_by``: it pays for a 3rd-party
+    provider's model calls."""
     gate = eligibility(run)
     if not gate["eligible"]:
         raise AppError(
@@ -632,6 +636,7 @@ def start(
             created.append(_start_provider_job(
                 db, run, workspace, provider=str(provider), model_id=model_id,
                 prompt=prompt, input_source=input_source, source=provider_source,
+                requester=requester,
             ))
             continue
         if kind == "system_prompt":
@@ -654,6 +659,8 @@ def start(
             skipped_tools=skipped if kind == "tool_descriptions" else [],
             result=({"excluded_sessions": excluded}
                     if kind == "system_prompt" and excluded else {}),
+            requested_by=getattr(requester, "user_id", None),
+            requested_by_name=getattr(requester, "name", None),
         )
         db.add(row)
         db.commit()
@@ -695,6 +702,7 @@ def _spawn(fn: Any) -> None:
 def _start_provider_job(
     db: Session, run: EvalRun, workspace: WorkspaceContext, *, provider: str,
     model_id: str | None, prompt: str, input_source: str, source: dict[str, Any],
+    requester: Any = None,
 ) -> EvalRecommendation:
     from app.optimization import providers as rec_providers
 
@@ -706,6 +714,8 @@ def _start_provider_job(
         name=f"{prov.id} · {model}", status="IN_PROGRESS", input_source=input_source,
         system_prompt=prompt, evaluator=None, tools={}, skipped_tools=[],
         result={"provider": prov.id, "provider_model_id": model},
+        requested_by=getattr(requester, "user_id", None),
+        requested_by_name=getattr(requester, "name", None),
     )
     db.add(row)
     db.commit()
@@ -740,10 +750,24 @@ def _run_provider_job(
             agent = db.get(Agent, agent_id)
             meta = {"id": agent_id, "name": getattr(agent, "name", ""),
                     "method": getattr(agent, "method", ""), "system_prompt": prompt}
+            row = db.get(EvalRecommendation, row_id)
+            requested_by = row.requested_by if row is not None else None
+            requested_name = row.requested_by_name if row is not None else None
         finally:
             db.close()
+        # the requester pays for the provider's own model calls (exact
+        # ConverseStream usage); the worker rebuilds the meter from the stored row
+        from app.core.billing_policy import SOURCE_EVAL
+        from app.services.usage_meter import UsageMeter
+
+        meter = UsageMeter.for_user(
+            requested_by, SOURCE_EVAL, user_name=requested_name,
+            origin_workspace_id=workspace.id, agent_id=agent_id or None, model_id=model,
+            ref_type="eval_recommendation", ref_id=row_id,
+        )
         out_keys = opt_service._third_party_prompt_recommendation(
             "", meta, workspace, note, provider_id=provider, model_id=model, source=source,
+            meter=meter,
         )
         status = str(out_keys.get("system_prompt_status") or "FAILED")
         text = str(out_keys.get("recommended_prompt") or "")
@@ -990,6 +1014,8 @@ def out(row: EvalRecommendation) -> dict[str, Any]:
         "error": row.error,
         "accepted": row.accepted,
         "edit": row.edit,
+        "requested_by": row.requested_by,
+        "requested_by_name": row.requested_by_name,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

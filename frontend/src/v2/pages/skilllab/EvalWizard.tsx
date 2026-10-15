@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJudgeMode, type SkillLabStatus, type SkillLabTargetBackend } from "../../../lib/api";
+import { rememberBudgetNotice } from "../../../lib/budgets";
 import { canSubmitJobs, evalSplitsOf } from "../../../lib/skillLab";
 import { Alert, Button, Card, Field, FlowHeader, Segmented, Select } from "../../ui";
 import { ModelFields } from "./ModelFields";
@@ -113,6 +114,7 @@ export function EvalWizard({ status }: { status: SkillLabStatus | null }) {
           limit,
         },
       });
+      rememberBudgetNotice(job.id, job.budget_notice);
       setParams({ tab: "eval", view: "detail", id: job.id });
     } catch (err) {
       setError(errorMessage(err));

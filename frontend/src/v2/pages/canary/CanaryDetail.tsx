@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type CanaryPairRow, type RuntimeCanaryInfo } from "../../../lib/api";
+import { isBudgetStop } from "../../../lib/budgets";
 import { ONLINE_EVAL_DEFAULT } from "../../../lib/experiments";
+import { BudgetStopAlert } from "../../BudgetBanner";
 import { creatorLabel, fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
@@ -295,6 +297,15 @@ export function CanaryDetail({ id }: { id: string }) {
                   { label: t("v2.experiments.failed"), value: attempts.reduce((sum, x) => sum + x.failed, 0) },
                   { label: t("v2.canary.baseline"), value: attempts[attempts.length - 1].baseline_n },
                 ]}
+              />
+            )}
+            {attempts.length > 0 && isBudgetStop(attempts[attempts.length - 1]) && (
+              <BudgetStopAlert
+                kind="traffic"
+                // a paired attempt skips whole questions: both arms of each
+                skipped={(attempts[attempts.length - 1].pairs ?? []).filter((p) => p.skipped).length
+                  || attempts[attempts.length - 1].skipped}
+                testId="v2-canary-traffic-budget-stop"
               />
             )}
             {verdict && (

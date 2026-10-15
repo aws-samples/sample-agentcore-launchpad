@@ -61,6 +61,20 @@ DEFAULT_SETTINGS: dict[str, float] = {
     # What one turn on an opaque runtime (Strands zip, BYOC without usage, Studio,
     # A2A) is charged until reconciliation replaces it with measured cost.
     "opaque_turn_estimate_usd": 0.01,
+    # ── long-running jobs (services/job_budget.py): per-unit estimates for work
+    # that reports no usage in-band, debited as each unit starts ──
+    # One agent turn when the agent has no measured turns yet: experiment and
+    # canary gateway traffic per prompt (the response body is never read).
+    "agent_turn_estimate_usd": 0.02,
+    # The simulated persona actor model, per actor turn (its usage is unreachable
+    # inside the SDK, research S row 6): priced at the run's actor model.
+    "persona_actor_input_tokens": 1500,
+    "persona_actor_output_tokens": 200,
+    # Skill Lab, until results.json trues an eval job up (measured on dev
+    # 2026-10-15: ~$0.11 per Sonnet task rollout + judge)
+    "skill_lab_eval_task_usd": 0.15,
+    "skill_lab_train_step_usd": 1.0,
+    "skill_lab_taskgen_job_usd": 0.5,
 }
 
 
@@ -262,6 +276,31 @@ def _unpriced(model_id: str | None) -> AppError:
     return AppError("budget.model_unpriced", message, {"model_id": model_id}, status_code=402)
 
 
+def exceeded(
+    db: Session, payer: Payer, *, now: datetime | None = None, extra_usd: float = 0.0,
+) -> AppError | None:
+    """The ``402 budget.exceeded`` a budgeted payer at or over the limit would get,
+    or None. The spend half of ``check``, for a job's boundary stops
+    (services/job_budget.py): a stop is not a refusal, so it is returned, not
+    raised. ``extra_usd`` is spend the job has incurred but not written yet.
+    Exempt and unlimited payers cost no query."""
+    if not payer.budgeted:
+        return None
+    period = period_of(now)
+    used = spend(db, payer.user_id, period) + max(0.0, float(extra_usd or 0.0))
+    if used >= float(payer.limit_usd or 0.0):
+        return _exceeded(payer, used, period)
+    return None
+
+
+def remaining(db: Session, payer: Payer, *, now: datetime | None = None) -> float | None:
+    """What a budgeted payer has left this period (never negative); None = unlimited."""
+    if not payer.budgeted:
+        return None
+    used = spend(db, payer.user_id, period_of(now))
+    return round(max(0.0, float(payer.limit_usd or 0.0) - used), 6)
+
+
 def check(
     db: Session,
     payer: Payer,
@@ -274,10 +313,9 @@ def check(
     model. Exempt and unlimited payers are never refused (and cost no query)."""
     if not payer.budgeted:
         return
-    period = period_of(now)
-    used = spend(db, payer.user_id, period)
-    if used >= float(payer.limit_usd or 0.0):
-        raise _exceeded(payer, used, period)
+    error = exceeded(db, payer, now=now)
+    if error is not None:
+        raise error
     if model_unknown or (model_id and rates.is_unpriced(model_id)):
         raise _unpriced(model_id)
 

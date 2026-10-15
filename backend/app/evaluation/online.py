@@ -582,6 +582,14 @@ def set_execution_status(
     control = control or control_client(ws.context)
     current = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(current, ("agent", "external"), "resume" if enabled else "pause")
+    if enabled and current.get("created_by"):
+        # continuous judging is charged to the config's creator (budgets design), so
+        # resuming it is refused while THEY are over budget — whoever presses resume
+        # (the route gate already checked the caller)
+        from app.services import budgets
+
+        budgets.check(db, budgets.payer_for_user_id(
+            db, current["created_by"], current.get("created_by_name")))
     ac.update_online_eval_config(
         control, config_id=config_id, executionStatus="ENABLED" if enabled else "DISABLED"
     )

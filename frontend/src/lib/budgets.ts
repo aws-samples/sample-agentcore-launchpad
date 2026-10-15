@@ -3,7 +3,7 @@
 // and percent formatting, the "usage ≥ 80 %" banner rule, and the price editor's path.
 // Type-only imports keep it loadable in the node test environment (lib/api.ts pulls in
 // i18n and imports this module for `localizedMessage`).
-import type { BudgetBasis, MyUsage } from "./api";
+import type { BudgetBasis, BudgetNotice, MyUsage } from "./api";
 
 /** `402` at or over the monthly limit: `{used_usd, limit_usd, period, resets_at, level}`. */
 export const BUDGET_EXCEEDED = "budget.exceeded";
@@ -178,6 +178,51 @@ export function budgetRefusalText(code: string, detail: unknown, t: Translate): 
   }
   const model = typeof d.model_id === "string" && d.model_id ? d.model_id : null;
   return model ? t("budgetRefusal.modelUnpriced", { model }) : t("budgetRefusal.modelUnpricedUnknown");
+}
+
+/* ---------- long-running jobs: the estimates, the boundary stop, the create notice ---------- */
+
+/** The per-unit estimates charged where a call reports no usage (backend
+ *  `budgets.DEFAULT_SETTINGS`): an opaque runtime's turn, and the long-running jobs' units. */
+export const BUDGET_ESTIMATE_KEYS = [
+  "opaque_turn_estimate_usd",
+  "agent_turn_estimate_usd",
+  "persona_actor_input_tokens",
+  "persona_actor_output_tokens",
+  "skill_lab_eval_task_usd",
+  "skill_lab_train_step_usd",
+  "skill_lab_taskgen_job_usd",
+] as const;
+export type BudgetEstimateKey = (typeof BUDGET_ESTIMATE_KEYS)[number];
+
+/** `stop_reason` of a job its payer's monthly budget stopped at a boundary (an eval run,
+ *  a Skill Lab job, an experiment / canary traffic attempt). */
+export const BUDGET_STOP_REASON = "budget_exceeded";
+
+export function isBudgetStop(row: { stop_reason?: string | null } | null | undefined): boolean {
+  return !!row && row.stop_reason === BUDGET_STOP_REASON;
+}
+
+/** The notice copy: the job's estimate against what is left, or null without a notice. */
+export function budgetNoticeText(notice: BudgetNotice | null | undefined, t: Translate): string | null {
+  if (!notice) return null;
+  return t("v2.usage.jobNotice", {
+    estimate: fmtUsd(notice.estimate_usd),
+    remaining: fmtUsd(notice.remaining_usd),
+    date: fmtResetDate(notice.resets_at),
+  });
+}
+
+// A create response's notice, kept for the detail page the wizard opens next (one SPA
+// session; the notice belongs to that one create and is never refetched).
+const createNotices = new Map<string, BudgetNotice>();
+
+export function rememberBudgetNotice(id: string, notice: BudgetNotice | null | undefined): void {
+  if (notice) createNotices.set(id, notice);
+}
+
+export function budgetNoticeFor(id: string | null | undefined): BudgetNotice | null {
+  return (id && createNotices.get(id)) || null;
 }
 
 /* ---------- the price editor's route ---------- */

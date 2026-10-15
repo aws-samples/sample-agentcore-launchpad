@@ -366,8 +366,8 @@ def runtime_canary_action(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     row = _canary_in(db, ws, canary_id, viewer=viewer)
-    # the spend-budget gate for setup / traffic only: rolling back or completing a
-    # canary must stay possible for a payer over budget
+    # the spend-budget gate for setup / traffic / advance only: rolling back or
+    # completing a canary must stay possible for a payer over budget
     billing_policy.gate_action(request, req.action)
     if req.action not in AGENT_FREE_ACTIONS:
         # setup / advance / complete / rollback re-publish the champion and traffic
@@ -419,12 +419,14 @@ def runtime_canary_action(
         )
 
     action = req.action
+    # who pays for this action: the caller, recorded per action
+    caller = Creator.of_request(request)
     if action == "setup":
         fn = partial(canary_service.act_setup, canary_id)
     elif action == "traffic":
         fn = partial(
             canary_service.act_traffic, canary_id, prompts, dataset_info,
-            scenario_ids=scenario_ids,
+            scenario_ids=scenario_ids, caller=caller,
         )
     elif action == "verdict":
         fn = partial(canary_service.act_verdict, canary_id)
@@ -445,7 +447,7 @@ def runtime_canary_action(
     else:
         fn = partial(canary_service.act_cleanup, canary_id)
 
-    canary_service.run_action(canary_id, action, fn)
+    canary_service.run_action(canary_id, action, fn, caller=caller)
     response.status_code = 202
     db.expire_all()
     row = db.get(RuntimeCanary, canary_id)

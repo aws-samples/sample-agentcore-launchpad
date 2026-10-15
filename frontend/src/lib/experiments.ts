@@ -1,5 +1,7 @@
 import type { TFunction } from "i18next";
 
+import type { BudgetStopReason } from "./api";
+
 // Configuration-bundle experiments (recommend → bundles → gateway/A-B → traffic →
 // verdict → promote → cleanup): artifact types and the per-experiment console
 // state both consoles share — the classic experiment page and console V2.
@@ -163,7 +165,9 @@ export interface ExperimentInfo {
     // status_counts is diagnostic only (throttling shows up as a "429" bucket);
     // absent on artifacts written before the concurrent send landed
     traffic?: { sent: number; failed: number; dataset_id?: string;
-      dataset_name?: string; status_counts?: Record<string, number> };
+      dataset_name?: string; status_counts?: Record<string, number>;
+      /** prompts never sent because the caller's monthly spend budget was reached */
+      skipped?: number; stop_reason?: BudgetStopReason | null };
     verdict?: { verdict: string; avg_delta?: number; n?: number;
       significant?: boolean; metrics: ABMetric[] };
     promotion_attempt?: {

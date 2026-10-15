@@ -19,6 +19,7 @@ content-log group is discovered by log-group prefix instead of derived.
 """
 
 import copy
+import functools
 import math
 import threading
 import time
@@ -28,6 +29,7 @@ from typing import Any
 import httpx
 from botocore.exceptions import ClientError
 
+from app.core.billing_policy import SOURCE_EVAL
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
@@ -41,7 +43,7 @@ from app.evaluation.scenarios import (
     scenario_prompts,
 )
 from app.models.ledger import Agent
-from app.services import creators
+from app.services import budgets, creators, job_budget
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -97,9 +99,88 @@ def stop_requested(run_id: str) -> bool:
     return stop_flags.requested(run_id)
 
 
-def _check_stop(run_id: str) -> None:
+def _check_stop(run_id: str, budget: job_budget.JobBudget | None = None) -> None:
+    """A run boundary (before a scenario, a prompt, StartBatchEvaluation): the
+    operator's stop first, then the payer's spend budget (``BudgetStop`` once the
+    run's creator is at or over their monthly limit)."""
     if stop_flags.requested(run_id):
         raise RunStopped(run_id)
+    if budget is not None:
+        budget.check()
+
+
+def _run_budget(
+    run_id: str, agent_id: str | None, method: str, workspace: WorkspaceContext,
+) -> tuple[job_budget.JobBudget, dict[str, Any]]:
+    """The run's payer — its creator (``EvalRun.created_by``) — and the per-turn
+    meter fields of its agent: the model its tokens are priced at, and for an
+    opaque runtime the turn estimate (the agent's recent measured average, else
+    the opaque-turn default) a silent turn is charged as ``job_estimate``."""
+    from app.services.runtime_discovery import is_discovered_harness
+    from app.services.usage_meter import KIND_JOB_ESTIMATE
+
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        agent = db.get(Agent, agent_id) if agent_id else None
+        budget = job_budget.JobBudget.for_user(
+            run.created_by if run is not None else None, SOURCE_EVAL,
+            user_name=run.created_by_name if run is not None else None,
+            origin_workspace_id=(run.workspace_id if run is not None else None) or workspace.id,
+            agent_id=agent_id or None,
+            resource_id=agent.arn if agent is not None else None,
+            ref_type="eval_run", ref_id=run_id,
+        )
+        turn: dict[str, Any] = {"estimate_kind": KIND_JOB_ESTIMATE}
+        if agent is not None:
+            model, _token_metered = budgets.agent_model(agent)
+            harness = agent.method == "harness" or is_discovered_harness(agent)
+            turn.update(model_id=model, opaque=not harness)
+            if not harness:
+                turn["estimate_usd"] = job_budget.turn_estimate(
+                    db, agent.id, fallback="opaque_turn_estimate_usd")[0]
+        else:
+            turn["opaque"] = method != "harness"
+        return budget, turn
+    finally:
+        db.close()
+
+
+def _persona_estimate(
+    budget: job_budget.JobBudget, scenario: dict[str, Any], actor_model_id: str | None,
+    turns: int,
+) -> str | None:
+    """Debit a simulated persona's actor model (its usage is unreachable inside the
+    SDK executor): ``turns`` actor turns × the calibrated tokens per turn × the
+    actor model's price."""
+    db = SessionLocal()
+    try:
+        usd = job_budget.persona_actor_usd(db, actor_model_id, turns)
+    finally:
+        db.close()
+    return budget.estimate(
+        usd, quantity=turns, unit="actor_turn", model_id=actor_model_id or None,
+        detail={"estimate": "persona_actor",
+                "scenario_id": str(scenario.get("scenario_id") or "")},
+    )
+
+
+def _judge_estimate(
+    budget: job_budget.JobBudget, evaluators: list[str], sessions: int,
+) -> str | None:
+    """Debit the batch judges as ``StartBatchEvaluation`` returns (sessions ×
+    evaluators × the calibrated per-evaluation cost). Child 3 replaces it with the
+    exact result-record count."""
+    if not evaluators or sessions <= 0:
+        return None
+    db = SessionLocal()
+    try:
+        usd, detail = job_budget.judge_estimate(db, evaluators, sessions)
+    finally:
+        db.close()
+    return budget.estimate(
+        usd, quantity=sessions * len(set(evaluators)), unit="evaluation", detail=detail,
+    )
 
 # With up to eval_max_concurrent_runs of our own batches (plus anything else in
 # the account) contending for the 5-active / 3-TPS account quotas, a start can
@@ -273,6 +354,31 @@ def transient_invoke_error(exc: BaseException) -> bool:
     return False
 
 
+def _run_persona(
+    budget: job_budget.JobBudget,
+    scenario: dict[str, Any],
+    actor_model_id: str | None,
+    turns: dict[str, int],
+    run: Callable[[], str],
+) -> str:
+    """One simulated persona attempt with its actor estimate: max turns debited up
+    front, then trued up (superseded) to the agent turns it really took — the actor
+    model answers each agent turn once, so the actor's turns follow the agent's."""
+    from app.services.usage_meter import supersede
+
+    max_turns = int(scenario.get("max_turns") or 10)
+    upfront = _persona_estimate(budget, scenario, actor_model_id, max_turns)
+    turns["n"] = 0
+    try:
+        return run()
+    finally:
+        taken = min(turns["n"], max_turns)
+        if upfront and taken != max_turns:
+            actual = _persona_estimate(budget, scenario, actor_model_id, taken)
+            if actual:
+                supersede([upfront], actual)
+
+
 def execute_run(
     run_id: str,
     *,
@@ -310,13 +416,21 @@ def execute_run(
     input_groups = list(log_groups or ["aws/spans", log_group])
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     attempt: dict[str, str] = {}
+    # agent turns metered so far in the current persona (its actor true-up)
+    persona_turns = {"n": 0}
+
+    def turn_meter() -> Any:
+        persona_turns["n"] += 1
+        return budget.meter(**turn_fields)
+
     try:
-        _check_stop(run_id)
+        budget, turn_fields = _run_budget(run_id, agent_id, method, workspace)
+        _check_stop(run_id, budget)
         data = data_client(workspace)
         session_ids = list(existing_session_ids or [])
         if online_config_arn:
             _update(run_id, status="evaluating")
-            _check_stop(run_id)
+            _check_stop(run_id, budget)
             response = _start_with_retry(
                 lambda: ac.start_online_report(
                     data,
@@ -342,13 +456,13 @@ def execute_run(
             metadata_entries: list[dict[str, Any]] = []
             watermark_sid: str | None = None
 
-            def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
+            def raw_invoke(prompt: str, sid: str | None, sink: dict[str, Any]) -> dict[str, Any]:
                 if method == "harness":  # InvokeHarness, not the runtime data plane
                     attempt["session_id"] = sid or hc.new_session_id()
                     return hc.invoke_harness_text(
-                        data, agent_arn, prompt, session_id=attempt["session_id"],
+                        data, agent_arn, prompt, session_id=attempt["session_id"], **sink,
                     )
-                if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
+                if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}; no usage
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                 if inbound_jwt:  # JWT authorizer: Bearer, never SigV4
                     from app.services import inbound_auth as inbound_auth_service
@@ -359,6 +473,7 @@ def execute_run(
                         inbound_auth_service.m2m_bearer_token(workspace),
                         prompt,
                         session_id=sid,
+                        **sink,
                     )
                 return rt.invoke_runtime_text(
                     data,
@@ -366,7 +481,21 @@ def execute_run(
                     prompt,
                     session_id=sid,
                     runtime_user_id=runtime_user_id,
+                    **sink,
                 )
+
+            def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
+                """One replayed turn under its own meter: exact rows where the agent
+                reports usage (Harness metadata, Claude SDK complete.usage), the
+                turn estimate where it does not — never both."""
+                meter = turn_meter()
+                try:
+                    result = raw_invoke(prompt, sid, {"on_usage": meter.on_usage})
+                except Exception:
+                    meter.settle(failed=True, session_id=attempt.get("session_id") or sid)
+                    raise
+                meter.settle(session_id=result.get("session_id"))
+                return result
 
             budget_stops: list[dict[str, str]] = []
             # A simulated persona that still fails after its retries is skipped,
@@ -377,7 +506,7 @@ def execute_run(
             scenario_failures: list[dict[str, str]] = []
             _update(run_id, status="invoking")
             for scenario in scenarios:
-                _check_stop(run_id)
+                _check_stop(run_id, budget)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
                 sid: str | None = None
@@ -386,25 +515,31 @@ def execute_run(
                     try:
                         sid = None  # a replay starts the whole scenario in a fresh session
                         if simulation.is_simulated(scenario):
-                            sim_kwargs: dict[str, Any] = {}
+                            sim_kwargs: dict[str, Any] = {"meter_for": turn_meter}
                             if inbound_jwt:
                                 # JWT runtimes: persona turns Bearer-invoke like replay turns
                                 sim_kwargs["invoke_text"] = invoke
-                            sid = simulation.run_simulated_scenario(
-                                data,
-                                agent_arn=agent_arn,
-                                method=method,
-                                scenario=scenario,
-                                actor_model_id=actor_model_id or "",
-                                protocol=protocol,
-                                runtime_user_id=runtime_user_id,
-                                **sim_kwargs,
+                            sid = _run_persona(
+                                budget, scenario, actor_model_id, persona_turns,
+                                functools.partial(
+                                    simulation.run_simulated_scenario,
+                                    data,
+                                    agent_arn=agent_arn,
+                                    method=method,
+                                    scenario=scenario,
+                                    actor_model_id=actor_model_id or "",
+                                    protocol=protocol,
+                                    runtime_user_id=runtime_user_id,
+                                    **sim_kwargs,
+                                ),
                             )
                         else:
                             for prompt in scenario_prompts(scenario):
-                                _check_stop(run_id)
+                                _check_stop(run_id, budget)
                                 sid = invoke(prompt, sid)["session_id"]
                         break
+                    except (RunStopped, job_budget.BudgetStop):
+                        raise  # a stop is never a scenario failure to retry or skip
                     except Exception as exc:
                         timed_out = getattr(exc, "code", None) == "harness.execution_timeout"
                         if (retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc)
@@ -429,7 +564,7 @@ def execute_run(
                                     .get("stop_reason") or ""),
                             })
                             break
-                        _check_stop(run_id)
+                        _check_stop(run_id, budget)
                         attempt["retried"] = str(retry + 1)
                 if skipped:
                     _update(run_id, scenario_failures=list(scenario_failures))
@@ -447,7 +582,7 @@ def execute_run(
                 )
             if session_metadata is None:
                 session_metadata = metadata_entries or None
-            _check_stop(run_id)
+            _check_stop(run_id, budget)
             _update(run_id, status="waiting")
             _wait_for_fresh_telemetry(
                 workspace=workspace,
@@ -458,8 +593,9 @@ def execute_run(
             )
 
         # Last exit before the batch exists on AWS: a stop requested during
-        # replay/wait ends the run here without ever calling StartBatchEvaluation.
-        _check_stop(run_id)
+        # replay/wait — or a payer over budget — ends the run here without ever
+        # calling StartBatchEvaluation (the replayed sessions are kept).
+        _check_stop(run_id, budget)
         _update(run_id, status="evaluating", session_ids=session_ids)
         if mode == "insights":
             response = _start_with_retry(
@@ -488,11 +624,19 @@ def execute_run(
             )
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
+        if mode != "insights":  # insights are free during the preview (pricing page)
+            # debited once the batch exists (a refused start judges nothing); a
+            # time-window run's session count is unknown up front: child 3 counts it
+            _judge_estimate(budget, evaluators, len(session_ids))
         _stop_batch_if_requested(run_id, data, batch_id)
         result = _poll_batch(data, batch_id)
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except RunStopped:
         _update(run_id, status="stopped", error=STOP_REASON)
+    except job_budget.BudgetStop as exc:
+        # the payer's monthly limit: stopped like an operator stop, everything done so
+        # far kept (replayed sessions on the row); the console reads the prefix
+        _update(run_id, status="stopped", error=exc.message[:500])
     except AppError as exc:
         parts = [f"{exc.code}: {exc.message}"]
         if isinstance(exc.detail, dict) and "stop_reason" in exc.detail:

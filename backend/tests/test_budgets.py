@@ -947,8 +947,9 @@ def test_admin_price_editor_and_settings(admin):
     settings = admin.get("/api/budgets/settings").json()
     assert settings["opaque_turn_estimate_usd"] == 0.01
     updated = admin.put("/api/budgets/settings", json={"opaque_turn_estimate_usd": 0.02}).json()
-    assert updated["opaque_turn_estimate_usd"] == 0.02 and updated["defaults"] == {
-        "opaque_turn_estimate_usd": 0.01}
+    assert updated["opaque_turn_estimate_usd"] == 0.02
+    assert updated["defaults"] == budgets.DEFAULT_SETTINGS
+    assert updated["defaults"]["opaque_turn_estimate_usd"] == 0.01
 
 
 def test_users_list_carries_the_assignment(admin, app):

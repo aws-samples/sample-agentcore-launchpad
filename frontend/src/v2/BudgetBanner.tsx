@@ -1,6 +1,8 @@
 // The spend-budget notices of the V2 shell: a banner once the signed-in person has used
-// 80 % of their monthly budget (or reached it), and the link a budget refusal shows
-// next to its message. Both read the shared My usage cache (myUsage.ts).
+// 80 % of their monthly budget (or reached it), the link a budget refusal shows next to
+// its message (both read the shared My usage cache, myUsage.ts), and the two notices of
+// long-running jobs: a job stopped at a boundary by its payer's budget, and a create
+// whose estimate is more than its payer has left.
 import { X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -13,6 +15,8 @@ import {
   type BudgetRefusalCode,
   bannerDismissKey,
   bannerLevel,
+  budgetNoticeFor,
+  budgetNoticeText,
   fmtPercent,
   fmtResetDate,
   fmtUsd,
@@ -110,4 +114,35 @@ export function BudgetRefusalLink({ code }: { code: BudgetRefusalCode }) {
     );
   }
   return null;
+}
+
+/** What a budget stop did, per job kind: a run stopped before its next scenario, a
+ *  traffic attempt left prompts unsent, a training job stopped after a completed step
+ *  (resumable), a queued job never started. */
+export type BudgetStopKind = "run" | "traffic" | "train" | "notStarted";
+
+/** A job its payer's monthly spend budget stopped at a boundary; the work done is kept. */
+export function BudgetStopAlert({ kind, skipped, testId }: { kind: BudgetStopKind; skipped?: number; testId?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div data-testid={testId ?? "v2-budget-stop"}>
+      <Alert tone="warn" action={<BudgetRefusalLink code={BUDGET_EXCEEDED} />}>
+        {t(`v2.usage.stop.${kind}`, { count: skipped ?? 0 })}
+      </Alert>
+    </div>
+  );
+}
+
+/** On the page a create opened: the job's estimate is more than its payer has left. */
+export function BudgetNoticeAlert({ id }: { id: string | null | undefined }) {
+  const { t } = useTranslation();
+  const text = budgetNoticeText(budgetNoticeFor(id), t);
+  if (!text) return null;
+  return (
+    <div data-testid="v2-budget-notice">
+      <Alert tone="warn" action={<BudgetRefusalLink code={BUDGET_EXCEEDED} />}>
+        {text}
+      </Alert>
+    </div>
+  );
 }

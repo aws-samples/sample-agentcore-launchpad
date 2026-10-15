@@ -20,7 +20,7 @@ import {
 import { creatorLabel, fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
-import { GoneCard, JobStatusTag } from "./common";
+import { GoneCard, JobErrorAlert, JobStatusTag } from "./common";
 import { JobLog } from "./JobLog";
 import { taskgenTarget, useJob } from "./state";
 
@@ -244,7 +244,7 @@ export function TaskgenDetail({ id }: { id: string }) {
           )
         }
       />
-      {detail.error && <Alert tone="error">{detail.error}</Alert>}
+      <JobErrorAlert job={detail} />
       <Card title={t("v2.skillLab.overview")} sub={isExpansion ? t("skillLab.taskgen.job.expandSub", { name: detail.taskset_name, split: detail.split }) : t("skillLab.taskgen.job.newSub")}>
         <Descriptions
           items={[

@@ -6,6 +6,7 @@
 import type {
   AgentCoreRates,
   BudgetAssignmentInput,
+  BudgetEstimateKey,
   BudgetBasis,
   BudgetLevelInfo,
   BudgetPerson,
@@ -21,8 +22,30 @@ import { usageTone } from "../../../lib/budgets";
 export const MAX_BUDGET_USD = 1_000_000;
 export const MAX_PRICE_PER_MTOK = 10_000;
 export const MAX_RATE = 1_000_000;
-/** the per-turn estimate the settings route accepts */
+/** the per-unit USD estimates the settings route accepts (`BudgetSettingsIn`) */
 export const MAX_TURN_ESTIMATE_USD = 100;
+/** the per-turn token counts it accepts (persona actor tokens) */
+export const MAX_ESTIMATE_TOKENS = 1_000_000;
+
+export type EstimateUnit = "usd" | "tokens";
+
+/** The admin Estimates card, in order: each key's unit and the largest value it takes. */
+export const ESTIMATE_FIELDS: { key: BudgetEstimateKey; unit: EstimateUnit; max: number }[] = [
+  { key: "opaque_turn_estimate_usd", unit: "usd", max: MAX_TURN_ESTIMATE_USD },
+  { key: "agent_turn_estimate_usd", unit: "usd", max: MAX_TURN_ESTIMATE_USD },
+  { key: "persona_actor_input_tokens", unit: "tokens", max: MAX_ESTIMATE_TOKENS },
+  { key: "persona_actor_output_tokens", unit: "tokens", max: MAX_ESTIMATE_TOKENS },
+  { key: "skill_lab_eval_task_usd", unit: "usd", max: MAX_TURN_ESTIMATE_USD },
+  { key: "skill_lab_train_step_usd", unit: "usd", max: MAX_TURN_ESTIMATE_USD },
+  { key: "skill_lab_taskgen_job_usd", unit: "usd", max: MAX_TURN_ESTIMATE_USD },
+];
+
+/** A typed estimate, or null when it is not acceptable: token counts are whole numbers. */
+export function estimateFromInput(raw: string, unit: EstimateUnit, max: number): number | null {
+  const value = amountFromInput(raw, max);
+  if (value === null) return null;
+  return unit === "tokens" && !Number.isInteger(value) ? null : value;
+}
 
 /** A typed non-negative amount up to `max`, or null when it is not acceptable
  *  (empty included — the caller decides what an empty field means). */

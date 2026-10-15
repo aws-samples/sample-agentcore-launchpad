@@ -44,6 +44,9 @@ logger = logging.getLogger("launchpad.usage")
 
 KIND_TOKENS = "tokens"
 KIND_TURN_ESTIMATE = "turn_estimate"
+# a long-running job's up-front estimate for work that reports no usage in-band
+# (services/job_budget.py); a true-up or reconciliation supersedes it
+KIND_JOB_ESTIMATE = "job_estimate"
 KIND_EVALUATION_BUILTIN = "evaluation_builtin"
 KIND_EVALUATION_CUSTOM = "evaluation_custom"
 
@@ -132,6 +135,8 @@ class UsageMeter:
         ref_type: str | None = None,
         ref_id: str | None = None,
         opaque: bool = False,
+        estimate_kind: str = KIND_TURN_ESTIMATE,
+        estimate_usd: float | None = None,
     ) -> None:
         self.user_id = user_id
         self.user_name = user_name
@@ -145,6 +150,10 @@ class UsageMeter:
         self.ref_id = ref_id
         # an opaque runtime reports no usage in-band: a silent turn gets the estimate
         self.opaque = opaque
+        # what that estimate is: the admin's flat per-turn default (core), or a job's
+        # per-agent recent average written as ``job_estimate`` (services/job_budget.py)
+        self.estimate_kind = estimate_kind
+        self.estimate_usd = estimate_usd
         self._lock = threading.Lock()
         self._turn = _Turn()
 
@@ -199,6 +208,21 @@ class UsageMeter:
             agent_id=agent.id, resource_id=agent.arn, session_id=session_id,
             model_id=model_id, opaque=not harness, **kwargs,
         )
+
+    def derive(self, **overrides: Any) -> UsageMeter:
+        """A fresh meter with this one's context (payer, source, refs…) and the
+        given fields replaced — one per turn of a job, so concurrent turns never
+        share an accumulator."""
+        fields = {
+            "user_id": self.user_id, "user_name": self.user_name, "source": self.source,
+            "origin_workspace_id": self.origin_workspace_id, "agent_id": self.agent_id,
+            "resource_id": self.resource_id, "session_id": self.session_id,
+            "model_id": self.model_id, "ref_type": self.ref_type, "ref_id": self.ref_id,
+            "opaque": self.opaque, "estimate_kind": self.estimate_kind,
+            "estimate_usd": self.estimate_usd,
+        }
+        fields.update(overrides)
+        return UsageMeter(**fields)
 
     # ── the in-band sinks ───────────────────────────────────────────────────
 
@@ -312,15 +336,19 @@ class UsageMeter:
             return None
 
     def turn_estimate(self, *, upsert_session: bool = True) -> str | None:
-        """Charge one turn of an opaque runtime the admin's flat estimate."""
+        """Charge one turn of an opaque runtime its estimate: the meter's own
+        ``estimate_usd`` when set (a job's per-agent average), else the admin's flat
+        per-turn default."""
         try:
-            db = SessionLocal()
-            try:
-                usd = budgets.budget_settings(db)["opaque_turn_estimate_usd"]
-            finally:
-                db.close()
+            usd = self.estimate_usd
+            if usd is None:
+                db = SessionLocal()
+                try:
+                    usd = budgets.budget_settings(db)["opaque_turn_estimate_usd"]
+                finally:
+                    db.close()
             row_id = self._write(
-                kind=KIND_TURN_ESTIMATE, model_id=self.model_id, usage=TokenUsage(),
+                kind=self.estimate_kind, model_id=self.model_id, usage=TokenUsage(),
                 usd=float(usd), estimated=True, quantity=1.0, unit="turn",
             )
             if upsert_session:
@@ -328,6 +356,36 @@ class UsageMeter:
             return row_id
         except Exception:  # noqa: BLE001
             logger.warning("usage meter: could not record a turn estimate", exc_info=True)
+            return None
+
+    def job_estimate(
+        self,
+        usd: float | None,
+        *,
+        quantity: float,
+        unit: str,
+        detail: dict[str, Any] | None = None,
+        model_id: str | None = None,
+        upsert_session: bool = False,
+    ) -> str | None:
+        """Debit one up-front ``job_estimate`` row (flagged estimated) for work that
+        reports no usage in-band. ``usd`` None means its model has no price: the
+        row is kept (and flagged) so the admin price editor lists the model, but
+        adds nothing. Never raises."""
+        try:
+            extra = dict(detail or {})
+            if usd is None:
+                extra["unpriced"] = True
+            row_id = self._write(
+                kind=KIND_JOB_ESTIMATE, model_id=model_id or self.model_id, usage=TokenUsage(),
+                usd=None if usd is None else round(float(usd), 8), estimated=True,
+                quantity=float(quantity), unit=unit, detail=extra or None,
+            )
+            if upsert_session:
+                self._upsert_session()
+            return row_id
+        except Exception:  # noqa: BLE001
+            logger.warning("usage meter: could not record a job estimate", exc_info=True)
             return None
 
     def evaluate_usage(
@@ -464,6 +522,30 @@ class UsageMeter:
                     db.close()
         except Exception:  # noqa: BLE001
             logger.warning("usage meter: could not record the session", exc_info=True)
+
+
+def supersede(row_ids: Any, by: str) -> int:
+    """Mark estimate rows as replaced by row ``by`` (a measured row, or a better
+    estimate): spend stops counting them. Rows another row already superseded
+    keep their first replacement. Returns how many rows changed; never raises."""
+    ids = [str(row_id) for row_id in (row_ids or []) if row_id and str(row_id) != by]
+    if not ids or not by:
+        return 0
+    try:
+        db = SessionLocal()
+        try:
+            changed = (
+                db.query(UsageEvent)
+                .filter(UsageEvent.id.in_(ids), UsageEvent.superseded_by.is_(None))
+                .update({UsageEvent.superseded_by: by}, synchronize_session=False)
+            )
+            db.commit()
+            return int(changed or 0)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("usage meter: could not supersede %s", ids, exc_info=True)
+        return 0
 
 
 def meter_sink(meter: UsageMeter | None) -> dict[str, Any]:

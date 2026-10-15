@@ -362,7 +362,8 @@ def test_a_harness_canary_completes_from_50_50_on_a_treatment_win(client, monkey
     canary_id = _canary(_agent())
     _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": True})
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: runs.append(action))
 
     res = _complete(client, canary_id)
 
@@ -389,7 +390,8 @@ def test_a_non_significant_early_win_still_needs_the_override(client, monkeypatc
     canary_id = _canary(_agent())
     _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": False})
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: runs.append(action))
 
     refused = _complete(client, canary_id)
     overridden = _complete(client, canary_id, allow_non_significant=True)
@@ -404,7 +406,8 @@ def test_a_50_50_tie_may_complete_with_the_override(client, monkeypatch):
     canary_id = _canary(_agent())
     _at_stage(canary_id, 1, {"verdict": "tie", "significant": False})
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: runs.append(action))
 
     refused = _complete(client, canary_id)
     overridden = _complete(client, canary_id, allow_non_significant=True)
@@ -427,7 +430,8 @@ def test_early_complete_is_only_a_harness_50_50_win_or_tie(client, monkeypatch, 
     canary_id = _canary(_agent())
     _at_stage(canary_id, stage, verdict, harness=harness)
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: runs.append(action))
 
     res = _complete(client, canary_id, allow_non_significant=True)
 

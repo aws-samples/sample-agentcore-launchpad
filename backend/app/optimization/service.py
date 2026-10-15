@@ -22,6 +22,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from app.core.billing_policy import SOURCE_EXPERIMENT
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
@@ -40,7 +41,7 @@ from app.optimization.models import Experiment
 from app.optimization.providers import evidence as rec_evidence
 from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
-from app.services import creators, visibility
+from app.services import creators, job_budget, visibility
 from app.services.agentcore.client import control_client, data_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
@@ -78,6 +79,10 @@ TRAFFIC_USER_ID = "launchpad-experiment-traffic"
 # fatally. Never surfaces to a caller: its presence implies a stored exception,
 # which send_gateway_traffic raises before it builds a result.
 _TRAFFIC_SKIPPED = object()
+# Outcome for a prompt never sent because the action caller reached their monthly
+# spend budget: unlike _TRAFFIC_SKIPPED it is not an error — the stage keeps the
+# prompts already answered.
+_TRAFFIC_BUDGET_SKIPPED = object()
 
 _sleep = time.sleep  # injectable
 
@@ -138,13 +143,17 @@ def legacy_promotion(artifacts: dict[str, Any]) -> bool:
     return bool(promote.get("after_weights") and not promotion_complete(artifacts))
 
 
-def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
+def run_action(
+    exp_id: str, action: str, fn: Callable[[Progress], Any],
+    caller: creators.Creator | None = None,
+) -> None:
     """Run a stage action on a daemon thread with row-level progress.
 
     The wrapped fn persists its own artifact + stage on success; this runner
     only owns the running_action/progress/error lifecycle. A failure keeps
     the stage so re-POSTing the same action retries it (AWS creates are
-    idempotent — conflict-adopt by name).
+    idempotent — conflict-adopt by name). ``caller`` is recorded per action
+    (``artifacts.action_callers``): who started it is who pays for it.
     """
     def progress(msg: str) -> None:
         _update(exp_id, progress=msg[:300])
@@ -162,7 +171,11 @@ def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
             _update(exp_id, running_action=None, progress=None,
                     error=f"{action}: {type(exc).__name__}: {exc}"[:500])
 
-    _update(exp_id, running_action=action, error=None)
+    extra: dict[str, Any] = {}
+    if caller is not None:
+        extra["artifact"] = {
+            "action_callers": record_action_caller(_get(exp_id).artifacts, action, caller)}
+    _update(exp_id, running_action=action, error=None, **extra)
     _spawn(runner)
 
 
@@ -568,7 +581,10 @@ def stage_recommend(
     source: dict[str, Any] | None = None,
     provider: str | None = None,
     model_id: str | None = None,
+    meter: Any = None,
 ) -> dict[str, Any]:
+    """``meter`` pays for a 3rd-party provider's model calls (the AgentCore
+    recommendation jobs are free: pricing page, "pay only for evaluations")."""
     data = data_client(workspace)
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
     log_group_arns = [
@@ -624,6 +640,7 @@ def stage_recommend(
                 # `recommend_tools` is ignored here (it keeps its meaning on the
                 # AgentCore branch below)
                 components=mine, tools=agent.get("tools") or {},
+                **({"meter": meter} if meter is not None else {}),
             )
         )
     if "system_prompt" in types and "system_prompt" not in mine:
@@ -743,9 +760,15 @@ def _third_party_prompt_recommendation(
     tools: dict[str, str] | None = None,
     tool_turns: rec_evidence.ToolTurnsFn | None = None,
     tool_spans: rec_evidence.ToolSpansFn | None = None,
+    meter: Any = None,
 ) -> dict[str, Any]:
     """Recommendation(s) from a registered non-AgentCore provider — the system
     prompt and/or the agent's own tool descriptions, per ``components``.
+
+    ``meter`` (a ``UsageMeter`` of the requester) is charged the provider's own
+    model calls: every ConverseStream round's reported usage, settled as one exact
+    ``tokens`` row at the provider model's price once the provider returns (or
+    fails).
 
     Evidence is the pinned run's own batch-evaluation results stream joined
     with each session's transcript; the router already guaranteed a pinned
@@ -811,24 +834,30 @@ def _third_party_prompt_recommendation(
         )
     finally:
         db.close()
-    result = prov.optimize(
-        OptimizeRequest(
-            current_prompt=agent.get("system_prompt") or "",
-            agent=agent,
-            trace_source=source,
-            evidence=evidence,
-            stats=stats,
-            model_id=resolved_model,
-            workspace=workspace,
-            max_chars=REC_PROMPT_MAX_CHARS,
-            extra_feedback=extra_feedback,
-            max_tokens=settings.prompt_opt_max_tokens,
-            components=components,
-            tools=own_tools,
-        ),
-        progress,
-        converse=converse,
-    )
+    if meter is not None:
+        converse = _metered_converse(converse, workspace, meter)
+    try:
+        result = prov.optimize(
+            OptimizeRequest(
+                current_prompt=agent.get("system_prompt") or "",
+                agent=agent,
+                trace_source=source,
+                evidence=evidence,
+                stats=stats,
+                model_id=resolved_model,
+                workspace=workspace,
+                max_chars=REC_PROMPT_MAX_CHARS,
+                extra_feedback=extra_feedback,
+                max_tokens=settings.prompt_opt_max_tokens,
+                components=components,
+                tools=own_tools,
+            ),
+            progress,
+            converse=converse,
+        )
+    finally:
+        if meter is not None:
+            meter.settle()  # what the rounds reported, even when the provider failed
     out: dict[str, Any] = dict(attribution)
     if want_prompt:
         # the prompt's meta; the tool component's counters live in tool_provider_meta
@@ -859,6 +888,22 @@ def _third_party_prompt_recommendation(
             out["tool_error"] = (result.tool_error or result.error or "provider produced "
                                  "no tool descriptions")[:300]
     return out
+
+
+def _metered_converse(converse: Any, workspace: WorkspaceContext, meter: Any) -> Any:
+    """Wrap a provider's ``ConverseFn`` so each round's reported usage reaches
+    ``meter`` (``converse_text`` returns ``{input_tokens, output_tokens}``)."""
+    from app.optimization.providers.bedrock_lm import converse_for
+
+    inner = converse or converse_for(workspace)
+
+    def call(model_id: str, system: str, messages: list[dict[str, str]],
+             max_tokens: int) -> tuple[str, dict[str, Any]]:
+        text, usage = inner(model_id, system, messages, max_tokens)
+        meter.converse_usage(usage)
+        return text, usage
+
+    return call
 
 
 def recommendation_attribution(rec: dict[str, Any] | None) -> str | None:
@@ -1260,8 +1305,17 @@ def send_gateway_traffic(
     concurrency: int | None = None, user_id: str = TRAFFIC_USER_ID,
     path_suffix: str = "/invocations",
     body_for: Callable[[str, str], dict[str, Any]] | None = None,
+    budget: Any = None,
+    estimate_usd: float | None = None,
 ) -> dict[str, Any]:
     """SigV4 POST each prompt through the experiment gateway (A/B routes them).
+
+    ``budget`` (a ``JobBudget`` of the action caller) is checked before each
+    prompt is sent: once the caller is at or over their monthly limit the prompts
+    not yet started are skipped (requests in flight finish), and the result says
+    so (``stop_reason: budget_exceeded``, ``skipped``). Each answered prompt is
+    debited ``estimate_usd`` as a ``job_estimate`` on its session — the response
+    body is never read, so there is no in-band usage.
 
     ``path_suffix`` / ``body_for`` default to the Runtime target contract
     (``/<target>/invocations`` + ``{prompt, sessionId}``); a Harness canary's
@@ -1344,6 +1398,27 @@ def send_gateway_traffic(
     # written by the one worker that owns index i, so no lock is needed
     outcomes: list[Any] = [None] * len(seeds)
     abort = threading.Event()
+    # the caller's spend budget: set once a prompt found them over the limit
+    over_budget = threading.Event()
+    stop_error: list[Any] = []
+    # answered prompts whose estimate this thread has not written yet: counted by
+    # the check, under the one lock the write also holds, so it is never a prompt late
+    debit_lock = threading.Lock()
+    undebited = {"usd": 0.0}
+    per_prompt = float(estimate_usd or 0.0)
+
+    def budget_allows() -> bool:
+        if budget is None:
+            return True
+        if over_budget.is_set():
+            return False
+        with debit_lock:
+            error = budget.exceeded(extra_usd=undebited["usd"])
+        if error is not None:
+            stop_error.append(error)
+            over_budget.set()
+            return False
+        return True
 
     def worker() -> None:
         while True:
@@ -1354,8 +1429,13 @@ def send_gateway_traffic(
             try:
                 if abort.is_set():
                     outcomes[index] = _TRAFFIC_SKIPPED
+                elif not budget_allows():
+                    outcomes[index] = _TRAFFIC_BUDGET_SKIPPED
                 else:
                     outcomes[index] = send_one(*seeds[index])
+                    if budget is not None and outcomes[index] == 200:
+                        with debit_lock:
+                            undebited["usd"] += per_prompt
             except BaseException as exc:  # re-raised by the caller, in order
                 outcomes[index] = exc
                 abort.set()  # one fatal error stops the prompts not yet started
@@ -1370,13 +1450,25 @@ def send_gateway_traffic(
     ]
     for thread in threads:
         thread.start()
-    sent_ok = live_failed = 0
+    sent_ok = live_failed = skipped = 0
     for _ in range(len(seeds)):
-        if outcomes[finished.get()] == 200:
+        index = finished.get()
+        if outcomes[index] == 200:
             sent_ok += 1
+            if budget is not None:
+                # debited here, on the one thread that writes, as each answer lands
+                with debit_lock:
+                    budget.estimate(
+                        estimate_usd, quantity=1, unit="prompt",
+                        session_id=seeds[index][1], detail={"estimate": "traffic_prompt"},
+                    )
+                    undebited["usd"] -= per_prompt
+        elif outcomes[index] is _TRAFFIC_BUDGET_SKIPPED:
+            skipped += 1
         else:
             live_failed += 1
-        progress(f"sent {sent_ok}/{len(seeds)} ({live_failed} failed)")
+        progress(f"sent {sent_ok}/{len(seeds)} ({live_failed} failed"
+                 + (f", {skipped} skipped: budget reached)" if skipped else ")"))
     for thread in threads:
         thread.join()
 
@@ -1390,15 +1482,24 @@ def send_gateway_traffic(
     failed = 0
     status_counts: dict[str, int] = {}
     for (_, session_id), status in zip(seeds, outcomes, strict=True):
+        if status is _TRAFFIC_BUDGET_SKIPPED:
+            continue  # never sent: not a failure, not a status
         status_counts[str(status)] = status_counts.get(str(status), 0) + 1
         if status == 200:
             session_ids.append(session_id)
         else:
             failed += 1
-    return {
+    result: dict[str, Any] = {
         "session_ids": session_ids, "sent": len(session_ids), "failed": failed,
         "status_counts": status_counts,
     }
+    if skipped:
+        error = stop_error[0] if stop_error else None
+        result.update(
+            skipped=skipped, stop_reason=job_budget.STOP_REASON,
+            stop_message=job_budget.stop_message(error) if error is not None else None,
+        )
+    return result
 
 
 def metric_evaluator_id(metric: dict[str, Any]) -> str:
@@ -1545,10 +1646,19 @@ def act_recommend(
     source: dict[str, Any] | None = None,
     provider: str | None = None,
     model_id: str | None = None,
+    caller: creators.Creator | None = None,
 ) -> None:
+    """``caller`` — who pressed RECOMMEND, not the experiment's creator — pays for a
+    3rd-party provider's model calls."""
     exp = _get(exp_id)
     workspace = context_for_workspace(exp.workspace_id)
     sel = tuple(t for t in REC_TYPES if t in (types or REC_TYPES))
+    meter = None
+    if provider and provider != rec_providers.DEFAULT_PROVIDER:
+        meter = action_budget(exp, caller, SOURCE_EXPERIMENT).meter(
+            model_id=(model_id or rec_providers.get_provider(provider).default_model_id()
+                      or None),
+        )
     rec = stage_recommend(
         exp_id,
         _agent_meta(exp, workspace),
@@ -1560,6 +1670,7 @@ def act_recommend(
         # only when chosen: the default path's call shape stays exactly as before
         **({"provider": provider} if provider else {}),
         **({"model_id": model_id} if model_id else {}),
+        **({"meter": meter} if meter is not None else {}),
     )
     # merge over the prior artifact: the type(s) just generated replace their
     # own keys; the other type's output and any earlier accept survive
@@ -1668,18 +1779,59 @@ def resolve_traffic_items(dataset: Any) -> list[tuple[str, str]]:
 
 def act_traffic(
     exp_id: str, prompts: list[str], dataset_info: dict[str, str],
-    progress: Progress,
+    progress: Progress, caller: creators.Creator | None = None,
 ) -> None:
+    """Replay ``prompts`` through the A/B gateway, charged to ``caller`` (who pressed
+    TRAFFIC): one ``job_estimate`` per answered prompt at the agent's recent
+    measured average (the response body is never read), and a stop before the
+    next prompt once the caller is over budget — the prompts already sent are
+    kept as the stage's traffic (``stop_reason: budget_exceeded`` on the artifact)."""
     exp = _get(exp_id)
     gateway = exp.artifacts["gateway"]
+    budget = action_budget(exp, caller, SOURCE_EXPERIMENT)
     result = send_gateway_traffic(
         gateway["gateway_url"], gateway["target_v1"],
         prompts,
         context_for_workspace(exp.workspace_id),
         progress=progress,
+        budget=budget,
+        estimate_usd=traffic_prompt_estimate(exp.agent_id),
     )
     result.update(dataset_info)
+    # A budget stop is not an error to retry (a retry would be refused): the stage
+    # advanced with what was sent, and the artifact's `stop_reason` says why it is short.
     _update(exp_id, stage="traffic", artifact={"traffic": result})
+
+
+def traffic_prompt_estimate(agent_id: str | None) -> float:
+    """One gateway traffic prompt's estimate: the agent's recent measured average
+    per turn, else the ``agent_turn_estimate_usd`` budget setting."""
+    db = SessionLocal()
+    try:
+        return job_budget.turn_estimate(db, agent_id, fallback="agent_turn_estimate_usd")[0]
+    finally:
+        db.close()
+
+
+def action_budget(row: Any, caller: creators.Creator | None, source: str) -> Any:
+    """The payer of one experiment / canary action: the caller who started it
+    (recorded on the row's ``action_callers``), never assumed to be the creator."""
+    agent_id = getattr(row, "agent_id", None) or getattr(row, "champion_agent_id", None)
+    ref_type = "experiment" if source == SOURCE_EXPERIMENT else "canary"
+    return job_budget.JobBudget.for_creator(
+        caller, source, origin_workspace_id=row.workspace_id, agent_id=agent_id,
+        ref_type=ref_type, ref_id=row.id,
+    )
+
+
+def record_action_caller(artifacts: dict[str, Any], action: str,
+                         caller: creators.Creator | None) -> dict[str, Any]:
+    """``artifacts["action_callers"]`` with ``action`` → who started it now (its
+    payer); the creator stays on the row's own ``created_by``."""
+    callers = dict((artifacts or {}).get("action_callers") or {})
+    callers[action] = {"user_id": getattr(caller, "user_id", None),
+                       "name": getattr(caller, "name", None), "at": _now()}
+    return callers
 
 
 def act_verdict(exp_id: str, progress: Progress) -> None:

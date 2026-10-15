@@ -276,6 +276,11 @@ def _migrate(bind) -> None:
          "ALTER TABLE eval_recommendations ADD COLUMN accepted JSON"),
         ("eval_recommendations", "edit",
          "ALTER TABLE eval_recommendations ADD COLUMN edit JSON"),
+        # the spend-budget payer of a recommendation (services/job_budget.py)
+        ("eval_recommendations", "requested_by",
+         "ALTER TABLE eval_recommendations ADD COLUMN requested_by VARCHAR(32)"),
+        ("eval_recommendations", "requested_by_name",
+         "ALTER TABLE eval_recommendations ADD COLUMN requested_by_name VARCHAR(64)"),
     ):
         if table in inspector.get_table_names():
             existing = {c["name"] for c in inspector.get_columns(table)}

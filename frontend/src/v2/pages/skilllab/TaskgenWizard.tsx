@@ -9,6 +9,7 @@ import {
   type SkillLabStatus,
   type SkillLabTargetBackend,
 } from "../../../lib/api";
+import { rememberBudgetNotice } from "../../../lib/budgets";
 import { modelDefault } from "../../../lib/skillLab";
 import { TASK_ASSET_ACCEPT } from "../../../lib/skillLabTasksets";
 import { Alert, Button, Card, Field, FlowHeader, LinkButton, Select } from "../../ui";
@@ -95,6 +96,7 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
           : {}),
         params: { target_backend: backend, model: model.trim(), count, guidance: guidance.trim(), timeout },
       });
+      rememberBudgetNotice(job.id, job.budget_notice);
       setParams({ tab: "tasksets", view: "gen", id: job.id });
     } catch (err) {
       setError(errorMessage(err));

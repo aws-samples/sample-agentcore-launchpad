@@ -212,7 +212,7 @@ def test_provider_and_model_reach_act_recommend(client, monkeypatch):
     captured: dict = {}
 
     def fake_act(exp_id, progress, types=None, tools=None, source=None,
-                 provider=None, model_id=None):
+                 provider=None, model_id=None, caller=None):
         captured.update(provider=provider, model_id=model_id, source=source)
 
     monkeypatch.setattr(svc, "act_recommend", fake_act)

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
+import { rememberBudgetNotice } from "../../../lib/budgets";
 import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { loadModelDefaults, STATIC_MODEL_DEFAULTS, withCurrentModel } from "../../../lib/model-defaults";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
@@ -268,6 +269,8 @@ export function TaskWizard() {
           ...scope,
         });
         toast("success", t("v2.tasks.createdRun"));
+        // its estimate is more than the creator has left: the detail page says so
+        rememberBudgetNotice(run.id, run.budget_notice);
         setParams({ view: "detail", kind: "run", id: run.id });
       }
     } catch (err) {

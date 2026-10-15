@@ -8760,6 +8760,13 @@
         "studio": "Studio",
         "governance": "Governance",
         "models_probe": "Model probes"
+      },
+      "jobNotice": "This job's estimated cost ({{estimate}}) is more than what is left of your monthly budget ({{remaining}}). It runs anyway, and stops at its next safe point once the budget is reached. The budget resets on {{date}}.",
+      "stop": {
+        "run": "Stopped by the spend budget: the monthly budget of the person who started this run was reached, so it stopped before its next scenario. The sessions replayed so far are kept.",
+        "traffic": "Cut short by the spend budget: the monthly budget of the person who sent this traffic was reached, so {{count}} more were not sent. What was already answered is kept.",
+        "train": "Stopped by the spend budget: the monthly budget of the person who started this job was reached, so training stopped after its last completed step. Resume it once the budget resets or an administrator raises the limit.",
+        "notStarted": "Not started: the monthly budget of the person who started this job was reached while it waited in the queue. Submit it again once the budget resets or an administrator raises the limit."
       }
     },
     "budgets": {
@@ -8846,8 +8853,39 @@
       "unknownPrincipal": "Unknown",
       "settingsTitle": "Estimates",
       "settingsSub": "Charged where a call reports no usage, until reconciliation replaces it",
-      "turnEstimate": "Per turn on an opaque runtime (USD)",
-      "turnEstimateHint": "Charged for each turn on a runtime that reports no token usage (Strands zip, BYOC, Studio, A2A). Default {{value}}.",
+      "estimatesTurns": "Agent turns",
+      "estimatesJobs": "Long-running jobs",
+      "estimateInvalidTokens": "Enter a whole number from 0 to {{max}}.",
+      "estimates": {
+        "opaque_turn_estimate_usd": {
+          "label": "Per turn on an opaque runtime (USD)",
+          "hint": "Charged for each turn on a runtime that reports no token usage (Strands zip, BYOC, Studio, A2A). An evaluation replay uses the agent's recent measured average instead when it has one. Default {{value}}."
+        },
+        "agent_turn_estimate_usd": {
+          "label": "Per traffic prompt, agent with no history (USD)",
+          "hint": "Experiment and canary traffic never reads the agent's answer, so each answered prompt is charged the agent's recent measured average per turn, or this when the agent has none yet. Default {{value}}."
+        },
+        "persona_actor_input_tokens": {
+          "label": "Persona actor input tokens per turn",
+          "hint": "The model that plays the user in a simulated persona reports no usage, so each of its turns is charged this many input tokens at the run's actor model price. Default {{value}}."
+        },
+        "persona_actor_output_tokens": {
+          "label": "Persona actor output tokens per turn",
+          "hint": "Output tokens charged per simulated persona actor turn, at the run's actor model price. Default {{value}}."
+        },
+        "skill_lab_eval_task_usd": {
+          "label": "Skill Lab evaluation, per task (USD)",
+          "hint": "Charged as an evaluation job starts, then replaced by the tokens its results report. Default {{value}}."
+        },
+        "skill_lab_train_step_usd": {
+          "label": "Skill Lab training, per step (USD)",
+          "hint": "Charged as each training step starts. Training reports no usage, so the estimate stays. Default {{value}}."
+        },
+        "skill_lab_taskgen_job_usd": {
+          "label": "Skill Lab task generation, per job (USD)",
+          "hint": "Charged as a task-generation job starts. Default {{value}}."
+        }
+      },
       "estimateInvalid": "Enter an amount from 0 to {{max}}.",
       "estimateSaved": "Estimate saved",
       "estimateReset": "Estimate back to its default",

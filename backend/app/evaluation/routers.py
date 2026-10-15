@@ -32,7 +32,7 @@ from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import agent_access, creators, visibility
+from app.services import agent_access, budgets, creators, job_budget, visibility
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
 from app.services.creators import Creator
@@ -1386,6 +1386,9 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         # sessions a partially failed batch skipped, and why (null when none / older row)
         "session_failures": run.session_failures,
         "error": run.error,
+        # `budget_exceeded` when the run stopped at a boundary because its creator
+        # reached their monthly spend budget (services/job_budget.py), else null
+        "stop_reason": job_budget.stop_reason_of(run.error),
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
@@ -1586,6 +1589,15 @@ def create_run(
     if req.mode == "insights":
         applied = req.insights or list(ac.INSIGHT_TYPES)
 
+    # The route gate checked the caller's spend (the agent rides in the body, not
+    # the path): a replay also invokes the agent, and a persona run the actor model,
+    # so a budgeted payer is refused here when either has no price.
+    payer = budgets.payer_of_request(request)
+    if payer.budgeted and items:
+        budgets.check_agent(db, payer, agent)
+        if any("actor_profile" in item for item in items):
+            budgets.check_model(payer, req.actor_model_id)
+
     run = service.submit_run(
         agent=agent,
         workspace=ws.context,
@@ -1606,7 +1618,18 @@ def create_run(
         log_source=log_source,
         creator=Creator.of_request(request),
     )
-    return _run_out(run)
+    out = _run_out(run)
+    out["budget_notice"] = None
+    if payer.budgeted:
+        # the run is allowed either way; it stops at its next boundary once the
+        # limit is reached — say so up front when the forecast is more than is left
+        forecast = job_budget.eval_run_forecast(
+            db, agent=agent, items=items, evaluators=applied, mode=req.mode,
+            actor_model_id=req.actor_model_id,
+            session_count=len(set(req.session_ids or [])) or None,
+        )
+        out["budget_notice"] = job_budget.notice(db, payer.user_id, forecast)
+    return out
 
 
 def _assert_log_groups_exist(ws: WorkspaceScope, groups: list[str]) -> None:
@@ -1742,13 +1765,23 @@ def list_run_recommendations(
 def create_run_recommendations(
     run_id: str,
     req: RecommendationCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Start one StartRecommendation job per requested kind, its traces pinned to
-    this run's batch evaluation (only completed runs with a batch → else 409)."""
+    this run's batch evaluation (only completed runs with a batch → else 409). The
+    caller is recorded as the requester: a 3rd-party provider's model calls are
+    charged to them, and a budgeted caller is refused when that model has no price."""
     run = _run_in(db, ws, run_id, viewer=viewer)
+    if req.provider and req.provider != recommendations.AGENTCORE_PROVIDER:
+        from app.optimization import providers as rec_providers
+
+        if req.provider in rec_providers.PROVIDER_IDS:
+            model = (req.model_id or "").strip() or (
+                rec_providers.get_provider(req.provider).default_model_id() or None)
+            budgets.check_model(budgets.payer_of_request(request), model)
     rows = recommendations.start(
         db, run, ws.context,
         kinds=list(dict.fromkeys(req.kinds)),
@@ -1758,6 +1791,7 @@ def create_run_recommendations(
         tools={t.name: t.description for t in req.tools or []},
         provider=req.provider,
         model_id=req.model_id,
+        requester=Creator.of_request(request),
     )
     return {"recommendations": [recommendations.out(r) for r in rows]}
 

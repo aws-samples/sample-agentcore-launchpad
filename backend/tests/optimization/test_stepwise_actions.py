@@ -617,7 +617,7 @@ def test_traffic_action_uses_dataset_prompts(client, monkeypatch):
     sent: dict = {}
 
     def fake_send(gateway_url, target, prompts, poster=None, signer=None,
-                  progress=svc._noop):
+                  progress=svc._noop, budget=None, estimate_usd=None):
         sent.update(url=gateway_url, target=target, prompts=list(prompts))
         return {"session_ids": ["s1"], "sent": len(prompts), "failed": 0}
 
@@ -1027,7 +1027,7 @@ def test_configuration_gateway_rejects_active_canary_before_dispatch(
     monkeypatch.setattr(
         svc,
         "run_action",
-        lambda exp_id, action, fn: dispatched.append(action),
+        lambda exp_id, action, fn, caller=None: dispatched.append(action),
     )
 
     res = client.post(
@@ -1165,7 +1165,7 @@ def _capture_gateway(monkeypatch):
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
         svc, "run_action",
-        lambda exp_id, action, fn: seen.update(action=action, fn=fn),
+        lambda exp_id, action, fn, caller=None: seen.update(action=action, fn=fn),
     )
     monkeypatch.setattr(
         svc, "act_gateway",

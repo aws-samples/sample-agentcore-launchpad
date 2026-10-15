@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentCoreRates, BudgetLevelInfo, BudgetPerson, ModelPriceEntry } from "../../../lib/api";
+import { BUDGET_ESTIMATE_KEYS } from "../../../lib/budgets";
 import {
   amountFromInput,
   amountToInput,
+  ESTIMATE_FIELDS,
+  estimateFromInput,
+  MAX_ESTIMATE_TOKENS,
+  MAX_TURN_ESTIMATE_USD,
   assignDraftFrom,
   assignDraftValid,
   assignmentPayload,
@@ -297,5 +302,22 @@ describe("AgentCore rates", () => {
     expect(unitKey("vCPU-hour")).toBe("v2.models.rates.unit.vcpu_hour");
     expect(unitKey("1K input tokens")).toBe("v2.models.rates.unit.1k_input_tokens");
     expect(unitKey("tokens per evaluation")).toBe("v2.models.rates.unit.tokens_per_evaluation");
+  });
+});
+
+describe("job estimates", () => {
+  it("edits every estimate key once, with its unit and the route's bound", () => {
+    expect(ESTIMATE_FIELDS.map((f) => f.key)).toEqual([...BUDGET_ESTIMATE_KEYS]);
+    for (const field of ESTIMATE_FIELDS) {
+      expect(field.max).toBe(field.unit === "usd" ? MAX_TURN_ESTIMATE_USD : MAX_ESTIMATE_TOKENS);
+    }
+  });
+
+  it("takes amounts in USD and whole token counts", () => {
+    expect(estimateFromInput("0.15", "usd", 100)).toBe(0.15);
+    expect(estimateFromInput("100.01", "usd", 100)).toBeNull();
+    expect(estimateFromInput("1500", "tokens", MAX_ESTIMATE_TOKENS)).toBe(1500);
+    expect(estimateFromInput("1500.5", "tokens", MAX_ESTIMATE_TOKENS)).toBeNull();
+    expect(estimateFromInput("", "usd", 100)).toBeNull();
   });
 });

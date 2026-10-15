@@ -308,6 +308,9 @@ def experiment_action(
     reason = service.stage_not_ready_reason(exp, req.action)
     if reason:
         raise AppError("experiment.stage_not_ready", reason, status_code=409)
+    # who pays for this action: the caller, recorded per action — in a shared
+    # workspace it need not be the experiment's creator
+    caller = Creator.of_request(request)
 
     # sync actions answer inline; async ones 202 into a background thread and
     # the client watches running_action/progress on the experiment itself
@@ -346,6 +349,7 @@ def experiment_action(
             exp.id,
             "promote",
             lambda progress: service.act_promote(exp_id, progress),
+            caller=caller,
         )
     elif req.action == "traffic":
         if not req.dataset_id:
@@ -364,7 +368,8 @@ def experiment_action(
         service.run_action(
             exp.id, "traffic",
             lambda progress: service.act_traffic(exp_id, prompts, dataset_info,
-                                                 progress),
+                                                 progress, caller=caller),
+            caller=caller,
         )
     elif req.action == "recommend":
         _validate_recommend_provider(req)
@@ -374,13 +379,24 @@ def experiment_action(
         source = service.resolve_recommend_source(
             exp.agent_id, req.recommend_source_run_id, ws.context, viewer=viewer
         )
+        provider = rec_providers.get_provider(req.recommend_provider)
+        if provider.id != rec_providers.DEFAULT_PROVIDER:
+            # a 3rd-party provider's model calls are the caller's: an unpriced
+            # model cannot bypass a budgeted caller's limit
+            from app.services import budgets
+
+            budgets.check_model(
+                budgets.payer_of_request(request),
+                req.recommend_model_id or provider.default_model_id() or None,
+            )
         service.run_action(
             exp.id, "recommend",
             lambda progress: service.act_recommend(
                 exp_id, progress,
                 types=req.recommend_types, tools=req.recommend_tools,
                 source=source, provider=req.recommend_provider,
-                model_id=req.recommend_model_id),
+                model_id=req.recommend_model_id, caller=caller),
+            caller=caller,
         )
     elif req.action == "gateway":
         service.assert_shared_gateway_available(ws.context)
@@ -393,6 +409,7 @@ def experiment_action(
         service.run_action(
             exp.id, "gateway",
             lambda progress: service.act_gateway(exp_id, progress, evaluators),
+            caller=caller,
         )
     else:  # abtest | verdict | cleanup
         if req.action == "abtest":
@@ -405,7 +422,7 @@ def experiment_action(
             "cleanup": service.act_cleanup,
         }[req.action]
         service.run_action(exp.id, req.action,
-                           lambda progress: fn(exp_id, progress))
+                           lambda progress: fn(exp_id, progress), caller=caller)
 
     if req.action in service.ASYNC_ACTIONS:
         response.status_code = 202

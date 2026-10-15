@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from app.core.billing_policy import SOURCE_CANARY
 from app.core.db import SessionLocal
 from app.core.errors import AppError, cleanup_error, is_not_found
 from app.evaluation import agentcore_eval as ac
@@ -16,7 +17,7 @@ from app.optimization import canary_harness, canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
-from app.services import creators, snapshots
+from app.services import budgets, creators, job_budget, snapshots
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -69,8 +70,11 @@ def run_action(
     canary_id: str,
     action: str,
     fn: Callable[[Progress], Any],
+    caller: creators.Creator | None = None,
 ) -> None:
-    """Run one canary action with progress persisted on its own ledger row."""
+    """Run one canary action with progress persisted on its own ledger row.
+    ``caller`` is recorded per action (``artifacts.action_callers``): who started
+    an action pays for it, whoever created the canary."""
 
     def progress(message: str) -> None:
         _update(canary_id, progress=message[:300])
@@ -89,7 +93,11 @@ def run_action(
                 error=f"{action}: {type(exc).__name__}: {exc}"[:500],
             )
 
-    _update(canary_id, running_action=action, error=None)
+    extra: dict[str, Any] = {}
+    if caller is not None:
+        extra["artifact"] = {"action_callers": experiment_service.record_action_caller(
+            _get(canary_id).artifacts, action, caller)}
+    _update(canary_id, running_action=action, error=None, **extra)
     experiment_service._spawn(runner)
 
 
@@ -835,12 +843,26 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     return result
 
 
+def _arm_models(row: RuntimeCanary) -> dict[str, str | None]:
+    """The model each Harness arm's tokens are priced at: the champion's for the
+    control endpoint, the candidate spec's (when it changed it) for the treatment."""
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, row.champion_agent_id)
+        control = budgets.agent_model(agent)[0] if agent is not None else None
+    finally:
+        db.close()
+    candidate = str((row.artifacts.get("edited_spec") or {}).get("model_id") or "").strip()
+    return {"control": control, "treatment": candidate or control}
+
+
 def _paired_harness_traffic(
     row: RuntimeCanary,
     workspace: WorkspaceContext,
     prompts: list[str],
     scenario_ids: list[str] | None,
     progress: Progress,
+    budget: job_budget.JobBudget | None = None,
 ) -> dict[str, Any]:
     """Send every prompt to BOTH Harness endpoints (see ``canary_harness.PAIRED_MODE``).
 
@@ -848,7 +870,12 @@ def _paired_harness_traffic(
     fresh session; up to ``TRAFFIC_MAX_CONCURRENCY`` run at once on daemon threads,
     while ``progress`` stays on this thread. A transient upstream error is retried
     once in a new session; any other failure marks that side of the pair, which the
-    verdict then leaves out — it never fails the whole replay."""
+    verdict then leaves out — it never fails the whole replay.
+
+    ``budget`` (the action caller's) meters each call exactly (Harness ``metadata``)
+    and is checked once per PAIR, by whichever arm of it starts first: once the
+    caller is over their monthly limit the pairs not yet started are skipped
+    whole (``skipped: budget_exceeded``), so no half pair is ever sent."""
     import queue
     import threading
     import uuid
@@ -871,6 +898,22 @@ def _paired_harness_traffic(
         for arm in ("control", "treatment"):
             jobs.put((i, arm))
     done: queue.SimpleQueue[tuple[int, str, str | None, str | None]] = queue.SimpleQueue()
+    models = _arm_models(row) if budget is not None else {}
+    # per pair: may it run (decided once, by its first arm to start)
+    allowed: dict[int, bool] = {}
+    decide = threading.Lock()
+    stop_error: list[AppError] = []
+
+    def pair_allowed(i: int) -> bool:
+        if budget is None:
+            return True
+        with decide:
+            if i not in allowed:
+                error = None if stop_error else budget.exceeded()
+                if error is not None:
+                    stop_error.append(error)
+                allowed[i] = not stop_error
+            return allowed[i]
 
     def worker() -> None:
         while True:
@@ -878,19 +921,29 @@ def _paired_harness_traffic(
                 i, arm = jobs.get_nowait()
             except queue.Empty:
                 return
+            if not pair_allowed(i):
+                done.put((i, arm, None, job_budget.STOP_REASON))
+                continue
             error: str | None = None
             sid: str | None = None
             for attempt in range(2):
                 sid = hc.new_session_id()
+                meter = (budget.meter(session_id=sid, model_id=models.get(arm),
+                                      resource_id=arn) if budget is not None else None)
                 try:
                     hc.invoke_harness_text(
                         data, arn, prompts[i], session_id=sid, actor_id=actor,
                         qualifier=endpoints[arm],
                         runtime_user_id=experiment_service.TRAFFIC_USER_ID,
+                        **({"on_usage": meter.on_usage} if meter is not None else {}),
                     )
                     error = None
+                    if meter is not None:
+                        meter.settle(session_id=sid)
                     break
                 except Exception as exc:  # noqa: BLE001 — recorded per side, never raised
+                    if meter is not None:
+                        meter.settle(failed=True, session_id=sid)
                     error = (getattr(exc, "code", None) or type(exc).__name__)[:120]
                     if attempt or not transient_invoke_error(exc):
                         break
@@ -902,28 +955,41 @@ def _paired_harness_traffic(
                for n in range(workers)]
     for thread in threads:
         thread.start()
-    total, failed = 2 * len(prompts), 0
+    total, failed, skipped = 2 * len(prompts), 0, 0
     for finished in range(1, total + 1):
         i, arm, sid, error = done.get()
-        pairs[i][f"{arm}_session_id"] = sid
-        if error:
-            failed += 1
-            pairs[i].setdefault("errors", {})[arm] = error
-            pairs[i]["error"] = ", ".join(f"{k}: {v}" for k, v in pairs[i]["errors"].items())
-        progress(f"paired replay · {finished}/{total} calls · {failed} failed")
+        if error == job_budget.STOP_REASON and sid is None:
+            skipped += 1  # never sent: the caller's budget was reached first
+            pairs[i]["skipped"] = job_budget.STOP_REASON
+        else:
+            pairs[i][f"{arm}_session_id"] = sid
+            if error:
+                failed += 1
+                pairs[i].setdefault("errors", {})[arm] = error
+                pairs[i]["error"] = ", ".join(
+                    f"{k}: {v}" for k, v in pairs[i]["errors"].items())
+        progress(f"paired replay · {finished}/{total} calls · {failed} failed"
+                 + (f" · {skipped} skipped: budget reached" if skipped else ""))
     for thread in threads:
         thread.join()
     for p in pairs:
         p.pop("errors", None)
-    return {
+    sent = total - failed - skipped
+    result: dict[str, Any] = {
         "mode": canary_harness.PAIRED_MODE,
         "pairs": pairs,
         "session_ids": [p[k] for p in pairs for k in ("control_session_id", "treatment_session_id")
                         if p[k]],
-        "sent": total - failed,
+        "sent": sent,
         "failed": failed,
-        "status_counts": {"ok": total - failed, **({"error": failed} if failed else {})},
+        "status_counts": {"ok": sent, **({"error": failed} if failed else {})},
     }
+    if skipped:
+        result.update(
+            skipped=skipped, stop_reason=job_budget.STOP_REASON,
+            stop_message=job_budget.stop_message(stop_error[0]) if stop_error else None,
+        )
+    return result
 
 
 def act_traffic(
@@ -932,13 +998,21 @@ def act_traffic(
     dataset_info: dict[str, str],
     progress: Progress,
     scenario_ids: list[str] | None = None,
+    caller: creators.Creator | None = None,
 ) -> dict[str, Any]:
+    """One traffic attempt, charged to ``caller`` (who pressed TRAFFIC): a Harness
+    canary's paired calls exactly, a runtime canary's gateway prompts as
+    ``job_estimate`` rows; either stops before its next prompt once the caller is
+    over budget, keeping what was already sent. The attempt then carries
+    ``stop_reason: budget_exceeded`` — not a row error: a retry would be refused."""
     row = _get(canary_id)
     workspace = context_for_workspace(row.workspace_id)
     setup = row.artifacts["setup"]
+    budget = experiment_service.action_budget(row, caller, SOURCE_CANARY)
     if is_harness(row):
         attempt = {
-            **_paired_harness_traffic(row, workspace, prompts, scenario_ids, progress),
+            **_paired_harness_traffic(row, workspace, prompts, scenario_ids, progress,
+                                      budget=budget),
             **dataset_info,
             "baseline_n": 0,
             "completed_at": _now(),
@@ -969,6 +1043,8 @@ def act_traffic(
         prompts,
         workspace,
         progress=progress,
+        budget=budget,
+        estimate_usd=experiment_service.traffic_prompt_estimate(row.champion_agent_id),
         **harness_seams,
     )
     attempt = {

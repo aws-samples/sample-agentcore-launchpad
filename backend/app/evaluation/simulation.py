@@ -39,6 +39,7 @@ def run_simulated_scenario(
     protocol: str = "http",
     runtime_user_id: str | None = None,
     invoke_text: Any = None,
+    meter_for: Any = None,
 ) -> str:
     """Drive one persona scenario to completion; returns the runtime session id.
 
@@ -50,6 +51,10 @@ def run_simulated_scenario(
     ``invoke_text(prompt, session_id) -> {text, session_id}`` overrides the
     default SigV4 runtime call for HTTP runtimes — the JWT-inbound bearer path
     rides through it (harness/A2A keep their own dispatch).
+    ``meter_for() -> UsageMeter`` meters the agent side of each turn the platform
+    invokes itself (exact Harness / Claude SDK usage, else the turn estimate);
+    an ``invoke_text`` caller meters its own turns. The actor model's usage is
+    unreachable here — the caller estimates it (services/job_budget.py).
     """
     if not actor_model_id:
         raise RuntimeError(
@@ -67,26 +72,39 @@ def run_simulated_scenario(
 
     def _invoke(inp: AgentInvokerInput) -> AgentInvokerOutput:
         prompt = inp.payload if isinstance(inp.payload, str) else str(inp.payload)
-        if method == "harness":
-            result = hc.invoke_harness_text(
-                data_client, agent_arn, prompt, session_id=state["session_id"]
-            )
-        elif protocol == "a2a":  # JSON-RPC runtimes reject the {prompt} payload
-            result = rt.invoke_a2a_text(
-                data_client, agent_arn, prompt, session_id=state["session_id"]
-            )
-        elif invoke_text is not None:
-            result = invoke_text(prompt, state["session_id"])
+        if invoke_text is not None and method != "harness" and protocol != "a2a":
+            result = invoke_text(prompt, state["session_id"])  # meters its own turn
         else:
-            result = rt.invoke_runtime_text(
-                data_client,
-                agent_arn,
-                prompt,
-                session_id=state["session_id"],
-                runtime_user_id=runtime_user_id,
-            )
+            meter = meter_for() if meter_for is not None else None
+            sink = {"on_usage": meter.on_usage} if meter is not None else {}
+            try:
+                result = _platform_invoke(prompt, sink)
+            except Exception:
+                if meter is not None:
+                    meter.settle(failed=True, session_id=state["session_id"])
+                raise
+            if meter is not None:
+                meter.settle(session_id=result.get("session_id"))
         state["session_id"] = result["session_id"]
         return AgentInvokerOutput(agent_output=result["text"])
+
+    def _platform_invoke(prompt: str, sink: dict[str, Any]) -> dict[str, Any]:
+        if method == "harness":
+            return hc.invoke_harness_text(
+                data_client, agent_arn, prompt, session_id=state["session_id"], **sink
+            )
+        if protocol == "a2a":  # JSON-RPC runtimes reject the {prompt} payload; no usage
+            return rt.invoke_a2a_text(
+                data_client, agent_arn, prompt, session_id=state["session_id"]
+            )
+        return rt.invoke_runtime_text(
+            data_client,
+            agent_arn,
+            prompt,
+            session_id=state["session_id"],
+            runtime_user_id=runtime_user_id,
+            **sink,
+        )
 
     profile = scenario.get("actor_profile") or {}
     executor = SimulatedScenarioExecutor(

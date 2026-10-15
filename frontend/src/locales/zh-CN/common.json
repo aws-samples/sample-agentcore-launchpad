@@ -8760,6 +8760,13 @@
         "studio": "Studio",
         "governance": "治理",
         "models_probe": "模型探测"
+      },
+      "jobNotice": "这个任务的预估费用（{{estimate}}）超过了你本月剩余的预算（{{remaining}}）。它仍会运行，预算用完后会在下一个安全节点停止。预算将于 {{date}} 重置。",
+      "stop": {
+        "run": "已因消费预算停止：发起这次运行的人本月预算已用完，运行在下一个场景开始前停止。已回放的会话都会保留。",
+        "traffic": "已因消费预算提前结束：发送这批流量的人本月预算已用完，还有 {{count}} 条没有发送。已得到回复的部分都会保留。",
+        "train": "已因消费预算停止：发起这个任务的人本月预算已用完，训练在最近一个完成的步骤之后停止。预算重置或管理员提高上限后，可以继续运行。",
+        "notStarted": "未启动：这个任务排队期间，发起人本月预算已用完。预算重置或管理员提高上限后，请重新提交。"
       }
     },
     "budgets": {
@@ -8846,8 +8853,39 @@
       "unknownPrincipal": "未知",
       "settingsTitle": "估算",
       "settingsSub": "调用没有上报用量时按估算计费，之后由对账替换",
-      "turnEstimate": "不透明运行时每轮费用（USD）",
-      "turnEstimateHint": "运行时不上报 Token 用量时（Strands zip、BYOC、Studio、A2A），每轮按这个金额计费。默认 {{value}}。",
+      "estimatesTurns": "Agent 轮次",
+      "estimatesJobs": "长时间任务",
+      "estimateInvalidTokens": "请输入 0 到 {{max}} 之间的整数。",
+      "estimates": {
+        "opaque_turn_estimate_usd": {
+          "label": "不透明运行时每轮费用（USD）",
+          "hint": "运行时不上报 Token 用量时（Strands zip、BYOC、Studio、A2A），每轮按这个金额计费。评估回放时，如果这个 Agent 有近期实测的平均值，就改用平均值。默认 {{value}}。"
+        },
+        "agent_turn_estimate_usd": {
+          "label": "每条流量提示，无历史的 Agent（USD）",
+          "hint": "实验和灰度发布的流量不会读取 Agent 的回复，因此每条得到回复的提示按这个 Agent 近期实测的每轮平均费用计费；Agent 还没有实测记录时按这个金额计费。默认 {{value}}。"
+        },
+        "persona_actor_input_tokens": {
+          "label": "模拟用户每轮输入 Token 数",
+          "hint": "模拟用户场景中扮演用户的模型不上报用量，因此它的每一轮按这个输入 Token 数、以运行所选的扮演模型价格计费。默认 {{value}}。"
+        },
+        "persona_actor_output_tokens": {
+          "label": "模拟用户每轮输出 Token 数",
+          "hint": "模拟用户每一轮计费的输出 Token 数，按运行所选的扮演模型价格计费。默认 {{value}}。"
+        },
+        "skill_lab_eval_task_usd": {
+          "label": "Skill Lab 评估，每个任务（USD）",
+          "hint": "评估任务开始时按这个金额计费，结束后改用结果中上报的 Token 用量。默认 {{value}}。"
+        },
+        "skill_lab_train_step_usd": {
+          "label": "Skill Lab 训练，每个步骤（USD）",
+          "hint": "每个训练步骤开始时计费。训练不上报用量，因此这个估算会保留。默认 {{value}}。"
+        },
+        "skill_lab_taskgen_job_usd": {
+          "label": "Skill Lab 任务生成，每个任务（USD）",
+          "hint": "任务生成开始时计费。默认 {{value}}。"
+        }
+      },
       "estimateInvalid": "请输入 0 到 {{max}} 之间的金额。",
       "estimateSaved": "估算已保存",
       "estimateReset": "估算已恢复默认",

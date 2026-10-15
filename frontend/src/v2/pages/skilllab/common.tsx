@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { SkillLabJobInfo, SkillLabStatus } from "../../../lib/api";
+import { isBudgetStop } from "../../../lib/budgets";
+import { BudgetNoticeAlert, BudgetStopAlert } from "../../BudgetBanner";
 import { Alert, Button, Tag, type TagTone } from "../../ui";
 
 
@@ -28,6 +30,29 @@ export function JobStatusTag({ job }: { job: SkillLabJobInfo }) {
 
 
 
+
+/** A job's failure, or — when its creator's monthly spend budget stopped it — what that
+ *  stop did (a training job stopped after a completed step and resumes; any other job
+ *  never started). Also the create notice when the estimate was more than was left. */
+export function JobErrorAlert({ job }: { job: SkillLabJobInfo }) {
+  return (
+    <>
+      <BudgetNoticeAlert id={job.id} />
+      {isBudgetStop(job) ? (
+        <BudgetStopAlert
+          kind={job.type === "train" && job.status === "interrupted" ? "train" : "notStarted"}
+          testId="v2-skilllab-budget-stop"
+        />
+      ) : (
+        job.error && (
+          <Alert tone="error">
+            <span style={{ whiteSpace: "pre-wrap" }}>{job.error}</span>
+          </Alert>
+        )
+      )}
+    </>
+  );
+}
 
 /**
  * Worker provisioning gaps. The second one (no local interpreter) blocks

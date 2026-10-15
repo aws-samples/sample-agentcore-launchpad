@@ -309,7 +309,7 @@ def test_setup_action_dispatches(client, monkeypatch):
     monkeypatch.setattr(
         canary_svc,
         "run_action",
-        lambda canary_id, action, fn: dispatched.append(action),
+        lambda canary_id, action, fn, caller=None: dispatched.append(action),
     )
     res = client.post(
         f"/api/runtime-canaries/{row.id}/action",

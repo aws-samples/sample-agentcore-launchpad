@@ -40,7 +40,7 @@ import {
 } from "../../ui";
 import { ArtifactBrowser } from "./ArtifactBrowser";
 import { bestScoreCache, useJob } from "./state";
-import { GoneCard, JobStatusTag } from "./common";
+import { GoneCard, JobErrorAlert, JobStatusTag } from "./common";
 import { JobOverview, LiveProgress } from "./EvalDetail";
 import { JobLog } from "./JobLog";
 import { TrainCurve } from "./TrainCurve";
@@ -339,11 +339,7 @@ export function TrainDetail({ id }: { id: string }) {
           </>
         }
       />
-      {job.error && (
-        <Alert tone="error">
-          <span style={{ whiteSpace: "pre-wrap" }}>{job.error}</span>
-        </Alert>
-      )}
+      <JobErrorAlert job={job} />
       <Card title={t("v2.skillLab.overview")}>
         <JobOverview job={job} extra={loopItems} />
       </Card>

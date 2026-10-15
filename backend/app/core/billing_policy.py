@@ -73,9 +73,12 @@ FREE = Free()
 # Experiment actions that invoke the agent, run a recommender or stand up judges;
 # accept / bundles / promote / verdict / cleanup only edit or tear down state.
 EXPERIMENT_BILLABLE_ACTIONS = frozenset({"recommend", "traffic", "gateway", "abtest"})
-# Canary setup creates the online judges, traffic invokes both arms; verdict /
-# advance / complete / rollback move or end the rollout.
-CANARY_BILLABLE_ACTIONS = frozenset({"setup", "traffic"})
+# Canary setup creates the online judges, traffic invokes both arms, and advance
+# moves the ramp to its next stage — the canary's online judges keep scoring live
+# traffic for another stage (the jobs child's "check before each stage advance").
+# verdict / complete / rollback read or END the rollout, so a payer over budget
+# can always wind a canary down.
+CANARY_BILLABLE_ACTIONS = frozenset({"setup", "traffic", "advance"})
 
 _ARCH = "/api/assistant/architect/conversations/{conversation_id}"
 

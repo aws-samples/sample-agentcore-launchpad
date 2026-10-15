@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { DiffPanes } from "../../../components/DiffPanes";
 import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
+import { isBudgetStop } from "../../../lib/budgets";
 import { evaluationRunPresentation, type EvaluationRunInfo } from "../../../lib/evaluation";
 import { evaluatorLabel, evaluatorPolarity } from "../../../lib/evaluators";
 import {
@@ -20,6 +21,7 @@ import {
   verdictLabel,
 } from "../../../lib/experiments";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
+import { BudgetStopAlert } from "../../BudgetBanner";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { creatorLabel, fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -633,13 +635,18 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
           </Field>
         </div>
       ) : (
-        <Descriptions
-          items={[
-            { label: t("v2.experiments.sent"), value: a.traffic.sent },
-            { label: t("v2.experiments.failed"), value: a.traffic.failed },
-            { label: t("expPage.datasetTag"), value: a.traffic.dataset_name ?? "—" },
-          ]}
-        />
+        <>
+          <Descriptions
+            items={[
+              { label: t("v2.experiments.sent"), value: a.traffic.sent },
+              { label: t("v2.experiments.failed"), value: a.traffic.failed },
+              { label: t("expPage.datasetTag"), value: a.traffic.dataset_name ?? "—" },
+            ]}
+          />
+          {isBudgetStop(a.traffic) && (
+            <BudgetStopAlert kind="traffic" skipped={a.traffic.skipped} testId="v2-exp-traffic-budget-stop" />
+          )}
+        </>
       )}
     </StageCard>
   );

@@ -8,7 +8,7 @@ import { creatorLabel, fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Spin, Tag } from "../../ui";
 import { ArtifactBrowser } from "./ArtifactBrowser";
-import { GoneCard, JobStatusTag } from "./common";
+import { GoneCard, JobErrorAlert, JobStatusTag } from "./common";
 import { passRateCache, useJob } from "./state";
 import { EvalResults } from "./EvalResults";
 import { JobLog } from "./JobLog";
@@ -165,11 +165,7 @@ export function EvalDetail({ id }: { id: string }) {
           )
         }
       />
-      {job.error && (
-        <Alert tone="error">
-          <span style={{ whiteSpace: "pre-wrap" }}>{job.error}</span>
-        </Alert>
-      )}
+      <JobErrorAlert job={job} />
       <Card title={t("v2.skillLab.overview")}>
         <JobOverview job={job} />
       </Card>

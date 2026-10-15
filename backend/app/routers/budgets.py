@@ -7,7 +7,10 @@ Administrator routes (``ROUTE_POLICY``: ADMIN):
 - ``GET /api/budgets/people?period=YYYY-MM``: every account's level, limit, spend
   (by source) and remaining budget, plus spend charged to principals with no account.
 - ``PUT /api/budgets/users/{user_id}``: an account's level and personal amount.
-- ``GET/PUT /api/budgets/settings``: the flat per-turn estimate for opaque runtimes.
+- ``GET/PUT /api/budgets/settings``: the per-unit estimates — the flat per-turn
+  estimate for opaque runtimes, and the long-running jobs' units (an agent turn
+  with no measured history, persona actor tokens per turn, Skill Lab per task /
+  per train step / per taskgen job).
 - ``GET /api/admin/model-prices``, ``PUT/DELETE /api/admin/model-prices/{model_id}``:
   the price editor — a model id may carry dots, colons and slashes, so the route
   takes the rest of the path.
@@ -115,7 +118,29 @@ def assign_user(
 
 
 class BudgetSettingsIn(BaseModel):
+    """The per-unit estimates (``budgets.DEFAULT_SETTINGS``); a ``null`` value resets
+    that key to its default, an omitted key is left alone."""
+
     opaque_turn_estimate_usd: float | None = Field(
+        default=None, ge=0, le=100, allow_inf_nan=False,
+    )
+    # long-running jobs (services/job_budget.py)
+    agent_turn_estimate_usd: float | None = Field(
+        default=None, ge=0, le=100, allow_inf_nan=False,
+    )
+    persona_actor_input_tokens: float | None = Field(
+        default=None, ge=0, le=1_000_000, allow_inf_nan=False,
+    )
+    persona_actor_output_tokens: float | None = Field(
+        default=None, ge=0, le=1_000_000, allow_inf_nan=False,
+    )
+    skill_lab_eval_task_usd: float | None = Field(
+        default=None, ge=0, le=100, allow_inf_nan=False,
+    )
+    skill_lab_train_step_usd: float | None = Field(
+        default=None, ge=0, le=100, allow_inf_nan=False,
+    )
+    skill_lab_taskgen_job_usd: float | None = Field(
         default=None, ge=0, le=100, allow_inf_nan=False,
     )
 

@@ -1,6 +1,7 @@
 // The Budgets tab of `/v2/costs` (admin): spend levels, every account's limit and spend
-// this period, spend with no account, and the flat per-turn estimate for runtimes that
-// report no usage. Nothing is enforced until a level exists (services/budgets.py).
+// this period, spend with no account, and the per-unit estimates charged where a call
+// reports no usage (an opaque runtime's turn, the long-running jobs' units). Nothing is
+// enforced until a level exists (services/budgets.py).
 import { RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,6 +9,7 @@ import { Link } from "react-router-dom";
 
 import {
   api,
+  type BudgetEstimateKey,
   type BudgetLevelInfo,
   type BudgetPerson,
   type BudgetSettings,
@@ -47,8 +49,10 @@ import {
   levelDraftFrom,
   levelDraftValid,
   levelPatchPayload,
+  ESTIMATE_FIELDS,
+  estimateFromInput,
+  type EstimateUnit,
   type LevelDraft,
-  MAX_TURN_ESTIMATE_USD,
   type PeopleSort,
   type PeopleSortKey,
   peopleSummary,
@@ -567,24 +571,37 @@ function UnattributedCard({ rows }: { rows: BudgetUnattributed[] }) {
   );
 }
 
-/* ---------- settings ---------- */
+/* ---------- estimates ---------- */
 
-function SettingsCard({ settings, onSaved }: { settings: BudgetSettings; onSaved: (next: BudgetSettings) => void }) {
+function EstimateField({
+  field,
+  settings,
+  onSaved,
+}: {
+  field: { key: BudgetEstimateKey; unit: EstimateUnit; max: number };
+  settings: BudgetSettings;
+  onSaved: (next: BudgetSettings) => void;
+}) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const [value, setValue] = useState(() => amountToInput(settings.opaque_turn_estimate_usd));
+  const { key, unit, max } = field;
+  const current = settings[key];
+  const fallback = settings.defaults[key];
+  const [value, setValue] = useState(() => amountToInput(current));
   const [busy, setBusy] = useState(false);
-  const parsed = amountFromInput(value, MAX_TURN_ESTIMATE_USD);
-  const changed = parsed !== null && Math.abs(parsed - settings.opaque_turn_estimate_usd) > 1e-12;
-  const atDefault = Math.abs(settings.opaque_turn_estimate_usd - settings.defaults.opaque_turn_estimate_usd) < 1e-12;
+  const parsed = estimateFromInput(value, unit, max);
+  const changed = parsed !== null && Math.abs(parsed - current) > 1e-12;
+  const atDefault = Math.abs(current - fallback) < 1e-12;
+  const label = t(`v2.budgets.estimates.${key}.label`);
+  const shown = (n: number) => (unit === "usd" ? fmtUsd(n) : n.toLocaleString("en-US"));
 
   const write = async (next: number | null) => {
     setBusy(true);
     try {
-      const saved = await api.putBudgetSettings({ opaque_turn_estimate_usd: next });
+      const saved = await api.putBudgetSettings({ [key]: next });
       toast("success", t(next === null ? "v2.budgets.estimateReset" : "v2.budgets.estimateSaved"));
       onSaved(saved);
-      setValue(amountToInput(saved.opaque_turn_estimate_usd));
+      setValue(amountToInput(saved[key]));
     } catch (err) {
       toast("error", errorMessage(err));
     } finally {
@@ -593,32 +610,52 @@ function SettingsCard({ settings, onSaved }: { settings: BudgetSettings; onSaved
   };
 
   return (
-    <Card title={t("v2.budgets.settingsTitle")} sub={t("v2.budgets.settingsSub")} testId="v2-budget-settings">
-      <Field
-        label={t("v2.budgets.turnEstimate")}
-        hint={t("v2.budgets.turnEstimateHint", { value: fmtUsd(settings.defaults.opaque_turn_estimate_usd) })}
-        error={value.trim() && parsed === null ? t("v2.budgets.estimateInvalid", { max: MAX_TURN_ESTIMATE_USD }) : null}
-      >
-        <span className="v2-row" style={{ gap: 8 }}>
-          <input
-            className="v2-input"
-            style={{ maxWidth: 160 }}
-            inputMode="decimal"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            aria-label={t("v2.budgets.turnEstimate")}
-            data-testid="v2-budget-turn-estimate"
-          />
-          <Button size="sm" kind="primary" disabled={busy || !changed} onClick={() => void write(parsed)} testId="v2-budget-turn-estimate-save">
-            {t("v2.common.save")}
+    <Field
+      label={label}
+      hint={t(`v2.budgets.estimates.${key}.hint`, { value: shown(fallback) })}
+      error={
+        value.trim() && parsed === null
+          ? t(unit === "usd" ? "v2.budgets.estimateInvalid" : "v2.budgets.estimateInvalidTokens", { max: max.toLocaleString("en-US") })
+          : null
+      }
+    >
+      <span className="v2-row" style={{ gap: 8 }}>
+        <input
+          className="v2-input"
+          style={{ maxWidth: 160 }}
+          inputMode={unit === "usd" ? "decimal" : "numeric"}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          aria-label={label}
+          data-testid={`v2-budget-estimate-${key}`}
+        />
+        <Button size="sm" kind="primary" disabled={busy || !changed} onClick={() => void write(parsed)} testId={`v2-budget-estimate-${key}-save`}>
+          {t("v2.common.save")}
+        </Button>
+        {!atDefault && (
+          <Button size="sm" disabled={busy} onClick={() => void write(null)} testId={`v2-budget-estimate-${key}-reset`}>
+            <RotateCcw size={13} aria-hidden="true" /> {t("v2.budgets.resetDefault")}
           </Button>
-          {!atDefault && (
-            <Button size="sm" disabled={busy} onClick={() => void write(null)} testId="v2-budget-turn-estimate-reset">
-              <RotateCcw size={13} aria-hidden="true" /> {t("v2.budgets.resetDefault")}
-            </Button>
-          )}
-        </span>
-      </Field>
+        )}
+      </span>
+    </Field>
+  );
+}
+
+function SettingsCard({ settings, onSaved }: { settings: BudgetSettings; onSaved: (next: BudgetSettings) => void }) {
+  const { t } = useTranslation();
+  return (
+    <Card title={t("v2.budgets.settingsTitle")} sub={t("v2.budgets.settingsSub")} testId="v2-budget-settings">
+      <div className="v2-form">
+        <span className="v2-sec-title">{t("v2.budgets.estimatesTurns")}</span>
+        {ESTIMATE_FIELDS.slice(0, 2).map((field) => (
+          <EstimateField key={field.key} field={field} settings={settings} onSaved={onSaved} />
+        ))}
+        <span className="v2-sec-title">{t("v2.budgets.estimatesJobs")}</span>
+        {ESTIMATE_FIELDS.slice(2).map((field) => (
+          <EstimateField key={field.key} field={field} settings={settings} onSaved={onSaved} />
+        ))}
+      </div>
       {settings.updated_at && (
         <span className="v2-muted">{t("v2.budgets.updated", { who: settings.updated_by || "—", when: fmtTime(settings.updated_at) })}</span>
       )}

@@ -153,7 +153,8 @@ def test_eval_stop_during_replay_never_starts_batch(monkeypatch):
     workspace = ws_ctx()
     calls = {"n": 0}
 
-    def invoke_runtime_text(client, arn, prompt, session_id=None, runtime_user_id=None):
+    def invoke_runtime_text(client, arn, prompt, session_id=None, runtime_user_id=None,
+                            on_usage=None):
         calls["n"] += 1
         if calls["n"] == 1:
             # Operator clicks STOP while the first prompt is in flight: the run

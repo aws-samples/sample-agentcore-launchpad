@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { MyUsage } from "./api";
+import type { BudgetNotice, MyUsage } from "./api";
 import {
   BANNER_PERCENT,
+  BUDGET_ESTIMATE_KEYS,
   BUDGET_EXCEEDED,
   BUDGET_MODEL_UNPRICED,
+  BUDGET_STOP_REASON,
   bannerDismissKey,
   bannerLevel,
   barPercent,
   basisKey,
+  budgetNoticeFor,
+  budgetNoticeText,
   budgetRefusalOf,
   budgetRefusalText,
   currentPeriod,
@@ -18,10 +22,12 @@ import {
   fmtShare,
   fmtUsd,
   isBudgetCode,
+  isBudgetStop,
   isExemptBasis,
   isPeriod,
   modelPricePath,
   recentPeriods,
+  rememberBudgetNotice,
   sourceKey,
   usageTone,
 } from "./budgets";
@@ -210,5 +216,46 @@ describe("modelPricePath", () => {
       "/api/admin/model-prices/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile/global.openai.gpt-6-sol",
     );
     expect(modelPricePath("a+b@c")).toBe("/api/admin/model-prices/a%2Bb%40c");
+  });
+});
+
+describe("long-running jobs", () => {
+  const notice: BudgetNotice = {
+    estimate_usd: 2.4,
+    remaining_usd: 0.5,
+    limit_usd: 10,
+    period: "2026-10",
+    resets_at: "2026-11-01T00:00:00+00:00",
+  };
+  const t = (key: string, options?: Record<string, unknown>) => `${key}|${JSON.stringify(options ?? {})}`;
+
+  it("recognizes a budget stop by its reason only", () => {
+    expect(BUDGET_STOP_REASON).toBe("budget_exceeded");
+    expect(isBudgetStop({ stop_reason: "budget_exceeded" })).toBe(true);
+    expect(isBudgetStop({ stop_reason: null })).toBe(false);
+    expect(isBudgetStop({})).toBe(false);
+    expect(isBudgetStop(null)).toBe(false);
+  });
+
+  it("words the create notice with the estimate, what is left and the reset date", () => {
+    expect(budgetNoticeText(notice, t)).toBe(
+      'v2.usage.jobNotice|{"estimate":"$2.40","remaining":"$0.50","date":"2026-11-01"}',
+    );
+    expect(budgetNoticeText(null, t)).toBeNull();
+  });
+
+  it("keeps a create's notice for the page it opens, and nothing for other ids", () => {
+    rememberBudgetNotice("run-1", notice);
+    rememberBudgetNotice("run-2", null);
+    expect(budgetNoticeFor("run-1")).toEqual(notice);
+    expect(budgetNoticeFor("run-1")).toEqual(notice); // a second render reads it too
+    expect(budgetNoticeFor("run-2")).toBeNull();
+    expect(budgetNoticeFor(undefined)).toBeNull();
+  });
+
+  it("lists the estimate keys the backend settings carry", () => {
+    expect(BUDGET_ESTIMATE_KEYS).toContain("opaque_turn_estimate_usd");
+    expect(BUDGET_ESTIMATE_KEYS).toContain("skill_lab_train_step_usd");
+    expect(new Set(BUDGET_ESTIMATE_KEYS).size).toBe(BUDGET_ESTIMATE_KEYS.length);
   });
 });

@@ -126,8 +126,10 @@ def test_action_dispatchers_name_their_billable_actions():
     exp = BILLING[("POST", "/api/experiments/{exp_id}/action")]
     can = BILLING[("POST", "/api/runtime-canaries/{canary_id}/action")]
     assert exp.actions == {"recommend", "traffic", "gateway", "abtest"}
-    assert can.actions == {"setup", "traffic"}
+    # advance: the ramp checks the caller's budget before each stage (jobs child)
+    assert can.actions == {"setup", "traffic", "advance"}
     assert "cleanup" not in exp.actions and "rollback" not in can.actions
+    assert "complete" not in can.actions and "verdict" not in can.actions
 
 
 class _Route:

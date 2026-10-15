@@ -7,6 +7,16 @@ status transition. Cancel kills the whole process group via an in-memory
 (same as the registry inspect staging). After a backend restart the old process
 group is gone, so non-terminal rows are swept to `interrupted`; only training
 jobs can be picked up again (`resume_job` — the trainer checkpoints per step).
+
+Spend budget (services/job_budget.py): the job's creator pays. A job that waited
+in the queue starts only while they still have budget; it is debited a flagged
+estimate as its work starts (eval: tasks × per-task, taskgen: a flat amount,
+train: one per-step amount as each step starts). An eval job is trued up from
+``results.json`` (exact target + judge tokens supersede the estimate). A train
+job is stopped between steps once its creator is over budget — status
+``interrupted``, resumable like any interrupted training. An eval job has no
+safe boundary inside the vendored CLI (one pool rolls out every task, results
+are written once), so it runs to completion once started.
 """
 
 from __future__ import annotations
@@ -14,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import subprocess
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,11 +33,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.billing_policy import SOURCE_SKILL_LAB
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation.queue import EvalRunQueue
-from app.services import creators, visibility
+from app.services import budgets, creators, job_budget, visibility
 from app.services.local_exec import kill_process_group
 from app.services.visibility import Viewer
 from app.services.workspace import context_for_workspace
@@ -37,6 +49,8 @@ from app.skill_lab.models import SkillLabJob
 logger = logging.getLogger("launchpad.skill_lab")
 
 TERMINAL_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
+# How often a running training job's step boundary (out/history.json) is read.
+STEP_POLL_S = 2.0
 
 job_queue = EvalRunQueue(max_concurrency=get_settings().skill_lab_max_concurrent_jobs)
 _procs: dict[str, Any] = {}
@@ -57,6 +71,9 @@ def job_out(row: SkillLabJob) -> dict[str, Any]:
         "split": row.split,
         "params": row.params,
         "error": row.error,
+        # `budget_exceeded` when the creator's monthly spend budget stopped it (a
+        # train job between steps, or any job before it started), else null
+        "stop_reason": job_budget.stop_reason_of(row.error),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
@@ -152,11 +169,46 @@ def _materialize_skill(
     )
 
 
-def _enqueue(db: Session, row: SkillLabJob, command: list[str]) -> dict[str, Any]:
+def _enqueue(
+    db: Session, row: SkillLabJob, command: list[str], *, notice: bool = False,
+) -> dict[str, Any]:
     position = job_queue.submit(row.id, lambda: _run_job(row.id, command))
     row.queue_position = position
     db.commit()
-    return job_out(row)
+    out = job_out(row)
+    if notice:
+        # still allowed either way; a train job stops between steps once the limit
+        # is reached — say so up front when the estimate is more than is left
+        out["budget_notice"] = None
+        if row.created_by:
+            units = job_budget.skill_lab_units(
+                row.type, command, row.params, _taskset_counts(db, row))
+            per_unit, _unit = job_budget.skill_lab_unit_usd(db, row.type)
+            out["budget_notice"] = job_budget.notice(db, row.created_by, units * per_unit)
+    return out
+
+
+def _taskset_counts(db: Session, row: SkillLabJob) -> dict[str, Any]:
+    if not row.taskset_id:
+        return {}
+    from app.skill_lab.models import SkillLabTaskset
+
+    taskset = db.get(SkillLabTaskset, row.taskset_id)
+    return dict(taskset.counts or {}) if taskset is not None else {}
+
+
+def _refuse_unpriced(db: Session, creator: creators.Creator | None,
+                     params: dict[str, Any]) -> None:
+    """A budgeted creator cannot start a job on a model with no price (the route
+    gate checked their spend; the models ride in the params)."""
+    payer = budgets.payer_for_user_id(db, getattr(creator, "user_id", None),
+                                      getattr(creator, "name", None))
+    if not payer.budgeted:
+        return
+    for key in ("target_model", "judge_model", "model"):
+        model = str(params.get(key) or "").strip()
+        if model:
+            budgets.check_model(payer, model)
 
 
 def submit_eval_job(
@@ -177,6 +229,7 @@ def submit_eval_job(
     with taskset_svc.taskset_operation(taskset_id):
         runner.require_worker(workspace)
         merged_params = runner.clamp_params(params)
+        _refuse_unpriced(db, creator, merged_params)
         tasks_file, resolved_split, taskset_name = _resolve_tasks_file(
             db, workspace_id, taskset_id, split, viewer=viewer
         )
@@ -217,7 +270,7 @@ def submit_eval_job(
             params=merged_params,
             assets_dir=inputs / "assets" if (inputs / "assets").is_dir() else None,
         )
-        return _enqueue(db, row, command)
+        return _enqueue(db, row, command, notice=True)
 
 def submit_train_job(
     db: Session,
@@ -238,6 +291,7 @@ def submit_train_job(
     with taskset_svc.taskset_operation(taskset_id):
         runner.require_worker(workspace)
         merged_params = runner.clamp_train_params(params)
+        _refuse_unpriced(db, creator, merged_params)
         ts_row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
 
         row = SkillLabJob(
@@ -291,7 +345,7 @@ def submit_train_job(
             (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
         command = runner.build_train_command(config_file=config_file, out_dir=directory / "out")
-        return _enqueue(db, row, command)
+        return _enqueue(db, row, command, notice=True)
 
 def _materialize_taskgen_skills(
     workspace: Any,
@@ -432,6 +486,7 @@ def submit_taskgen_job(
     tasks against real documents instead of pasted text."""
     runner.require_worker(workspace)
     merged_params = runner.clamp_taskgen_params(params)
+    _refuse_unpriced(db, creator, merged_params)
     if (taskset_id is None) != (target_split is None):
         raise AppError(
             "skill_lab.bad_params",
@@ -521,7 +576,7 @@ def submit_taskgen_job(
         attachments=(directory / "inputs" / "attachments.json") if manifest else None,
         attachment_assets=attachment_assets,
     )
-    return _enqueue(db, row, command)
+    return _enqueue(db, row, command, notice=True)
 
 
 def strip_derived_task_fields(tasks: list[Any]) -> list[Any]:
@@ -888,6 +943,9 @@ def resume_job(db: Session, workspace_id: str, workspace: Any, job_id: str) -> d
             "the job's config.yaml is gone — submit a new training job",
             status_code=400,
         )
+    # the job's creator keeps paying for its remaining steps, whoever resumes it
+    # (the route gate checked the caller): refused while they are over budget
+    budgets.check(db, budgets.payer_for_user_id(db, row.created_by, row.created_by_name))
     row.status = "queued"
     row.cancel_requested = False
     row.error = None
@@ -1039,6 +1097,159 @@ def _cancel_requested(job_id: str) -> bool:
         db.close()
 
 
+def _job_budget(row: SkillLabJob) -> job_budget.JobBudget:
+    """The job's payer: its creator (``SkillLabJob.created_by``)."""
+    return job_budget.JobBudget.for_user(
+        row.created_by, SOURCE_SKILL_LAB, user_name=row.created_by_name,
+        origin_workspace_id=row.workspace_id, ref_type="skill_lab_job", ref_id=row.id,
+    )
+
+
+def _budget_stop_fields(job_type: str, error: AppError) -> dict[str, Any]:
+    """The terminal fields of a job its creator's budget stopped: a training job is
+    ``interrupted`` (resumable from its last completed step); an eval / taskgen job
+    can only be stopped before it starts, so it ``failed`` without running."""
+    message = job_budget.stop_message(error)
+    if job_type == "train":
+        return {"status": "interrupted", "finished_at": datetime.now(UTC),
+                "error": f"{message} — resume it to continue from the last completed step"}
+    return {"status": "failed", "finished_at": datetime.now(UTC),
+            "error": f"{message} — it did not start; submit it again"}
+
+
+def _debit_start(
+    budget: job_budget.JobBudget, job_type: str, command: list[str],
+    params: dict[str, Any], counts: dict[str, Any], first_step: int,
+) -> list[str]:
+    """The estimate debited as the job's work starts: every task of an eval job,
+    the flat taskgen amount, the FIRST step of a training run (later steps are
+    debited as they start, see ``_wait``)."""
+    try:
+        db = SessionLocal()
+        try:
+            per_unit, unit = job_budget.skill_lab_unit_usd(db, job_type)
+        finally:
+            db.close()
+        if job_type == "train":
+            units, detail = 1, {"estimate": "skill_lab_train_step", "step": first_step}
+        else:
+            units = job_budget.skill_lab_units(job_type, command, params, counts)
+            detail = {"estimate": f"skill_lab_{job_type}"}
+        row_id = budget.estimate(round(units * per_unit, 8), quantity=units, unit=unit,
+                                 detail=detail)
+        return [row_id] if row_id else []
+    except Exception:  # noqa: BLE001 — the process is already running: never fail it here
+        logger.warning("skill-lab %s: could not debit its estimate", budget.ref_id,
+                       exc_info=True)
+        return []
+
+
+def _completed_steps(job_id: str) -> int | None:
+    """Steps a training run has completed (its out/history.json, rewritten after
+    every step); None on a torn read."""
+    path = artifacts.out_root(job_id) / "history.json"
+    if not path.is_file():
+        return 0
+    try:
+        history = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return len(history) if isinstance(history, list) else None
+
+
+def _total_steps(job_id: str) -> int | None:
+    """epochs × steps per epoch, as the trainer resolved them (out/config.json)."""
+    try:
+        config = json.loads((artifacts.out_root(job_id) / "config.json").read_text("utf-8"))
+        return int(config["num_epochs"]) * int(config["steps_per_epoch"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _wait(
+    job_id: str, proc: Any, budget: job_budget.JobBudget, job_type: str, step_usd: float,
+    started_through: int,
+) -> tuple[int, AppError | None]:
+    """Wait for the CLI. A training run is watched at its step boundaries: after
+    each completed step its creator's budget is checked — over the limit, the run
+    is killed right there (the trainer checkpointed the step: resumable) — and the
+    step now starting is debited. Returns ``(returncode, budget stop or None)``."""
+    if job_type != "train":
+        return proc.wait(), None
+    seen = _completed_steps(job_id) or 0
+    total: int | None = None
+    while True:
+        try:
+            return proc.wait(timeout=STEP_POLL_S), None
+        except subprocess.TimeoutExpired:
+            pass
+        done = _completed_steps(job_id)
+        if done is None or done <= seen:
+            continue
+        seen = done
+        stop = budget.exceeded()
+        if stop is not None:
+            kill_process_group(proc)
+            return proc.wait(), stop
+        total = total or _total_steps(job_id)
+        through = done + 1 if total is None or done < total else done
+        for step in range(started_through + 1, through + 1):
+            budget.estimate(step_usd, quantity=1, unit="step",
+                            detail={"estimate": "skill_lab_train_step", "step": step})
+        started_through = max(started_through, through)
+
+
+def _true_up_eval(job_id: str, budget: job_budget.JobBudget, params: dict[str, Any],
+                  estimates: list[str]) -> None:
+    """Replace an eval job's estimate with what ``results.json`` reports: the
+    target rollouts' tokens (claude: all four counters; codex: only a ``total``,
+    priced at the output rate) and the judge's ``{input, output}``, each priced at
+    its own model. Without results (a failed or cancelled job), or when a model
+    has no price, the estimate stands."""
+    from app.services import rates
+    from app.services.usage_meter import TokenUsage, supersede
+
+    try:
+        raw = json.loads((artifacts.out_root(job_id) / "results.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, list):
+        return
+    sides = {"target": TokenUsage(), "judge": TokenUsage()}
+    rows = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        rows += 1
+        for side, key in (("target", "usage"), ("judge", "judge_usage")):
+            record = artifacts.usage_record(item.get(key))
+            usage = sides[side]
+            usage.tokens_in += record["input"] or 0
+            usage.cache_write += record["cache_write"] or 0
+            usage.cache_read += record["cache_read"] or 0
+            # a total with no breakdown (codex) is priced at the output rate
+            usage.tokens_out += (record["output"] or 0) + (record["unattributed"] or 0)
+    models = {"target": str(params.get("target_model") or "") or None,
+              "judge": str(params.get("judge_model") or "") or None}
+    reported = {side: usage for side, usage in sides.items() if usage.total}
+    if not reported:
+        return
+    unpriced = [models[side] for side in reported if rates.price_of(models[side]) is None]
+    if unpriced:
+        logger.warning("skill-lab %s: true-up skipped, no price for %s", job_id, unpriced)
+        return
+    meter = budget.meter()
+    written = [
+        row_id for side, usage in reported.items()
+        if (row_id := meter.record_tokens(
+            usage, model_id=models[side], upsert_session=False,
+            detail={"side": side, "tasks": rows, "true_up": "results.json"},
+        ))
+    ]
+    if written:
+        supersede(estimates, written[0])
+
+
 def _run_job(job_id: str, command: list[str]) -> None:
     """Worker-thread body: spawn → wait → terminal transition. Never raises."""
     db = SessionLocal()
@@ -1047,24 +1258,38 @@ def _run_job(job_id: str, command: list[str]) -> None:
         if row is None or row.status != "queued":
             return  # cancelled while queued, or swept
         workspace_id = row.workspace_id or ""
+        job_type = row.type
+        params = dict(row.params or {})
+        budget = _job_budget(row)
+        counts = _taskset_counts(db, row)
+        step_usd, _unit = job_budget.skill_lab_unit_usd(db, "train")
     finally:
         db.close()
 
+    # a job that waited in the queue starts only while its creator has budget left
+    stop = budget.exceeded()
+    if stop is not None:
+        _set_status(job_id, **_budget_stop_fields(job_type, stop))
+        return
+
+    estimates: list[str] = []
     try:
         workspace = context_for_workspace(workspace_id)
         env = runner.build_job_env(workspace)
         _set_status(job_id, status="running", started_at=datetime.now(UTC), queue_position=0)
         log_path = artifacts.job_dir(job_id) / "log.txt"
+        first_step = (_completed_steps(job_id) or 0) + 1
         with open(log_path, "ab") as log_file:
             proc = runner.spawn(command, env, log_file)
             with _procs_lock:
                 _procs[job_id] = proc
+            estimates = _debit_start(budget, job_type, command, params, counts, first_step)
             # A cancel between the `running` flip above and the registration
             # just above finds no process to kill, so it would otherwise let a
             # full-price run finish and only then report "cancelled".
             if _cancel_requested(job_id):
                 kill_process_group(proc)
-            returncode = proc.wait()
+            returncode, stop = _wait(job_id, proc, budget, job_type, step_usd, first_step)
     except Exception as exc:  # noqa: BLE001 — status carries the failure
         logger.exception("skill-lab job %s crashed before/at spawn", job_id)
         _set_status(
@@ -1080,6 +1305,8 @@ def _run_job(job_id: str, command: list[str]) -> None:
 
     if _cancel_requested(job_id):
         _set_status(job_id, status="cancelled", finished_at=datetime.now(UTC))
+    elif stop is not None:
+        _set_status(job_id, **_budget_stop_fields(job_type, stop))
     elif returncode == 0:
         _set_status(job_id, status="succeeded", finished_at=datetime.now(UTC))
     else:
@@ -1090,6 +1317,8 @@ def _run_job(job_id: str, command: list[str]) -> None:
             error=f"process exited {returncode}\n…{tail}",
             finished_at=datetime.now(UTC),
         )
+    if job_type == "eval":
+        _true_up_eval(job_id, budget, params, estimates)
 
     try:
         workspace = context_for_workspace(workspace_id)

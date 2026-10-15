@@ -129,6 +129,12 @@ class EvalRecommendation(Base):
     # ``result`` (which every GetRecommendation refresh rewrites): {prompt, by, at};
     # accepting publishes it unless the dialog sends its own text
     edit: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # Who asked for it — the spend-budget payer of a 3rd-party provider's model
+    # calls (services/job_budget.py): `users.id` (NULL for the config admin /
+    # auth-disabled operator and older rows) and the username, display only. Not
+    # the run's creator: in a shared workspace anyone who sees the run may ask.
+    requested_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    requested_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
