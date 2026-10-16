@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, String, Text
+from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -84,6 +84,20 @@ class EvalRun(Base):
     # [{session_id, index, kind, error_type, message}]}, see
     # ``agentcore_eval.summarize_session_failures``); NULL on clean or older rows.
     session_failures: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # The agent version the run evaluated (`evaluation/scorecard.py`): the newest
+    # `SpecSnapshot.seq` with an `aws_version` when the run was submitted (a newer
+    # snapshot still deploying is not what the run invokes). NULL for a log-source
+    # run, an agent with no deployed snapshot, and older rows (inferred on read).
+    agent_snapshot_seq: Mapped[int | None] = mapped_column(Integer, default=None)
+    # What a replay run replayed: the first 16 hex of sha256 over its normalized
+    # scenarios (`scenarios.items_fingerprint`) and their count. NULL for passive
+    # scopes and older rows; a cloud run also keeps `dataset_version`.
+    dataset_fingerprint: Mapped[str | None] = mapped_column(String(16), default=None)
+    dataset_size: Mapped[int | None] = mapped_column(Integer, default=None)
+    # {session_id: {scenario_id, input}} of a replay run, written as each session
+    # lands (`input` = the scenario's first prompt, ≤ 200 chars). A skipped persona
+    # has no entry. NULL for passive scopes and older rows.
+    scenario_map: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # The creating console principal (`app.services.creators`): `users.id` (NULL for
     # the config admin / auth-disabled operator, system paths and legacy rows) and

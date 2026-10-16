@@ -219,6 +219,7 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", "/api/eval/runs"): Billable(SOURCE_EVAL),
     ("POST", "/api/eval/runs/{run_id}/stop"): FREE,
     ("POST", "/api/eval/runs/{run_id}/recheck"): FREE,
+    ("POST", "/api/eval/runs/{run_id}/rerun"): Billable(SOURCE_EVAL),
     ("POST", "/api/eval/runs/{run_id}/recommendations"): Billable(SOURCE_EVAL),
     ("PUT", "/api/eval/runs/{run_id}/recommendations/{rec_id}/edit"): FREE,
     ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): FREE,

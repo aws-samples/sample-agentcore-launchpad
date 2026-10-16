@@ -10,7 +10,13 @@ Builtin.Correctness).
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
+
+# A scenario's input preview on the run row (`EvalRun.scenario_map`) and the compare read.
+INPUT_PREVIEW_CHARS = 200
+FINGERPRINT_CHARS = 16
 
 
 def normalize_scenarios(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -46,6 +52,36 @@ def scenario_prompts(scenario: dict[str, Any]) -> list[str]:
             raw = raw.get("content") or raw.get("prompt") or str(raw)
         prompts.append(str(raw))
     return prompts
+
+
+def input_preview(scenario: dict[str, Any]) -> str:
+    """The scenario's first user input, whitespace collapsed, at most
+    ``INPUT_PREVIEW_CHARS`` characters: the first replayed prompt, or a simulated
+    persona's opening ``input``."""
+    prompts = scenario_prompts(scenario)
+    raw: Any = prompts[0] if prompts else scenario.get("input", "")
+    if isinstance(raw, dict):
+        raw = raw.get("content") or raw.get("prompt") or str(raw)
+    text = " ".join(str(raw or "").split())
+    if len(text) > INPUT_PREVIEW_CHARS:
+        text = text[: INPUT_PREVIEW_CHARS - 1] + "…"
+    return text
+
+
+def items_fingerprint(items: list[dict[str, Any]]) -> tuple[str, int] | None:
+    """(fingerprint, scenario count) of the items a replay run replays; None for none.
+
+    The fingerprint is the first 16 hex of sha256 over the *normalized* scenarios as
+    canonical JSON (sorted keys), so key order inside an item does not change it, a
+    legacy prompt list and its normalized form hash the same, and editing any item
+    (or the order of the items) does.
+    """
+    if not items:
+        return None
+    scenarios = normalize_scenarios(items)
+    blob = json.dumps(scenarios, sort_keys=True, ensure_ascii=False, default=str)
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return digest[:FINGERPRINT_CHARS], len(scenarios)
 
 
 def ground_truth_metadata(

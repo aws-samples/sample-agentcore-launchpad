@@ -229,6 +229,12 @@ def _migrate(bind) -> None:
             ("budget_stops", "ALTER TABLE eval_runs ADD COLUMN budget_stops JSON"),
             ("session_failures", "ALTER TABLE eval_runs ADD COLUMN session_failures JSON"),
             ("scenario_failures", "ALTER TABLE eval_runs ADD COLUMN scenario_failures JSON"),
+            # scorecard stamps (evaluation/scorecard.py): NULL on older rows
+            ("agent_snapshot_seq", "ALTER TABLE eval_runs ADD COLUMN agent_snapshot_seq INTEGER"),
+            ("dataset_fingerprint",
+             "ALTER TABLE eval_runs ADD COLUMN dataset_fingerprint VARCHAR(16)"),
+            ("dataset_size", "ALTER TABLE eval_runs ADD COLUMN dataset_size INTEGER"),
+            ("scenario_map", "ALTER TABLE eval_runs ADD COLUMN scenario_map JSON"),
         ):
             if column not in existing:
                 with bind.begin() as conn:

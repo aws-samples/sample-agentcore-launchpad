@@ -11,10 +11,11 @@ from typing import Annotated, Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import (
     AppError,
@@ -24,7 +25,7 @@ from app.core.errors import (
     public_aws_message,
 )
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import recommendations, service
+from app.evaluation import recommendations, scorecard, service
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
@@ -1359,7 +1360,11 @@ class RunCreate(BaseModel):
     insights: list[str] | None = None  # insight-type subset (insights mode)
 
 
-def _run_out(run: EvalRun) -> dict[str, Any]:
+def _run_out(run: EvalRun, *, snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """A run's payload. ``snapshot`` is the agent version it evaluated
+    (``scorecard.resolve_snapshots``: ``{seq, source: stamped|inferred|observed}``, or
+    null without an agent or a deployed snapshot) — resolved by the caller, a page at
+    a time."""
     return {
         "id": run.id,
         "agent_id": run.agent_id,
@@ -1392,10 +1397,16 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
+        "snapshot": snapshot,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
         **creators.fields(run),
     }
+
+
+def _run_one(db: Session, run: EvalRun) -> dict[str, Any]:
+    """One run's payload, its version resolved on its own (the by-id routes)."""
+    return _run_out(run, snapshot=scorecard.resolve_snapshot(db, run))
 
 
 @router.get("/runs")
@@ -1433,11 +1444,138 @@ def list_runs(
     rows = (
         query.order_by(EvalRun.created_at.desc()).offset(offset).limit(limit).all()
     )
+    snaps = scorecard.resolve_snapshots(db, rows)
     return {
-        "runs": [_run_out(r) for r in rows],
+        "runs": [_run_out(r, snapshot=snaps.get(r.id)) for r in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.get("/scorecard")
+def get_scorecard(
+    agent_id: str | None = Query(None, min_length=1, max_length=32),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Agent scorecards, ledger-only (no AWS call): the workspace's scored runs the
+    viewer may see — insights runs excluded, runs of a hidden agent dropped — each
+    with its benchmark and agent version, plus the agents they belong to with their
+    snapshot timelines. ``agent_id`` narrows to one agent and adds each version's
+    changed diff groups. The newest ``SCORECARD_RUN_CAP`` runs, oldest first;
+    ``truncated`` says older ones were left out."""
+    query = db.query(EvalRun).filter(
+        EvalRun.workspace_id == ws.id,
+        EvalRun.mode == "evaluators",
+        visibility.clause(viewer, EvalRun.created_by),
+    )
+    if agent_id:
+        query = query.filter(EvalRun.agent_id == agent_id)
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
+    if hidden:  # in SQL, before the cap
+        query = query.filter(EvalRun.agent_id.not_in(hidden))
+    cap = scorecard.SCORECARD_RUN_CAP
+    rows = query.order_by(EvalRun.created_at.desc(), EvalRun.id.desc()).limit(cap + 1).all()
+    return scorecard.scorecard_out(
+        db, ws.id, list(reversed(rows[:cap])),
+        agent_id=agent_id, viewer=viewer, truncated=len(rows) > cap,
+    )
+
+
+def _replayed_items(
+    db: Session, ws: WorkspaceScope, run: EvalRun, viewer: Viewer
+) -> list[dict[str, Any]] | None:
+    """The items a legacy replay run is assumed to have replayed: the
+    local dataset's current items, or the cloud dataset's pinned version (the draft
+    when none). None when they cannot be read, or the dataset is hidden from the
+    viewer (its items would surface as case inputs) — the compare then shows overall
+    scores."""
+    scope = scorecard.scope_of(run)
+    if scope == scorecard.SCOPE_DATASET:
+        dataset = db.get(EvalDataset, run.dataset_id)
+        if dataset is None or dataset.workspace_id != ws.id:
+            return None
+        if not visibility.sees(viewer, db, dataset.created_by):
+            return None
+        return list(dataset.items or [])
+    if scope == scorecard.SCOPE_CLOUD:
+        if run.dataset_id in _hidden_cloud_ids(db, ws, viewer):
+            return None
+        try:
+            return _cloud_dataset_items(run.dataset_id, ws, version=run.dataset_version)[1]
+        except Exception as exc:  # gone, not ACTIVE, AWS error — the compare degrades
+            logger.info("compare: cloud dataset %s unreadable (%s)", run.dataset_id,
+                        type(exc).__name__)
+            return None
+    return None
+
+
+def _side_results(run: EvalRun, ws: WorkspaceScope) -> tuple[dict[str, Any], dict[str, list]]:
+    """(``{available, reason?, detail?, truncated?}``, ``session_id → judge records``) of
+    one run; ``truncated`` = the stream held more records than one read returns."""
+    read = service.run_results(run, workspace=ws.context)
+    status = {"available": bool(read.get("available"))}
+    for key in ("reason", "detail", "truncated"):
+        if read.get(key):
+            status[key] = read[key]
+    by_session = {s["session_id"]: list(s.get("results") or []) for s in read.get("sessions") or []}
+    return status, by_session
+
+
+# declared before `/runs/{run_id}`, which would read `compare` as a run id
+@router.get("/runs/compare")
+def compare_runs(
+    a: str = Query(min_length=1, max_length=16),
+    b: str = Query(min_length=1, max_length=16),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Two terminal evaluator runs side by side: both runs (with benchmark and
+    version), how their sessions align (``scenario`` | ``order`` | ``none`` +
+    ``alignment_reason``), the per-case judge records when aligned (one results read
+    per side, each degrading on its own), and the agent's configuration change between
+    the two versions (the diff itself is ``GET /api/agents/{id}/snapshots/diff``)."""
+    run_a = _run_in(db, ws, a, viewer=viewer)
+    run_b = _run_in(db, ws, b, viewer=viewer)
+    for run in (run_a, run_b):
+        if run.mode != "evaluators" or run.status in service.ACTIVE_STATUSES:
+            raise AppError(
+                "run.compare_unsupported",
+                f"run {run.id} cannot be compared: only finished evaluator runs can "
+                f"(this one is a {run.mode} run, {run.status})",
+                {"run_id": run.id, "mode": run.mode, "status": run.status},
+                status_code=422,
+            )
+    labels = scorecard.dataset_labels(db, [run_a, run_b], workspace_id=ws.id, viewer=viewer)
+    snaps = scorecard.resolve_snapshots(db, [run_a, run_b])
+    aligned = scorecard.align(run_a, run_b,
+                              items_of=lambda r: _replayed_items(db, ws, r, viewer))
+    cases: list[dict[str, Any]] = []
+    results = None
+    if aligned["alignment"] != scorecard.ALIGN_NONE:
+        status_a, by_a = _side_results(run_a, ws)
+        status_b, by_b = _side_results(run_b, ws)
+        results = {"a": status_a, "b": status_b}
+        cases = scorecard.build_cases(run_a, run_b, aligned["maps"], {"a": by_a, "b": by_b})
+    config = scorecard.config_change(db, run_a, run_b, snaps.get(run_a.id), snaps.get(run_b.id))
+    if config is not None and viewer.filters and not agent_access.agent_visible(
+            db, viewer, db.get(Agent, run_a.agent_id)):
+        # a visible run does not disclose its hidden agent's publish history (isolation)
+        config = None
+    return {
+        "runs": {
+            side: {**_run_out(run, snapshot=snaps.get(run.id)),
+                   "benchmark": scorecard.benchmark_of(run, labels)}
+            for side, run in (("a", run_a), ("b", run_b))
+        },
+        "alignment": aligned["alignment"],
+        "alignment_reason": aligned["reason"],
+        "cases": cases,
+        "results": results,
+        "config": config,
     }
 
 
@@ -1448,7 +1586,7 @@ def get_run(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return _run_out(_run_in(db, ws, run_id, viewer=viewer))
+    return _run_one(db, _run_in(db, ws, run_id, viewer=viewer))
 
 
 @router.get("/runs/{run_id}/results")
@@ -1473,6 +1611,23 @@ def create_run(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    return _start_run(req, request, db, ws, viewer)
+
+
+def _start_run(
+    req: RunCreate,
+    request: Request,
+    db: Session,
+    ws: WorkspaceScope,
+    viewer: Viewer,
+    *,
+    actor_fallback: str | None = None,
+) -> dict[str, Any]:
+    """Validate and queue one run — ``POST /runs`` and the re-run route alike, so
+    both apply the same scope, reference, visibility and budget checks.
+    ``actor_fallback`` is the actor model a persona dataset gets when the request
+    names none (the re-run's platform default); ``POST /runs`` passes none and
+    requires the caller's."""
     if bool(req.agent_id) == bool(req.log_source):
         raise AppError(
             "run.target_required",
@@ -1547,7 +1702,9 @@ def create_run(
         # like "window:Nh": the scope rides in dataset_name, no schema change
         dataset_name = f"logs:{len(set(req.session_ids or []))}"
 
-    if any("actor_profile" in item for item in items) and not req.actor_model_id:
+    persona = any("actor_profile" in item for item in items)
+    actor_model_id = req.actor_model_id or (actor_fallback if persona else None)
+    if persona and not actor_model_id:
         raise AppError(
             "run.actor_model_required",
             "this dataset contains simulated persona scenarios — pick an "
@@ -1595,8 +1752,8 @@ def create_run(
     payer = budgets.payer_of_request(request)
     if payer.budgeted and items:
         budgets.check_agent(db, payer, agent)
-        if any("actor_profile" in item for item in items):
-            budgets.check_model(payer, req.actor_model_id)
+        if persona:
+            budgets.check_model(payer, actor_model_id)
 
     run = service.submit_run(
         agent=agent,
@@ -1611,21 +1768,21 @@ def create_run(
         time_range=time_range,
         insights=req.insights,
         lookback_hours=req.lookback_hours,
-        actor_model_id=req.actor_model_id,
+        actor_model_id=actor_model_id,
         dataset_version=req.dataset_version if req.cloud_dataset_id else None,
         name=req.name,
         description=req.description,
         log_source=log_source,
         creator=Creator.of_request(request),
     )
-    out = _run_out(run)
+    out = _run_one(db, run)
     out["budget_notice"] = None
     if payer.budgeted:
         # the run is allowed either way; it stops at its next boundary once the
         # limit is reached — say so up front when the forecast is more than is left
         forecast = job_budget.eval_run_forecast(
             db, agent=agent, items=items, evaluators=applied, mode=req.mode,
-            actor_model_id=req.actor_model_id,
+            actor_model_id=actor_model_id,
             session_count=len(set(req.session_ids or [])) or None,
         )
         out["budget_notice"] = job_budget.notice(db, payer.user_id, forecast)
@@ -1663,7 +1820,7 @@ def stop_run(
     dataset stops before StartBatchEvaluation. Terminal runs → 409
     `run.not_active`."""
     run = _run_in(db, ws, run_id, viewer=viewer)
-    return _run_out(service.request_stop(run.id, workspace=ws.context))
+    return _run_one(db, service.request_stop(run.id, workspace=ws.context))
 
 
 @router.post("/runs/{run_id}/recheck", status_code=202)
@@ -1677,7 +1834,84 @@ def recheck_run(
     (e.g. `completed` with scores); one still running resumes polling
     (`evaluating`). Only failed runs with a batch → else 409 `run.not_recheckable`."""
     run = _run_in(db, ws, run_id, viewer=viewer)
-    return _run_out(service.recheck_run(run.id, workspace=ws.context))
+    return _run_one(db, service.recheck_run(run.id, workspace=ws.context))
+
+
+class RunRerun(BaseModel):
+    # the new run's task name; default "<source name> · 再评"
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+RERUN_SUFFIX = " · 再评"
+
+
+def _rerun_request(source: EvalRun, name: str | None) -> RunCreate:
+    """The ``RunCreate`` that evaluates ``source``'s target again on the same scope:
+    the same dataset (a cloud run's pinned version stays pinned; the draft stays the
+    draft) or the same window length, and the same evaluators. Chosen sessions and
+    log streams would only re-score the same sessions (judge noise), and insights
+    runs have no scores to trend → 422 ``run.rerun_unsupported``."""
+    scope = scorecard.scope_of(source)
+    hours = scorecard.window_hours(source) if scope == scorecard.SCOPE_WINDOW else None
+    if source.mode != "evaluators" or (
+        scope not in (scorecard.SCOPE_DATASET, scorecard.SCOPE_CLOUD) and not hours
+    ):
+        raise AppError(
+            "run.rerun_unsupported",
+            "only a dataset or time-window evaluator run can be evaluated again "
+            f"(this one is a {source.mode} run on a {scope} scope)",
+            {"scope": scope, "mode": source.mode},
+            status_code=422,
+        )
+    fields: dict[str, Any] = {
+        # a re-run of a re-run keeps one suffix
+        "name": (name or f"{(source.name or source.agent_name).removesuffix(RERUN_SUFFIX)}"
+                         f"{RERUN_SUFFIX}")[:64],
+        "description": source.description,
+        "evaluators": list(source.evaluators or []),
+        "mode": "evaluators",
+    }
+    if source.agent_id:
+        fields["agent_id"] = source.agent_id
+    else:
+        fields["log_source"] = source.log_source
+    if scope == scorecard.SCOPE_DATASET:
+        fields["dataset_id"] = source.dataset_id
+    elif scope == scorecard.SCOPE_CLOUD:
+        fields["cloud_dataset_id"] = source.dataset_id
+        fields["dataset_version"] = source.dataset_version
+    else:
+        fields["lookback_hours"] = hours
+    try:
+        return RunCreate(**fields)
+    except ValidationError as exc:
+        raise AppError(
+            "run.rerun_unsupported",
+            "this run's stored scope can no longer start a run",
+            {"errors": exc.errors(include_url=False, include_context=False)},
+            status_code=422,
+        ) from exc
+
+
+@router.post("/runs/{run_id}/rerun", status_code=201)
+def rerun_run(
+    run_id: str,
+    request: Request,
+    body: RunRerun | None = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Evaluate a run's target again, as it is now, on the run's own scope — a new
+    run, exactly as ``POST /runs`` would start it (same validation, visibility,
+    budget refusals and ``budget_notice``). A simulated-persona dataset plays the
+    user with the platform's current actor model."""
+    source = _run_in(db, ws, run_id, viewer=viewer)
+    req = _rerun_request(source, body.name if body else None)
+    # the platform's effective actor model (console override included); only a
+    # persona dataset uses it
+    return _start_run(req, request, db, ws, viewer,
+                      actor_fallback=get_settings().actor_model_id)
 
 
 # ─── recommendations seeded from a run ──────────────────────────────────────

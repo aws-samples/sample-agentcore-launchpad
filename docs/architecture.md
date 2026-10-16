@@ -2162,6 +2162,44 @@ agent looked like two edits ago. `services/snapshots.py` keeps one row per publi
   digest in the snapshot is a record, and the generate stage re-stamps it. A missing upload
   or image fails the job at that stage, as a redeploy would.
 
+### Evaluation scorecards
+
+The evaluation views can read one agent's scores across its runs: which version each run
+evaluated, what it was measured on, and how two runs line up case by case.
+`app/evaluation/scorecard.py` holds the rules; the routes are `GET /api/eval/scorecard`,
+`GET /api/eval/runs/compare` and `POST /api/eval/runs/{id}/rerun` (see the API reference).
+
+- **Stamps on the run row.** `submit_run`, the one place a run row is created, records
+  `agent_snapshot_seq` (the newest spec snapshot that reached AWS — a snapshot still
+  deploying is not what the run invokes) and, for a replay, `dataset_fingerprint` (16 hex of
+  sha256 over the normalized scenarios, key order irrelevant) with `dataset_size`. The
+  replay loop writes `scenario_map` (`{session_id: {scenario_id, input}}`) as each session
+  lands; a skipped persona has no entry. All four columns are nullable and older rows keep
+  them null.
+- **Versions on read.** Every run payload carries `snapshot {seq, source}`: `stamped`, or
+  for an older row `inferred` from the snapshot timeline (the newest snapshot whose deploy
+  ended by the run's creation, else the oldest), or `observed` for a passive scope, whose
+  sessions predate the run. Nothing inferred is written back.
+- **Benchmarks.** A local dataset (revision = the fingerprint), a cloud dataset (revision =
+  the pinned version or the draft's fingerprint) or the agent's live traffic, which groups
+  every window, chosen-session and log-stream run. Trends only connect runs of one
+  benchmark; the composite and regression math stays in the console, which owns evaluator
+  polarity.
+- **Compare.** Two replays of one benchmark pair sessions by scenario id. A legacy run
+  without a map is paired by position only when it skipped no scenario and has one session
+  per scenario of its dataset's items; anything else compares overall scores
+  and reads no results. The configuration change between the two versions comes from the
+  snapshots diff route.
+- **Re-run** rebuilds a `RunCreate` from the source run (same target, evaluators, dataset
+  and pinned version, or window length) and goes through the same `_start_run` as
+  `POST /api/eval/runs`, so validation, visibility and budget checks cannot drift apart.
+  Chosen-session and log-stream runs are refused: re-scoring the same sessions would only
+  measure judge noise.
+- **Isolation.** The scorecard filters runs by their creator and drops runs of hidden agents
+  in SQL, before its 1000-run cap. Compare withholds a hidden agent's publish history and
+  never reads a hidden dataset's items. A hidden dataset is labelled with the name stored
+  on the run.
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API

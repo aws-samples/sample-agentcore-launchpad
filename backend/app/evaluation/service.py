@@ -34,11 +34,13 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import simulation, telemetry
+from app.evaluation import scorecard, simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
     ground_truth_metadata,
+    input_preview,
+    items_fingerprint,
     normalize_scenarios,
     scenario_prompts,
 )
@@ -250,6 +252,17 @@ def resolve_telemetry(
     return f"{runtime_name}.DEFAULT", (
         f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
     )
+
+
+def _live_snapshot_seq(agent_id: str | None) -> int | None:
+    """The agent's newest deployed snapshot seq, read now (None without an agent)."""
+    if not agent_id:
+        return None
+    db = SessionLocal()
+    try:
+        return scorecard.newest_deployed_seq(db, agent_id)
+    finally:
+        db.close()
 
 
 def _update(run_id: str, **fields: Any) -> None:
@@ -504,7 +517,15 @@ def execute_run(
             # 0 tokens for 600 s) must not discard the other personas' sessions.
             # The run fails only when no scenario produced a session.
             scenario_failures: list[dict[str, str]] = []
-            _update(run_id, status="invoking")
+            # session → the scenario it replayed (`EvalRun.scenario_map`), so two runs
+            # of one dataset can be compared case by case; a skipped persona has none
+            scenario_map: dict[str, dict[str, str]] = {}
+            # the version this replay invokes, read again now: a deploy that finished
+            # while the run waited in the queue is what runs (submit_run's stamp stays
+            # when there is no deployed snapshot)
+            live_seq = _live_snapshot_seq(agent_id)
+            _update(run_id, status="invoking",
+                    **({"agent_snapshot_seq": live_seq} if live_seq is not None else {}))
             for scenario in scenarios:
                 _check_stop(run_id, budget)
                 attempt.clear()
@@ -571,9 +592,12 @@ def execute_run(
                     continue
                 session_ids.append(sid)
                 watermark_sid = sid
+                scenario_map[sid] = {"scenario_id": attempt["scenario_id"],
+                                     "input": input_preview(scenario)}
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
                 _update(run_id, session_ids=list(session_ids),
-                        budget_stops=list(budget_stops) or None)
+                        budget_stops=list(budget_stops) or None,
+                        scenario_map=dict(scenario_map))
             if not session_ids:
                 first = scenario_failures[0] if scenario_failures else {}
                 raise RuntimeError(
@@ -1035,6 +1059,8 @@ def submit_run(
     # runs list can render "window · Nh" without a schema change.
     if lookback_hours and not dataset_name:
         dataset_name = f"window:{lookback_hours}h"
+    # what a replay replays (a cloud run also keeps `dataset_version`)
+    fingerprint = items_fingerprint(dataset_items)
     db = SessionLocal()
     try:
         run = EvalRun(
@@ -1053,6 +1079,10 @@ def submit_run(
             evaluators=evaluators,
             status="queued",
             session_ids=session_ids or [],
+            # the version the run evaluates: the newest snapshot that reached AWS
+            agent_snapshot_seq=scorecard.newest_deployed_seq(db, agent.id) if agent else None,
+            dataset_fingerprint=fingerprint[0] if fingerprint else None,
+            dataset_size=fingerprint[1] if fingerprint else None,
         )
         creators.stamp(run, creator)
         db.add(run)

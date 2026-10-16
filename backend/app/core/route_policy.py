@@ -368,10 +368,16 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/queue"): MEMBER,
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
+    # agent scorecards + two-run compare: ledger reads (compare adds the two runs'
+    # results-stream reads, as `/results` does)
+    ("GET", "/api/eval/scorecard"): MEMBER,
+    ("GET", "/api/eval/runs/compare"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}/results"): MEMBER,
     ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
     ("POST", "/api/eval/runs/{run_id}/recheck"): PERM_EVAL_RUN,
+    # starts a new run of the same scope — the same grant as POST /runs
+    ("POST", "/api/eval/runs/{run_id}/rerun"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}/recommendation-inputs"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}/recommendations"): MEMBER,
     # starts billable AWS recommendation jobs — same revocable grant as a run
