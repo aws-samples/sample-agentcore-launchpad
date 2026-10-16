@@ -2439,7 +2439,9 @@
     "rates.price_incomplete": "A price needs at least an input and an output rate.",
     "rates.invalid_value": "Rates must be finite, non-negative numbers within the allowed range.",
     "rates.invalid_model_id": "This is not a valid model id.",
-    "rates.override_not_found": "This model has no console price override."
+    "rates.override_not_found": "This model has no console price override.",
+    "run.compare_unsupported": "Only finished evaluator runs can be compared: insights runs and runs still in progress cannot.",
+    "run.not_found": "Evaluation run not found."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -6362,6 +6364,103 @@
       "insightsWait": "Insight clusters appear once the task completes.",
       "insightsEmpty": "This task produced no insight clusters.",
       "scenarioFailures": "{{count}} simulated scenario(s) still failed after retries and were skipped (not scored); the others were evaluated: {{list}}"
+    },
+    "compare": {
+      "title": "Compare evaluation runs",
+      "swap": "Swap A / B",
+      "addRegressed": "Regressions to dataset",
+      "addRegressedHint": "Add B's {{count}} regressed session(s) to a dataset",
+      "addRegressedNone": "No regressed cases on the current basis",
+      "addRegressedUnaligned": "The runs are not aligned case by case, so there are no regressed cases",
+      "openRun": "Open task",
+      "sessions": "Sessions: {{count}}",
+      "sep": ", ",
+      "sideNote": "{{side}}: {{note}}",
+      "composite": "Composite",
+      "basis": "Basis",
+      "live": "Live traffic",
+      "flat": "≈ Flat",
+      "flatHint": "Changed by less than 0.02",
+      "prev": "Compare with previous",
+      "prevHint": "Compare with the previous completed run on the same benchmark: {{name}} ({{time}})",
+      "version": {
+        "stamped": "#{{seq}}",
+        "stampedHint": "The agent version recorded when the run was submitted: snapshot #{{seq}}",
+        "inferred": "≈ #{{seq}} inferred",
+        "inferredHint": "An older run recorded no version; inferred from the run time as snapshot #{{seq}}",
+        "observed": "#{{seq}} observed",
+        "observedHint": "Scores existing sessions, which may span versions; #{{seq}} was live when the run was created",
+        "none": "No version",
+        "noneHint": "A log-source run has no platform version, or the agent has no deployed snapshot"
+      },
+      "notice": {
+        "scenario": "Comparable: the same dataset {{name}}, with {{count}} case(s) aligned by scenario ID.",
+        "order": "Aligned by order: an older run did not record which case each session replayed, so its sessions are matched to the dataset's {{count}} case(s) by position.",
+        "revision": "The runs replayed different revisions of the dataset: only the {{shared}} case(s) both have are compared, and {{only}} more are on one side only.",
+        "revisionAll": "The runs replayed different revisions of the dataset: only the {{shared}} case(s) both have are compared, and a case may have been edited in between.",
+        "partial": "{{count}} case(s) have a session in one run only (for example a skipped simulated user) and are not compared.",
+        "live": "Live-traffic runs score different sessions, so only overall scores are compared. Replay a dataset to compare case by case.",
+        "benchmark": "The runs used different datasets ({{a}} / {{b}}): overall scores are only indicative, and cases are not compared.",
+        "unaligned": "Cases cannot be aligned: {{why}}. Only overall scores are compared.",
+        "agents": "The runs evaluated different agents ({{a}} / {{b}}).",
+        "evaluators": "{{list}}: used by one run only, not compared."
+      },
+      "unaligned": {
+        "scenarios_skipped": "a simulated-user scenario was skipped, so sessions cannot be matched to cases",
+        "session_count_mismatch": "the session count differs from the dataset's current case count (the dataset may have changed)",
+        "dataset_unavailable": "the dataset is deleted, unreadable, or not visible to you",
+        "no_dataset": "the run has no dataset",
+        "unaligned": "the runs' sessions cannot be paired"
+      },
+      "kpi": {
+        "composite": "Composite",
+        "noShared": "No evaluator scored both runs",
+        "sharedCount": "Over {{count}} shared evaluator(s)",
+        "cases": "Case changes",
+        "casesValue": "{{down}} down · {{up}} up",
+        "basis": "Basis: {{basis}}"
+      },
+      "cls": {
+        "down": "Regressed",
+        "up": "Improved",
+        "same": "Unchanged",
+        "unscored": "No score",
+        "onlyA": "A only",
+        "onlyB": "B only"
+      },
+      "filter": {
+        "all": "All {{count}}",
+        "down": "Regressed {{count}}",
+        "up": "Improved {{count}}",
+        "same": "Unchanged {{count}}"
+      },
+      "config": {
+        "title": "Configuration change",
+        "range": "#{{from}} → #{{to}}",
+        "same": "Both runs evaluated #{{seq}}, so the configuration did not change: the score difference comes from the randomness of the agent's output and the judges, and works as a noise baseline.",
+        "unknown": "At least one run's agent version is unknown (a log-source run, or an agent with no deployed snapshot), so there is no configuration change to show.",
+        "otherAgent": "The runs evaluated different agents, so there is no configuration change to compare.",
+        "hidden": "This agent's publish history is not visible to you.",
+        "backwards": "A's version is newer than B's: below is the change from #{{from}} back to #{{to}}.",
+        "publishes": "Publishes in between",
+        "changes": "Differences"
+      },
+      "cases": {
+        "title": "Case by case",
+        "subScenario": "Aligned by scenario ID; scores read higher-is-better, and a change of 0.1 or more counts as improved or regressed",
+        "subOrder": "Aligned by session order; scores read higher-is-better, and a change of 0.1 or more counts as improved or regressed",
+        "filterLabel": "Filter by change",
+        "colCase": "Case",
+        "colChange": "Change",
+        "empty": "No cases of this kind",
+        "unreadableHint": "The overall scores above still come from the two run records."
+      },
+      "case": {
+        "judges": "Judges",
+        "noSession": "This run has no session for this case.",
+        "noResults": "No scores were read for this session.",
+        "notCompared": "Not compared"
+      }
     },
     "outcome": {
       "passed": "Passed",

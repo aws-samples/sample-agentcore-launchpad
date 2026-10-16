@@ -23,7 +23,7 @@ import {
 } from "./snapshots";
 
 /** A diff side: a snapshot seq, or the agent's current spec. */
-type DiffSide = number | "current";
+export type DiffSide = number | "current";
 
 const KIND_TONE: Record<SpecChange["kind"], TagTone> = { added: "green", removed: "red", changed: "blue" };
 
@@ -124,8 +124,10 @@ function ChangeItem({
   );
 }
 
-/** A diff, grouped (prompt, model, tools, …). `from` / `to` say where a full body is read. */
-function DiffBody({
+/** A diff, grouped (prompt, model, tools, …). `from` / `to` say where a full body is read;
+ *  `currentSpec` is only read for a `"current"` side. Also rendered by the evaluation
+ *  compare page (`v2/pages/tasks/RunCompare.tsx`) between two snapshots. */
+export function DiffBody({
   agentId,
   currentSpec,
   from,

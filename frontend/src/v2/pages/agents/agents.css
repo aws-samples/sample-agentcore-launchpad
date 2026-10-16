@@ -73,11 +73,6 @@
 .v2 .v2-agents-files li { display: flex; align-items: center; gap: 6px; }
 .v2 .v2-agents-foot .v2-alert + .v2-alert { margin-top: 8px; }
 
-/* Snapshots card (SnapshotsCard.tsx): pick column, grouped field-level diff */
+/* Snapshots card (SnapshotsCard.tsx): pick column. The grouped field-level diff
+   (DiffBody, also on the evaluation compare page) is styled in v2.css. */
 .v2 .v2-snap-pick { accent-color: var(--v2-primary); width: 14px; height: 14px; cursor: pointer; }
-.v2 .v2-snap-diff { display: flex; flex-direction: column; gap: 4px; }
-.v2 .v2-snap-diff .v2-sub-title { margin-top: 8px; }
-.v2 .v2-snap-change { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--v2-line); }
-.v2 .v2-snap-side { font-size: 12px; color: var(--v2-ink-3); margin-bottom: 4px; }
-.v2 .v2-snap-line.add { color: var(--v2-success); }
-.v2 .v2-snap-line.del { color: var(--v2-danger); }

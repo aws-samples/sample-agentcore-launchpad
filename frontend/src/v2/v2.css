@@ -644,3 +644,97 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 
 /* inbound JWT field set: the three allow-lists share one row (one column when narrow) */
 .v2-ia-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 16px; }
+
+/* ---------- spec snapshot diff (DiffBody: Agent snapshots card, evaluation compare) ---------- */
+.v2 .v2-snap-diff { display: flex; flex-direction: column; gap: 4px; }
+.v2 .v2-snap-diff .v2-sub-title { margin-top: 8px; }
+.v2 .v2-snap-change { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--v2-line); }
+.v2 .v2-snap-side { font-size: 12px; color: var(--v2-ink-3); margin-bottom: 4px; }
+.v2 .v2-snap-line.add { color: var(--v2-success); }
+.v2 .v2-snap-line.del { color: var(--v2-danger); }
+
+/* ---------- evaluation scorecard bits (pages/tasks/scorecardUi.tsx) ---------- */
+/* delta chip: a status tone plus ▲ / ▼ text, never colour alone */
+.v2-delta {
+  display: inline-flex; align-items: center; gap: 2px; border-radius: 4px; padding: 0 6px; line-height: 20px;
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.v2-delta.up { color: #009a29; background: var(--v2-success-soft); }
+.v2-delta.down { color: #cb2634; background: var(--v2-danger-soft); }
+.v2-delta.flat { color: var(--v2-ink-3); background: var(--v2-fill-2); }
+.v2-delta.none { color: var(--v2-ink-3); font-weight: 400; padding: 0; }
+/* an inferred version (an older run recorded none) gets a dashed outline */
+.v2-ver-tag.inferred .v2-tag { border-style: dashed; }
+/* "0.62 → 0.81" */
+.v2-score-pair { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.v2-score-pair .a { color: var(--v2-ink-3); }
+.v2-score-pair .arr { color: var(--v2-ink-4); }
+.v2-score-pair .b { font-weight: 600; }
+.v2-score-pair .b.up { color: #009a29; }
+.v2-score-pair .b.down { color: #cb2634; }
+.v2-score-pair .v2-delta { align-self: center; }
+
+/* ---------- two-run compare (pages/tasks/RunCompare.tsx) ---------- */
+/* a card's sub text drops below its title when the row cannot hold both, instead of
+   squeezing the title to one word per line (the case table's alignment note when narrow) */
+.v2-compare .v2-sec-title { flex-wrap: wrap; row-gap: 4px; }
+.v2-compare-agent { color: var(--v2-ink-3); font-weight: 400; font-size: 14px; }
+.v2-compare-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: stretch; margin-bottom: 16px; }
+.v2-compare-pair > .v2-card { margin-bottom: 0; min-width: 0; }
+.v2-compare-pair > .v2-card > .v2-card-body { padding: 14px 18px; height: 100%; }
+.v2-compare-pair > .to { display: grid; place-items: center; color: var(--v2-ink-4); }
+.v2-compare-run { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.v2-compare-run .h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; min-width: 0; }
+.v2-compare-run .h .name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-compare-run .m { font-size: 12.5px; color: var(--v2-ink-3); overflow-wrap: anywhere; }
+.v2-compare-ab {
+  display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--v2-ink); color: #fff; font-size: 12px; font-weight: 700;
+}
+.v2-compare-ab.sm { width: 18px; height: 18px; font-size: 10.5px; }
+.v2-compare-notices { display: flex; flex-direction: column; }
+.v2-compare-kpis .v2-kpi { min-width: 0; }
+.v2-compare-kpis .v2-kpi .v { font-size: 20px; }
+.v2-compare-kpis .v2-kpi .l { overflow-wrap: anywhere; }
+.v2-compare-kpis .v2-kpi .s { overflow-wrap: anywhere; }
+.v2-compare-stack { display: flex; gap: 2px; height: 8px; border-radius: 3px; overflow: hidden; margin: 6px 0; background: var(--v2-fill-2); }
+.v2-compare-stack span { display: block; height: 100%; }
+.v2-compare-legend { display: flex; gap: 10px; flex-wrap: wrap; color: var(--v2-ink-2); }
+.v2-compare-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+.v2-compare-stack .down, .v2-compare-legend .down { background: var(--v2-danger); }
+.v2-compare-stack .same, .v2-compare-legend .same { background: var(--v2-ink-4); }
+.v2-compare-stack .up, .v2-compare-legend .up { background: var(--v2-success); }
+.v2-compare-stack .unscored, .v2-compare-legend .unscored { background: var(--v2-line); }
+.v2-compare-note { margin: 0; color: var(--v2-ink-3); font-size: 13.5px; }
+.v2-compare-between { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--v2-ink-2); }
+.v2-compare-between li { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; }
+.v2-compare-table td.v2-compare-case { min-width: 200px; }
+.v2-compare-case .id { display: block; font-family: var(--v2-mono); font-size: 12px; color: var(--v2-ink-3); overflow-wrap: anywhere; }
+.v2-compare-case .q {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 360px; word-break: break-word;
+}
+.v2-compare-change { display: inline-flex; align-items: center; gap: 6px; }
+.v2-compare-chev {
+  display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: var(--v2-ink-3); cursor: pointer;
+}
+.v2-compare-chev:hover { background: var(--v2-fill-2); color: var(--v2-primary); }
+.v2-table tbody tr.v2-compare-expand > td, .v2-table tbody tr.v2-compare-expand:hover > td { background: var(--v2-fill); padding: 0; }
+.v2-compare-judges { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px 16px; }
+.v2-compare-judge-col {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 10px 12px;
+  background: var(--v2-card); border: 1px solid var(--v2-line); border-radius: 6px;
+}
+.v2-compare-judge-col .hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; font-size: 13px; }
+.v2-compare-judge-col .sid { font-family: var(--v2-mono); font-size: 12px; font-weight: 400; color: var(--v2-ink-3); overflow-wrap: anywhere; }
+.v2-compare-judge { font-size: 13px; line-height: 1.6; }
+.v2-compare-judge .l { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; color: var(--v2-ink-2); font-size: 12.5px; }
+.v2-compare-judge p { margin: 2px 0 0; color: var(--v2-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .v2-compare-pair { grid-template-columns: minmax(0, 1fr); }
+  .v2-compare-pair > .to { transform: rotate(90deg); height: 18px; }
+  .v2-compare-judges { grid-template-columns: minmax(0, 1fr); padding: 10px; }
+  /* narrow: case + change only — every evaluator's A / B score is in the expanded row */
+  .v2-compare-table .ev { display: none; }
+  .v2-compare-table td.v2-compare-case { min-width: 140px; }
+}

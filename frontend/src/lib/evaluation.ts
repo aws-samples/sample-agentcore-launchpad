@@ -1,4 +1,4 @@
-import type { BudgetNotice, BudgetStopReason } from "./api";
+import type { BudgetNotice, BudgetStopReason, RunSnapshotRef } from "./api";
 import { evaluatorPolarity } from "./evaluators";
 
 export interface EvaluationDatasetInfo {
@@ -142,6 +142,10 @@ export interface EvaluationRunInfo {
    *  Absent on older backends / rows finished before it existed. */
   session_failures?: EvaluationSessionFailures | null;
   error: string | null;
+  /** The agent version the run evaluated (`#seq`, and whether it was stamped at
+   *  submit, inferred for an older row, or observed for a passive scope); null for a
+   *  log-source run or an agent with no deployed snapshot. Absent on older backends. */
+  snapshot?: RunSnapshotRef | null;
   created_at?: string | null;
   /** operator-facing task name/description (console V2); null on unnamed runs */
   name?: string | null;

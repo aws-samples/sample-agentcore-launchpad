@@ -2199,6 +2199,14 @@ evaluated, what it was measured on, and how two runs line up case by case.
   in SQL, before its 1000-run cap. Compare withholds a hidden agent's publish history and
   never reads a hidden dataset's items. A hidden dataset is labelled with the name stored
   on the run.
+- **Console.** The V2 task page renders the compare as `?view=compare&a=&b=`
+  (`v2/pages/tasks/RunCompare.tsx`, with the pure rules in `v2/compare.ts`). It shows one KPI
+  per shared evaluator plus a composite over the evaluators both runs scored, the
+  comparability notice, and the configuration change (the Agent page's `DiffBody` between the
+  two snapshots). When the runs are aligned it adds a per-case table, classed by the
+  normalized change on the chosen basis (0.1 or more is improved or regressed). A completed,
+  scored run's detail offers 与上一次对比: the newest earlier completed run of the same agent
+  and benchmark, read from the scorecard.
 
 ## The invoke chain
 

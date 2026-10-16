@@ -7,6 +7,7 @@ import { api, errorMessage, type V2Range } from "../../../lib/api";
 import { isBudgetStop } from "../../../lib/budgets";
 import { coverageInfo, hasInsightTrees, runCoverage } from "../../../lib/evaluation";
 import { BudgetNoticeAlert, BudgetStopAlert } from "../../BudgetBanner";
+import { previousComparable } from "../../compare";
 import { fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
@@ -83,6 +84,21 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   }, [legacyPartial, resultsRead, reloadTask]);
   const summary = useMemo(() => summarize(rows), [rows]);
 
+  // "compare with the previous run": the newest earlier completed, scored run of the same
+  // agent on the same benchmark, read from the ledger-only scorecard. A log-source run
+  // has no agent id, so it reads the whole scorecard and matches on its `agent_key`.
+  const comparable =
+    data?.kind === "run" && data.mode === "evaluators" && data.run?.status === "completed" && data.run.scores.length > 0;
+  const previous = useLoad(
+    async () => {
+      const run = data?.run;
+      if (!comparable || !run) return null;
+      const card = await api.evaluationScorecard(run.agent_id ? { agent_id: run.agent_id } : {});
+      return previousComparable(card.runs, run.id);
+    },
+    `task-previous:${kind}:${id}:${comparable ? "on" : "off"}`,
+  );
+
   const act = async () => {
     if (!confirm || !data) return;
     setBusy(true);
@@ -104,6 +120,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   if (!data) return null;
 
   const mayRun = can("eval.run");
+  const previousRun = previous.data;
   const coverage = data.kind === "run" && data.run ? runCoverage(data.run) : null;
   const recheck = async () => {
     if (data.kind !== "run") return;
@@ -134,6 +151,15 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       {data.kind === "online" && data.status === "paused" && (
         <Button disabled={!mayRun} onClick={() => setConfirm("resume")}>
           {t("v2.tasks.resume")}
+        </Button>
+      )}
+      {comparable && previousRun && (
+        <Button
+          title={t("v2.compare.prevHint", { name: previousRun.name || previousRun.id, time: fmtTime(previousRun.created_at) })}
+          onClick={() => setParams({ view: "compare", a: previousRun.id, b: data.id })}
+          testId="v2-compare-prev"
+        >
+          {t("v2.compare.prev")}
         </Button>
       )}
       <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `${data.kind}:${data.id}` })}>

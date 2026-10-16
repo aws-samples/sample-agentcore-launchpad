@@ -2439,7 +2439,9 @@
     "rates.price_incomplete": "价格至少需要输入和输出两项单价。",
     "rates.invalid_value": "费率必须是允许范围内的有限非负数。",
     "rates.invalid_model_id": "这不是有效的模型 ID。",
-    "rates.override_not_found": "这个模型没有控制台价格覆盖。"
+    "rates.override_not_found": "这个模型没有控制台价格覆盖。",
+    "run.compare_unsupported": "只能对比已结束的评估器运行：洞察任务和仍在运行的任务不能对比。",
+    "run.not_found": "未找到该评估运行。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -6362,6 +6364,103 @@
       "insightsWait": "任务完成后展示洞察聚类。",
       "insightsEmpty": "该任务未产出洞察聚类。",
       "scenarioFailures": "{{count}} 个模拟用户场景重试后仍失败，已跳过（不计分），其余场景照常评估：{{list}}"
+    },
+    "compare": {
+      "title": "对比评估运行",
+      "swap": "交换 A / B",
+      "addRegressed": "退步用例加入数据集",
+      "addRegressedHint": "把 B 的 {{count}} 个退步用例会话加入数据集",
+      "addRegressedNone": "当前依据下没有退步用例",
+      "addRegressedUnaligned": "两次运行没有逐用例对齐，找不出退步用例",
+      "openRun": "查看任务",
+      "sessions": "{{count}} 个会话",
+      "sep": "、",
+      "sideNote": "{{side}}：{{note}}",
+      "composite": "综合",
+      "basis": "判断依据",
+      "live": "线上流量",
+      "flat": "≈ 持平",
+      "flatHint": "变化小于 0.02",
+      "prev": "与上一次对比",
+      "prevHint": "与同一基准上一次完成的运行对比：{{name}}（{{time}}）",
+      "version": {
+        "stamped": "#{{seq}}",
+        "stampedHint": "提交运行时记录的 Agent 版本：快照 #{{seq}}",
+        "inferred": "≈ #{{seq}} 推断",
+        "inferredHint": "旧运行没有记录版本，按运行时间推断为快照 #{{seq}}",
+        "observed": "#{{seq}} 观测",
+        "observedHint": "评估的是已有会话，可能跨版本；#{{seq}} 是运行创建时在线的版本",
+        "none": "无版本",
+        "noneHint": "日志源运行没有平台版本，或 Agent 没有部署成功的快照"
+      },
+      "notice": {
+        "scenario": "可比：同一数据集 {{name}}，{{count}} 条用例按用例 ID 一一对齐。",
+        "order": "按顺序对齐：较早的运行没有记录每个会话回放的用例，按会话顺序与数据集的 {{count}} 条用例对应。",
+        "revision": "两次运行回放的数据集内容不同：只比两边都有的 {{shared}} 条用例，另有 {{only}} 条只在一边。",
+        "revisionAll": "两次运行回放的数据集内容不同：只比两边都有的 {{shared}} 条用例，其间用例内容可能改过。",
+        "partial": "{{count}} 条用例只在一次运行里有会话（例如被跳过的模拟用户场景），不参与对比。",
+        "live": "线上流量的两次评估看的是不同的会话，只对比整体得分。要逐用例看，请用数据集回放。",
+        "benchmark": "两次运行用的数据集不同（{{a}} / {{b}}），只能参考整体得分，不能逐用例对比。",
+        "unaligned": "无法逐用例对齐：{{why}}。只对比整体得分。",
+        "agents": "两次运行评估的是不同的 Agent（{{a}} / {{b}}）。",
+        "evaluators": "{{list}} 只在一次运行里用到，不参与对比。"
+      },
+      "unaligned": {
+        "scenarios_skipped": "有模拟用户场景被跳过，无法确定每个会话对应的用例",
+        "session_count_mismatch": "会话数与数据集当前的用例数不一致，数据集可能改过",
+        "dataset_unavailable": "数据集已删除、无法读取或你无权查看",
+        "no_dataset": "运行没有关联数据集",
+        "unaligned": "两次运行的会话无法配对"
+      },
+      "kpi": {
+        "composite": "综合分",
+        "noShared": "没有两次运行都打了分的评估器",
+        "sharedCount": "基于 {{count}} 个共同评估器",
+        "cases": "用例变化",
+        "casesValue": "{{down}} 退步 · {{up}} 改进",
+        "basis": "依据：{{basis}}"
+      },
+      "cls": {
+        "down": "退步",
+        "up": "改进",
+        "same": "不变",
+        "unscored": "无分数",
+        "onlyA": "仅 A",
+        "onlyB": "仅 B"
+      },
+      "filter": {
+        "all": "全部 {{count}}",
+        "down": "退步 {{count}}",
+        "up": "改进 {{count}}",
+        "same": "不变 {{count}}"
+      },
+      "config": {
+        "title": "配置变化",
+        "range": "#{{from}} → #{{to}}",
+        "same": "两次运行都是 #{{seq}}，配置没有变化：得分差异来自 Agent 输出和评委打分的随机性，可以当作噪声基线。",
+        "unknown": "至少一次运行的 Agent 版本未知（日志源运行，或 Agent 没有部署成功的快照），无法给出配置变化。",
+        "otherAgent": "两次运行评估的是不同的 Agent，没有可对比的配置变化。",
+        "hidden": "你看不到这个 Agent 的发布历史。",
+        "backwards": "A 的版本比 B 新：下面是从 #{{from}} 回到 #{{to}} 的变化。",
+        "publishes": "期间的发布",
+        "changes": "配置差异"
+      },
+      "cases": {
+        "title": "逐用例对比",
+        "subScenario": "按用例 ID 对齐；分数统一为越高越好，变化 ≥ 0.1 记为改进或退步",
+        "subOrder": "按会话顺序对齐；分数统一为越高越好，变化 ≥ 0.1 记为改进或退步",
+        "filterLabel": "按变化筛选",
+        "colCase": "用例",
+        "colChange": "变化",
+        "empty": "没有这类用例",
+        "unreadableHint": "上方的整体得分仍来自两次运行的记录。"
+      },
+      "case": {
+        "judges": "评委意见",
+        "noSession": "这次运行没有这个用例的会话。",
+        "noResults": "没有读到这个会话的评分。",
+        "notCompared": "不参与对比"
+      }
     },
     "outcome": {
       "passed": "通过",

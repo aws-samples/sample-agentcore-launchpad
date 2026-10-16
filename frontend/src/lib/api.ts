@@ -4,7 +4,11 @@ import i18n from "../i18n";
 import type { KBSourceBody, KnowledgeBaseDetail } from "../pages/KnowledgeBases";
 import type {
   EvaluationRunInfo,
+  EvaluationRunResultRow,
   EvaluationRunResults,
+  EvaluationRunResultsReason,
+  EvaluationRunStatus,
+  EvaluationScore,
   ExperimentReadiness,
   InsightTrees,
   LogSource,
@@ -4460,6 +4464,160 @@ export interface ModelProbeResult {
   stop_reason?: string | null;
 }
 
+/* ── evaluation scorecards: run versions, benchmarks, two-run compare ─────
+ * `backend/app/evaluation/scorecard.py`. Ledger facts only: the composite score and
+ * the regression math stay in the console (`v2/compare.ts`), which owns polarity. */
+
+/** How a run's agent version is known: `stamped` at submit, `inferred` for an older
+ *  row from the snapshot timeline, `observed` for a passive scope (a time window,
+ *  chosen sessions, log streams), whose sessions predate the run. */
+export type RunSnapshotSource = "stamped" | "inferred" | "observed";
+
+/** The agent version a run evaluated: `seq` = the spec snapshot number (`#N` on the
+ *  Agent page). Null for a log-source run or an agent with no deployed snapshot. */
+export interface RunSnapshotRef {
+  seq: number;
+  source: RunSnapshotSource;
+}
+
+/** What a run was measured on: one local dataset (`ds:<id>`), one cloud dataset
+ *  (`cloud:<id>`), or the agent's live traffic (`live`, every passive run). */
+export interface RunBenchmark {
+  kind: "dataset" | "cloud" | "live";
+  key: string;
+  /** the local dataset's current name, else the name stored on the run; null for live */
+  label: string | null;
+  dataset_id: string | null;
+  /** fingerprint (local), `v<N>` / `draft:<fingerprint>` (cloud); null when unknown */
+  revision: string | null;
+  /** the replayed scenario count; null when unknown */
+  size: number | null;
+}
+
+/** One run of `GET /api/eval/runs/compare`: the run payload plus its benchmark. */
+export type RunCompareRun = EvaluationRunInfo & { benchmark: RunBenchmark };
+
+/** One side of a compared case: the session that replayed it and its judge records
+ *  (empty when that side's results stream could not be read). */
+export interface RunCompareSide {
+  session_id: string;
+  results: EvaluationRunResultRow[];
+}
+
+/** One scenario of two aligned runs; a side is null when that run has no session for it. */
+export interface RunCompareCase {
+  scenario_id: string;
+  /** the scenario's first user input, ≤ 200 chars */
+  input: string;
+  a: RunCompareSide | null;
+  b: RunCompareSide | null;
+}
+
+export type RunCompareAlignment = "scenario" | "order" | "none";
+
+/** Why two runs compare overall scores only (`alignment: "none"`). */
+export type RunCompareAlignmentReason =
+  | "live_traffic"
+  | "different_benchmark"
+  | "scenarios_skipped"
+  | "session_count_mismatch"
+  | "dataset_unavailable"
+  | "no_dataset"
+  | "unaligned";
+
+/** Whether one side's per-session results could be read. */
+export interface RunCompareResultsStatus {
+  available: boolean;
+  reason?: EvaluationRunResultsReason;
+  detail?: string;
+  truncated?: boolean;
+}
+
+/** A snapshot between the two compared versions (after the lower seq, up to the higher). */
+export interface RunCompareBetween {
+  seq: number;
+  aws_version: string | null;
+  note: string | null;
+  created_at: string | null;
+  created_by_name: string | null;
+}
+
+/** The agent's configuration change between the two runs' versions. Null when a version
+ *  is unknown, the runs are of different agents, or the agent is hidden from the viewer. */
+export type RunCompareConfig =
+  | { agent_id: string; from_seq: number; to_seq: number; between: RunCompareBetween[]; same?: undefined }
+  | { same: true; agent_id: string; seq: number }
+  | null;
+
+/** `GET /api/eval/runs/compare?a=&b=`. */
+export interface RunCompare {
+  runs: { a: RunCompareRun; b: RunCompareRun };
+  alignment: RunCompareAlignment;
+  alignment_reason: RunCompareAlignmentReason | null;
+  /** B's scenario order, then the scenarios only A has; empty when not aligned */
+  cases: RunCompareCase[];
+  /** null when not aligned (no results are read) */
+  results: { a: RunCompareResultsStatus; b: RunCompareResultsStatus } | null;
+  config: RunCompareConfig;
+}
+
+/** One run of `GET /api/eval/scorecard` (evaluator-mode runs only). */
+export interface ScorecardRun {
+  id: string;
+  name: string | null;
+  /** the agent id, or `logs:<service_name>` for a log-source run */
+  agent_key: string;
+  status: EvaluationRunStatus;
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  evaluators: string[];
+  scores: EvaluationScore[];
+  /** the run's session count */
+  sessions: number;
+  scope: "dataset" | "cloud" | "window" | "sessions" | "logs";
+  /** the scope as stored (`window:24h`, `cloud:<name>`, …) */
+  dataset_name: string | null;
+  dataset_version: string | null;
+  benchmark: RunBenchmark;
+  snapshot: RunSnapshotRef | null;
+  created_by_name: string | null;
+}
+
+/** One spec snapshot of a scorecard agent's timeline. */
+export interface ScorecardVersion {
+  seq: number;
+  aws_version: string | null;
+  created_at: string | null;
+  created_by_name: string | null;
+  note: string | null;
+  /** with `agent_id` only: the diff groups against the deployed snapshot before it */
+  changes?: SpecChangeGroup[];
+}
+
+export interface ScorecardAgent {
+  key: string;
+  /** null for a log-source run's service */
+  agent_id: string | null;
+  name: string;
+  method: string | null;
+  log_source: LogSource | null;
+  deleted: boolean;
+  /** the newest deployed snapshot */
+  current_seq: number | null;
+  versions: ScorecardVersion[];
+}
+
+/** `GET /api/eval/scorecard?agent_id=` — ledger-only, no AWS call. */
+export interface EvaluationScorecard {
+  /** the newest 1000, oldest first */
+  runs: ScorecardRun[];
+  /** newest evaluation first */
+  agents: ScorecardAgent[];
+  /** older runs were left out */
+  truncated: boolean;
+}
+
 /* ── spend attribution + threshold alerts (`routers/alerts.py`, all ADMIN) ── */
 
 /** `GET /api/costs?range=` — the spend windows (30d exists here, not in observability). */
@@ -5089,6 +5247,23 @@ export const api = {
    *  nothing to read yet. */
   evaluationRunResults: (runId: string) =>
     request<EvaluationRunResults>(`/api/eval/runs/${encodeURIComponent(runId)}/results`),
+  /** `GET /api/eval/runs/compare?a=&b=` — two finished evaluator runs side by side: how
+   *  their sessions align, the per-case judge records when aligned (≤ 2 AWS reads, each
+   *  side degrading alone) and the snapshots between their versions. 422
+   *  `run.compare_unsupported` for an insights or still-active run. */
+  compareEvaluationRuns: (a: string, b: string) => {
+    const q = new URLSearchParams({ a, b });
+    return request<RunCompare>(`/api/eval/runs/compare?${q.toString()}`);
+  },
+  /** `GET /api/eval/scorecard?agent_id=` — the workspace's scored runs the viewer may
+   *  see, each with its benchmark and version, plus their agents' snapshot timelines.
+   *  Ledger-only; `agent_id` narrows to one agent and adds each version's diff groups. */
+  evaluationScorecard: (params: { agent_id?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.agent_id) q.set("agent_id", params.agent_id);
+    const qs = q.toString();
+    return request<EvaluationScorecard>(`/api/eval/scorecard${qs ? `?${qs}` : ""}`);
+  },
   /** `GET /api/eval/runs/{id}/recommendation-inputs` — the current system prompt +
    *  tool descriptions a recommendation from this run would revise, and where they
    *  came from (a Managed Harness is read live; other agents fall back to the spec,
