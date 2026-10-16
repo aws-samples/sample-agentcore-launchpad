@@ -15,7 +15,7 @@ export interface RegistryEntry {
   values: { name: string; type: RegistryRecordOut["type"]; version: string; detail: string };
 }
 
-/** Rows the panel shows; the header counts them all. */
+/** Rows the panel shows (`AttentionPanel` `cap`); the header counts them all. */
 export const APPROVAL_CAP = 8;
 
 /** Longest hint a row shows before it is cut. */
@@ -23,14 +23,11 @@ export const HINT_MAX = 90;
 
 const clip = (text: string) => (text.length > HINT_MAX ? `${text.slice(0, HINT_MAX - 1)}…` : text);
 
-/** `PENDING_APPROVAL` records the viewer may move, at most `APPROVAL_CAP`; `total` counts
- *  them all. A system-managed record's lifecycle is an administrator's call: the server
- *  refuses a member, so the queue hides it from one. Every entry is `wait`, so the API
- *  order is kept (no sort by date). */
-export function approvalQueue(
-  records: RegistryRecordOut[],
-  isAdmin: boolean,
-): { entries: RegistryEntry[]; total: number } {
+/** `PENDING_APPROVAL` records the viewer may move; the panel caps them at `APPROVAL_CAP`.
+ *  A system-managed record's lifecycle is an administrator's call: the server refuses a
+ *  member, so the queue hides it from one. Every entry is `wait`, so the API order is kept
+ *  (no sort by date). */
+export function approvalQueue(records: RegistryRecordOut[], isAdmin: boolean): RegistryEntry[] {
   const out: RegistryEntry[] = records
     .filter((r) => r.status === "PENDING_APPROVAL" && (!r.system || isAdmin))
     .map((r) => ({
@@ -45,5 +42,5 @@ export function approvalQueue(
         detail: clip(r.description || r.record_id),
       },
     }));
-  return { entries: rankBySignal(out).slice(0, APPROVAL_CAP), total: out.length };
+  return rankBySignal(out);
 }

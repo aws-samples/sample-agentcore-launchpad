@@ -135,6 +135,7 @@ export function WorkspaceList() {
         <AttentionPanel
           title={t("v2.workspaces.attention.title")}
           items={attention}
+          dismissScope="workspaces"
           testId="v2-ws-attention"
           empty={
             <>

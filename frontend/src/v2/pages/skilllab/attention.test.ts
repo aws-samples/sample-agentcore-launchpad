@@ -34,8 +34,8 @@ describe("skill lab job queue", () => {
   });
 
   it("is empty for no jobs and for finished ones", () => {
-    expect(jobQueue([])).toEqual({ entries: [], total: 0 });
-    expect(jobQueue([job("s", { status: "succeeded" }), job("c", { status: "cancelled" })])).toEqual({ entries: [], total: 0 });
+    expect(jobQueue([])).toEqual([]);
+    expect(jobQueue([job("s", { status: "succeeded" }), job("c", { status: "cancelled" })])).toEqual([]);
   });
 
   it("makes queued / running wait (running live) and failed / interrupted act", () => {
@@ -43,7 +43,7 @@ describe("skill lab job queue", () => {
     expect(jobSignal({ status: "running" })).toBe("wait");
     expect(jobSignal({ status: "failed" })).toBe("act");
     expect(jobSignal({ status: "interrupted" })).toBe("act");
-    const { entries } = jobQueue([job("q", { status: "queued" }), job("r")]);
+    const entries = jobQueue([job("q", { status: "queued" }), job("r")]);
     expect(entries.map((e) => [e.job.id, e.live])).toEqual([
       ["q", false],
       ["r", true],
@@ -51,7 +51,7 @@ describe("skill lab job queue", () => {
   });
 
   it("covers all three job types in one queue, with their own pages", () => {
-    const { entries } = jobQueue([
+    const entries = jobQueue([
       job("e", { type: "eval" }),
       job("t", { type: "train", status: "interrupted" }),
       job("g", { type: "taskgen", status: "queued" }),
@@ -63,7 +63,7 @@ describe("skill lab job queue", () => {
   });
 
   it("puts act before wait, newest first within each (naive times read as UTC)", () => {
-    const { entries } = jobQueue([
+    const entries = jobQueue([
       job("w-old", { created_at: "2026-10-10T08:00:00" }),
       job("a-old", { status: "failed", created_at: "2026-10-11T08:00:00" }),
       job("w-new", { status: "queued", created_at: "2026-10-12T08:00:00" }),
@@ -74,15 +74,15 @@ describe("skill lab job queue", () => {
     expect(entries.map((e) => e.job.id)).toEqual(["a-new", "a-zoned", "a-old", "w-new", "w-old"]);
   });
 
-  it(`caps the rows at ${JOB_ATTENTION_CAP} while the total counts them all`, () => {
+  it(`returns every job for the panel to cap at ${JOB_ATTENTION_CAP}`, () => {
     const many = Array.from({ length: 9 }, (_, i) => job(`j${i}`, { created_at: `2026-10-0${i + 1}T00:00:00` }));
-    const { entries, total } = jobQueue([...many, job("x", { status: "failed", created_at: "2026-09-01T00:00:00" })]);
-    expect(total).toBe(10);
-    expect(entries.map((e) => e.job.id)).toEqual(["x", "j8", "j7", "j6", "j5", "j4"]);
+    const entries = jobQueue([...many, job("x", { status: "failed", created_at: "2026-09-01T00:00:00" })]);
+    expect(entries).toHaveLength(10);
+    expect(entries.slice(0, JOB_ATTENTION_CAP).map((e) => e.job.id)).toEqual(["x", "j8", "j7", "j6", "j5", "j4"]);
   });
 
   it("shows the first line of the error, clipped", () => {
-    const { entries } = jobQueue([
+    const entries = jobQueue([
       job("a", { status: "failed", error: "worker died\nTraceback …" }),
       job("b", { status: "failed", error: "z".repeat(400) }),
       job("c"),

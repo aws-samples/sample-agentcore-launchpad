@@ -6,7 +6,7 @@ import { api } from "../../lib/api";
 import { jobSkillName, LIST_POLL_MS } from "../../lib/skillLab";
 import { useLoad } from "../hooks";
 import { type AttentionItem, AttentionPanel, Lamp, PageHeader, SubTabs } from "../ui";
-import { jobParams, jobQueue } from "./skilllab/attention";
+import { JOB_ATTENTION_CAP, jobParams, jobQueue } from "./skilllab/attention";
 import { ProvisionAlert } from "./skilllab/common";
 import { EvalDetail } from "./skilllab/EvalDetail";
 import { EvalWizard } from "./skilllab/EvalWizard";
@@ -105,8 +105,7 @@ function JobAttention() {
   }, [reload]);
   if (!data) return null;
 
-  const { entries, total } = jobQueue(data);
-  const items: AttentionItem[] = entries.map((entry) => {
+  const items: AttentionItem[] = jobQueue(data).map((entry) => {
     const { job } = entry;
     const queued = job.status === "queued" && job.queue_position > 0 ? ` #${job.queue_position}` : "";
     return {
@@ -125,7 +124,8 @@ function JobAttention() {
     <AttentionPanel
       title={t("v2.skillLab.attention.title")}
       items={items}
-      count={total}
+      cap={JOB_ATTENTION_CAP}
+      dismissScope="skilllab"
       testId="v2-skilllab-attention"
       empty={
         <>

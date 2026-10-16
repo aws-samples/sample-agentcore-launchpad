@@ -27,7 +27,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
-import { approvalQueue } from "./attention";
+import { APPROVAL_CAP, approvalQueue } from "./attention";
 import { isRegistryUnavailable, type RegistryRecord, statusLabel, typeLabel } from "./common";
 import { StatusTag, SystemTag, TypeTag } from "./tags";
 
@@ -213,8 +213,7 @@ export function RecordList() {
 
   const open = (r: RegistryRecord) => setParams({ view: "detail", id: r.record_id });
   const undecided = decided.data === data ? records.filter((r) => !decided.ids.has(r.record_id)) : records;
-  const approvals = approvalQueue(undecided, isAdmin);
-  const attention: AttentionItem[] = approvals.entries.map((entry) => {
+  const attention: AttentionItem[] = approvalQueue(undecided, isAdmin).map((entry) => {
     const v = entry.values;
     const id = entry.recordId;
     const inFlight = acting.has(id);
@@ -329,7 +328,8 @@ export function RecordList() {
         <AttentionPanel
           title={t("v2.registry.attention.title")}
           items={attention}
-          count={approvals.total}
+          cap={APPROVAL_CAP}
+          dismissScope="registry"
           testId="v2-registry-attention"
           empty={
             <>

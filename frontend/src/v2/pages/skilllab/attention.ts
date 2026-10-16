@@ -15,7 +15,7 @@ export interface JobEntry {
   detail: string;
 }
 
-/** Rows the panel shows; its header still counts every job that needs a look. */
+/** Rows the panel shows (`AttentionPanel` `cap`); its header counts every job that needs a look. */
 export const JOB_ATTENTION_CAP = 6;
 /** Longest hint a row shows before it is cut. */
 export const HINT_MAX = 120;
@@ -39,8 +39,8 @@ export function jobSignal(job: Pick<SkillLabJobInfo, "status">): Signal | null {
   }
 }
 
-/** Act before wait, newest first within each, at most `JOB_ATTENTION_CAP`; `total` counts all. */
-export function jobQueue(jobs: SkillLabJobInfo[]): { entries: JobEntry[]; total: number } {
+/** Act before wait, newest first within each; the panel caps them at `JOB_ATTENTION_CAP`. */
+export function jobQueue(jobs: SkillLabJobInfo[]): JobEntry[] {
   const out: JobEntry[] = [];
   for (const job of jobs) {
     const signal = jobSignal(job);
@@ -54,7 +54,7 @@ export function jobQueue(jobs: SkillLabJobInfo[]): { entries: JobEntry[]; total:
     });
   }
   const newest = out.sort((a, b) => createdMs(b.job) - createdMs(a.job));
-  return { entries: rankBySignal(newest).slice(0, JOB_ATTENTION_CAP), total: out.length };
+  return rankBySignal(newest);
 }
 
 /** The URL params of a job's own page: taskgen lives inside the task-set tab. */

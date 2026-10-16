@@ -31,13 +31,13 @@ const system: RegistryRecordSystem = {
 
 describe("registry approval queue", () => {
   it("is empty when nothing is pending", () => {
-    expect(approvalQueue([], false).entries).toEqual([]);
+    expect(approvalQueue([], false)).toEqual([]);
     const settled = ["APPROVED", "DRAFT", "REJECTED", "DEPRECATED"].map((status, i) => rec(`r${i}`, { status }));
-    expect(approvalQueue(settled, true).entries).toEqual([]);
+    expect(approvalQueue(settled, true)).toEqual([]);
   });
 
   it("queues a pending record as wait with its name, type and version", () => {
-    expect(approvalQueue([rec("a", { type: "AGENT_SKILLS", version: "2.1.0" })], false).entries).toEqual([
+    expect(approvalQueue([rec("a", { type: "AGENT_SKILLS", version: "2.1.0" })], false)).toEqual([
       {
         key: "a:pending",
         kind: "pending",
@@ -50,13 +50,13 @@ describe("registry approval queue", () => {
 
   it("hides a system record from a member and shows it to an admin", () => {
     const records = [rec("sys", { system }), rec("own")];
-    expect(approvalQueue(records, false).entries.map((e) => e.recordId)).toEqual(["own"]);
-    expect(approvalQueue(records, true).entries.map((e) => e.recordId)).toEqual(["sys", "own"]);
+    expect(approvalQueue(records, false).map((e) => e.recordId)).toEqual(["own"]);
+    expect(approvalQueue(records, true).map((e) => e.recordId)).toEqual(["sys", "own"]);
   });
 
   it("excludes records that are not pending approval", () => {
     const records = [rec("a"), rec("b", { status: "APPROVED" }), rec("c", { status: "DRAFT" }), rec("d")];
-    expect(approvalQueue(records, true).entries.map((e) => e.recordId)).toEqual(["a", "d"]);
+    expect(approvalQueue(records, true).map((e) => e.recordId)).toEqual(["a", "d"]);
   });
 
   it("keeps the API order instead of sorting by date", () => {
@@ -65,23 +65,23 @@ describe("registry approval queue", () => {
       rec("new", { updated_at: "2026-10-12T00:00:00" }),
       rec("mid", { updated_at: "2026-10-05T00:00:00" }),
     ];
-    expect(approvalQueue(records, false).entries.map((e) => e.recordId)).toEqual(["old", "new", "mid"]);
+    expect(approvalQueue(records, false).map((e) => e.recordId)).toEqual(["old", "new", "mid"]);
   });
 
   it("falls back to the record id, clips a long description and blanks a missing version", () => {
-    const [bare] = approvalQueue([rec("a", { description: "", version: null })], false).entries;
+    const [bare] = approvalQueue([rec("a", { description: "", version: null })], false);
     expect(bare.values).toMatchObject({ detail: "a", version: "" });
-    const [long] = approvalQueue([rec("b", { description: "x".repeat(200) })], false).entries;
+    const [long] = approvalQueue([rec("b", { description: "x".repeat(200) })], false);
     expect(long.values.detail).toHaveLength(HINT_MAX);
     expect(long.values.detail.endsWith("…")).toBe(true);
-    const [exact] = approvalQueue([rec("c", { description: "y".repeat(HINT_MAX) })], false).entries;
+    const [exact] = approvalQueue([rec("c", { description: "y".repeat(HINT_MAX) })], false);
     expect(exact.values.detail).toBe("y".repeat(HINT_MAX));
   });
 
-  it("shows at most APPROVAL_CAP rows but counts every pending record", () => {
+  it("returns every pending record for the panel to cap at APPROVAL_CAP", () => {
     const many = Array.from({ length: APPROVAL_CAP + 3 }, (_, i) => rec(`r${i}`));
-    const { entries, total } = approvalQueue(many, false);
-    expect(entries.map((e) => e.recordId)).toEqual(many.slice(0, APPROVAL_CAP).map((r) => r.record_id));
-    expect(total).toBe(APPROVAL_CAP + 3);
+    const entries = approvalQueue(many, false);
+    expect(entries.map((e) => e.recordId)).toEqual(many.map((r) => r.record_id));
+    expect(entries.slice(0, APPROVAL_CAP).map((e) => e.recordId)).toEqual(many.slice(0, APPROVAL_CAP).map((r) => r.record_id));
   });
 });

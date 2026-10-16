@@ -131,6 +131,7 @@ export function CanaryList({
         <AttentionPanel
           title={t("v2.canary.attention.title")}
           items={attention}
+          dismissScope="canary"
           testId="v2-canary-attention"
           empty={
             <>

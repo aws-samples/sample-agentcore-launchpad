@@ -5280,6 +5280,13 @@
       "view": "View",
       "yes": "Yes"
     },
+    "attention": {
+      "dismiss": "Dismiss",
+      "restore": "Restore",
+      "dismissedCount": "Dismissed {{count}}",
+      "dismissedList": "Dismissed items",
+      "localHint": "Dismissals are kept in this browser only, for 30 days; an item shows again once its status changes"
+    },
     "range": {
       "1h": "Last 1 hour",
       "6h": "Last 6 hours",
@@ -6318,6 +6325,7 @@
       "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached.",
       "attention": {
         "title": "Failed — needs a look",
+        "sub": "Runs that failed in the last 7 days, until a later run of the same agent and dataset succeeds; and failed online evaluations",
         "empty": "No evaluation task has failed."
       }
     },
@@ -6537,7 +6545,7 @@
       "liveTag": "Live traffic",
       "attention": {
         "title": "Needs a look",
-        "sub": "A new version's composite fell by 0.05 or more, or one evaluator fell by 0.1 or more; and failed runs",
+        "sub": "A new version's composite fell by 0.05 or more, or one evaluator fell by 0.1 or more; and runs that failed in the last 7 days, until a later run on the same benchmark succeeds",
         "empty": "No regression and no failed evaluation run.",
         "emptyNone": "No agent has been evaluated yet.",
         "regressionComposite": "{{agent}} #{{to}}: the composite is {{by}} below #{{from}}",

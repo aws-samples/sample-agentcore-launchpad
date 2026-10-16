@@ -130,6 +130,7 @@ export function ExperimentList({
         <AttentionPanel
           title={t("v2.experiments.attention.title")}
           items={attention}
+          dismissScope="experiments"
           testId="v2-exp-attention"
           empty={
             <>

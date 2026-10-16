@@ -1,6 +1,7 @@
 import { type ComponentType, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { errorMessage } from "../lib/api";
+import { loadScope, saveScope, type ScopeDismissals, withDismissal, withoutDismissal } from "./attentionDismiss";
 
 export type ToastFn = (tone: "success" | "error", text: string) => void;
 
@@ -67,4 +68,44 @@ export function useLoad<T>(fetcher: () => Promise<T>, key: string): Loaded<T> {
   }, [key, nonce]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   return { ...state, reload };
+}
+
+export interface AttentionDismissals {
+  /** the `dismissKey`s dismissed in this scope */
+  dismissed: ReadonlySet<string>;
+  dismiss: (key: string) => void;
+  restore: (key: string) => void;
+}
+
+/**
+ * An attention panel's per-browser dismissals (`attentionDismiss.ts`). The scope's entries
+ * are read once and kept in React state; each change is written through to localStorage.
+ * Without a scope nothing is dismissed and both calls do nothing. When storage is
+ * unavailable a dismissal still holds until the panel unmounts (a reload, or leaving the
+ * page).
+ */
+export function useAttentionDismissals(scope: string | undefined): AttentionDismissals {
+  const [state, setState] = useState<{ scope: string | undefined; entries: ScopeDismissals }>(() => ({
+    scope,
+    entries: scope ? loadScope(scope) : {},
+  }));
+  let current = state;
+  if (state.scope !== scope) {
+    // a panel whose scope changes re-reads (state adjusted during render, not in an effect)
+    current = { scope, entries: scope ? loadScope(scope) : {} };
+    setState(current);
+  }
+  const { entries } = current;
+  const dismissed = useMemo(() => new Set(Object.keys(entries)), [entries]);
+  const update = useCallback(
+    (next: ScopeDismissals) => {
+      if (!scope) return;
+      setState({ scope, entries: next });
+      saveScope(scope, next);
+    },
+    [scope],
+  );
+  const dismiss = useCallback((key: string) => update(withDismissal(entries, key)), [update, entries]);
+  const restore = useCallback((key: string) => update(withoutDismissal(entries, key)), [update, entries]);
+  return { dismissed, dismiss, restore };
 }

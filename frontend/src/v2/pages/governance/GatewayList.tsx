@@ -200,6 +200,7 @@ export function GatewayList() {
         <AttentionPanel
           title={t("v2.governance.attention.title")}
           items={attention}
+          dismissScope="governance"
           testId="v2-governance-attention"
           empty={
             <>

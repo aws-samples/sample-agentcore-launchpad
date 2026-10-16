@@ -1,8 +1,9 @@
 // The 按 Agent tab's "needs a look" queue (v2-attention-signals): regressions of a new
 // agent version on a dataset benchmark, the same drop on a dataset whose content changed
-// (to confirm), and failed runs. Pure and computed on read from the scorecard the list
-// already loads; the page turns each entry into a row and owns the copy and navigation.
+// (to confirm), and recent failed runs. Pure and computed on read from the scorecard the
+// list already loads; the page turns each entry into a row and owns the copy and navigation.
 import type { EvaluationScorecard, ScorecardAgent, ScorecardRun } from "../../../lib/api";
+import { parseTimestamp } from "../../../lib/timestamps";
 import { delta } from "../../compare";
 import {
   type Benchmark,
@@ -19,10 +20,12 @@ import {
 } from "../../scorecard";
 import { rankBySignal, type Signal } from "../../signals";
 
-/** Rows the panel shows; its header still counts every entry. */
+/** Rows the panel shows (`AttentionPanel` `cap`); its header counts every entry. */
 export const SCORECARD_ATTENTION_CAP = 5;
 /** Longest error hint a failed-run row shows before it is cut. */
 export const HINT_MAX = 120;
+/** A failed run is listed this long after it was created, unless a later run fixed it. */
+export const FAILED_RUN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** A new version scored lower than the previous one on the same dataset benchmark. */
 export interface RegressionEntry {
@@ -97,11 +100,13 @@ function regressionOf(agent: ScorecardAgent, bench: Benchmark): RegressionEntry 
 /**
  * Every agent's regressions (act) and dataset-changed drops (wait) on its dataset and
  * cloud benchmarks — the newest version's latest scored run against the previous
- * version's — plus its failed runs (act), each kind newest first, ranked by signal and
- * capped at `SCORECARD_ATTENTION_CAP`; `total` counts them all. A deleted agent raises
- * nothing: there is no version left to fix or re-run.
+ * version's — plus its failed runs (act), each kind newest first and ranked by signal; the
+ * panel caps them at `SCORECARD_ATTENTION_CAP`. A deleted agent raises nothing: there is no
+ * version left to fix or re-run. A failed run expires: it is listed only within
+ * `FAILED_RUN_TTL_MS` of its creation (a run whose time cannot be read is kept) and until
+ * a later run of the same agent on the same benchmark completes.
  */
-export function scorecardAttention(sc: EvaluationScorecard): { entries: ScorecardEntry[]; total: number } {
+export function scorecardAttention(sc: EvaluationScorecard, now = Date.now()): ScorecardEntry[] {
   const order = new Map(sc.runs.map((run, i) => [run.id, i]));
   const newestFirst = (a: ScorecardRun, b: ScorecardRun) => (order.get(b.id) ?? 0) - (order.get(a.id) ?? 0);
   const byAgent = runsByAgent(sc.runs);
@@ -117,8 +122,18 @@ export function scorecardAttention(sc: EvaluationScorecard): { entries: Scorecar
   }
   drops.sort((a, b) => newestFirst(a.latest, b.latest));
 
+  // the newest completed run per agent and benchmark (runs arrive oldest-first)
+  const benchOf = (run: ScorecardRun) => `${run.agent_key}|${run.benchmark.key}`;
+  const lastCompleted = new Map<string, number>();
+  for (const run of sc.runs) if (run.status === "completed") lastCompleted.set(benchOf(run), order.get(run.id) ?? 0);
+  const listed = (run: ScorecardRun) => {
+    const at = parseTimestamp(run.created_at)?.getTime();
+    if (at !== undefined && now - at > FAILED_RUN_TTL_MS) return false;
+    return (lastCompleted.get(benchOf(run)) ?? -1) < (order.get(run.id) ?? 0);
+  };
+
   const failed: FailedEntry[] = sc.runs
-    .filter((run) => run.status === "failed" && !agents.get(run.agent_key)?.deleted)
+    .filter((run) => run.status === "failed" && !agents.get(run.agent_key)?.deleted && listed(run))
     .sort(newestFirst)
     .map((run) => ({
       key: `failed:${run.id}`,
@@ -130,10 +145,9 @@ export function scorecardAttention(sc: EvaluationScorecard): { entries: Scorecar
     }));
 
   // regressions lead the act rows, then failures; the wait rows follow (a stable rank)
-  const all = rankBySignal<ScorecardEntry>([
+  return rankBySignal<ScorecardEntry>([
     ...drops.filter((d) => d.kind === "regression"),
     ...failed,
     ...drops.filter((d) => d.kind === "pending"),
   ]);
-  return { entries: all.slice(0, SCORECARD_ATTENTION_CAP), total: all.length };
 }

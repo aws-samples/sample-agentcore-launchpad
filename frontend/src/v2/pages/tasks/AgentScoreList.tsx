@@ -27,7 +27,7 @@ import {
 } from "../../ui";
 import { backState } from "./back";
 import { RerunDialog } from "./RerunDialog";
-import { scorecardAttention, type ScorecardEntry } from "./scorecardAttention";
+import { SCORECARD_ATTENTION_CAP, scorecardAttention, type ScorecardEntry } from "./scorecardAttention";
 import { benchName, rerunBlockText, runName, versionHint, versionShort } from "./scorecardText";
 import { DeltaChip, Sparkline } from "./scorecardUi";
 
@@ -60,7 +60,7 @@ export function AgentScoreList() {
     );
   }, [rows, q, t]);
   const paged = usePaged(filtered, PAGE_SIZE);
-  const attention = useMemo(() => (sc.data ? scorecardAttention(sc.data) : { entries: [], total: 0 }), [sc.data]);
+  const attention = useMemo(() => (sc.data ? scorecardAttention(sc.data) : []), [sc.data]);
 
   const openAgent = (key: string, bench?: string) => setParams(bench ? { view: "agent", key, bench } : { view: "agent", key });
   const openCompare = (a: string, b: string) => setParams({ view: "compare", a, b });
@@ -291,8 +291,9 @@ export function AgentScoreList() {
               <span className="sub">{t("v2.scorecard.attention.sub")}</span>
             </>
           }
-          items={attention.entries.map(attentionItem)}
-          count={attention.total}
+          items={attention.map(attentionItem)}
+          cap={SCORECARD_ATTENTION_CAP}
+          dismissScope="eval.agents"
           testId="v2-scorecard-attention"
           empty={
             <>

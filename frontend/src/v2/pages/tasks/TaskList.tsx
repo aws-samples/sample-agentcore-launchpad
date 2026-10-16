@@ -36,7 +36,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
-import { failedTasks } from "./attention";
+import { failedTasks, TASK_ATTENTION_CAP } from "./attention";
 import { backState } from "./back";
 import { versionHint, versionShort } from "./scorecardText";
 
@@ -80,8 +80,7 @@ export function TaskList() {
   const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id }, back);
   const copy = (task: V2Task) => setParams({ view: "new", from: `${task.kind}:${task.id}` }, back);
 
-  const failed = failedTasks(tasks);
-  const attention: AttentionItem[] = failed.entries.map((entry) => ({
+  const attention: AttentionItem[] = failedTasks(tasks).map((entry) => ({
     key: entry.key,
     signal: entry.signal,
     title: entry.task.name,
@@ -246,9 +245,15 @@ export function TaskList() {
     <>
       {data && (
         <AttentionPanel
-          title={t("v2.tasks.attention.title")}
+          title={
+            <>
+              {t("v2.tasks.attention.title")}
+              <span className="sub">{t("v2.tasks.attention.sub")}</span>
+            </>
+          }
           items={attention}
-          count={failed.total}
+          cap={TASK_ATTENTION_CAP}
+          dismissScope="eval.tasks"
           testId="v2-tasks-attention"
           empty={
             <>

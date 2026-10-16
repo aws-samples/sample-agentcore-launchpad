@@ -33,7 +33,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { PageHeaderAsideContext, ToastContext } from "./hooks";
+import { dismissKey, visibleAttention } from "./attentionDismiss";
+import { PageHeaderAsideContext, ToastContext, useAttentionDismissals } from "./hooks";
 import { type Signal, worstSignal } from "./signals";
 
 /* ---------- button ---------- */
@@ -716,62 +717,156 @@ export interface AttentionItem {
 }
 
 /** A ranked list of what needs a look. The page orders `items`; the card edge takes the
- *  most severe item's colour and `empty` is the one-line state when nothing does. */
+ *  most severe shown item's colour and `empty` is the one-line state when nothing does.
+ *  With `dismissScope`, each row can be dismissed in this browser (`attentionDismiss.ts`):
+ *  dismissed rows are hidden before `cap` applies, the header counts the rest, and a
+ *  "Dismissed N" toggle lists them muted, each with Restore. */
 export function AttentionPanel({
   title,
   items,
   empty,
-  count,
+  cap,
+  dismissScope,
   testId,
 }: {
   title: ReactNode;
   items: AttentionItem[];
   empty: ReactNode;
-  /** header count when `items` is capped (defaults to `items.length`) */
-  count?: number;
+  /** rows shown at most, applied after the dismissed rows are hidden; the header counts
+   *  every row not dismissed */
+  cap?: number;
+  /** turns on per-row dismiss, stored per browser under this scope (e.g. `eval.tasks`) */
+  dismissScope?: string;
   testId?: string;
 }) {
+  const { t } = useTranslation();
+  const listId = useId();
+  const sectionRef = useRef<HTMLElement>(null);
+  const { dismissed: dismissedKeys, dismiss, restore } = useAttentionDismissals(dismissScope);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const view = visibleAttention(items, dismissedKeys, cap);
+  const hidden = view.dismissed;
+  // the last restore closes the list, so the next dismissal does not open it by itself
+  if (showDismissed && hidden.length === 0) setShowDismissed(false);
+  const dismissable = dismissScope !== undefined;
+
+  // The pressed ✕ / Restore leaves with its row; focus moves to the same control of the
+  // row now in that slot (else the last one, else the header toggle), so a keyboard user
+  // is not dropped back to the top of the page.
+  const refocus = useRef<{ selector: string; index: number } | null>(null);
+  useEffect(() => {
+    const target = refocus.current;
+    if (!target || !sectionRef.current) return;
+    refocus.current = null;
+    const section = sectionRef.current;
+    const same = section.querySelectorAll<HTMLButtonElement>(target.selector);
+    const next =
+      same[Math.min(target.index, same.length - 1)] ??
+      section.querySelector<HTMLButtonElement>(".v2-attention-toggle, .v2-attention-x");
+    next?.focus();
+  });
+  const act = (selector: string, index: number, change: () => void) => {
+    refocus.current = { selector, index };
+    change();
+  };
+
+  const row = (item: AttentionItem, muted: boolean, index: number) => {
+    const id = dismissKey(item);
+    const body = (
+      <>
+        <Lamp signal={item.signal} live={item.live} />
+        <span className="v2-attention-text">
+          <span className="title">{item.title}</span>
+          {item.hint && <small>{item.hint}</small>}
+        </span>
+        {item.meta && <span className="v2-attention-meta">{item.meta}</span>}
+        {item.onOpen && item.openLabel && (
+          <span className="v2-attention-open">
+            {item.openLabel}
+            <ChevronRight size={14} aria-hidden="true" />
+          </span>
+        )}
+      </>
+    );
+    return (
+      <li
+        key={item.key}
+        className={dismissable ? (muted ? "v2-attention-row dismissable muted" : "v2-attention-row dismissable") : "v2-attention-row"}
+        data-signal={item.signal}
+        data-testid={muted && item.testId ? `${item.testId}-dismissed` : item.testId}
+      >
+        {item.onOpen ? (
+          <button type="button" className="v2-attention-main" onClick={item.onOpen}>
+            {body}
+          </button>
+        ) : (
+          <div className="v2-attention-main">{body}</div>
+        )}
+        {!muted && item.actions && <span className="v2-attention-actions">{item.actions}</span>}
+        {dismissable && !muted && (
+          <button
+            type="button"
+            className="v2-attention-x"
+            onClick={() => act(".v2-attention-x", index, () => dismiss(id))}
+            aria-label={t("v2.attention.dismiss")}
+            title={t("v2.attention.dismiss")}
+            data-testid={item.testId && `${item.testId}-dismiss`}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
+        {muted && (
+          <button
+            type="button"
+            className="v2-link v2-attention-restore"
+            onClick={() => act(".v2-attention-restore", index, () => restore(id))}
+            data-testid={item.testId && `${item.testId}-restore`}
+          >
+            {t("v2.attention.restore")}
+          </button>
+        )}
+      </li>
+    );
+  };
+
   return (
-    <section className="v2-card v2-attention" data-signal={worstSignal(items.map((i) => i.signal))} data-testid={testId}>
+    <section
+      ref={sectionRef}
+      className="v2-card v2-attention"
+      data-signal={worstSignal(view.shown.map((i) => i.signal))}
+      data-testid={testId}
+    >
       <div className="v2-card-body">
         <h2 className="v2-sec-title">
           {title}
-          <span className="end v2-count">{count ?? items.length}</span>
+          {hidden.length > 0 ? (
+            <span className="end v2-attention-end">
+              <button
+                type="button"
+                className="v2-attention-toggle"
+                aria-expanded={showDismissed}
+                aria-controls={showDismissed ? listId : undefined}
+                title={t("v2.attention.localHint")}
+                onClick={() => setShowDismissed((open) => !open)}
+                data-testid={testId && `${testId}-dismissed-toggle`}
+              >
+                {t("v2.attention.dismissedCount", { count: hidden.length })}
+                <ChevronDown size={12} aria-hidden="true" />
+              </button>
+              <span className="v2-count">{view.remaining}</span>
+            </span>
+          ) : (
+            <span className="end v2-count">{view.remaining}</span>
+          )}
         </h2>
-        {items.length === 0 ? (
+        {view.shown.length === 0 ? (
           <div className="v2-attention-empty">{empty}</div>
         ) : (
-          <ul className="v2-attention-list">
-            {items.map((item) => {
-              const body = (
-                <>
-                  <Lamp signal={item.signal} live={item.live} />
-                  <span className="v2-attention-text">
-                    <span className="title">{item.title}</span>
-                    {item.hint && <small>{item.hint}</small>}
-                  </span>
-                  {item.meta && <span className="v2-attention-meta">{item.meta}</span>}
-                  {item.onOpen && item.openLabel && (
-                    <span className="v2-attention-open">
-                      {item.openLabel}
-                      <ChevronRight size={14} aria-hidden="true" />
-                    </span>
-                  )}
-                </>
-              );
-              return (
-                <li key={item.key} className="v2-attention-row" data-signal={item.signal} data-testid={item.testId}>
-                  {item.onOpen ? (
-                    <button type="button" className="v2-attention-main" onClick={item.onOpen}>
-                      {body}
-                    </button>
-                  ) : (
-                    <div className="v2-attention-main">{body}</div>
-                  )}
-                  {item.actions && <span className="v2-attention-actions">{item.actions}</span>}
-                </li>
-              );
-            })}
+          <ul className="v2-attention-list">{view.shown.map((item, i) => row(item, false, i))}</ul>
+        )}
+        {showDismissed && hidden.length > 0 && (
+          <ul id={listId} className="v2-attention-list v2-attention-dismissed" aria-label={t("v2.attention.dismissedList")}>
+            {hidden.map((item, i) => row(item, true, i))}
           </ul>
         )}
       </div>

@@ -263,6 +263,7 @@ function ObsAttention({ data, onOpenTraces }: { data: ObsDashboard; onOpenTraces
     <AttentionPanel
       title={t("v2.observability.attention.title")}
       items={items}
+      dismissScope="observability"
       testId="v2-obs-attention"
       empty={
         <>

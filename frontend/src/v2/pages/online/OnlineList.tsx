@@ -232,6 +232,7 @@ export function OnlineList() {
         <AttentionPanel
           title={t("v2.online.attention.title")}
           items={attention}
+          dismissScope="online"
           testId="v2-online-attention"
           empty={
             <>

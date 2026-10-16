@@ -192,7 +192,8 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 @media (prefers-reduced-motion: reduce) { .v2-lamp[data-live="true"][data-signal="wait"]::after { animation: none; display: none; } }
 .v2-attention[data-signal="act"] { box-shadow: inset 3px 0 0 var(--v2-danger), var(--v2-shadow); }
 .v2-attention[data-signal="wait"] { box-shadow: inset 3px 0 0 var(--v2-warning), var(--v2-shadow); }
-.v2-attention .v2-sec-title { margin-bottom: 12px; }
+/* the header wraps rather than overflow when narrow (a sub line, the Dismissed toggle) */
+.v2-attention .v2-sec-title { margin-bottom: 12px; flex-wrap: wrap; row-gap: 4px; }
 .v2-attention-empty { display: flex; align-items: center; gap: 10px; color: var(--v2-ink-2); font-size: 13px; }
 .v2-attention-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .v2-attention-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); }
@@ -213,6 +214,26 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 .v2-attention-meta { color: var(--v2-ink-3); font-size: 12px; white-space: nowrap; }
 .v2-attention-open { display: inline-flex; align-items: center; gap: 2px; color: var(--v2-primary); font-size: 13px; white-space: nowrap; }
 .v2-attention-actions { display: flex; gap: 6px; padding-right: 12px; }
+/* per-row dismiss (dismissScope): the ✕ hides the row, after any inline actions; the
+   header's "Dismissed N" toggle lists the hidden rows muted, each with Restore */
+.v2-attention-end { display: inline-flex; align-items: center; gap: 10px; }
+.v2-attention-toggle {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; border: 0; border-radius: 4px;
+  background: none; color: var(--v2-ink-3); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.v2-attention-toggle:hover { color: var(--v2-ink); background: var(--v2-fill); }
+.v2-attention-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.v2-attention-x {
+  flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; padding: 0;
+  border: 0; border-radius: 4px; background: none; color: var(--v2-ink-3); cursor: pointer;
+}
+.v2-attention-x:hover { color: var(--v2-ink); background: var(--v2-fill); }
+.v2-attention-x:focus-visible, .v2-attention-toggle:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 1px; }
+.v2-attention-dismissed { margin-top: 8px; }
+.v2-attention-row.muted { border-style: dashed; border-color: var(--v2-line); }
+.v2-attention-row.muted > .v2-attention-main { opacity: 0.55; }
+/* beats the later .v2-link rule (padding 0, 14 px) */
+.v2-attention-row > .v2-attention-restore { flex: none; padding: 0 12px 0 0; font-size: 13px; }
 /* narrow: the meta drops under the text and wraps there, instead of holding the row at its
    full width; the lamp and the open label stay centred beside both lines. Inline actions
    take their own line under the row, indented past the lamp */
@@ -225,6 +246,10 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
   .v2-attention-text { grid-column: 2; }
   .v2-attention-meta { grid-column: 2; grid-row: 2; margin-top: 2px; white-space: normal; overflow-wrap: anywhere; }
   .v2-attention-open { grid-column: 3; }
+  /* a dismissable row keeps its ✕ / Restore beside the text; the inline actions still
+     take the line under it */
+  .v2-attention-row.dismissable > .v2-attention-main { flex: 1 1 0%; }
+  .v2-attention-row.dismissable > .v2-attention-actions { order: 1; flex-basis: 100%; }
 }
 
 /* ---------- toolbar (filters above a table) ---------- */
