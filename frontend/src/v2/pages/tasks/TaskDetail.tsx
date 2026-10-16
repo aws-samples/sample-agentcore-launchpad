@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
@@ -16,6 +16,7 @@ import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
 import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
 import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
 import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
+import { backState, backTarget } from "./back";
 import { RunRecommendations } from "./RunRecommendations";
 
 const POLL_MS = 8000;
@@ -40,6 +41,7 @@ function useTask(kind: TaskKind, id: string) {
 export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const initialOutcome = params.get("outcome") === "error" ? "error" : "";
   const toast = useV2Toast();
   const { can } = useAuth();
@@ -162,7 +164,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           {t("v2.compare.prev")}
         </Button>
       )}
-      <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `${data.kind}:${data.id}` })}>
+      <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `${data.kind}:${data.id}` }, { state: backState(location.search) })}>
         {t("v2.tasks.copy")}
       </Button>
       <Button kind="primary" onClick={() => task.reload()}>
@@ -180,7 +182,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             {coverage ? <RunCoverageTag coverage={coverage} /> : <Tag tone={STATUS_TONE[data.status]}>{statusLabel(t, data.status)}</Tag>}
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={() => setParams(backTarget(location.state))}
         end={actions}
       />
       {data.run && <BudgetNoticeAlert id={data.run.id} />}

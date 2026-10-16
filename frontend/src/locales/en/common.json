@@ -2441,7 +2441,9 @@
     "rates.invalid_model_id": "This is not a valid model id.",
     "rates.override_not_found": "This model has no console price override.",
     "run.compare_unsupported": "Only finished evaluator runs can be compared: insights runs and runs still in progress cannot.",
-    "run.not_found": "Evaluation run not found."
+    "run.not_found": "Evaluation run not found.",
+    "run.rerun_unsupported": "Only a dataset replay or a time-window evaluator run can be evaluated again.",
+    "dataset.not_found": "The dataset no longer exists, or you cannot see it."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -6460,6 +6462,180 @@
         "noSession": "This run has no session for this case.",
         "noResults": "No scores were read for this session.",
         "notCompared": "Not compared"
+      }
+    },
+    "scorecard": {
+      "tabs": {
+        "agents": "By agent",
+        "all": "All tasks"
+      },
+      "desc": "How each agent's scores moved across its evaluations. Runs on the same dataset form one trend line.",
+      "listHint": "One row per agent: the latest score is taken from the benchmark it completed the most runs on",
+      "search": "Search agent / benchmark",
+      "agentCount": "{{count}} agent(s)",
+      "empty": "No agent has been evaluated yet. Create an evaluation task and it is summarized here by agent.",
+      "emptyFiltered": "No agent matches",
+      "truncated": "Only the newest 1000 runs are included; older ones are left out.",
+      "col": {
+        "agent": "Agent",
+        "main": "Main benchmark",
+        "latest": "Composite",
+        "vsPrev": "vs previous",
+        "trend": "Trend",
+        "evals": "Evaluations",
+        "lastEval": "Last run",
+        "avg": "Mean score",
+        "pick": "Compare",
+        "version": "Version",
+        "benchSource": "Benchmark · data source"
+      },
+      "current": "Current #{{seq}}",
+      "currentShort": "Current",
+      "deleted": "Deleted",
+      "noVersion": "No platform version",
+      "versionLine": "Version {{version}}",
+      "versionShort": {
+        "stamped": "#{{seq}}",
+        "inferred": "≈ #{{seq}}",
+        "observed": "≈ #{{seq}}"
+      },
+      "vs": {
+        "version": "vs #{{seq}}",
+        "run": "vs previous run"
+      },
+      "reason": {
+        "noCompleted": "No completed run yet",
+        "single": "Only 1 run",
+        "differentDatasets": "Each run used a different dataset",
+        "noEarlierVersion": "No earlier version on this benchmark",
+        "noSharedScore": "The two runs have no score on a common evaluator, so their composites cannot be compared"
+      },
+      "reasonShort": {
+        "noCompleted": "None completed",
+        "single": "Only 1 run",
+        "differentDatasets": "Different datasets",
+        "noEarlierVersion": "No earlier version",
+        "noSharedScore": "No shared score"
+      },
+      "counts": {
+        "runs_one": "{{count}} run",
+        "runs_other": "{{count}} runs",
+        "versions_one": "{{count}} version",
+        "versions_other": "{{count}} versions",
+        "benches_one": "{{count}} benchmark",
+        "benches_other": "{{count}} benchmarks"
+      },
+      "sparkLabel": "Composite trend: {{values}}",
+      "listSep": ", ",
+      "benchKind": {
+        "dataset": "Local dataset",
+        "cloud": "Cloud dataset",
+        "live": "Time window / sessions / logs"
+      },
+      "benchRuns": "{{count}} run(s)",
+      "benchSize": "{{count}} case(s)",
+      "liveTag": "Live traffic",
+      "attention": {
+        "title": "Needs a look",
+        "sub": "A new version's composite fell by 0.05 or more, or one evaluator fell by 0.1 or more; and failed runs",
+        "empty": "No regression and no failed evaluation run.",
+        "emptyNone": "No agent has been evaluated yet.",
+        "regressionComposite": "{{agent}} #{{to}}: the composite is {{by}} below #{{from}}",
+        "regressionEvaluator": "{{agent}} #{{to}}: {{evaluator}} is {{by}} below #{{from}}",
+        "pending": "The dataset changed, to confirm",
+        "change": "{{name}} {{a}} → {{b}}",
+        "failed": "{{agent}}: evaluation run failed: {{name}}",
+        "openCompare": "Compare"
+      },
+      "agent": {
+        "title": "Agent evaluations",
+        "notFound": "No evaluation record of this agent. It may have been deleted, or you cannot see it.",
+        "detail": "Agent details",
+        "compareTwo": "Compare two",
+        "compareTwoHint": "Pick two runs on the chart or in the run list first",
+        "noRuns": "This agent has no evaluation run yet.",
+        "deletedNote": "This agent was deleted: its runs are kept, and it cannot be evaluated again."
+      },
+      "kpi": {
+        "latest": "Latest composite · {{bench}}",
+        "vs": "vs #{{seq}} ({{date}})",
+        "vsRun": "vs the previous run ({{date}})",
+        "current": "Current version",
+        "published": "Published {{date}} by {{name}}",
+        "publishedNoName": "Published {{date}}",
+        "noVersionLog": "A log source has no platform version",
+        "noDeployed": "No successfully deployed snapshot",
+        "benchRuns": "Runs on this benchmark",
+        "runsUnit": "runs · {{count}} version(s)",
+        "unfinished": "{{count}} not completed",
+        "allDone": "All completed",
+        "lastEval": "Last evaluated"
+      },
+      "trend": {
+        "title": "Score trend",
+        "sub": "Pick a benchmark: only runs on the same dataset form a line",
+        "live": "Each live-traffic evaluation scores different sessions, so the line shows the overall trend only and cases cannot be compared one by one. Versions are observed from when the sessions ran and may span versions (marked ≈).",
+        "few": "This benchmark has {{count}} completed run(s), not enough for a trend. Use Re-evaluate to score the current version on the same data with the same evaluators.",
+        "caption": "Composite = the mean of the evaluators every run of this benchmark used ({{list}}), all scores oriented so higher is better. Runs are evenly spaced in order, not to time scale; the shaded bands are agent versions and a dashed line marks a change of the dataset's content.",
+        "captionNoCore": "The runs of this benchmark share no evaluator, so there is no composite. Runs are evenly spaced in order; the shaded bands are agent versions and a dashed line marks a change of the dataset's content.",
+        "empty": "This benchmark has no run to draw yet.",
+        "pickHint": "Click two runs on the chart, or tick two in the run list below, to compare them.",
+        "pickB": "Pick one more run as B",
+        "clear": "Clear",
+        "compare": "Compare these two"
+      },
+      "chart": {
+        "aria": "{{bench}} score trend: {{points}}",
+        "ariaPoint": "{{date}} {{series}} {{score}}",
+        "ariaPending": "{{date}} {{status}}",
+        "ariaSep": "; ",
+        "revision": "Dataset changed",
+        "revisionSizes": "Dataset changed ({{from}} → {{to}} cases)",
+        "first": "First",
+        "pending": "{{status}}, no score yet",
+        "noScores": "Completed without a score",
+        "pick": "Click to pick for compare",
+        "unpick": "Click to unpick"
+      },
+      "matrix": {
+        "title": "Version × evaluator",
+        "sub": "A version run several times shows the mean; each change is against the next row, the previous version",
+        "version": "Agent version",
+        "runs": "Runs",
+        "composite": "Composite",
+        "compareWith": "Compare #{{seq}}",
+        "more": "{{count}} more evaluator(s) are shown on the trend only"
+      },
+      "runs": {
+        "title": "Runs",
+        "sub": "This agent's evaluation runs",
+        "onlyBench": "Current benchmark only",
+        "pickLabel": "Pick {{name}} for compare",
+        "pickDisabled": "Only completed runs with scores can be compared",
+        "empty": "No run"
+      },
+      "rerun": {
+        "action": "Re-evaluate",
+        "title": "Re-evaluate",
+        "intro": "Evaluate the agent's current version with the data and evaluators of the last run. The result becomes the next point on the trend.",
+        "agent": "Agent",
+        "agentValue": "{{name}} · current #{{seq}}",
+        "data": "Data",
+        "evaluators": "Evaluators",
+        "defaultName": "{{bench}} · #{{seq}} · {{date}}",
+        "defaultNameNoVersion": "{{bench}} · {{date}}",
+        "draft": "draft",
+        "note": "The run records the version it evaluates (#{{seq}}). To change the dataset or the evaluators, use the full wizard.",
+        "noteNoVersion": "To change the data or the evaluators, use the full wizard.",
+        "wizard": "Edit in the wizard",
+        "start": "Start evaluation",
+        "starting": "Submitting…",
+        "started": "Evaluation task submitted: {{name}}",
+        "block": {
+          "deleted": "The agent was deleted and cannot be evaluated again",
+          "noRun": "This benchmark has no completed run to repeat yet",
+          "unsupported": "Only a dataset replay or a time-window run can be evaluated again: re-scoring the same chosen sessions would only measure judge noise"
+        }
       }
     },
     "outcome": {

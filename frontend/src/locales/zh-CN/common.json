@@ -2441,7 +2441,9 @@
     "rates.invalid_model_id": "这不是有效的模型 ID。",
     "rates.override_not_found": "这个模型没有控制台价格覆盖。",
     "run.compare_unsupported": "只能对比已结束的评估器运行：洞察任务和仍在运行的任务不能对比。",
-    "run.not_found": "未找到该评估运行。"
+    "run.not_found": "未找到该评估运行。",
+    "run.rerun_unsupported": "只有数据集回放或时间窗的评估器运行可以再评一次。",
+    "dataset.not_found": "数据集已不存在，或你无权查看。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -6460,6 +6462,180 @@
         "noSession": "这次运行没有这个用例的会话。",
         "noResults": "没有读到这个会话的评分。",
         "notCompared": "不参与对比"
+      }
+    },
+    "scorecard": {
+      "tabs": {
+        "agents": "按 Agent",
+        "all": "全部任务"
+      },
+      "desc": "看每个 Agent 经过多次评估后的得分变化。同一数据集的运行连成趋势线。",
+      "listHint": "每个 Agent 一行：最新得分取它完成运行最多的基准",
+      "search": "搜索 Agent / 基准",
+      "agentCount": "共 {{count}} 个 Agent",
+      "empty": "还没有评估过的 Agent。新建一个评估任务后，这里会按 Agent 汇总。",
+      "emptyFiltered": "没有符合条件的 Agent",
+      "truncated": "只包含最近 1000 次运行，更早的运行未列出。",
+      "col": {
+        "agent": "Agent",
+        "main": "主基准",
+        "latest": "最新综合分",
+        "vsPrev": "较上一版本",
+        "trend": "趋势",
+        "evals": "评估",
+        "lastEval": "最近评估",
+        "avg": "平均分",
+        "pick": "对比",
+        "version": "版本",
+        "benchSource": "基准 · 数据来源"
+      },
+      "current": "当前 #{{seq}}",
+      "currentShort": "当前",
+      "deleted": "已删除",
+      "noVersion": "无平台版本",
+      "versionLine": "版本 {{version}}",
+      "versionShort": {
+        "stamped": "#{{seq}}",
+        "inferred": "≈ #{{seq}}",
+        "observed": "≈ #{{seq}}"
+      },
+      "vs": {
+        "version": "较 #{{seq}}",
+        "run": "较上一次"
+      },
+      "reason": {
+        "noCompleted": "暂无完成的运行",
+        "single": "只有 1 次运行",
+        "differentDatasets": "各次运行用的数据集不同",
+        "noEarlierVersion": "同一基准下没有更早的版本",
+        "noSharedScore": "两次运行没有共同评估器的得分，无法比较综合分"
+      },
+      "reasonShort": {
+        "noCompleted": "暂无完成运行",
+        "single": "仅 1 次运行",
+        "differentDatasets": "数据集不同",
+        "noEarlierVersion": "无更早版本",
+        "noSharedScore": "无共同评分"
+      },
+      "counts": {
+        "runs_one": "{{count}} 次",
+        "runs_other": "{{count}} 次",
+        "versions_one": "{{count}} 个版本",
+        "versions_other": "{{count}} 个版本",
+        "benches_one": "{{count}} 个基准",
+        "benches_other": "{{count}} 个基准"
+      },
+      "sparkLabel": "综合分趋势：{{values}}",
+      "listSep": "，",
+      "benchKind": {
+        "dataset": "本地数据集",
+        "cloud": "云端数据集",
+        "live": "时间窗 / 指定会话 / 日志"
+      },
+      "benchRuns": "{{count}} 次运行",
+      "benchSize": "{{count}} 条用例",
+      "liveTag": "真实流量",
+      "attention": {
+        "title": "需要关注",
+        "sub": "新版本综合分降 0.05 以上，或单个评估器降 0.1 以上；以及失败的运行",
+        "empty": "没有退步或失败的评估运行。",
+        "emptyNone": "还没有评估过的 Agent。",
+        "regressionComposite": "{{agent}} #{{to}} 的综合分比 #{{from}} 低 {{by}}",
+        "regressionEvaluator": "{{agent}} #{{to}} 的{{evaluator}}比 #{{from}} 低 {{by}}",
+        "pending": "数据集已变化，待确认",
+        "change": "{{name}} {{a}} → {{b}}",
+        "failed": "{{agent}} 的评估运行失败：{{name}}",
+        "openCompare": "查看对比"
+      },
+      "agent": {
+        "title": "Agent 评估",
+        "notFound": "找不到这个 Agent 的评估记录。它可能已被删除，或你无权查看。",
+        "detail": "Agent 详情",
+        "compareTwo": "对比两次",
+        "compareTwoHint": "先在图上或运行记录里选两次运行",
+        "noRuns": "这个 Agent 还没有评估运行。",
+        "deletedNote": "这个 Agent 已删除：历史运行保留，不能再评。"
+      },
+      "kpi": {
+        "latest": "最新综合分 · {{bench}}",
+        "vs": "较 #{{seq}}（{{date}}）",
+        "vsRun": "较上一次（{{date}}）",
+        "current": "当前版本",
+        "published": "{{date}} 由 {{name}} 发布",
+        "publishedNoName": "{{date}} 发布",
+        "noVersionLog": "日志源没有平台版本",
+        "noDeployed": "没有部署成功的快照",
+        "benchRuns": "本基准运行",
+        "runsUnit": "次 · {{count}} 个版本",
+        "unfinished": "其中 {{count}} 次未完成",
+        "allDone": "全部已完成",
+        "lastEval": "最近评估"
+      },
+      "trend": {
+        "title": "得分趋势",
+        "sub": "选择基准：同一数据集的运行才连成线",
+        "live": "线上流量每次评估的会话都不同，曲线只反映整体趋势，不能逐用例对比。版本按会话发生的时间观测，可能跨版本，标为“≈”。",
+        "few": "这个基准只有 {{count}} 次完成的运行，还画不出趋势。点“再评一次”，用同样的数据和评估器评估当前版本。",
+        "caption": "综合分 = 这个基准每次运行都用到的评估器（{{list}}）的平均分，分数统一为越高越好。横轴按运行先后等距排列，不按时间比例；底色分段是 Agent 版本，竖虚线是数据集内容变化。",
+        "captionNoCore": "这个基准的各次运行没有共同的评估器，画不出综合分。横轴按运行先后等距排列；底色分段是 Agent 版本，竖虚线是数据集内容变化。",
+        "empty": "这个基准还没有可画的运行。",
+        "pickHint": "在图上点两次运行，或在下方运行记录里勾选两条，就可以对比。",
+        "pickB": "再选一次运行作为 B",
+        "clear": "清除",
+        "compare": "对比这两次"
+      },
+      "chart": {
+        "aria": "{{bench}} 得分趋势：{{points}}",
+        "ariaPoint": "{{date}} {{series}} {{score}}",
+        "ariaPending": "{{date}} {{status}}",
+        "ariaSep": "；",
+        "revision": "数据集变化",
+        "revisionSizes": "数据集变化（{{from}} → {{to}} 条）",
+        "first": "首次",
+        "pending": "{{status}}，还没有得分",
+        "noScores": "已完成，但没有得分",
+        "pick": "点击选中，用于对比",
+        "unpick": "点击取消选择"
+      },
+      "matrix": {
+        "title": "版本 × 评估器",
+        "sub": "同一版本跑了多次时取平均；变化都和下一行的上一版本比",
+        "version": "Agent 版本",
+        "runs": "运行",
+        "composite": "综合",
+        "compareWith": "对比 #{{seq}}",
+        "more": "另有 {{count}} 个评估器只在趋势图里显示"
+      },
+      "runs": {
+        "title": "运行记录",
+        "sub": "这个 Agent 的评估运行",
+        "onlyBench": "只看当前基准",
+        "pickLabel": "选择「{{name}}」进行对比",
+        "pickDisabled": "只能对比已完成并有得分的运行",
+        "empty": "没有运行"
+      },
+      "rerun": {
+        "action": "再评一次",
+        "title": "再评一次",
+        "intro": "用上一次的数据和评估器评估 Agent 的当前版本。结果会成为趋势图上的下一个点。",
+        "agent": "Agent",
+        "agentValue": "{{name}} · 当前 #{{seq}}",
+        "data": "数据",
+        "evaluators": "评估器",
+        "defaultName": "{{bench}} · #{{seq}} · {{date}}",
+        "defaultNameNoVersion": "{{bench}} · {{date}}",
+        "draft": "草稿",
+        "note": "运行会记下被评估的版本（#{{seq}}）。要换数据集或评估器，请用完整的新建向导。",
+        "noteNoVersion": "要换数据或评估器，请用完整的新建向导。",
+        "wizard": "在向导中修改",
+        "start": "开始评估",
+        "starting": "正在提交…",
+        "started": "已提交评估任务：{{name}}",
+        "block": {
+          "deleted": "Agent 已删除，不能再评",
+          "noRun": "这个基准还没有完成的运行可以照着再评",
+          "unsupported": "只有数据集回放和时间窗运行可以再评一次：重新评同一批会话只会测出评委打分的噪声"
+        }
       }
     },
     "outcome": {

@@ -2207,6 +2207,18 @@ evaluated, what it was measured on, and how two runs line up case by case.
   normalized change on the chosen basis (0.1 or more is improved or regressed). A completed,
   scored run's detail offers 与上一次对比: the newest earlier completed run of the same agent
   and benchmark, read from the scorecard.
+- **按 Agent tab.** `/v2/eval/tasks` now opens on 按 Agent (`AgentScoreList`); the run list
+  moved to `?tab=all`. Each agent row shows its main benchmark (the one with the most
+  completed runs), the latest composite, and the change against the previous *version's*
+  latest run on that benchmark, or the reason there is none.
+  - The composite is over the evaluators every completed run of that benchmark includes.
+  - 需要关注 lists regressions: the composite down 0.05 or more, or one evaluator down 0.1
+    or more. It shows a dataset change as 待确认, and also lists failed runs.
+  - `?view=agent&key=` (`AgentScorecard`) draws the benchmark's trend in run order, with
+    snapshot version bands and dataset-revision markers. It adds a version × evaluator
+    table, the agent's runs with A/B picks for compare, and 再评一次 through
+    `POST /api/eval/runs/{id}/rerun`.
+  - The rules live in `v2/scorecard.ts` and `pages/tasks/scorecardAttention.ts`.
 
 ## The invoke chain
 

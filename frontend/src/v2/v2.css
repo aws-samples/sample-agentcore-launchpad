@@ -34,6 +34,18 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   --v2-warning-soft: #fff7e8;
   --v2-danger: #f53f3f;
   --v2-danger-soft: #ffece8;
+  /* chart series: categorical slots in a fixed order (one per evaluator id, see
+     v2/scorecard.ts seriesSlots); the composite is ink, overflow evaluators a neutral ink */
+  --v2-series-1: #2a78d6;
+  --v2-series-2: #eb6834;
+  --v2-series-3: #1baf7a;
+  --v2-series-4: #eda100;
+  --v2-series-5: #e87ba4;
+  --v2-series-6: #6250d6;
+  --v2-series-composite: var(--v2-ink);
+  --v2-series-extra: var(--v2-ink-3);
+  --v2-chart-band: #f5f7fb;
+  --v2-chart-grid: #eef0f3;
   --v2-radius: 8px;
   --v2-radius-sm: 4px;
   --v2-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -193,12 +205,27 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 button.v2-attention-main { cursor: pointer; }
 button.v2-attention-main:hover { background: var(--v2-fill); }
 button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; }
-.v2-attention-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* long unbreakable tokens (a session id, an ARN in an error line) wrap instead of
+   pushing the row past a narrow viewport */
+.v2-attention-text { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
 .v2-attention-text .title { color: var(--v2-ink); }
 .v2-attention-text small { color: var(--v2-ink-3); font-size: 12px; }
 .v2-attention-meta { color: var(--v2-ink-3); font-size: 12px; white-space: nowrap; }
 .v2-attention-open { display: inline-flex; align-items: center; gap: 2px; color: var(--v2-primary); font-size: 13px; white-space: nowrap; }
 .v2-attention-actions { display: flex; gap: 6px; padding-right: 12px; }
+/* narrow: the meta drops under the text and wraps there, instead of holding the row at its
+   full width; the lamp and the open label stay centred beside both lines. Inline actions
+   take their own line under the row, indented past the lamp */
+@media (max-width: 720px) {
+  .v2-attention-row { flex-wrap: wrap; }
+  .v2-attention-row > .v2-attention-main { flex-basis: 100%; }
+  .v2-attention-actions { flex-wrap: wrap; padding: 0 12px 8px 30px; }
+  .v2-attention-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0 10px; }
+  .v2-attention-main > .v2-lamp, .v2-attention-open { grid-row: 1 / span 2; }
+  .v2-attention-text { grid-column: 2; }
+  .v2-attention-meta { grid-column: 2; grid-row: 2; margin-top: 2px; white-space: normal; overflow-wrap: anywhere; }
+  .v2-attention-open { grid-column: 3; }
+}
 
 /* ---------- toolbar (filters above a table) ---------- */
 .v2-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -341,6 +368,9 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 .v2-table .nowrap { white-space: nowrap; }
 .v2-table .sub { display: block; color: var(--v2-ink-3); font-size: 12px; margin-top: 2px; }
 .v2-table .ellipsis { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* wraps an .ellipsis that gives way when the table is tight: it adds no min-content, so the
+   column shrinks and the ellipsis cuts the text; with room it still grows to its max-width */
+.v2-table .v2-fluid { display: grid; grid-template-columns: minmax(0, 1fr); }
 .v2-table .clip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 320px; word-break: break-word; }
 .v2-table .num { font-variant-numeric: tabular-nums; }
 .v2-table-empty { padding: 48px 0; text-align: center; color: var(--v2-ink-3); }
@@ -737,4 +767,94 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
   /* narrow: case + change only — every evaluator's A / B score is in the expanded row */
   .v2-compare-table .ev { display: none; }
   .v2-compare-table td.v2-compare-case { min-width: 140px; }
+}
+/* ---------- agent scorecard (pages/tasks/AgentScoreList / AgentScorecard / TrendChart) ---------- */
+/* a card's sub text drops below its title when narrow (the attention rule, the trend) */
+.v2-scorecard .v2-sec-title { flex-wrap: wrap; row-gap: 4px; }
+/* three header actions: they wrap under the title instead of widening a narrow page */
+.v2-scorecard .v2-flow-head .end { flex-wrap: wrap; }
+.v2-scorecard .v2-flow-head h1 { min-width: 0; overflow-wrap: anywhere; }
+.v2-sc-hint { color: var(--v2-ink-3); font-size: 13px; }
+.v2-sc-agent { gap: 6px; flex-wrap: nowrap; }
+.v2-sc-agent .v2-link { min-width: 0; font-weight: 600; }
+.v2-sc-big .v2-score { font-size: 16px; }
+.v2-sc-reason { color: var(--v2-ink-3); font-size: 12.5px; white-space: nowrap; }
+/* the two 评估任务 lists (按 Agent, 全部任务): their 8 columns fit from 1280 px with 12 px
+   cell sides, so the sticky 操作 column never covers a cell; rows keep the default height */
+.v2-tasks-list .v2-table th, .v2-tasks-list .v2-table td { padding-left: 12px; padding-right: 12px; }
+/* the agent name gives way last: it keeps room for a readable prefix */
+.v2-tasks-list .v2-table td.v2-sc-agent-col { min-width: 140px; }
+.v2-spark { display: block; }
+.v2-sc-caption { margin: 8px 0 0; color: var(--v2-ink-3); font-size: 12px; line-height: 1.7; }
+.v2-sc-intro { margin: 0; color: var(--v2-ink-2); }
+.v2-sc-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; color: var(--v2-ink-2); }
+.v2-sc-empty p { margin: 0; }
+/* KPI values: score + delta chip, or a number + a small unit */
+.v2-sc-kpis .v2-kpi { min-width: 0; }
+.v2-sc-kpis .v2-kpi .v { font-size: 22px; }
+.v2-sc-kpis .v2-kpi .s { overflow-wrap: anywhere; }
+.v2-sc-kpi-v { display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.v2-sc-kpi-v small { font-size: 13px; font-weight: 400; color: var(--v2-ink-3); }
+.v2-sc-kpi-v .v2-delta { align-self: center; }
+/* benchmark picker: compact option cards */
+.v2-sc-benches { margin-bottom: 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.v2-sc-benches .v2-option { padding: 8px 14px; }
+.v2-sc-benches .v2-option .t { overflow-wrap: anywhere; }
+/* trend chart: legend toggles, the plot, the crosshair tooltip */
+.v2-trend { margin-top: 4px; }
+.v2-trend-legend { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.v2-trend-legend button {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 26px; padding: 0 10px;
+  border: 1px solid var(--v2-line); border-radius: 14px; background: var(--v2-card); color: var(--v2-ink-2);
+  font-size: 12.5px; cursor: pointer;
+}
+.v2-trend-legend button .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trend-legend button:hover { border-color: var(--v2-primary-line); }
+.v2-trend-legend button[aria-pressed="false"] { color: var(--v2-ink-4); background: var(--v2-fill); }
+.v2-trend-legend button[aria-pressed="false"] i { opacity: 0.25; }
+.v2-trend-legend i, .v2-trend-tip i, .v2-matrix-head i { flex: none; display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
+.v2-trend-legend i.thick, .v2-trend-tip i.thick, .v2-matrix-head i.thick { height: 4px; }
+.v2-trend-plot { position: relative; }
+.v2-trend-plot svg { display: block; max-width: 100%; overflow: visible; }
+.v2-trend-plot text { font-family: var(--v2-font); font-size: 12px; fill: var(--v2-ink-2); font-variant-numeric: tabular-nums; }
+.v2-trend-plot text.tick { font-size: 11px; fill: var(--v2-ink-3); }
+.v2-trend-plot text.note { font-size: 11px; fill: var(--v2-ink-3); }
+.v2-trend-plot text.band { font-weight: 600; fill: var(--v2-ink-2); }
+.v2-trend-plot text .changes { font-weight: 400; fill: var(--v2-ink-3); }
+.v2-trend-plot text.ab { font-size: 11px; font-weight: 700; fill: var(--v2-card); }
+.v2-trend-plot text.end.thick { font-weight: 600; }
+.v2-trend-plot text .val { font-weight: 600; fill: var(--v2-ink); }
+.v2-trend-plot rect.hit.pick { cursor: pointer; }
+.v2-trend-tip {
+  position: absolute; z-index: 5; pointer-events: none; padding: 10px 12px; font-size: 12.5px;
+  background: var(--v2-card); border: 1px solid var(--v2-line); border-radius: 6px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+.v2-trend-tip .h { font-weight: 600; overflow-wrap: anywhere; }
+.v2-trend-tip .m { color: var(--v2-ink-3); font-size: 12px; margin-bottom: 6px; overflow-wrap: anywhere; }
+.v2-trend-tip .r { display: flex; align-items: center; gap: 8px; line-height: 22px; }
+.v2-trend-tip .r .n { flex: 1; min-width: 0; color: var(--v2-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trend-tip .r b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.v2-trend-tip .r.muted { color: var(--v2-ink-3); }
+.v2-trend-tip .f { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--v2-line-2); color: var(--v2-ink-3); font-size: 12px; }
+/* the A / B pick bar under the chart */
+.v2-pickbar {
+  display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 14px;
+  border-radius: 6px; background: var(--v2-fill); color: var(--v2-ink-2); font-size: 13px;
+}
+.v2-pickbar-run { min-width: 0; overflow-wrap: anywhere; }
+.v2-pickbar .end { margin-left: auto; display: flex; gap: 8px; }
+.v2-sc-pick { gap: 6px; }
+/* version × evaluator: a one-hue tint carries the score, the chip the direction */
+.v2-sc-ver { display: flex; flex-direction: column; gap: 1px; min-width: 140px; }
+.v2-sc-ver b { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.v2-matrix-head { display: inline-flex; align-items: center; gap: 6px; max-width: 160px; }
+.v2-matrix-head .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-matrix-cell {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 4px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.v2-matrix-cell .val { font-weight: 600; }
+@media (max-width: 720px) {
+  .v2-pickbar .end { margin-left: 0; }
+  .v2-sc-benches { grid-template-columns: minmax(0, 1fr); }
 }

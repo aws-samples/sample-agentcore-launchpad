@@ -5264,6 +5264,17 @@ export const api = {
     const qs = q.toString();
     return request<EvaluationScorecard>(`/api/eval/scorecard${qs ? `?${qs}` : ""}`);
   },
+  /** `POST /api/eval/runs/{id}/rerun` (201) — evaluate the run's target again, as it is
+   *  now, on the run's own scope: the same local dataset, the same cloud dataset and
+   *  pinned version, or the same window length, with the same evaluators. Same checks
+   *  and `budget_notice` as `POST /runs`. 422 `run.rerun_unsupported` for chosen
+   *  sessions / log streams / insights; 400 `agent.not_active`; 404 `run.not_found` /
+   *  `dataset.not_found`; 402 `budget.exceeded` / `budget.model_unpriced`. */
+  rerunEvaluationRun: (runId: string, body: { name?: string } = {}) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/rerun`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   /** `GET /api/eval/runs/{id}/recommendation-inputs` — the current system prompt +
    *  tool descriptions a recommendation from this run would revise, and where they
    *  came from (a Managed Harness is read live; other agents fall back to the spec,

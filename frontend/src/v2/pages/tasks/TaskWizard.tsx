@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
 import { rememberBudgetNotice } from "../../../lib/budgets";
@@ -27,6 +27,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { backTarget } from "./back";
 import { LogSourceFields } from "./LogSourceFields";
 import { LogStreamPicker } from "./LogStreamPicker";
 import { SessionPicker } from "./SessionPicker";
@@ -145,6 +146,7 @@ interface Handoff {
 export function TaskWizard() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const toast = useV2Toast();
   const from = params.get("from");
   const handoff: Handoff = {
@@ -253,7 +255,8 @@ export function TaskWizard() {
           enable_on_create: true,
         });
         toast("success", t("v2.tasks.createdOnline"));
-        setParams({ view: "detail", kind: "online", id: cfg.config_id });
+        // the new task's Back returns to where the wizard was opened from
+        setParams({ view: "detail", kind: "online", id: cfg.config_id }, { state: location.state });
       } else {
         const scope =
           draft.source === "window"
@@ -277,7 +280,7 @@ export function TaskWizard() {
         toast("success", t("v2.tasks.createdRun"));
         // its estimate is more than the creator has left: the detail page says so
         rememberBudgetNotice(run.id, run.budget_notice);
-        setParams({ view: "detail", kind: "run", id: run.id });
+        setParams({ view: "detail", kind: "run", id: run.id }, { state: location.state });
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -321,7 +324,7 @@ export function TaskWizard() {
     <>
       <FlowHeader
         title={t("v2.tasks.newTitle")}
-        onBack={() => setParams({})}
+        onBack={() => setParams(backTarget(location.state))}
         steps={
           <Steps
             steps={[t("v2.tasks.stepData"), draft.mode === "insights" ? t("v2.tasks.stepInsights") : t("v2.tasks.stepEvaluators")]}
