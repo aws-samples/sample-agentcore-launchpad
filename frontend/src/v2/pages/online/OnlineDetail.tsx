@@ -449,7 +449,7 @@ export function OnlineDetail({ id }: { id: string }) {
       {row.failure_reason && <Alert tone="error">{row.failure_reason}</Alert>}
       {row.duplicate_enabled && <Alert tone="warn">{t("v2.online.duplicateWarn")}</Alert>}
       {row.owner === "experiment" && (
-        <Alert action={<Link to="/v2/eval/experiments" className="v2-link">{t("v2.online.openExperiments")}</Link>}>
+        <Alert action={<Link to="/v2/eval/experiments?mode=configuration" className="v2-link">{t("v2.online.openExperiments")}</Link>}>
           {t("v2.online.experimentReadonly")}
         </Alert>
       )}

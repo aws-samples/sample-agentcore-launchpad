@@ -2657,8 +2657,9 @@ through the same backend routes and permission checks as the classic pages.
   stage's result read-only (recommendation diff, bundles, gateway/A-B, traffic, verdict
   metrics, cleanup rows): they are ledger artifacts (`Experiment.artifacts`, merged per
   stage and never removed by cleanup), not AWS reads. The per-experiment RECOMMEND picker state lives in
-  `lib/experiments.ts`, shared with the classic page. Runtime canaries are its second tab
-  (`mode=canary`, `v2/pages/canary/`): list, `canary=new` (champion + candidate prompt /
+  `lib/experiments.ts`, shared with the classic page. Runtime canaries are its first and
+  default tab (`mode=canary`; the experiments tab is `mode=configuration`, and its
+  `?view=new|detail` sub-pages open without `mode`; `v2/pages/canary/`): list, `canary=new` (champion + candidate prompt /
   Studio code, accepting the experiment's promote hand-off `champion=` / `sourceExp=`)
   and `canary=<id>` with setup plus one card per ramp stage (90/10 → 50/50 → 1/99:
   traffic, verdict, advance/complete with the non-significant override confirm),

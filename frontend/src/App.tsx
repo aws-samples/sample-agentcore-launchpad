@@ -242,6 +242,8 @@ function v2EvaluationTarget(search: string): string | null {
       } else if (exp) {
         next.set("view", "detail");
         next.set("id", exp);
+      } else {
+        next.set("mode", "configuration"); // the V2 page defaults to the canary tab
       }
     }
     const q = next.toString();

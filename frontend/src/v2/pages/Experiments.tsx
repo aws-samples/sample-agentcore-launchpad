@@ -16,18 +16,21 @@ type Mode = "configuration" | "canary";
 const LIST_POLL_MS = 8000;
 
 /**
- * 实验 — configuration-bundle experiments (recommend → bundles → gateway/A-B →
- * traffic → verdict → promote → cleanup) and, as a second tab, runtime canaries.
- * Experiment sub-pages are `?view=` states: `new` (`agent=`, `lookback=`,
- * `baselineRun=`, `sourceRun=`) and `detail&id=`. `mode=canary` opens the canary
- * tab, whose params are the classic page's: `canary=new` (with the promote
- * hand-off's `champion=` / `sourceExp=`) or `canary=<id>`.
+ * 实验 — runtime canaries (the first, default tab) and configuration-bundle
+ * experiments (recommend → bundles → gateway/A-B → traffic → verdict → promote →
+ * cleanup). `mode=configuration` opens the experiments tab; its sub-pages are
+ * `?view=` states — `new` (`agent=`, `lookback=`, `baselineRun=`, `sourceRun=`)
+ * and `detail&id=` — which open without `mode` (they predate the canary default).
+ * Canary params are the classic page's: `canary=new` (with the promote hand-off's
+ * `champion=` / `sourceExp=`) or `canary=<id>`, alongside `mode=canary`.
  */
 export function V2Experiments() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
-  const mode: Mode = params.get("mode") === "canary" ? "canary" : "configuration";
   const view = params.get("view");
+  const modeParam = params.get("mode");
+  const mode: Mode =
+    modeParam === "configuration" || (modeParam !== "canary" && (view === "new" || view === "detail")) ? "configuration" : "canary";
   const id = params.get("id");
   const canaryParam = mode === "canary" ? params.get("canary") : null;
   const list = useLoad(() => api.v2Experiments(), "v2-experiments");
@@ -62,8 +65,8 @@ export function V2Experiments() {
         tabs={
           <SubTabs
             value={mode}
-            onChange={(next) => setParams(next === "canary" ? { mode: "canary" } : {})}
-            tabs={(["configuration", "canary"] as Mode[]).map((value) => ({ value, label: t(`v2.experiments.mode.${value}`) }))}
+            onChange={(next) => setParams({ mode: next })}
+            tabs={(["canary", "configuration"] as Mode[]).map((value) => ({ value, label: t(`v2.experiments.mode.${value}`) }))}
           />
         }
       />

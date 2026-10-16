@@ -130,7 +130,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
   if (!exp) {
     return loadError ? (
       <>
-        <FlowHeader title={id} onBack={() => setParams({})} />
+        <FlowHeader title={id} onBack={() => setParams({ mode: "configuration" })} />
         <Alert tone="error">{loadError}</Alert>
       </>
     ) : (
@@ -892,7 +892,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
             <Tag tone={EXPERIMENT_TONE[exp.status] ?? "gray"}>{t(`v2.experiments.status.${exp.status}`, { defaultValue: exp.status })}</Tag>
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={() => setParams({ mode: "configuration" })}
         end={
           <>
             <Button onClick={() => void refresh()}>{t("v2.common.refresh")}</Button>

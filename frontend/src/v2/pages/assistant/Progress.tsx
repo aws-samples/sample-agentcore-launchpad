@@ -61,7 +61,7 @@ export function CreationProgressCard({
         ) : (
           <Link to="/v2/eval/tasks">{t("assistantProgress.evaluate")}</Link>
         )}
-        <Link to="/v2/eval/experiments">{t("assistantProgress.experiment")}</Link>
+        <Link to="/v2/eval/experiments?mode=configuration">{t("assistantProgress.experiment")}</Link>
         <Link to="/v2/observability">{t("assistantProgress.feedback")}</Link>
       </div>
     </Card>
