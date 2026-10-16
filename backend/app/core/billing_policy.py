@@ -268,6 +268,7 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     # ---- observability: SCORE NOW calls Evaluate; the price refresh is config ----
     ("POST", "/api/observability/sessions/{session_id}/evaluate"): Billable(SOURCE_OBSERVABILITY),
     ("POST", "/api/observability/prices/refresh"): FREE,
+    ("POST", "/api/observability/session-previews"): FREE,  # ledger / Memory / log reads
     # ---- user and workspace management ----
     ("PATCH", "/api/users/{user_id}"): FREE,
     ("DELETE", "/api/users/{user_id}"): FREE,

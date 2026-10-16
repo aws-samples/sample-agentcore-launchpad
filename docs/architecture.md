@@ -2781,6 +2781,16 @@ through the same backend routes and permission checks as the classic pages.
   session owns are hidden behind a toggle and never selectable. The picked
   sessions start an ordinary `session_ids` run (no agent invocation), tagged
   `session_source: "logs"` so the list shows the source as 日志.
+- **Agent 轨迹 data source** (`v2/pages/tasks/SessionPicker.tsx`): the agent's
+  sessions observed in the last 7 days (`/api/observability/sessions`), each row
+  showing the session's first user input and last agent reply so a session is
+  picked by content. Previews load one page (10 rows) per
+  `POST /api/observability/session-previews` call — the transcript sources read in
+  parallel (chat ledger, Memory, eval content logs; for a session no ledger row
+  claims, the agent's runtime content logs from its first span on), no long-term
+  record count. 全选 picks every row the status / session-id / selected-only
+  filters leave, the header checkbox the page; 查看 opens the whole conversation
+  in a drawer that can also (de)select the session.
 - **Evaluation target: platform agent or CloudWatch telemetry.** A task can
   evaluate an agent that is not a platform agent (for example one not hosted on
   AgentCore Runtime) straight from its CloudWatch telemetry

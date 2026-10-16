@@ -2676,6 +2676,19 @@ export interface ObsSessionTranscript {
   transcript: ObsTranscript;
 }
 
+/** `GET /api/observability/session-previews` — one trajectory-picker row:
+ *  the first user input and last agent reply (clipped server-side), or
+ *  `available: false` with a `reason` (`not_found` · `read_failed` ·
+ *  `not_platform_session` · `memory_unavailable` · `no_turns`). */
+export interface ObsSessionPreview {
+  session_id: string;
+  available: boolean;
+  reason: string | null;
+  input: string | null;
+  output: string | null;
+  user_turns: number;
+}
+
 export interface ObsSessionDetail {
   session_id: string;
   range: string;
@@ -6105,13 +6118,21 @@ export const api = {
     request<ObsSessionDetail>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}?${obsQuery(range, force)}`,
     ),
-  /** Conversation only, no span query — `agentId` attributes an unclaimed session. */
-  obsSessionTranscript: (sessionId: string, agentId?: string | null) =>
-    request<ObsSessionTranscript>(
-      `/api/observability/sessions/${encodeURIComponent(sessionId)}/transcript${
-        agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""
-      }`,
-    ),
+  /** Conversation only, no span query — `agentId` attributes an unclaimed session,
+   *  `since` (its first span) lets one with nothing in Memory read the agent's content logs. */
+  obsSessionTranscript: (sessionId: string, agentId?: string | null, since?: string | null) => {
+    const query = new URLSearchParams([...(agentId ? [["agent_id", agentId]] : []), ...(since ? [["since", since]] : [])]).toString();
+    return request<ObsSessionTranscript>(
+      `/api/observability/sessions/${encodeURIComponent(sessionId)}/transcript${query ? `?${query}` : ""}`,
+    );
+  },
+  /** First input / last output of up to 20 sessions (`first` = the session list's
+   *  first-span time) — one picker page per call; a read, POSTed for the body. */
+  obsSessionPreviews: (sessions: { session_id: string; first: string | null }[], agentId?: string | null) =>
+    request<{ previews: ObsSessionPreview[] }>("/api/observability/session-previews", {
+      method: "POST",
+      body: JSON.stringify({ sessions, ...(agentId ? { agent_id: agentId } : {}) }),
+    }),
   obsEvaluateSession: (sessionId: string, body: ObsSessionScoreBody) =>
     request<ObsSessionScore>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}/evaluate`,

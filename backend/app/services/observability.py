@@ -16,6 +16,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,6 +24,7 @@ from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
@@ -1366,12 +1368,24 @@ def get_session(session_id: str, range_key: str, db: Session,
         session_id,
         workspace,
         agent=_agent_from_traces(db, workspace.id, payload["traces"]),
+        started_at=_iso_datetime(payload["summary"]["first"]),
     )
     return {**payload, "transcript": transcript}
 
 
+def _iso_datetime(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
 def get_session_transcript(
-    session_id: str, db: Session, workspace: WorkspaceContext, agent_id: str | None = None
+    session_id: str,
+    db: Session,
+    workspace: WorkspaceContext,
+    agent_id: str | None = None,
+    started_at: datetime | None = None,
 ) -> dict[str, Any]:
     """The session's conversation alone — no Logs Insights pass.
 
@@ -1386,7 +1400,9 @@ def get_session_transcript(
             agent = None
     return {
         "session_id": session_id,
-        "transcript": session_transcript(db, session_id, workspace, agent=agent),
+        "transcript": session_transcript(
+            db, session_id, workspace, agent=agent, started_at=started_at
+        ),
     }
 
 
@@ -1781,7 +1797,11 @@ def _experiment_for_session(
 
 
 def _external_transcript(
-    db: Session, session_id: str, workspace: WorkspaceContext, agent: Agent | None
+    db: Session,
+    session_id: str,
+    workspace: WorkspaceContext,
+    agent: Agent | None,
+    started_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Transcript for a session that is in NO platform ledger — experiment
     gateway traffic, a `/v1` caller, or any other direct runtime invoke.
@@ -1789,7 +1809,13 @@ def _external_transcript(
     Memory has no "which actor owns this session" lookup, so probe a bounded
     candidate set: the traced agent's scoped actors first (unambiguous), then
     the bare "default" actor that the gateway→runtime hop leaves in place.
+    Nothing in Memory (a harness with memory disabled, a runtime-backed agent)
+    and the session's start known: the agent's runtime content logs, the same
+    records StartBatchEvaluation reads.
     """
+    turns: list[dict[str, Any]] = []
+    actor_id: str | None = None
+    origin = "memory"
     try:
         candidates = (
             memory.list_actor_ids(workspace, prefix=f"{agent.id}{memory.SCOPE_SEP}")
@@ -1797,34 +1823,46 @@ def _external_transcript(
             else []
         )
         candidates.append("default")
-        for actor_id in candidates:
+        for candidate in candidates:
             turns = _turns_from_events(
-                memory.list_events(workspace, actor_id, session_id, 100)
+                memory.list_events(workspace, candidate, session_id, 100)
             )
-            if not turns:
-                continue
-            experiment = _experiment_for_session(db, workspace.id, session_id)
-            return {
-                "available": True,
-                "actor_id": actor_id,
-                "agent_id": agent.id if agent else None,
-                "agent_name": agent.name if agent else None,
-                "source": "experiment" if experiment else "external",
-                "origin": "memory",
-                "run_id": None,
-                "experiment_id": experiment.id if experiment else None,
-                "experiment_name": experiment.name if experiment else None,
-                "turns": turns,
-                # Long-term namespaces are keyed on the actor alone, and these
-                # actors are shared across agents/runs — the count would say
-                # nothing about this session (same reason eval skips it).
-                "long_term_records": None,
-            }
+            if turns:
+                actor_id = candidate
+                break
     except Exception:
-        # Memory unreachable / not bootstrapped: this session was already
-        # unattributable, so degrade to the plain empty state.
+        # Memory unreachable / not bootstrapped: the session was already
+        # unattributable — only the content logs below can still say something.
+        turns = []
+    if not turns and agent is not None and started_at is not None:
+        try:
+            log_group = _eval_content_log_group(agent, workspace)
+            if log_group:
+                turns = eval_turns_from_content_logs(
+                    log_group, session_id, started_at, workspace
+                )
+                origin = "logs"
+        except Exception:
+            turns = []
+    if not turns:
         return dict(NOT_PLATFORM_SESSION)
-    return dict(NOT_PLATFORM_SESSION)
+    experiment = _experiment_for_session(db, workspace.id, session_id)
+    return {
+        "available": True,
+        "actor_id": actor_id,
+        "agent_id": agent.id if agent else None,
+        "agent_name": agent.name if agent else None,
+        "source": "experiment" if experiment else "external",
+        "origin": origin,
+        "run_id": None,
+        "experiment_id": experiment.id if experiment else None,
+        "experiment_name": experiment.name if experiment else None,
+        "turns": turns,
+        # Long-term namespaces are keyed on the actor alone, and these
+        # actors are shared across agents/runs — the count would say
+        # nothing about this session (same reason eval skips it).
+        "long_term_records": None,
+    }
 
 
 def session_transcript(
@@ -1832,7 +1870,14 @@ def session_transcript(
     session_id: str,
     workspace: WorkspaceContext,
     agent: Agent | None = None,
+    *,
+    started_at: datetime | None = None,
+    long_term: bool = True,
 ) -> dict[str, Any]:
+    """`started_at` — the session's first span — lets a session no ledger row
+    claims fall back to the agent's content logs; `long_term=False` skips the
+    chat session's long-term record count (two Memory reads a preview row does
+    not show)."""
     row = (
         db.query(ChatSession)
         .filter(
@@ -1845,7 +1890,7 @@ def session_transcript(
     if row is None and run is None:
         # Not chat, not eval — try memory directly (`agent` comes from the
         # session's traces, which is the only agent signal such sessions carry).
-        return _external_transcript(db, session_id, workspace, agent)
+        return _external_transcript(db, session_id, workspace, agent, started_at)
     if row is not None:
         agent = db.get(Agent, row.agent_id)
         # Memory is written under an agent-scoped actor (memory.scoped_actor);
@@ -1912,10 +1957,10 @@ def session_transcript(
     # Long-term records only make sense for chat sessions — eval traffic all
     # shares the bare "default" actor, so its namespaces aggregate across
     # every agent's runs and say nothing about this session.
-    long_term = None
-    if row is not None and readable:
+    long_term_records = None
+    if row is not None and readable and long_term:
         try:
-            long_term = sum(
+            long_term_records = sum(
                 len(
                     memory.list_records(
                         workspace,
@@ -1937,7 +1982,77 @@ def session_transcript(
         "origin": origin,
         "run_id": run.id if run else None,
         "turns": turns,
-        "long_term_records": long_term,
+        "long_term_records": long_term_records,
+    }
+
+
+# ── Session previews (the task wizard's trajectory picker) ──────────────────
+
+MAX_PREVIEW_SESSIONS = 20
+PREVIEW_WORKERS = 8
+PREVIEW_TEXT_CAP = 600
+
+
+def session_transcripts(
+    sessions: dict[str, datetime | None],
+    workspace: WorkspaceContext,
+    agent_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Each session's transcript (no long-term count), read in parallel.
+
+    `sessions` maps a session id to its first span time (the content-log
+    fallback's start, see `session_transcript`). Same sources as the single
+    read — chat ledger, Memory, content logs — one worker per session with its
+    own DB session (a SQLAlchemy Session is not thread-safe). `agent_id`
+    attributes sessions no ledger row claims; another workspace's id is dropped.
+    One session's failed read degrades to an unavailable transcript, never
+    fails the batch.
+    """
+    def one(session_id: str) -> dict[str, Any]:
+        db = SessionLocal()
+        try:
+            agent = db.get(Agent, agent_id) if agent_id else None
+            if agent is not None and agent.workspace_id != workspace.id:
+                agent = None
+            return session_transcript(
+                db, session_id, workspace, agent=agent,
+                started_at=sessions[session_id], long_term=False,
+            )
+        except Exception:
+            return {"available": False, "reason": "read_failed"}
+        finally:
+            db.close()
+
+    ids = list(sessions)
+    if not ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(PREVIEW_WORKERS, len(ids))) as pool:
+        return dict(zip(ids, pool.map(one, ids), strict=True))
+
+
+def transcript_preview(session_id: str, transcript: dict[str, Any]) -> dict[str, Any]:
+    """One picker row: the first user input and the last agent reply (a thread
+    list's "first input / last output"), clipped, plus the user-turn count."""
+    turns = (transcript.get("turns") or []) if transcript.get("available") else []
+
+    def texts(role: str) -> list[str]:
+        return [
+            str(turn.get("text") or "").strip()
+            for turn in turns
+            if str(turn.get("role") or "").lower() == role and str(turn.get("text") or "").strip()
+        ]
+
+    inputs, replies = texts("user"), texts("assistant")
+    reason = None
+    if not inputs and not replies:
+        reason = transcript.get("reason") or "no_turns"
+    return {
+        "session_id": session_id,
+        "available": reason is None,
+        "reason": reason,
+        "input": inputs[0][:PREVIEW_TEXT_CAP] if inputs else None,
+        "output": replies[-1][:PREVIEW_TEXT_CAP] if replies else None,
+        "user_turns": len(inputs),
     }
 
 
@@ -1991,7 +2106,6 @@ def evaluate_session(
     # a managed code evaluator whose rules read reference inputs cannot score a live
     # session (no ground truth here) — refused before any span read or Evaluate call
     from app.assistant.evaluation_assets import managed_reference_gap
-    from app.core.db import SessionLocal
 
     _db = SessionLocal()
     try:

@@ -8,6 +8,7 @@ session ids match the platform id shape.
 Violations return the standard {code, message, detail} envelope (422).
 """
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -187,21 +188,74 @@ def session_transcript(
     session_id: SessionIdParam,
     request: Request,
     agent_id: AgentParam = None,
+    since: datetime | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Conversation only (no span query) — the evaluation result drawer's read;
-    `agent_id` attributes a session no ledger row claims."""
+    `agent_id` attributes a session no ledger row claims, `since` (its first
+    span) lets such a session fall back to that agent's content logs."""
     private = _private(request, ws, db)
     private.require_visible(session_id)
     hidden = _hidden(db, ws, viewer)
     if hidden.hides_session(session_id) or hidden.hides(agent_id):
         raise NotFoundError("observability.session_not_found", "session not found")
-    payload = observability.get_session_transcript(session_id, db, ws.context, agent_id)
+    payload = observability.get_session_transcript(
+        session_id, db, ws.context, agent_id, started_at=since
+    )
     if private.mentions_hidden(payload) or hidden.mentions(payload):
         raise NotFoundError("observability.session_not_found", "session not found")
     return payload
+
+
+class PreviewSession(BaseModel):
+    session_id: str = Field(pattern=r"^[A-Za-z0-9_\-#:.@]{8,256}$")
+    # the session list's `first` (first span): where a session no ledger row
+    # claims starts reading the agent's content logs
+    first: datetime | None = None
+
+
+class SessionPreviewsBody(BaseModel):
+    sessions: list[PreviewSession] = Field(
+        min_length=1, max_length=observability.MAX_PREVIEW_SESSIONS
+    )
+    agent_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+@router.post("/session-previews")
+def session_previews(
+    body: SessionPreviewsBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """First input / last output of each session (the task wizard's trajectory
+    picker, one page of rows per call; a read, POST only for the per-session
+    start times). A session the caller may not see reads as `not_found` — the
+    row stays, its content does not."""
+    private = _private(request, ws, db)
+    hidden = _hidden(db, ws, viewer)
+    if hidden.hides(body.agent_id):
+        raise NotFoundError("observability.session_not_found", "session not found")
+    first: dict[str, datetime | None] = {}
+    for item in body.sessions:
+        first.setdefault(item.session_id, item.first)
+    ids = list(first)
+    readable = {
+        sid: first[sid] for sid in ids
+        if private.visible(sid) and not hidden.hides_session(sid)
+    }
+    transcripts = observability.session_transcripts(readable, ws.context, body.agent_id)
+    gone = {"available": False, "reason": "not_found"}
+    previews = []
+    for sid in ids:
+        transcript = transcripts.get(sid, gone)
+        if private.mentions_hidden(transcript) or hidden.mentions(transcript):
+            transcript = gone
+        previews.append(observability.transcript_preview(sid, transcript))
+    return {"previews": previews}
 
 
 class SessionEvaluateBody(BaseModel):

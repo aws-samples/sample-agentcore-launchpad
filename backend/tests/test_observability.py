@@ -850,6 +850,43 @@ def test_transcript_external_session_labels_owning_experiment(monkeypatch):
     assert result["experiment_id"] == exp_id and result["experiment_name"] == exp_name
 
 
+def test_transcript_external_session_falls_back_to_content_logs(monkeypatch):
+    """Nothing in Memory (a harness with memory disabled): with the session's
+    start known, the traced agent's runtime content logs carry the turns."""
+    from datetime import UTC, datetime
+
+    db = SessionLocal()
+    agent = db.get(Agent, _seed_agent())
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(obs, "_eval_content_log_group", lambda ag, ws: f"/logs/{ag.id}")
+    seen: list = []
+
+    def fake_logs_turns(log_group, session_id, started_at, workspace):
+        seen.append((log_group, session_id, started_at))
+        return [{"role": "USER", "text": "q", "at": "t"},
+                {"role": "ASSISTANT", "text": "a", "at": "t"}]
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
+    # no start → no scan: the window would be guesswork
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
+        "available": False, "reason": "not_platform_session"}
+    start = datetime(2026, 10, 15, 6, 22, 56, tzinfo=UTC)
+    result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent, started_at=start)
+    assert seen == [(f"/logs/{agent.id}", EXTERNAL_SID, start)]
+    assert (result["available"], result["origin"], result["source"]) == (True, "logs", "external")
+    assert result["actor_id"] is None and result["agent_id"] == agent.id
+    assert [t["text"] for t in result["turns"]] == ["q", "a"]
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("logs down")
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", broken)
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent, started_at=start) == {
+        "available": False, "reason": "not_platform_session"}
+    db.close()
+
+
 def test_transcript_external_probe_error_degrades(monkeypatch):
     """Neither leg of the probe may raise into the session payload — an
     unattributable session degrades to the plain empty state."""
@@ -879,8 +916,9 @@ def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
     agent_id = _seed_agent()
     seen: dict = {}
 
-    def fake_transcript(db, session_id, workspace, agent=None):
+    def fake_transcript(db, session_id, workspace, agent=None, started_at=None, **_):
         seen["agent_id"] = agent.id if agent is not None else None
+        seen["started_at"] = started_at
         return {"available": False, "reason": "not_platform_session"}
 
     monkeypatch.setattr(obs, "session_transcript", fake_transcript)
@@ -888,6 +926,8 @@ def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
     result = obs.get_session("s" * 64, "24h", db, ws_ctx(), logs=_fake_logs())
     db.close()
     assert seen["agent_id"] == agent_id  # resolved from AGG_ROW's service name
+    # the session's first span anchors a content-log fallback
+    assert seen["started_at"].isoformat() == result["summary"]["first"]
     assert result["transcript"]["available"] is False
 
 
@@ -1328,9 +1368,11 @@ def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, mon
     agent_id attributes an unclaimed session, a foreign workspace's id is dropped."""
     agent_id = _seed_agent()
     seen: list = []
+    starts: list = []
 
-    def fake_transcript(db, session_id, workspace, agent=None):
+    def fake_transcript(db, session_id, workspace, agent=None, started_at=None, **_):
         seen.append(agent.id if agent is not None else None)
+        starts.append(started_at)
         return {"available": True, "turns": [{"role": "USER", "text": "hi", "at": "t"}]}
 
     monkeypatch.setattr(obs, "session_transcript", fake_transcript)
@@ -1352,7 +1394,114 @@ def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, mon
     client.get(f"{url}?agent_id={foreign_id}")
     client.get(url)
     assert seen == [agent_id, None, None]
+    client.get(f"{url}?since=2026-10-15T06:22:56%2B00:00")
+    assert [str(s) if s else None for s in starts] == [
+        None, None, None, "2026-10-15 06:22:56+00:00"]
     assert client.get(f"{url}?agent_id=bad$id").status_code == 422
+    assert client.get(f"{url}?since=yesterday").status_code == 422
+
+
+# ── session previews (task wizard's trajectory picker) ──────────────────────
+
+
+def test_transcript_preview_is_first_input_and_last_output():
+    turns = [
+        {"role": "USER", "text": "  first question  "},
+        {"role": "ASSISTANT", "text": "first answer"},
+        {"role": "USER", "text": "follow-up"},
+        {"role": "ASSISTANT", "text": "x" * 900},
+    ]
+    row = obs.transcript_preview("s" * 64, {"available": True, "turns": turns})
+    assert row == {
+        "session_id": "s" * 64, "available": True, "reason": None,
+        "input": "first question", "output": "x" * obs.PREVIEW_TEXT_CAP, "user_turns": 2,
+    }
+    # an unanswered question still previews; nothing said at all does not
+    asked = obs.transcript_preview("q" * 64, {"available": True, "turns": turns[:1]})
+    assert (asked["available"], asked["input"], asked["output"]) == (True, "first question", None)
+    empty = obs.transcript_preview("e" * 64, {"available": True, "turns": []})
+    assert (empty["available"], empty["reason"], empty["user_turns"]) == (False, "no_turns", 0)
+    gone = obs.transcript_preview("g" * 64, {"available": False, "reason": "not_platform_session"})
+    assert (gone["available"], gone["reason"], gone["input"]) == (
+        False, "not_platform_session", None)
+
+
+def test_session_transcripts_skip_long_term_reads_and_degrade_per_session(monkeypatch):
+    agent_id = _seed_agent()
+    db = SessionLocal()
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="s" * 64, actor_id="river"))
+    db.add_all([
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                    session_id="s" * 64, role="user", text="hello"),
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                    session_id="s" * 64, role="agent", text="hi there"),
+    ])
+    db.commit()
+    db.close()
+
+    def no_long_term(*args, **kwargs):
+        raise AssertionError("a preview must not read long-term records")
+
+    seen_agents: list = []
+
+    def list_actor_ids(workspace, prefix=""):
+        seen_agents.append(prefix)
+        raise RuntimeError("memory down")
+
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(obs.memory, "list_records", no_long_term)
+    monkeypatch.setattr(obs.memory, "list_actor_ids", list_actor_ids)
+    out = obs.session_transcripts({"s" * 64: None, "x" * 64: None}, ws_ctx(), agent_id)
+    assert list(out) == ["s" * 64, "x" * 64]
+    chat = out["s" * 64]
+    assert chat["origin"] == "ledger" and chat["long_term_records"] is None
+    assert [t["text"] for t in chat["turns"]] == ["hello", "hi there"]
+    # an unclaimed session is probed under the given agent; its failure stays its own
+    assert out["x" * 64] == {"available": False, "reason": "not_platform_session"}
+    assert seen_agents == [f"{agent_id}{obs.memory.SCOPE_SEP}"]
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("ledger locked")
+
+    monkeypatch.setattr(obs, "session_transcript", boom)
+    assert obs.session_transcripts({"s" * 64: None}, ws_ctx()) == {
+        "s" * 64: {"available": False, "reason": "read_failed"}}
+    assert obs.session_transcripts({}, ws_ctx()) == {}
+
+
+def test_session_previews_endpoint_reads_one_page(client, mocked_aws, monkeypatch):
+    from datetime import UTC, datetime
+
+    agent_id = _seed_agent()
+    calls: list = []
+
+    def fake_transcripts(sessions, workspace, agent_id=None):
+        calls.append((dict(sessions), agent_id))
+        return {sid: {"available": True, "turns": [
+            {"role": "USER", "text": f"q-{sid[:2]}"},
+            {"role": "ASSISTANT", "text": f"a-{sid[:2]}"}]} for sid in sessions}
+
+    monkeypatch.setattr(obs, "session_transcripts", fake_transcripts)
+    url = "/api/observability/session-previews"
+    a, b = "a" * 40, "b#feishu#oc_1"
+    res = client.post(url, json={"agent_id": agent_id, "sessions": [
+        {"session_id": a, "first": "2026-10-15T06:22:56+00:00"},
+        {"session_id": b}, {"session_id": a}]})
+    assert res.status_code == 200, res.text
+    previews = res.json()["previews"]
+    assert [(p["session_id"], p["input"], p["output"]) for p in previews] == [
+        (a, "q-aa", "a-aa"), (b, "q-b#", "a-b#")]
+    # de-duplicated, one batch, each session's start handed on
+    assert calls == [({a: datetime(2026, 10, 15, 6, 22, 56, tzinfo=UTC), b: None}, agent_id)]
+    assert mocked_aws.start_calls == 0  # no Logs Insights query
+
+    assert client.post(url, json={"sessions": []}).status_code == 422
+    assert client.post(url, json={"sessions": [{"session_id": 'bad"id-123'}]}).status_code == 422
+    too_many = [{"session_id": f"sess-{i:04d}"} for i in range(obs.MAX_PREVIEW_SESSIONS + 1)]
+    assert client.post(url, json={"sessions": too_many}).status_code == 422
+    assert client.post(url, json={"sessions": [{"session_id": a}],
+                                  "agent_id": "bad$id"}).status_code == 422
 
 
 # ── SCORE NOW: on-demand session scoring via the data-plane Evaluate API ────

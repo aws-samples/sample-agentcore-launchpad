@@ -460,7 +460,7 @@ def spans(monkeypatch, world):
     by_session = {r["session_id"]: r for r in rows}
     monkeypatch.setattr(obs, "get_session", lambda sid, *a, **k: {
         "session_id": sid, "traces": [by_session[sid]], "transcript": {"available": False}})
-    monkeypatch.setattr(obs, "get_session_transcript", lambda sid, db, ws, agent_id=None: {
+    monkeypatch.setattr(obs, "get_session_transcript", lambda sid, db, ws, agent_id=None, **_: {
         "session_id": sid, "transcript": {"available": False, "agent_id": agent_id}})
     return SimpleNamespace(world=world, ada_sid=ada_sid, bob_sid=bob_sid, chat_sid=chat_sid)
 
@@ -487,6 +487,34 @@ def test_observability_drops_and_404s_hidden_agents(spans):
     assert w.bob.get(f"/api/observability/traces/{'b' * 32}").status_code == 200
     assert w.bob.get(f"/api/observability/sessions/{spans.bob_sid}").status_code == 200
     assert w.admin.get(f"/api/observability/sessions/{spans.ada_sid}").status_code == 200
+
+
+def test_session_previews_blank_hidden_agents_sessions(spans, monkeypatch):
+    from app.services import observability as obs
+
+    w = spans.world
+    read: list = []
+
+    def fake_transcripts(sessions, workspace, agent_id=None):
+        read.append(list(sessions))
+        return {sid: {"available": True, "turns": [{"role": "USER", "text": "q"}]}
+                for sid in sessions}
+
+    monkeypatch.setattr(obs, "session_transcripts", fake_transcripts)
+    url = "/api/observability/session-previews"
+    body = {"sessions": [{"session_id": spans.bob_sid}, {"session_id": spans.chat_sid}]}
+    _isolate()
+    res = w.bob.post(url, json=body)
+    assert res.status_code == 200, res.text
+    rows = {p["session_id"]: p for p in res.json()["previews"]}
+    assert rows[spans.bob_sid]["input"] == "q"
+    # ada's chat keeps its row but is never read for bob
+    assert (rows[spans.chat_sid]["available"], rows[spans.chat_sid]["reason"]) == (
+        False, "not_found")
+    assert read == [[spans.bob_sid]]
+    _refused(w.bob, "observability.session_not_found",
+             ("POST", url, {**body, "agent_id": w.ada_agent}))
+    assert all(p["available"] for p in w.admin.post(url, json=body).json()["previews"])
 
 
 def test_overview_active_sessions_and_a2a_count_are_per_viewer(monkeypatch, world):
