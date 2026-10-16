@@ -37,10 +37,13 @@ def _execute(monkeypatch, streams):
     monkeypatch.setattr(evaluation, "data_client", lambda _ws: client)
     monkeypatch.setattr(evaluation, "_wait_for_fresh_telemetry", lambda **_kw: None)
     monkeypatch.setattr(evaluation, "_poll_batch", lambda *_a, **_kw: {})
-    finished = []
-    monkeypatch.setattr(evaluation, "_finish_from_result",
-                        lambda run_id, *_a, **_kw: finished.append(run_id))
     run_id = _run_row()
+    finished = []
+    # Only this run counts: a run another test queued on the real evaluation
+    # queue can wake (after its telemetry wait) while these patches are live and
+    # call the patched finisher too (a flake seen on a two-core host).
+    monkeypatch.setattr(evaluation, "_finish_from_result",
+                        lambda rid, *_a, **_kw: finished.append(rid) if rid == run_id else None)
     evaluation.execute_run(
         run_id, workspace=ws_ctx(), agent_arn=ARN, method="harness",
         service_name="harness_test.DEFAULT", log_group="/test",
