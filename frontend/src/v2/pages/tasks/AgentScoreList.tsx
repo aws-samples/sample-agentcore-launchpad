@@ -10,7 +10,17 @@ import { evaluatorLabel } from "../../../lib/evaluators";
 import { fmtScore } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
 import { Score } from "../../ResultsView";
-import { type AgentRow, agentRows, rerunSource, shortDate, shortTime } from "../../scorecard";
+import {
+  type AgentRow,
+  agentMethods,
+  agentRows,
+  type AgentStatusFilter,
+  type ChangeKind,
+  filterAgentRows,
+  rerunSource,
+  shortDate,
+  shortTime,
+} from "../../scorecard";
 import {
   Alert,
   type AttentionItem,
@@ -18,6 +28,7 @@ import {
   Button,
   Card,
   type Column,
+  FilterSelect,
   Lamp,
   LinkButton,
   Pager,
@@ -48,17 +59,29 @@ export function AgentScoreList() {
   const { can } = useAuth();
   const sc = useLoad(() => api.evaluationScorecard(), "scorecard-list");
   const [q, setQ] = useState("");
+  // deleted agents keep their runs on the ledger; they stay out of the list unless asked for
+  const [status, setStatus] = useState<AgentStatusFilter>("active");
+  const [method, setMethod] = useState("");
+  const [change, setChange] = useState<"" | ChangeKind>("");
   const [rerun, setRerun] = useState<{ row: AgentRow; run: ScorecardRun } | null>(null);
   const mayRun = can("eval.run");
 
   const rows = useMemo(() => (sc.data ? agentRows(sc.data) : []), [sc.data]);
-  const filtered = useMemo(() => {
+  const { filtered, hiddenDeleted } = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) =>
-      `${row.agent.name} ${row.agent.key} ${row.main ? benchName(t, row.main) : ""}`.toLowerCase().includes(needle),
-    );
-  }, [rows, q, t]);
+    const matches = (list: AgentRow[]) =>
+      needle
+        ? list.filter((row) =>
+            `${row.agent.name} ${row.agent.key} ${row.main ? benchName(t, row.main) : ""}`.toLowerCase().includes(needle),
+          )
+        : list;
+    return {
+      filtered: matches(filterAgentRows(rows, { status, method, change })),
+      // what 已隐藏 N would add back: deleted rows that pass every other filter
+      hiddenDeleted: status === "active" ? matches(filterAgentRows(rows, { status: "deleted", method, change })).length : 0,
+    };
+  }, [rows, q, t, status, method, change]);
+  const methods = useMemo(() => agentMethods(rows), [rows]);
   const paged = usePaged(filtered, PAGE_SIZE);
   const attention = useMemo(() => (sc.data ? scorecardAttention(sc.data) : []), [sc.data]);
 
@@ -143,7 +166,8 @@ export function AgentScoreList() {
     },
     {
       key: "main",
-      title: t("v2.scorecard.col.main"),
+      // how the main benchmark is chosen, on hover (the toolbar holds the filters)
+      title: <span title={t("v2.scorecard.listHint")}>{t("v2.scorecard.col.main")}</span>,
       render: (row) => {
         if (!row.main) return <span className="v2-muted">—</span>;
         const size = row.main.runs[row.main.runs.length - 1]?.benchmark.size;
@@ -317,7 +341,38 @@ export function AgentScoreList() {
             <Plus size={14} aria-hidden="true" />
             {t("v2.tasks.new")}
           </Button>
-          <span className="v2-sc-hint">{t("v2.scorecard.listHint")}</span>
+          <FilterSelect
+            label={t("v2.scorecard.filter.status")}
+            value={status}
+            allLabel={t("v2.common.all")}
+            onChange={(v) => setStatus(v as AgentStatusFilter)}
+            options={[
+              { value: "active", label: t("v2.scorecard.filter.statusActive") },
+              { value: "deleted", label: t("v2.scorecard.deleted") },
+            ]}
+            testId="v2-scorecard-filter-status"
+          />
+          <FilterSelect
+            label={t("v2.scorecard.filter.method")}
+            value={method}
+            allLabel={t("v2.common.all")}
+            onChange={setMethod}
+            options={methods.map((m) => ({ value: m, label: m === "logs" ? t("v2.tasks.cw.short") : methodLabel(m) }))}
+            testId="v2-scorecard-filter-method"
+          />
+          <FilterSelect
+            label={t("v2.scorecard.col.vsPrev")}
+            value={change}
+            allLabel={t("v2.common.all")}
+            onChange={(v) => setChange(v as "" | ChangeKind)}
+            options={(["down", "up", "minor", "none"] as const).map((k) => ({ value: k, label: t(`v2.scorecard.filter.change.${k}`) }))}
+            testId="v2-scorecard-filter-change"
+          />
+          {hiddenDeleted > 0 && (
+            <LinkButton onClick={() => setStatus("")} testId="v2-scorecard-show-deleted">
+              {t("v2.scorecard.filter.hiddenDeleted", { count: hiddenDeleted })}
+            </LinkButton>
+          )}
           <div className="end">
             <SearchInput value={q} onChange={setQ} placeholder={t("v2.scorecard.search")} testId="v2-scorecard-search" />
             <span className="v2-count">{t("v2.scorecard.agentCount", { count: filtered.length })}</span>

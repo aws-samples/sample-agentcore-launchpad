@@ -6644,6 +6644,19 @@
           "noRun": "This benchmark has no completed run to repeat yet",
           "unsupported": "Only a dataset replay or a time-window run can be evaluated again: re-scoring the same chosen sessions would only measure judge noise"
         }
+      },
+      "filter": {
+        "status": "Status",
+        "statusActive": "In use",
+        "method": "Method",
+        "hiddenDeleted_one": "{{count}} deleted agent hidden",
+        "hiddenDeleted_other": "{{count}} deleted agents hidden",
+        "change": {
+          "down": "Regressed",
+          "up": "Improved",
+          "minor": "Minor change",
+          "none": "No comparison"
+        }
       }
     },
     "outcome": {

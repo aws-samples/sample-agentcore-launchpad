@@ -290,6 +290,47 @@ export function agentRows(sc: EvaluationScorecard): AgentRow[] {
     .sort((a, b) => (order.get(b.newest?.id ?? "") ?? -1) - (order.get(a.newest?.id ?? "") ?? -1));
 }
 
+/* ---------- the 按 Agent filters ---------- */
+
+/** 状态: `active` (the default) hides deleted agents, `deleted` shows only them, "" all. */
+export type AgentStatusFilter = "" | "active" | "deleted";
+/** 较上一版本, read from the row's lamp: `down` a regression, `up` improved by 0.05 or
+ *  more, `minor` a smaller move, `none` no comparable earlier run. */
+export type ChangeKind = "down" | "up" | "minor" | "none";
+
+export interface AgentRowFilter {
+  status: AgentStatusFilter;
+  /** `logs` for a CloudWatch log source, else `ScorecardAgent.method`; "" = any */
+  method: string;
+  change: "" | ChangeKind;
+}
+
+/** The creation method a row filters under: `logs` for a CloudWatch log source. */
+export function agentMethod(agent: ScorecardAgent): string {
+  return agent.agent_id == null ? "logs" : (agent.method ?? "unknown");
+}
+
+export function changeKind(row: AgentRow): ChangeKind {
+  if (row.head.delta == null || !row.head.previous) return "none";
+  return row.head.signal === "act" ? "down" : row.head.signal === "ok" ? "up" : "minor";
+}
+
+export function filterAgentRows(rows: AgentRow[], f: AgentRowFilter): AgentRow[] {
+  return rows.filter((row) => {
+    if (f.status === "active" && row.agent.deleted) return false;
+    if (f.status === "deleted" && !row.agent.deleted) return false;
+    if (f.method && agentMethod(row.agent) !== f.method) return false;
+    return !f.change || changeKind(row) === f.change;
+  });
+}
+
+/** The methods the rows use, in a stable order (log sources last). */
+export function agentMethods(rows: AgentRow[]): string[] {
+  return [...new Set(rows.map((row) => agentMethod(row.agent)))].sort((a, b) =>
+    a === "logs" ? 1 : b === "logs" ? -1 : a.localeCompare(b),
+  );
+}
+
 /* ---------- the trend: version bands, revision markers, series ---------- */
 
 export interface Band {

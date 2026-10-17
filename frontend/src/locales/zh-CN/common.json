@@ -6644,6 +6644,19 @@
           "noRun": "这个基准还没有完成的运行可以照着再评",
           "unsupported": "只有数据集回放和时间窗运行可以再评一次：重新评同一批会话只会测出评委打分的噪声"
         }
+      },
+      "filter": {
+        "status": "状态",
+        "statusActive": "使用中",
+        "method": "创建方式",
+        "change": {
+          "down": "退步",
+          "up": "改进",
+          "minor": "小幅变化",
+          "none": "无可比"
+        },
+        "hiddenDeleted_one": "已隐藏 {{count}} 个已删除 Agent",
+        "hiddenDeleted_other": "已隐藏 {{count}} 个已删除 Agent"
       }
     },
     "outcome": {

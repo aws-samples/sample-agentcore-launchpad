@@ -12,8 +12,11 @@ import type {
 import type { EvaluationRunStatus } from "../lib/evaluation";
 import { backTarget, backState } from "./pages/tasks/back";
 import {
+  agentMethod,
+  agentMethods,
   agentRow,
   agentRows,
+  changeKind,
   benchEvaluators,
   benchmarksOf,
   changesBetween,
@@ -21,6 +24,7 @@ import {
   composite,
   coreEvaluators,
   evaluatorChanges,
+  filterAgentRows,
   headline,
   isActive,
   isRegression,
@@ -303,6 +307,39 @@ describe("agent rows", () => {
     ]);
     expect(row.head.reason).toBe("differentDatasets");
     expect(row.head.delta).toBeNull();
+  });
+});
+
+describe("agent row filters", () => {
+  minute = 0;
+  const rowOf = (key: string, scores: number[], over: Partial<ScorecardAgent> = {}) =>
+    agentRow(agent(key, over), scores.map((v, i) => run(`${key}${i}`, { agent: key, seq: i + 1, scores: { [C]: v } })));
+  const down = rowOf("down", [0.9, 0.6]);
+  const up = rowOf("up", [0.5, 0.8]);
+  const minor = rowOf("minor", [0.8, 0.79]);
+  const single = rowOf("single", [0.7]);
+  const gone = rowOf("gone", [0.9, 0.5], { deleted: true });
+  const logs = rowOf("logs:svc", [0.6, 0.62], { method: null, log_source: { service_name: "svc", log_group_names: ["/g"] } });
+  const rows = [down, up, minor, single, gone, logs];
+  const keys = (list: typeof rows) => list.map((r) => r.agent.key);
+
+  it("reads the change from the row's lamp", () => {
+    expect([down, up, minor, single].map(changeKind)).toEqual(["down", "up", "minor", "none"]);
+  });
+
+  it("hides deleted agents for `active`, shows only them for `deleted`, all for \"\"", () => {
+    expect(keys(filterAgentRows(rows, { status: "active", method: "", change: "" }))).not.toContain("gone");
+    expect(keys(filterAgentRows(rows, { status: "deleted", method: "", change: "" }))).toEqual(["gone"]);
+    expect(filterAgentRows(rows, { status: "", method: "", change: "" })).toHaveLength(rows.length);
+  });
+
+  it("filters by method (log sources as `logs`) and combines with the change filter", () => {
+    expect(agentMethod(logs.agent)).toBe("logs");
+    expect(agentMethod(down.agent)).toBe("harness");
+    expect(agentMethods(rows)).toEqual(["harness", "logs"]);
+    expect(keys(filterAgentRows(rows, { status: "", method: "logs", change: "" }))).toEqual(["logs:svc"]);
+    expect(keys(filterAgentRows(rows, { status: "", method: "harness", change: "down" }))).toEqual(["down", "gone"]);
+    expect(keys(filterAgentRows(rows, { status: "active", method: "harness", change: "down" }))).toEqual(["down"]);
   });
 });
 

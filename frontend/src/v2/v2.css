@@ -799,7 +799,6 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 /* three header actions: they wrap under the title instead of widening a narrow page */
 .v2-scorecard .v2-flow-head .end { flex-wrap: wrap; }
 .v2-scorecard .v2-flow-head h1 { min-width: 0; overflow-wrap: anywhere; }
-.v2-sc-hint { color: var(--v2-ink-3); font-size: 13px; }
 .v2-sc-agent { gap: 6px; flex-wrap: nowrap; }
 .v2-sc-agent .v2-link { min-width: 0; font-weight: 600; }
 .v2-sc-big .v2-score { font-size: 16px; }
