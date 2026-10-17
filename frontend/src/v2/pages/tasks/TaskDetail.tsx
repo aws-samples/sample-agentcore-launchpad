@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
@@ -16,7 +16,7 @@ import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
 import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
 import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
 import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
-import { backState, backTarget } from "./back";
+import { backState, backTarget, returnPath } from "./back";
 import { RunRecommendations } from "./RunRecommendations";
 
 const POLL_MS = 8000;
@@ -42,6 +42,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const initialOutcome = params.get("outcome") === "error" ? "error" : "";
   const toast = useV2Toast();
   const { can } = useAuth();
@@ -182,7 +183,11 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             {coverage ? <RunCoverageTag coverage={coverage} /> : <Tag tone={STATUS_TONE[data.status]}>{statusLabel(t, data.status)}</Tag>}
           </span>
         }
-        onBack={() => setParams(backTarget(location.state))}
+        onBack={() => {
+          const outside = returnPath(location.state);
+          if (outside) navigate(outside);
+          else setParams(backTarget(location.state));
+        }}
         end={actions}
       />
       {data.run && <BudgetNoticeAlert id={data.run.id} />}

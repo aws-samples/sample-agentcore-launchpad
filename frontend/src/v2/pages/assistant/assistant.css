@@ -123,6 +123,18 @@
 .v2 .v2-assistant-sub-row .err { flex-basis: 100%; color: var(--v2-danger); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
 .v2 .v2-assistant-sub-row .err.warn { color: var(--v2-warning); }
 .v2 .v2-assistant-sub-row .err.info { color: var(--v2-primary); }
+/* step 2's run history (RunHistory.tsx): one scorecard benchmark, read run by run */
+.v2 .v2-assistant-runs { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.v2 .v2-assistant-runs-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; font-size: 12.5px; }
+.v2 .v2-assistant-runs-kpi { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.v2 .v2-assistant-runs-kpi .v2-score { font-size: 20px; }
+.v2 .v2-assistant-runs .v2-sc-caption { margin: 0; }
+.v2 .v2-assistant-run-score { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.v2 .v2-assistant-rerun { display: inline-flex; align-items: center; gap: 4px; }
+.v2 .v2-assistant-breakdown > summary { font-size: 13px; }
+.v2 .v2-assistant-breakdown > .v2-sc-caption { margin: 4px 0 6px; }
+/* evaluators down, a few versions across: as wide as its columns, not the step */
+.v2 .v2-assistant-breakdown .v2-table { width: auto; min-width: min(100%, 420px); }
 
 @media (max-width: 1100px) {
   .v2 .v2-assistant-adlc-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }

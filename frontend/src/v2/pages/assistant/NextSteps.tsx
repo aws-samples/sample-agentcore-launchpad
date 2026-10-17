@@ -13,10 +13,8 @@ import {
 } from "../../../lib/api";
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
 import {
-  coverageDiffers,
   coverageInfo,
   type EvaluationRunInfo,
-  evaluationRunPresentation,
   RUN_TERMINAL_STATUSES,
   runCoverage,
   runMeanScore,
@@ -24,12 +22,12 @@ import {
 } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
-import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
-import { Alert, Button, Card, Confirm, LinkButton, Select, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, Select, Tag } from "../../ui";
 import { RunRecommendations } from "../tasks/RunRecommendations";
-import { CHIP_TAG, shortId, useReadOnly } from "./common";
+import { shortId, useReadOnly } from "./common";
 import { HarnessCanary } from "./HarnessCanary";
 import { RecommendationHistory } from "./RecommendationHistory";
+import { RunHistory } from "./RunHistory";
 
 /**
  * NEXT STEPS — shown under the evaluation assets once the creation operation has
@@ -233,7 +231,6 @@ export function NextStepsCard({
   const blockedReason = completedRuns.length === 0
     ? candidateRuns.map((r) => runRecommendable(r).reason).find((r) => r && r !== "not_completed") ?? null
     : null;
-  const historyCoverage = (runs ?? []).map(runCoverage);
   const [sourceRunId, setSourceRunId] = useState<string | null>(null);
   const baseline = completedRuns.find((r) => r.id === sourceRunId) ?? completedRuns[0] ?? null;
   const otherRuns = completedRuns.filter((r) => r.id !== baseline?.id);
@@ -273,7 +270,7 @@ export function NextStepsCard({
         <Step
           n={++n}
           testId="v2-assistant-next-run"
-          title={t("assistantNext.run.title")}
+          title={(runs?.length ?? 0) > 0 ? t("assistantNext.run.titleAgain") : t("assistantNext.run.title")}
           actions={
             <>
               {!readOnly && (
@@ -305,65 +302,18 @@ export function NextStepsCard({
               {t("assistantNext.run.referenceDependent", { n: referenceDependent })}
             </div>
           )}
-          {runs && runs.length > 0 && (
-            <div className="v2-assistant-sub-rows" data-testid="v2-assistant-next-runs" data-live={runLive ? "true" : "false"}>
-              <div className="v2-muted" style={{ fontSize: 12.5 }}>{t("assistantNext.run.historyTitle", { n: runs.length })}</div>
-              {coverageDiffers(historyCoverage) && (
-                <div className="v2-muted" style={{ fontSize: 12.5 }} data-testid="v2-assistant-next-not-comparable">
-                  {t("v2.runCoverage.notComparable")}
-                </div>
-              )}
-              {runs.map((run, index) => {
-                const live = !RUN_TERMINAL_STATUSES.has(run.status);
-                const presentation = evaluationRunPresentation(run);
-                const coverage = historyCoverage[index];
-                const mean = meanScore(run);
-                return (
-                  <div key={run.id} className="v2-assistant-sub-row" data-run-status={run.status}>
-                    <span className="mono">{t("assistantNext.run.runLine", { id: run.id.slice(0, 8) })}</span>
-                    {coverage ? (
-                      <RunCoverageTag coverage={coverage} />
-                    ) : (
-                      <Tag tone={CHIP_TAG[presentation.tone] ?? "gray"}>
-                        {t(`expPage.readiness.runStatus.${presentation.status}`)}
-                      </Tag>
-                    )}
-                    {run.created_at && <span className="v2-muted">{fmtTime(run.created_at)}</span>}
-                    {run.queue_position != null && live && (
-                      <span className="v2-muted">{t("assistantNext.run.queued", { n: run.queue_position })}</span>
-                    )}
-                    {mean != null && (
-                      <span className="v2-muted">
-                        {coverage
-                          ? t("assistantNext.run.meanScoreCoverage", {
-                            mean: mean.toFixed(2), n: run.scores.length, scored: coverage.scored, total: coverage.total,
-                          })
-                          : t("assistantNext.run.meanScore", { mean: mean.toFixed(2), n: run.scores.length })}
-                      </span>
-                    )}
-                    <Link to={`/v2/eval/tasks?view=detail&id=${encodeURIComponent(run.id)}`}>{t("assistantNext.run.openRuns")} ›</Link>
-                    {canRun && (run.status === "failed" || run.status === "stopped") && (
-                      <LinkButton danger disabled={removing === run.id} onClick={() => void removeRun(run)}>
-                        {t("assistantNext.run.remove")}
-                      </LinkButton>
-                    )}
-                    {coverage ? (
-                      <div className={coverageInfo(coverage) ? "err info" : "err warn"}>
-                        <RunCoverageNote
-                          coverage={coverage}
-                          rawError={run.error}
-                          showRawError={false}
-                          onReadDetail={canRun ? () => void readDetail(run) : undefined}
-                          reading={reading === run.id}
-                        />
-                      </div>
-                    ) : run.error && (
-                      <div className={presentation.status === "completed_with_errors" ? "err warn" : "err"}>{run.error}</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          {targetId && datasetId && runs && runs.length > 0 && (
+            <RunHistory
+              agentId={targetId}
+              datasetId={datasetId}
+              runs={runs}
+              reloadKey={`${agent?.version ?? ""}:${agent?.status ?? ""}`}
+              canRun={canRun}
+              removing={removing}
+              onRemove={(run) => void removeRun(run)}
+              reading={reading}
+              onReadDetail={(run) => void readDetail(run)}
+            />
           )}
           {runError && <div style={{ marginTop: 8 }}><Alert tone="error">{runError}</Alert></div>}
         </Step>

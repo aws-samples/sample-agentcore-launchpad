@@ -1261,6 +1261,13 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
   - `?view=agent&key=`（`AgentScorecard`）按运行先后画出该基准的趋势，标出快照版本分段和数据集变化。页面另有
     版本 × 评估器表、可勾选 A/B 去对比的运行记录，以及通过 `POST /api/eval/runs/{id}/rerun` 发起的“再评一次”。
   - 规则在 `v2/scorecard.ts` 与 `pages/tasks/scorecardAttention.ts`。
+- **架构助手第 2 步。** “下一步”第 2 步（`v2/pages/assistant/RunHistory.tsx`）读取该 Agent 的评分卡，把它在
+  方案 Dataset 上的运行当作一个基准，规则与上面相同。先显示最新综合分与上一版本相比的变化和迷你趋势线，再列出最近
+  5 次运行，每行带版本、综合分和变化。
+  - 同版本重跑只与该版本的上一次运行比较，并标为噪声。
+  - 按上面的规则退步的版本变化标为“退步”。
+  - 默认收起的“评估器明细”按评估器 × 版本列出最近 4 个版本。
+  - 指向评分卡、运行详情和对比页的链接，在这些页面点“返回”都会回到该对话（`pages/tasks/back.ts` 的 `returnState`）。
 
 ## 调用链
 

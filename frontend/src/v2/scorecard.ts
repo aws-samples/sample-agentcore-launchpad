@@ -241,6 +241,52 @@ export function headline(
   return { latest: cmp.latest, previous: cmp.previous, byVersion: cmp.byVersion, core, score, delta: d, changes, reason, signal };
 }
 
+/* ---------- run by run (the architect's step 2) ---------- */
+
+/** One scored run of a benchmark against the run it follows. */
+export interface RunStep {
+  score: number | null;
+  /** the run it is measured against; null when there is none */
+  previous: ScorecardRun | null;
+  /** score − previous's composite; null without a previous or a shared score */
+  delta: number | null;
+  /** `previous` is an earlier run of the same version: the delta is judge noise */
+  sameVersion: boolean;
+  /** a version change by the regression rule (composite −0.05, or an evaluator −0.1) */
+  regression: boolean;
+}
+
+function newest(runs: ScorecardRun[], test: (run: ScorecardRun) => boolean): ScorecardRun | null {
+  for (let i = runs.length - 1; i >= 0; i -= 1) if (test(runs[i])) return runs[i];
+  return null;
+}
+
+/**
+ * Each scored run of `bench` (oldest first) against the run before it: a re-run of a
+ * version against that version's newest earlier run, else — as the headline — the newest
+ * scored run of an older version; a run without a version against the scored run before
+ * it. Unscored runs (failed, stopped, still running) get no step.
+ */
+export function runSteps(bench: Benchmark, core: string[]): Map<string, RunStep> {
+  const out = new Map<string, RunStep>();
+  const before: ScorecardRun[] = [];
+  for (const run of bench.runs) {
+    if (!isScored(run)) continue;
+    const seq = run.snapshot?.seq;
+    const same = seq == null ? null : newest(before, (r) => r.snapshot?.seq === seq);
+    const previous =
+      seq == null
+        ? (before[before.length - 1] ?? null)
+        : (same ?? newest(before, (r) => r.snapshot != null && r.snapshot.seq < seq));
+    const score = composite(run, core);
+    const d = previous ? delta(composite(previous, core), score) : null;
+    const regression = !!previous && !same && isRegression(d, evaluatorChanges(previous, run));
+    out.set(run.id, { score, previous, delta: d, sameVersion: !!same, regression });
+    before.push(run);
+  }
+  return out;
+}
+
 /* ---------- the agent list ---------- */
 
 export interface AgentRow {

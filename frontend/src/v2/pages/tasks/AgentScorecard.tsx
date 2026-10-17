@@ -36,7 +36,7 @@ import {
 import { STATUS_TONE } from "../../tasks";
 import { Alert, Button, Card, type Column, FlowHeader, Kpi, LinkButton, OptionCard, Pager, Spin, Table, Tag } from "../../ui";
 import { noteLabel } from "../agents/snapshots";
-import { backState } from "./back";
+import { backState, returnPath } from "./back";
 import { RerunDialog } from "./RerunDialog";
 import {
   benchName,
@@ -107,17 +107,24 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
         next.set("bench", key);
         return next;
       },
-      { replace: true },
+      // a view toggle: keep where Back goes
+      { replace: true, state: location.state },
     );
   const pick = (run: ScorecardRun) => setPicked((prev) => togglePick(prev, run.id, order));
   const openCompare = (a: string, b: string) => setParams({ view: "compare", a, b });
+  // to the page outside 评估任务 that opened this one (the architect's step 2), else the list
+  const back = () => {
+    const outside = returnPath(location.state);
+    if (outside) navigate(outside);
+    else setParams({});
+  };
   const openRun = (id: string) => setParams({ view: "detail", kind: "run", id }, { state: backState(location.search) });
 
   if (sc.loading && !sc.data) return <Spin />;
   if (sc.error && !sc.data) {
     return (
       <>
-        <FlowHeader title={t("v2.scorecard.agent.title")} onBack={() => setParams({})} />
+        <FlowHeader title={t("v2.scorecard.agent.title")} onBack={back} />
         <Alert tone="error" action={<LinkButton onClick={sc.reload}>{t("v2.common.retry")}</LinkButton>}>
           {sc.error}
         </Alert>
@@ -127,7 +134,7 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
   if (!agent) {
     return (
       <>
-        <FlowHeader title={t("v2.scorecard.agent.title")} onBack={() => setParams({})} />
+        <FlowHeader title={t("v2.scorecard.agent.title")} onBack={back} />
         <Alert tone="warn">{t("v2.scorecard.agent.notFound")}</Alert>
       </>
     );
@@ -154,7 +161,7 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
             {agent.deleted && <Tag tone="gray">{t("v2.scorecard.deleted")}</Tag>}
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={back}
         end={
           <>
             {agent.agent_id && !agent.deleted && (

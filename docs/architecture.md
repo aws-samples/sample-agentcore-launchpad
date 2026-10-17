@@ -2219,6 +2219,15 @@ evaluated, what it was measured on, and how two runs line up case by case.
     table, the agent's runs with A/B picks for compare, and 再评一次 through
     `POST /api/eval/runs/{id}/rerun`.
   - The rules live in `v2/scorecard.ts` and `pages/tasks/scorecardAttention.ts`.
+- **The architect's step 2.** NEXT STEPS step 2 (`v2/pages/assistant/RunHistory.tsx`) reads
+  the agent's scorecard and treats its runs on the plan's Dataset as one benchmark, with the
+  same rules as above. It shows the latest composite against the previous version and a
+  sparkline, then the newest five runs, each with its version, composite and change.
+  - A same-version re-run is compared with that version's previous run and marked as noise.
+  - A version change that regresses by the rule above is tagged 退步.
+  - A collapsed evaluator × version breakdown shows the newest four versions.
+  - Its links to the scorecard, the run detail and the compare page all return to the
+    conversation on Back (`returnState` in `pages/tasks/back.ts`).
 
 ## The invoke chain
 

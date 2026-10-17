@@ -15,7 +15,8 @@ function tint(value: number | null): string | undefined {
   return `color-mix(in srgb, var(--v2-primary) ${pct}%, var(--v2-card))`;
 }
 
-function Cell({ cell, testId }: { cell: MatrixCell; testId?: string }) {
+/** One tinted score with its change chip (also the architect's evaluator breakdown). */
+export function MatrixScore({ cell, testId }: { cell: MatrixCell; testId?: string }) {
   return (
     <span className="v2-matrix-cell" style={{ background: tint(cell.value) }} data-testid={testId}>
       <span className="val">{fmtScore(cell.value)}</span>
@@ -93,7 +94,7 @@ export function VersionMatrix({
           </span>
         ),
         className: "nowrap",
-        render: (row) => <Cell cell={row.cells[c]} testId={`v2-scorecard-matrix-${row.seq}-${id}`} />,
+        render: (row) => <MatrixScore cell={row.cells[c]} testId={`v2-scorecard-matrix-${row.seq}-${id}`} />,
       }),
     ),
     {
@@ -105,7 +106,7 @@ export function VersionMatrix({
         </span>
       ),
       className: "nowrap",
-      render: (row) => <Cell cell={row.composite} testId={`v2-scorecard-matrix-${row.seq}-composite`} />,
+      render: (row) => <MatrixScore cell={row.composite} testId={`v2-scorecard-matrix-${row.seq}-composite`} />,
     },
     {
       key: "ops",

@@ -10,7 +10,7 @@ import type {
   SpecChangeGroup,
 } from "../lib/api";
 import type { EvaluationRunStatus } from "../lib/evaluation";
-import { backTarget, backState } from "./pages/tasks/back";
+import { backTarget, backState, returnPath, returnState } from "./pages/tasks/back";
 import {
   agentMethod,
   agentMethods,
@@ -35,6 +35,7 @@ import {
   rerunSource,
   revisionMarkers,
   runMean,
+  runSteps,
   seriesColor,
   seriesSlots,
   shortDate,
@@ -274,6 +275,61 @@ describe("comparison and headline", () => {
   });
 });
 
+describe("run steps", () => {
+  it("measures a version change against the older version and a re-run against its own version", () => {
+    const qa = benchmarksOf(hrRuns())[0];
+    const steps = runSteps(qa, coreEvaluators(qa.runs));
+    expect([...steps.keys()]).toEqual(["h1", "h2", "h3", "h5", "h7", "h9"]);
+    expect(steps.get("h1")).toMatchObject({ previous: null, delta: null, sameVersion: false, regression: false });
+    const h2 = steps.get("h2");
+    expect(h2?.previous?.id).toBe("h1");
+    expect(h2?.sameVersion).toBe(true);
+    expect(h2?.delta).toBeCloseTo((0.55 + 0.62 + 0.45) / 3 - (0.5 + 0.6 + 0.4) / 3);
+    // #2 is measured against #1's newest run, the re-run
+    expect(steps.get("h3")?.previous?.id).toBe("h2");
+    expect(steps.get("h3")?.sameVersion).toBe(false);
+    expect(steps.get("h7")).toMatchObject({ sameVersion: true });
+    expect(steps.get("h7")?.previous?.id).toBe("h5");
+    // the latest run pairs as the headline does
+    const head = headline(qa, { agentScored: 10, anyComparable: true });
+    expect(steps.get("h9")?.previous?.id).toBe(head.previous?.id);
+    expect(steps.get("h9")?.delta).toBeCloseTo(head.delta ?? NaN);
+    expect(steps.get("h9")?.score).toBeCloseTo(head.score ?? NaN);
+  });
+
+  it("flags a regressing version change, never a same-version re-run", () => {
+    const runs = [
+      run("a", { seq: 1, scores: { [C]: 0.8, [H]: 0.6 } }),
+      run("b", { seq: 1, scores: { [C]: 0.5, [H]: 0.5 } }),
+      run("c", { seq: 2, scores: { [C]: 0.7, [H]: 0.6 } }),
+      run("d", { seq: 3, scores: { [C]: 0.55, [H]: 0.8 } }),
+    ];
+    const qa = benchmarksOf(runs)[0];
+    const steps = runSteps(qa, coreEvaluators(qa.runs));
+    expect(steps.get("b")).toMatchObject({ sameVersion: true, regression: false });
+    expect(steps.get("b")?.delta).toBeCloseTo(-0.2);
+    expect(steps.get("c")?.regression).toBe(false);
+    // composite +0.025, but Correctness −0.15
+    expect(steps.get("d")?.delta).toBeCloseTo(0.025);
+    expect(steps.get("d")?.regression).toBe(true);
+  });
+
+  it("skips unscored runs, and pairs runs without a version in order", () => {
+    const runs = [
+      run("l1", { bench: LIVE, seq: null, scores: { [H]: 0.6 } }),
+      run("lf", { bench: LIVE, seq: null, status: "failed" }),
+      run("lq", { bench: LIVE, seq: null, status: "queued" }),
+      run("l2", { bench: LIVE, seq: null, scores: { [H]: 0.7 } }),
+    ];
+    const live = benchmarksOf(runs)[0];
+    const steps = runSteps(live, coreEvaluators(live.runs));
+    expect([...steps.keys()]).toEqual(["l1", "l2"]);
+    expect(steps.get("l2")).toMatchObject({ sameVersion: false, regression: false });
+    expect(steps.get("l2")?.previous?.id).toBe("l1");
+    expect(steps.get("l2")?.delta).toBeCloseTo(0.1);
+  });
+});
+
 describe("agent rows", () => {
   const sc = (runs: ScorecardRun[], agents: ScorecardAgent[]): EvaluationScorecard => ({ runs, agents, truncated: false });
 
@@ -508,5 +564,14 @@ describe("back target", () => {
     expect(backTarget(backState("?view=agent&key=a1&bench=ds%3Aqa")).get("bench")).toBe("ds:qa");
     expect(backTarget(null).toString()).toBe("");
     expect(backTarget({ other: 1 }).toString()).toBe("");
+  });
+
+  it("returns to an outside opener's in-app path only", () => {
+    expect(returnPath(returnState("/v2/assistant?view=detail&id=c1"))).toBe("/v2/assistant?view=detail&id=c1");
+    expect(returnPath(backState("?tab=all"))).toBeNull();
+    expect(returnPath(null)).toBeNull();
+    expect(returnPath({ returnTo: "https://example.com/" })).toBeNull();
+    expect(returnPath({ returnTo: "//example.com/" })).toBeNull();
+    expect(returnPath({ returnTo: 7 })).toBeNull();
   });
 });
