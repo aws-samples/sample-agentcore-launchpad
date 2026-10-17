@@ -149,7 +149,11 @@ export function composite(run: ScorecardRun, core: string[]): number | null {
 
 /** The run a benchmark's latest scored run is measured against. With a version, that is
  *  the newest scored run of an *older* version (same-version re-runs are skipped); a run
- *  without a version (a log source) is measured against the scored run before it. */
+ *  without a version (a log source) is measured against the scored run before it.
+ *
+ *  An agent's run without a version before one with a version predates the version
+ *  records (the server leaves it unversioned only when the agent was deployed again after
+ *  it), so it counts as an older version — see `olderVersion`. */
 export interface Comparison {
   latest: ScorecardRun;
   previous: ScorecardRun | null;
@@ -162,10 +166,20 @@ export function comparison(scored: ScorecardRun[]): Comparison | null {
   const seq = latest.snapshot?.seq;
   if (seq == null) return { latest, previous: scored[scored.length - 2] ?? null, byVersion: false };
   for (let i = scored.length - 2; i >= 0; i -= 1) {
-    const older = scored[i].snapshot?.seq;
-    if (older != null && older < seq) return { latest, previous: scored[i], byVersion: true };
+    if (olderVersion(scored[i], seq)) return { latest, previous: scored[i], byVersion: true };
   }
   return { latest, previous: null, byVersion: true };
+}
+
+/** `run` evaluated a version older than `seq`: a lower snapshot, or none recorded. */
+export function olderVersion(run: Pick<ScorecardRun, "snapshot">, seq: number): boolean {
+  return run.snapshot == null || run.snapshot.seq < seq;
+}
+
+/** The agent records versions (a platform agent with a deployed snapshot): a run of it
+ *  without a version predates the records, rather than having no version at all. */
+export function recordsVersions(agent: Pick<ScorecardAgent, "log_source" | "versions"> | null): boolean {
+  return !!agent && !agent.log_source && agent.versions.length > 0;
 }
 
 export interface EvaluatorChange {
@@ -264,8 +278,9 @@ function newest(runs: ScorecardRun[], test: (run: ScorecardRun) => boolean): Sco
 /**
  * Each scored run of `bench` (oldest first) against the run before it: a re-run of a
  * version against that version's newest earlier run, else — as the headline — the newest
- * scored run of an older version; a run without a version against the scored run before
- * it. Unscored runs (failed, stopped, still running) get no step.
+ * scored run of an older version (one without a recorded version included); a run
+ * without a version against the scored run before it. Unscored runs (failed, stopped,
+ * still running) get no step.
  */
 export function runSteps(bench: Benchmark, core: string[]): Map<string, RunStep> {
   const out = new Map<string, RunStep>();
@@ -277,7 +292,7 @@ export function runSteps(bench: Benchmark, core: string[]): Map<string, RunStep>
     const previous =
       seq == null
         ? (before[before.length - 1] ?? null)
-        : (same ?? newest(before, (r) => r.snapshot != null && r.snapshot.seq < seq));
+        : (same ?? newest(before, (r) => olderVersion(r, seq)));
     const score = composite(run, core);
     const d = previous ? delta(composite(previous, core), score) : null;
     const regression = !!previous && !same && isRegression(d, evaluatorChanges(previous, run));

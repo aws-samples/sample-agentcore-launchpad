@@ -345,6 +345,40 @@ def test_resolve_snapshots_rules():
     assert got["logs_source"] is None and got["no_snapshot"] is None
 
 
+def test_a_run_before_every_snapshot_is_unknown_once_the_agent_was_redeployed():
+    # the architect's loop before snapshots existed: a deploy, a run, an accepted
+    # recommendation re-deploys, a run, again — and the baseline backfilled days later
+    agent = _agent(name="pre-snapshot")
+    for minutes in (0, 30, 60):
+        _add(Deployment(agent_id=agent, status="succeeded",
+                        ended_at=T0 + timedelta(minutes=minutes)))
+    # a failed deploy changes nothing the agent runs
+    _add(Deployment(agent_id=agent, status="failed", ended_at=T0 + timedelta(minutes=90)))
+    _snapshot(agent, 1, at=T0 + timedelta(days=5), note="baseline")
+    ds = {"dataset_id": "d1", "dataset_name": "ds"}
+    runs = {
+        "v1": _row(agent_id=agent, created_at=T0 + timedelta(minutes=10), **ds),
+        "v2": _row(agent_id=agent, created_at=T0 + timedelta(minutes=40), **ds),
+        # nothing succeeded after it until the baseline: #1 is what it evaluated
+        "v3": _row(agent_id=agent, created_at=T0 + timedelta(minutes=70), **ds),
+        "window_v1": _row(agent_id=agent, dataset_name="window:24h",
+                          created_at=T0 + timedelta(minutes=10)),
+        "stamped": _row(agent_id=agent, agent_snapshot_seq=1,
+                        created_at=T0 + timedelta(minutes=10), **ds),
+        "after": _row(agent_id=agent, created_at=T0 + timedelta(days=6), **ds),
+    }
+    db = SessionLocal()
+    try:
+        resolved = scorecard.resolve_snapshots(db, list(runs.values()))
+    finally:
+        db.close()
+    got = {name: resolved[run.id] for name, run in runs.items()}
+    assert got["v1"] is None and got["v2"] is None and got["window_v1"] is None
+    assert got["v3"] == {"seq": 1, "source": "inferred"}
+    assert got["stamped"] == {"seq": 1, "source": "stamped"}
+    assert got["after"] == {"seq": 1, "source": "inferred"}
+
+
 def test_benchmark_of_each_scope():
     local = _row(dataset_id="d1", dataset_name="old name", dataset_fingerprint="f" * 16,
                  dataset_size=3)

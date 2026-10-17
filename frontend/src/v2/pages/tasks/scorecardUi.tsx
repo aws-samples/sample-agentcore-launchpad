@@ -11,13 +11,24 @@ import { Tag } from "../../ui";
 
 /** `#N`, with a marker when the version was inferred (an older run recorded none) or
  *  observed (a passive run scores sessions that predate it); "no version" for a
- *  log-source run or an agent without a deployed snapshot. */
-export function VersionTag({ snapshot, testId }: { snapshot: RunSnapshotRef | null | undefined; testId?: string }) {
+ *  log-source run or an agent without a deployed snapshot, and "before the version
+ *  records" (`unrecorded`) for a run of an agent that records versions. */
+export function VersionTag({
+  snapshot,
+  unrecorded,
+  testId,
+}: {
+  snapshot: RunSnapshotRef | null | undefined;
+  /** the run's agent records versions (`recordsVersions`) */
+  unrecorded?: boolean;
+  testId?: string;
+}) {
   const { t } = useTranslation();
   if (!snapshot) {
+    const kind = unrecorded ? "unrecorded" : "none";
     return (
-      <Tag tone="gray" title={t("v2.compare.version.noneHint")} testId={testId}>
-        {t("v2.compare.version.none")}
+      <Tag tone="gray" title={t(`v2.compare.version.${kind}Hint`)} testId={testId}>
+        {t(`v2.compare.version.${kind}`)}
       </Tag>
     );
   }

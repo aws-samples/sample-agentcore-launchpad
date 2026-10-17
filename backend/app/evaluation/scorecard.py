@@ -219,39 +219,93 @@ def _deployed_timeline(
     return out
 
 
-def _inferred_seq(run: EvalRun, deployed: list[tuple[int, datetime | None]]) -> int:
-    """The newest deployed snapshot live at ``run.created_at``; the oldest deployed one
-    when none was yet (a run older than the startup baseline backfill)."""
+def _predates(run: EvalRun, deployed: list[tuple[int, datetime | None]]) -> bool:
+    """The run was created before the agent's oldest deployed snapshot was live."""
+    created = _naive_utc(run.created_at)
+    first_at = deployed[0][1] if deployed else None
+    return created is not None and first_at is not None and created < first_at
+
+
+def _deploy_ends(db: Session, agent_ids: set[str]) -> dict[str, list[datetime]]:
+    """``agent_id → [ended_at]`` of the agents' succeeded deployments (1 query)."""
+    if not agent_ids:
+        return {}
+    rows = db.execute(
+        select(Deployment.agent_id, Deployment.ended_at).where(
+            Deployment.agent_id.in_(agent_ids),
+            Deployment.status == "succeeded",
+            Deployment.ended_at.is_not(None),
+        )
+    ).all()
+    out: dict[str, list[datetime]] = {}
+    for agent_id, ended_at in rows:
+        at = _naive_utc(ended_at)
+        if at is not None:
+            out.setdefault(agent_id, []).append(at)
+    return out
+
+
+def _inferred_seq(
+    run: EvalRun, deployed: list[tuple[int, datetime | None]], deploy_ends: list[datetime]
+) -> int | None:
+    """The newest deployed snapshot live at ``run.created_at``. A run older than every
+    snapshot (the startup baseline backfill came later) gets the oldest one only when no
+    deployment of the agent succeeded between the run and that snapshot — the agent still
+    ran the configuration the snapshot recorded. Otherwise the version it evaluated is
+    unknown: None."""
     created = _naive_utc(run.created_at)
     live = [
         seq for seq, at in deployed if created is None or at is None or at <= created
     ]
-    return max(live) if live else deployed[0][0]
+    if live:
+        return max(live)
+    first_seq, first_at = deployed[0]
+    if created is not None and first_at is not None and any(
+        created < end < first_at for end in deploy_ends
+    ):
+        return None
+    return first_seq
 
 
-def _resolve(run: EvalRun, deployed: list[tuple[int, datetime | None]]) -> dict[str, Any] | None:
+def _resolve(
+    run: EvalRun, deployed: list[tuple[int, datetime | None]], deploy_ends: list[datetime]
+) -> dict[str, Any] | None:
     if not run.agent_id or not deployed:
         return None
     if scope_of(run) in PASSIVE_SCOPES:
         seq = run.agent_snapshot_seq
-        return {"seq": seq if seq is not None else _inferred_seq(run, deployed),
-                "source": OBSERVED}
+        if seq is None:
+            seq = _inferred_seq(run, deployed, deploy_ends)
+        return None if seq is None else {"seq": seq, "source": OBSERVED}
     if run.agent_snapshot_seq is not None:
         return {"seq": run.agent_snapshot_seq, "source": STAMPED}
-    return {"seq": _inferred_seq(run, deployed), "source": INFERRED}
+    seq = _inferred_seq(run, deployed, deploy_ends)
+    return None if seq is None else {"seq": seq, "source": INFERRED}
 
 
 def resolve_snapshots(db: Session, runs: list[EvalRun]) -> dict[str, dict[str, Any] | None]:
-    """``run_id → {seq, source} | None`` for a page of runs, in two queries.
+    """``run_id → {seq, source} | None`` for a page of runs, in two or three queries.
 
     1. no agent (a log-source run), or an agent with no deployed snapshot → None;
     2. a passive scope → the stamped seq, else the inferred one, as ``observed``;
     3. a stamped seq → ``stamped``;
     4. else ``inferred``: the newest deployed snapshot whose deploy time is at or
-       before the run's creation, else the oldest deployed snapshot.
+       before the run's creation, else the oldest deployed snapshot — unless a
+       deployment succeeded between the run and that snapshot, which leaves the run's
+       version unknown (None; the console reads it as older than every snapshot).
     """
     timeline = _deployed_timeline(db, {r.agent_id for r in runs if r.agent_id})
-    return {r.id: _resolve(r, timeline.get(r.agent_id) or []) for r in runs}
+    # deployments matter only for runs older than their agent's first snapshot
+    early = {
+        r.agent_id for r in runs
+        if r.agent_id and r.agent_snapshot_seq is None
+        and _predates(r, timeline.get(r.agent_id) or [])
+    }
+    ends = _deploy_ends(db, early)
+    return {
+        r.id: _resolve(r, timeline.get(r.agent_id) or [], ends.get(r.agent_id) or [])
+        for r in runs
+    }
 
 
 def resolve_snapshot(db: Session, run: EvalRun) -> dict[str, Any] | None:

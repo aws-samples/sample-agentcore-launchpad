@@ -30,7 +30,9 @@ import {
   isRegression,
   isScored,
   matrixColumns,
+  olderVersion,
   previousValue,
+  recordsVersions,
   rerunnable,
   rerunSource,
   revisionMarkers,
@@ -312,6 +314,38 @@ describe("run steps", () => {
     // composite +0.025, but Correctness −0.15
     expect(steps.get("d")?.delta).toBeCloseTo(0.025);
     expect(steps.get("d")?.regression).toBe(true);
+  });
+
+  it("reads runs from before the version records as older versions", () => {
+    // the HR loop before snapshots existed: v1, v2 unrecorded, then the baseline #1
+    const runs = [
+      run("u1", { seq: null, scores: { [C]: 0.8, [H]: 0.92 } }),
+      run("u2", { seq: null, scores: { [C]: 0.86, [H]: 0.94 } }),
+      run("b1", { seq: 1, source: "inferred", scores: { [C]: 0.95, [H]: 0.95 } }),
+    ];
+    const qa = benchmarksOf(runs)[0];
+    const steps = runSteps(qa, coreEvaluators(qa.runs));
+    expect(steps.get("u1")?.previous).toBeNull();
+    // two unrecorded runs pair in order, never as a same-version re-run
+    expect(steps.get("u2")).toMatchObject({ sameVersion: false });
+    expect(steps.get("u2")?.previous?.id).toBe("u1");
+    expect(steps.get("b1")).toMatchObject({ sameVersion: false, regression: false });
+    expect(steps.get("b1")?.previous?.id).toBe("u2");
+    expect(steps.get("b1")?.delta).toBeCloseTo(0.95 - 0.9);
+    const head = headline(qa, { agentScored: 3, anyComparable: true });
+    expect(head).toMatchObject({ byVersion: true, reason: null, signal: "ok" });
+    expect(head.previous?.id).toBe("u2");
+    // the breakdown has the numbered version only
+    expect(versionMatrix(qa.scored, coreEvaluators(qa.runs), [C, H]).map((r) => r.seq)).toEqual([1]);
+    expect(olderVersion(runs[0], 1)).toBe(true);
+    expect(olderVersion(runs[2], 1)).toBe(false);
+  });
+
+  it("an agent records versions once it has a deployed snapshot, a log source never", () => {
+    expect(recordsVersions(agent("ag1", { versions: [version(1)] }))).toBe(true);
+    expect(recordsVersions(agent("ag1", { versions: [] }))).toBe(false);
+    expect(recordsVersions(agent("logs:svc", { versions: [version(1)], log_source: { service_name: "svc", log_group_names: [] } }))).toBe(false);
+    expect(recordsVersions(null)).toBe(false);
   });
 
   it("skips unscored runs, and pairs runs without a version in order", () => {

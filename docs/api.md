@@ -1209,8 +1209,10 @@ the newest snapshot that had reached AWS — one still deploying is not what the
 invokes), `inferred` (an older row, read from the snapshot timeline: the newest
 snapshot deployed by the time the run was created, else the oldest) or `observed` (a
 time-window / chosen-session / log-stream run, whose sessions predate the run: the
-version live when it was made). `null` for a log-source run or an agent with no
-deployed snapshot. Inferred versions are never written back.
+version live when it was made). `null` for a log-source run, an agent with no
+deployed snapshot, or a run older than every snapshot when a deployment of the agent
+succeeded between the run and the oldest snapshot (the version it evaluated is
+unknown). Inferred versions are never written back.
 
 Before creating a run or invoking an agent, known managed code rules are compared
 with the target Agent's actual `tools`, `knowledge_bases` and `skills`. An

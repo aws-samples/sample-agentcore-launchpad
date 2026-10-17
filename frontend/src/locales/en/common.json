@@ -4831,7 +4831,8 @@
       "breakdownSub": "One column per agent version, averaged when a version ran more than once; the newest column shows the change from the previous version.",
       "breakdownMore": "{{count}} earlier version(s) are in the scorecard.",
       "colEvaluator": "Evaluator",
-      "scorecardError": "Could not read the evaluation history: {{message}}"
+      "scorecardError": "Could not read the evaluation history: {{message}}",
+      "breakdownUnrecorded": "{{count}} run(s) from before the version records are not in the breakdown."
     },
     "iterate": {
       "title": "Read the scores and the traces, then iterate",
@@ -6424,7 +6425,9 @@
         "observed": "#{{seq}} observed",
         "observedHint": "Scores existing sessions, which may span versions; #{{seq}} was live when the run was created",
         "none": "No version",
-        "noneHint": "A log-source run has no platform version, or the agent has no deployed snapshot"
+        "noneHint": "A log-source run has no platform version, the agent has no successfully deployed snapshot, or the run predates the version snapshots and the agent was deployed again after it",
+        "unrecorded": "Before version records",
+        "unrecordedHint": "This run predates the agent's version snapshots and the agent was deployed again after it, so which version it evaluated is unknown; comparisons treat it as older than every numbered version."
       },
       "notice": {
         "scenario": "Comparable: the same dataset {{name}}, with {{count}} case(s) aligned by scenario ID.",

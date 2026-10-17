@@ -22,6 +22,7 @@ import {
   isActive,
   isScored,
   matrixColumns,
+  recordsVersions,
   rerunSource,
   revisionMarkers,
   runMean,
@@ -229,7 +230,7 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
             onCompare={openCompare}
           />
           {bench.kind !== "live" && <MatrixCard agent={agent} bench={bench} slots={slots} onCompare={openCompare} />}
-          <RunsCard runs={runs} bench={bench} picked={picked} onPick={pick} onOpen={openRun} />
+          <RunsCard runs={runs} bench={bench} unrecorded={recordsVersions(agent)} picked={picked} onPick={pick} onOpen={openRun} />
         </>
       )}
       {rerun && (
@@ -378,7 +379,8 @@ function TrendCard({
   const describe = (run: ScorecardRun) =>
     [
       `${shortDate(run.created_at)} ${shortTime(run.created_at)}`,
-      versionShort(t, run.snapshot) || t("v2.scorecard.noVersion"),
+      versionShort(t, run.snapshot) ||
+        t(recordsVersions(agent) ? "v2.compare.version.unrecorded" : "v2.scorecard.noVersion"),
       runSourceText(t, run),
       run.sessions ? t("v2.compare.sessions", { count: run.sessions }) : null,
     ]
@@ -506,12 +508,15 @@ function MatrixCard({
 function RunsCard({
   runs,
   bench,
+  unrecorded,
   picked,
   onPick,
   onOpen,
 }: {
   runs: ScorecardRun[];
   bench: Benchmark;
+  /** the agent records versions: a run without one predates the records */
+  unrecorded: boolean;
   picked: string[];
   onPick: (run: ScorecardRun) => void;
   onOpen: (id: string) => void;
@@ -564,7 +569,7 @@ function RunsCard({
       key: "version",
       title: t("v2.scorecard.col.version"),
       className: "nowrap",
-      render: (run) => <VersionTag snapshot={run.snapshot} />,
+      render: (run) => <VersionTag snapshot={run.snapshot} unrecorded={unrecorded} />,
     },
     {
       key: "source",

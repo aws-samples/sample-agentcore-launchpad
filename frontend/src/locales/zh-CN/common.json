@@ -4831,7 +4831,8 @@
       "breakdownSub": "每列一个 Agent 版本，同一版本跑了多次时取平均；最新一列标出与上一版本的变化。",
       "breakdownMore": "更早的 {{count}} 个版本见评分卡。",
       "colEvaluator": "评估器",
-      "scorecardError": "读取评估记录失败：{{message}}"
+      "scorecardError": "读取评估记录失败：{{message}}",
+      "breakdownUnrecorded": "早于版本记录的 {{count}} 次运行不在明细中。"
     },
     "iterate": {
       "title": "查看分数与追踪，然后迭代",
@@ -6424,7 +6425,9 @@
         "observed": "#{{seq}} 观测",
         "observedHint": "评估的是已有会话，可能跨版本；#{{seq}} 是运行创建时在线的版本",
         "none": "无版本",
-        "noneHint": "日志源运行没有平台版本，或 Agent 没有部署成功的快照"
+        "noneHint": "日志源运行没有平台版本；Agent 没有部署成功的快照；或运行早于版本快照、之后 Agent 又部署过",
+        "unrecorded": "早于版本记录",
+        "unrecordedHint": "这次运行早于 Agent 的版本快照，且之后 Agent 又部署过，无法确定它评估的是哪个版本；比较时视为比所有已编号版本都早。"
       },
       "notice": {
         "scenario": "可比：同一数据集 {{name}}，{{count}} 条用例按用例 ID 一一对齐。",

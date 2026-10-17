@@ -2180,6 +2180,11 @@ evaluated, what it was measured on, and how two runs line up case by case.
   for an older row `inferred` from the snapshot timeline (the newest snapshot whose deploy
   ended by the run's creation, else the oldest), or `observed` for a passive scope, whose
   sessions predate the run. Nothing inferred is written back.
+  - A run older than every snapshot (the startup baseline came later) gets the oldest one
+    only when no deployment of the agent succeeded between the run and that snapshot.
+  - Otherwise its version is unknown and `snapshot` is null. The console labels it
+    早于版本记录 and compares it as older than every numbered version, so an accepted
+    recommendation from before the snapshots reads as a version change, not a re-run.
 - **Benchmarks.** A local dataset (revision = the fingerprint), a cloud dataset (revision =
   the pinned version or the draft's fingerprint) or the agent's live traffic, which groups
   every window, chosen-session and log-stream run. Trends only connect runs of one

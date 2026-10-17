@@ -26,6 +26,7 @@ import {
   headline,
   matrixColumns,
   type MatrixRow,
+  recordsVersions,
   type RunStep,
   runSteps,
   shortDate,
@@ -231,6 +232,7 @@ function RunTable({
 }) {
   const { t } = useTranslation();
   const bySeq = new Map((agent?.versions ?? []).map((v) => [v.seq, v]));
+  const unrecorded = recordsVersions(agent);
   // a version's note and 当前 go on its newest row only, not on every re-run of it
   const leads = new Set(rows.filter((run, i) => i === 0 || rows[i - 1].snapshot?.seq !== run.snapshot?.seq).map((run) => run.id));
   const columns: Column<ScorecardRun>[] = [
@@ -244,7 +246,7 @@ function RunTable({
         return (
           <div className="v2-sc-ver">
             <b>
-              <VersionTag snapshot={run.snapshot} />
+              <VersionTag snapshot={run.snapshot} unrecorded={unrecorded} />
               {lead && seq != null && seq === agent?.current_seq && <Tag tone="blue">{t("v2.scorecard.currentShort")}</Tag>}
             </b>
             {note && <span className="sub">{"text" in note ? note.text : t(note.key, note.params)}</span>}
@@ -328,7 +330,9 @@ function RunTable({
                 to={`/v2/eval/tasks?${new URLSearchParams({ view: "compare", a: previous.id, b: run.id })}`}
                 title={t("assistantNext.run.compareHint", {
                   id: shortId(previous.id),
-                  version: versionShort(t, previous.snapshot) || t("v2.scorecard.noVersion"),
+                  version:
+                    versionShort(t, previous.snapshot) ||
+                    t(unrecorded ? "v2.compare.version.unrecorded" : "v2.scorecard.noVersion"),
                 })}
                 data-testid={`v2-assistant-next-compare-${run.id}`}
               >
@@ -386,6 +390,8 @@ function Breakdown({ bench, core, agent }: { bench: Benchmark; core: string[]; a
   const versions = versionMatrix(bench.scored, core, ids);
   if (!versions.length || !ids.length) return null;
   const shown = versions.slice(0, VERSION_COLUMNS).reverse();
+  // runs from before the version records have no column
+  const unversioned = bench.scored.filter((run) => !run.snapshot).length;
   const last = shown.length - 1;
   type Line = { key: string; label: string; composite: boolean; cell: (v: MatrixRow) => MatrixRow["composite"] };
   const lines: Line[] = [
@@ -427,6 +433,7 @@ function Breakdown({ bench, core, agent }: { bench: Benchmark; core: string[]; a
       <p className="v2-sc-caption">
         {t("assistantNext.run.breakdownSub")}
         {versions.length > shown.length && <> {t("assistantNext.run.breakdownMore", { count: versions.length - shown.length })}</>}
+        {unversioned > 0 && <> {t("assistantNext.run.breakdownUnrecorded", { count: unversioned })}</>}
       </p>
       <Table columns={columns} rows={lines} rowKey={(line) => line.key} density="dense" />
     </details>
