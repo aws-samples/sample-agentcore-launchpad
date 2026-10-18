@@ -7,9 +7,10 @@ so both consumption paths behave identically.
 import json
 import logging
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, aws_error_code
@@ -21,9 +22,10 @@ from app.harness_tool_access import (
 from app.models.ledger import Agent
 from app.optimization import canary_harness, canary_service
 from app.services import inbound_auth as inbound_auth_service
-from app.services import oauth_sessions
+from app.services import oauth_sessions, user_gateways
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
+from app.services.agentcore import policy as gateway_api
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 from app.services.attachments import PreparedAttachments
@@ -198,6 +200,45 @@ def _agent_workspace(
     return workspace if workspace is not None else context_for_workspace(agent.workspace_id)
 
 
+def _user_trusting_gateways(
+    configured: list[dict[str, Any]], workspace: WorkspaceContext,
+) -> dict[str, str]:
+    """Gateway ARN -> MCP URL for configured Gateways (besides launchpad-gw) that may
+    carry the signed-in user's token this turn.
+
+    A candidate is a deployed ``agentcore_gateway`` tool authenticated with the
+    workspace M2M provider — the only outbound auth the platform maps for a
+    CUSTOM_JWT Gateway. Each one is re-read now, not trusted from deploy time: a
+    Gateway whose authorizer or interceptors changed since deploy stops receiving the
+    user token and keeps its configured M2M identity. A read failure does the same.
+    """
+    resources = workspace.resources
+    provider = resources.get("oauth_provider_arn")
+    result: dict[str, str] = {}
+    for tool in configured:
+        if tool.get("type") != "agentcore_gateway":
+            continue
+        cfg = (tool.get("config") or {}).get("agentCoreGateway") or {}
+        arn = str(cfg.get("gatewayArn") or "")
+        oauth = (cfg.get("outboundAuth") or {}).get("oauth") or {}
+        if not arn or arn == resources.get("gateway_arn") or not provider:
+            continue
+        if oauth.get("providerArn") != provider or arn == resources.get("kb_gateway_arn"):
+            continue
+        parts = arn.split(":")
+        region, gateway_id = parts[3], arn.rsplit("/", 1)[-1]
+        ctx = workspace if region == workspace.region else replace(workspace, region=region)
+        try:
+            gateway = gateway_api.get_gateway(control_client(ctx), gateway_id)
+        except (ClientError, BotoCoreError) as exc:
+            logger.warning("user gateway %s unreadable, keeping M2M identity: %s", arn, exc)
+            continue
+        if gateway.get("gatewayArn") == arn and gateway.get("gatewayUrl") and \
+                user_gateways.trusts_workspace_users(gateway, resources):
+            result[arn] = str(gateway["gatewayUrl"])
+    return result
+
+
 def harness_user_overrides(
     agent: Agent, workspace: WorkspaceContext, access_token: str,
 ) -> dict[str, Any]:
@@ -216,6 +257,7 @@ def harness_user_overrides(
         configured = detail.get("tools") or []
         tools = hc.user_authenticated_tools(
             spec, workspace.resources, access_token, configured_tools=configured,
+            user_gateways=_user_trusting_gateways(configured, workspace),
         )
     else:
         tools = hc.user_authenticated_tools(spec, workspace.resources, access_token)

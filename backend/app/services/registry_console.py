@@ -18,7 +18,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.core.config import REPO_ROOT
 from app.core.errors import AppError, cleanup_error, is_not_found
 from app.models.ledger import Agent
-from app.services import mcp_client
+from app.services import mcp_client, user_gateways
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
@@ -785,7 +785,13 @@ def _gateway_auth(
         return "aws_iam", {"awsIam": {}}, None
     if authorizer == "NONE":
         return "none", {"none": {}}, None
-    if authorizer == "CUSTOM_JWT" and _managed_launchpad_gateway(gateway, resources):
+    if authorizer == "CUSTOM_JWT" and (
+        _managed_launchpad_gateway(gateway, resources)
+        or user_gateways.trusts_workspace_users(gateway, resources)
+    ):
+        # A Gateway that trusts the workspace pool + M2M client is reached with the
+        # same deploy-time identity as launchpad-gw; logged-in chat later swaps in
+        # the user's token (app.services.invoke.harness_user_overrides).
         provider_arn = resources.get("oauth_provider_arn")
         if provider_arn:
             return (

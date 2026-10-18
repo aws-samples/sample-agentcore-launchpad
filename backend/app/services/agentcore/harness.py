@@ -269,14 +269,19 @@ def user_authenticated_tools(
     access_token: str,
     *,
     configured_tools: list[dict[str, Any]] | None = None,
+    user_gateways: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Harness invocation tools with launchpad-gw authenticated as one user.
 
     ``InvokeHarness.tools`` replaces the configured tool list for that request,
     so every non-user tool declared by the stored spec is reconstructed too.
     The user token is accepted only for the bootstrapped shared Gateway whose
-    Cognito authorizer issued it.
+    Cognito authorizer issued it, and for ``user_gateways`` (Gateway ARN -> MCP
+    URL): other configured Gateways the caller has verified trust the same pool
+    and clients (app.services.user_gateways). Those keep their configured alias,
+    so allowedTools selectors written against it still match.
     """
+    extra = dict(user_gateways or {})
     if configured_tools is not None:
         # Use the authoritative configuration when replacing the authenticated
         # Gateway, preserving all other resolved Gateway aliases/auth settings.
@@ -297,6 +302,15 @@ def user_authenticated_tools(
                     "name": USER_GATEWAY_ALIAS,
                     "config": {"remoteMcp": {
                         "url": str(resources["gateway_url"]),
+                        "headers": {"Authorization": f"Bearer {access_token}"},
+                    }},
+                })
+            elif tool.get("type") == "agentcore_gateway" and gateway_arn in extra:
+                result.append({
+                    "type": "remote_mcp",
+                    "name": tool["name"],
+                    "config": {"remoteMcp": {
+                        "url": str(extra[gateway_arn]),
                         "headers": {"Authorization": f"Bearer {access_token}"},
                     }},
                 })
