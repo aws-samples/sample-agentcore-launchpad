@@ -2464,7 +2464,19 @@
     "context_layer.coa_not_found": "COA 中没有该命名空间或条目，或者不向你开放。",
     "context_layer.no_result": "COA 没有找到这个问题的答案。",
     "context_layer.coa_rejected": "COA 无法处理这个问题。",
-    "context_layer.invalid_namespace": "COA 命名空间 ID 是 UUID。"
+    "context_layer.invalid_namespace": "COA 命名空间 ID 是 UUID。",
+    "coding.project_not_found": "编码项目不存在。",
+    "coding.runtime_not_installed": "本工作区尚未安装编码运行时。",
+    "coding.turn_running": "该项目已有回合正在运行。",
+    "coding.no_turn": "没有正在运行的回合。",
+    "coding.file_conflict": "打开该文件后，它已被修改。",
+    "coding.path_invalid": "文件路径无效。",
+    "coding.file_too_large": "文件过大（最多 2 MB）。",
+    "coding.model_invalid": "编码运行时不提供该模型。",
+    "coding.effort_invalid": "不支持该推理强度。",
+    "coding.prompt_too_long": "提示词过长（最多 32 KB）。",
+    "coding.runtime_error": "编码运行时未响应，请重试。",
+    "coding.deploy_failed": "部署项目失败。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -5363,7 +5375,8 @@
       "experiments": "A/B实验",
       "online": "在线评估",
       "models": "模型",
-      "costs": "成本与告警"
+      "costs": "成本与告警",
+      "coding": "编码 Agent"
     },
     "notFound": {
       "title": "页面不存在",
@@ -5495,7 +5508,9 @@
           "container": "其他 Agent SDK",
           "containerDesc": "使用自带 Agent 循环的 SDK（如 Claude Agent SDK），由 CodeBuild 构建为 ARM64 容器。",
           "byoc": "自带代码",
-          "byocDesc": "上传自己的 Agent 代码（zip 或 Dockerfile 上下文），或指定已有 ECR 镜像；平台负责打包、部署与运维。"
+          "byocDesc": "上传自己的 Agent 代码（zip 或 Dockerfile 上下文），或指定已有 ECR 镜像；平台负责打包、部署与运维。",
+          "coding": "编码 Agent",
+          "codingDesc": "描述你要的 Agent，codex 编码 Agent 在浏览器 IDE 背后的 AgentCore microVM 中编写、运行并测试任意代码；结果按自带代码方式部署。"
         },
         "recommended": "推荐",
         "classicForm": "完整表单",
@@ -5684,7 +5699,8 @@
           "keptNote": "在这里创建的知识库会保留在工作区的知识库列表中，即使你将它从此 Agent 中移除或离开向导也不会删除。不再需要时，请到知识库页面删除。",
           "keptLink": "打开知识库",
           "busyBlock": "知识库仍在创建并上传文件。完成后即可部署。"
-        }
+        },
+        "codingBadge": "打开 IDE"
       },
       "identity": {
         "open": "身份",
@@ -9133,7 +9149,8 @@
         "tools": "工具与沙箱",
         "studio": "Studio",
         "governance": "治理",
-        "models_probe": "模型探测"
+        "models_probe": "模型探测",
+        "coding": "编码 Agent"
       },
       "jobNotice": "这个任务的预估费用（{{estimate}}）超过了你本月剩余的预算（{{remaining}}）。它仍会运行，预算用完后会在下一个安全节点停止。预算将于 {{date}} 重置。",
       "stop": {
@@ -9558,6 +9575,227 @@
         "replaces": "此 Agent 当前挂载的是 {{name}}，保存后将替换为此命名空间。",
         "already": "此 Agent 已挂载此命名空间。",
         "openEditor": "打开编辑器"
+      }
+    },
+    "coding": {
+      "title": "编码 Agent",
+      "desc": "在浏览器 IDE 中构建 Agent：codex 编码 Agent 在 AgentCore microVM 中编写、运行并测试代码，Launchpad 再把结果部署为普通 Agent。",
+      "runtime": {
+        "title": "编码运行时",
+        "status": {
+          "not_installed": "未安装",
+          "installing": "安装中",
+          "ready": "就绪",
+          "failed": "失败",
+          "uninstalling": "卸载中"
+        },
+        "install": "安装",
+        "retryInstall": "重新安装",
+        "repair": "修复",
+        "uninstall": "卸载",
+        "installStarted": "已开始安装，需要几分钟。",
+        "uninstallStarted": "已开始卸载。",
+        "uninstallTitle": "卸载编码运行时？",
+        "uninstallBody": "将删除本工作区的编码运行时及其角色；在重新安装之前，成员无法打开或运行自己的项目。项目快照会保留，重新安装后项目即可恢复。",
+        "adminNotInstalled": "本工作区尚未安装编码运行时。只需安装一次：构建运行时镜像，并创建一个由平台托管、供所有成员项目共用的 AgentCore Runtime。",
+        "memberNotInstalled": "本工作区尚未安装编码运行时，请联系管理员安装。",
+        "failedAdmin": "上次安装失败。请查看任务日志后重试。",
+        "failedMember": "编码运行时不可用，请联系管理员修复。",
+        "installingNote": "安装中：正在构建镜像并创建运行时，本页会自动刷新。",
+        "uninstallingNote": "正在卸载编码运行时…",
+        "models": "模型",
+        "image": "镜像",
+        "arn": "运行时 ARN",
+        "log": "任务日志"
+      },
+      "projects": {
+        "title": "项目",
+        "new": "新建项目",
+        "mine": "我的",
+        "all": "全部项目",
+        "scope": "显示范围",
+        "search": "搜索项目",
+        "allNote": "本工作区的全部项目。你可以删除任意项目以做清理，但只有创建者能打开项目的 IDE。",
+        "colName": "项目",
+        "colStatus": "状态",
+        "colAgent": "已部署的 Agent",
+        "colUpdated": "更新时间",
+        "open": "打开",
+        "rename": "编辑",
+        "empty": "还没有编码项目",
+        "emptyBody": "新建一个项目，描述你想要的 Agent，编码 Agent 会把它构建出来。",
+        "noMatch": "没有匹配的项目。",
+        "created": "已创建项目 {{name}}",
+        "saved": "项目已保存",
+        "deleted": "已删除项目 {{name}}",
+        "deleteTitle": "删除该项目？",
+        "deleteBody": "确定删除 {{name}}？其文件、对话和快照都会被删除；它部署的 Agent 会保留。",
+        "runningNoDelete": "有回合正在运行，请先中断再删除项目。"
+      },
+      "form": {
+        "createTitle": "新建编码项目",
+        "editTitle": "编辑项目",
+        "name": "名称",
+        "namePlaceholder": "例如 weather-assistant",
+        "nameHint": "只有你能看到和打开自己的项目。",
+        "nameRequired": "请输入名称。",
+        "nameTooLong": "最多 {{max}} 个字符。",
+        "description": "描述",
+        "descriptionPlaceholder": "这个 Agent 要做什么？（可选）",
+        "descriptionHint": "{{count}} / {{max}}"
+      },
+      "status": {
+        "idle": "空闲",
+        "running": "运行中"
+      },
+      "turnStatus": {
+        "inProgress": "运行中",
+        "completed": "已完成",
+        "interrupted": "已中断",
+        "failed": "失败",
+        "abandoned": "已丢弃"
+      },
+      "itemStatus": {
+        "inProgress": "运行中",
+        "completed": "完成",
+        "failed": "失败",
+        "declined": "已拒绝"
+      },
+      "changeKind": {
+        "add": "新增",
+        "update": "修改",
+        "delete": "删除"
+      },
+      "effort": {
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "xhigh": "极高"
+      },
+      "usage": {
+        "input": "输入",
+        "cached": "缓存命中",
+        "cacheWrite": "缓存写入",
+        "output": "输出",
+        "reasoning": "推理"
+      },
+      "ide": {
+        "files": "文件",
+        "noFiles": "还没有文件",
+        "notFound": "项目 {{id}} 不存在，或不属于你。",
+        "backToList": "返回项目列表",
+        "openAgent": "打开 Agent"
+      },
+      "editor": {
+        "unsaved": "未保存",
+        "readOnlyRunning": "回合运行期间只读",
+        "view": "视图",
+        "source": "源码",
+        "preview": "预览",
+        "saving": "保存中…",
+        "saveHint": "保存（⌘/Ctrl+S）",
+        "saved": "已保存 {{path}}",
+        "conflict": "打开该文件后，编码 Agent 修改了它。重新加载会丢弃你的修改；覆盖则用你的版本替换较新的版本。",
+        "changedOnDisk": "你有未保存的修改时，该文件在磁盘上被修改了。",
+        "reload": "重新加载",
+        "overwrite": "覆盖",
+        "binary": "二进制文件，不予显示。",
+        "closeTab": "关闭 {{name}}",
+        "missing": "项目中已没有该文件（编码 Agent 可能删除或移动了它）。"
+      },
+      "changes": {
+        "tab": "变更",
+        "scope": "差异范围",
+        "turn": "上一回合",
+        "worktree": "未提交",
+        "count": "变更：{{count}}",
+        "files": "变更文件",
+        "copyPatch": "复制补丁",
+        "copied": "补丁已复制",
+        "emptyTurn": "上一回合没有修改文件。",
+        "emptyWorktree": "没有未提交的变更。",
+        "status": {
+          "A": "新增",
+          "M": "修改",
+          "D": "删除",
+          "R": "重命名"
+        }
+      },
+      "conversation": {
+        "title": "对话",
+        "empty": "描述你想构建的 Agent。编码 Agent 会在本项目的 microVM 中编写代码、运行并测试。",
+        "you": "你",
+        "working": "处理中…",
+        "reasoning": "推理过程",
+        "reasoningLive": "推理中…",
+        "command": "命令",
+        "running": "运行中",
+        "exit": "退出码 {{code}}",
+        "noOutput": "无输出",
+        "waitingOutput": "等待输出…",
+        "truncated": "… 较早的输出已截断",
+        "fileChanges": "变更文件（{{count}}）",
+        "openDiff": "查看差异",
+        "plan": "计划",
+        "retrying": "{{message}}（重试中）",
+        "other": "活动：{{type}}",
+        "effortOf": "推理强度 {{effort}}",
+        "tokens": "{{value}} tokens"
+      },
+      "notice": {
+        "appServerExited": "编码 Agent 进程已重启。",
+        "serverRequestDeclined": "已自动拒绝一个审批请求（命令无需审批即可运行）：",
+        "restored": "已从最新快照恢复项目。",
+        "threadResumeFailed": "无法恢复之前的对话；编码 Agent 将在新会话中继续，不带之前的上下文。"
+      },
+      "composer": {
+        "placeholder": "描述要构建或修改的内容（Enter 发送，Shift+Enter 换行）",
+        "model": "模型",
+        "effort": "推理强度",
+        "hint": "在后台运行：你可以离开本页。",
+        "send": "发送",
+        "sending": "启动中…",
+        "interrupt": "中断",
+        "interrupting": "中断中…",
+        "runtimeNotReady": "编码运行时尚未就绪。",
+        "tooLong": "提示词超过 {{max}} KB。"
+      },
+      "stream": {
+        "connecting": "连接中…",
+        "retrying": "重新连接中…",
+        "paused": "标签页隐藏期间已暂停"
+      },
+      "deploy": {
+        "button": "部署为 Agent",
+        "redeploy": "重新部署",
+        "title": "部署为 Agent",
+        "redeployTitle": "重新部署 Agent",
+        "body": "Launchpad 会为本项目创建快照并导出，再通过自带代码流水线部署；校验、IAM、注册表与可观测性都与上传 zip 相同。",
+        "agentName": "Agent 名称",
+        "agentNameHint": "3–48 个字符：小写字母、数字和连字符，以字母开头。",
+        "nameInvalid": "请使用 3–48 个小写字母、数字或连字符，并以字母开头。",
+        "description": "描述",
+        "artifactKind": "制品类型",
+        "kind": {
+          "auto": "自动识别",
+          "code_zip": "代码 zip（Python）",
+          "container_source": "Dockerfile 上下文"
+        },
+        "kindHint": {
+          "auto": "项目根目录有 Dockerfile 时构建容器，否则按 Python 代码 zip 部署。",
+          "code_zip": "打包为 Python 代码 zip，运行在 AgentCore Python 运行时上。",
+          "container_source": "由 CodeBuild 根据项目根目录的 Dockerfile 构建为 ARM64 容器。"
+        },
+        "entrypoint": "入口文件",
+        "python": "Python 版本",
+        "submit": "部署",
+        "deploying": "部署中…",
+        "created": "已创建 Agent {{id}}，部署正在进行。",
+        "updated": "Agent {{id}} 正在重新部署。",
+        "openAgent": "打开 Agent",
+        "redeployNote": "本项目已部署过一个 Agent，再次部署会为它发布新版本：",
+        "noPermission": "你没有部署 Agent 的权限。",
+        "whileRunning": "请等待正在运行的回合结束。"
       }
     }
   },

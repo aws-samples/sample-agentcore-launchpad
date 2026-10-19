@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import {
@@ -114,6 +114,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   // because `method` here is the prefill param), so Back lands on the same list
   const listSearch = (useLocation().state as { listSearch?: string } | null)?.listSearch ?? "";
   const toast = useV2Toast();
+  const navigate = useNavigate();
   const { can } = useAuth();
   const canDeploy = can("agents.deploy");
   const [initial] = useState(() => (edit ? editDraft(edit, params) : initialDraft(params)));
@@ -449,6 +450,15 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
                   testId={`v2-agent-method-${m}`}
                 />
               ))}
+              {/* not a form method: the coding console builds the project, then deploys it as byoc */}
+              <OptionCard
+                title={t("v2.agents.wizard.method.coding")}
+                desc={t("v2.agents.wizard.method.codingDesc")}
+                on={false}
+                onClick={() => navigate("/v2/coding")}
+                badge={<Tag tone="outline">{t("v2.agents.wizard.codingBadge")}</Tag>}
+                testId="v2-agent-method-coding"
+              />
             </div>
           </Card>
           <Card title={t("v2.agents.wizard.otherWays")}>

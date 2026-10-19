@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   SquareStack,
+  SquareTerminal,
   Target,
   Users,
   Wallet,
@@ -87,6 +88,8 @@ export const V2_NAV: V2NavGroup[] = [
         business: true,
         hintKey: "glossary.agent",
       },
+      // expert mode only: a member's remote coding projects, deployed through byoc
+      { to: "/v2/coding", labelKey: "v2.nav.coding", icon: SquareTerminal, v2: true },
       { to: "/v2/registry", labelKey: "nav.registry", icon: SquareStack, v2: true, hintKey: "glossary.registry" },
       {
         to: "/v2/knowledge-bases",

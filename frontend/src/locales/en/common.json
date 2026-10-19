@@ -2464,7 +2464,19 @@
     "context_layer.coa_not_found": "COA has no such namespace or item, or does not show it to you.",
     "context_layer.no_result": "COA found no answer to this question.",
     "context_layer.coa_rejected": "COA could not take this question.",
-    "context_layer.invalid_namespace": "A COA namespace id is a UUID."
+    "context_layer.invalid_namespace": "A COA namespace id is a UUID.",
+    "coding.project_not_found": "Coding project not found.",
+    "coding.runtime_not_installed": "The coding runtime is not installed in this workspace.",
+    "coding.turn_running": "A turn is already running in this project.",
+    "coding.no_turn": "No turn is running.",
+    "coding.file_conflict": "The file changed since you opened it.",
+    "coding.path_invalid": "Invalid file path.",
+    "coding.file_too_large": "The file is too large (2 MB at most).",
+    "coding.model_invalid": "The coding runtime does not offer this model.",
+    "coding.effort_invalid": "This reasoning effort is not supported.",
+    "coding.prompt_too_long": "The prompt is too long (32 KB at most).",
+    "coding.runtime_error": "The coding runtime did not answer. Try again.",
+    "coding.deploy_failed": "Deploying the project failed."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -5363,7 +5375,8 @@
       "experiments": "A/B experiments",
       "online": "Online evaluation",
       "models": "Models",
-      "costs": "Spend & alerts"
+      "costs": "Spend & alerts",
+      "coding": "Coding Agent"
     },
     "notFound": {
       "title": "Page not found",
@@ -5495,7 +5508,9 @@
           "container": "Other Agent SDK",
           "containerDesc": "Bring an agent SDK with its own loop (e.g. Claude Agent SDK); built by CodeBuild into an ARM64 container.",
           "byoc": "Bring your own code",
-          "byocDesc": "Upload your own agent code (zip or Dockerfile context) or point at an existing ECR image; the platform packages, deploys and operates it."
+          "byocDesc": "Upload your own agent code (zip or Dockerfile context) or point at an existing ECR image; the platform packages, deploys and operates it.",
+          "coding": "Coding Agent",
+          "codingDesc": "Describe the agent and a codex coding agent writes, runs and tests any code for it in an AgentCore microVM, from a browser IDE; the result deploys as bring-your-own-code."
         },
         "recommended": "Recommended",
         "classicForm": "Full form",
@@ -5684,7 +5699,8 @@
           "keptNote": "A knowledge base created here stays in your workspace knowledge base list, even if you remove it from this agent or leave the wizard. Delete it there when you no longer need it.",
           "keptLink": "Open knowledge bases",
           "busyBlock": "The knowledge base is still being created and its files uploaded. You can deploy once this finishes."
-        }
+        },
+        "codingBadge": "Opens the IDE"
       },
       "identity": {
         "open": "Identity",
@@ -9133,7 +9149,8 @@
         "tools": "Tools and sandboxes",
         "studio": "Studio",
         "governance": "Governance",
-        "models_probe": "Model probes"
+        "models_probe": "Model probes",
+        "coding": "Coding Agent"
       },
       "jobNotice": "This job's estimated cost ({{estimate}}) is more than what is left of your monthly budget ({{remaining}}). It runs anyway, and stops at its next safe point once the budget is reached. The budget resets on {{date}}.",
       "stop": {
@@ -9558,6 +9575,227 @@
         "replaces": "This agent attaches {{name}} now. Saving replaces it with this namespace.",
         "already": "This agent already attaches this namespace.",
         "openEditor": "Open its editor"
+      }
+    },
+    "coding": {
+      "title": "Coding Agent",
+      "desc": "Build an agent in a browser IDE: a codex coding agent writes, runs and tests the code in an AgentCore microVM, and Launchpad deploys the result as an ordinary Agent.",
+      "runtime": {
+        "title": "Coding runtime",
+        "status": {
+          "not_installed": "Not installed",
+          "installing": "Installing",
+          "ready": "Ready",
+          "failed": "Failed",
+          "uninstalling": "Uninstalling"
+        },
+        "install": "Install",
+        "retryInstall": "Retry install",
+        "repair": "Repair",
+        "uninstall": "Uninstall",
+        "installStarted": "Install started. It takes a few minutes.",
+        "uninstallStarted": "Uninstall started.",
+        "uninstallTitle": "Uninstall the coding runtime?",
+        "uninstallBody": "The workspace's coding runtime and its role are deleted, and members cannot open or run their projects until it is installed again. Project snapshots are kept, so projects come back after a reinstall.",
+        "adminNotInstalled": "The coding runtime is not installed in this workspace. Install it once: it builds the runtime image and creates one platform-owned AgentCore Runtime that every member's projects share.",
+        "memberNotInstalled": "The coding runtime is not installed in this workspace yet. Ask an administrator to install it.",
+        "failedAdmin": "The last install failed. Check the job log, then retry.",
+        "failedMember": "The coding runtime is unavailable. Ask an administrator to repair it.",
+        "installingNote": "Installing: building the image and creating the runtime. This page refreshes on its own.",
+        "uninstallingNote": "Uninstalling the coding runtime…",
+        "models": "Models",
+        "image": "Image",
+        "arn": "Runtime ARN",
+        "log": "Job log"
+      },
+      "projects": {
+        "title": "Projects",
+        "new": "New project",
+        "mine": "Mine",
+        "all": "All projects",
+        "scope": "Projects shown",
+        "search": "Search projects",
+        "allNote": "Every project in this workspace. You can delete any project for cleanup, but only its creator can open its IDE.",
+        "colName": "Project",
+        "colStatus": "Status",
+        "colAgent": "Deployed Agent",
+        "colUpdated": "Updated",
+        "open": "Open",
+        "rename": "Edit",
+        "empty": "No coding projects yet",
+        "emptyBody": "Create a project, describe the agent you want, and the coding agent builds it.",
+        "noMatch": "No projects match the search.",
+        "created": "Project {{name}} created",
+        "saved": "Project saved",
+        "deleted": "Project {{name}} deleted",
+        "deleteTitle": "Delete this project?",
+        "deleteBody": "Delete {{name}}? Its files, conversation and snapshots are removed. An Agent it deployed is kept.",
+        "runningNoDelete": "A turn is running. Interrupt it before deleting the project."
+      },
+      "form": {
+        "createTitle": "New coding project",
+        "editTitle": "Edit project",
+        "name": "Name",
+        "namePlaceholder": "e.g. weather-assistant",
+        "nameHint": "Only you can see and open your projects.",
+        "nameRequired": "Enter a name.",
+        "nameTooLong": "At most {{max}} characters.",
+        "description": "Description",
+        "descriptionPlaceholder": "What should this agent do? (optional)",
+        "descriptionHint": "{{count}} / {{max}}"
+      },
+      "status": {
+        "idle": "Idle",
+        "running": "Running"
+      },
+      "turnStatus": {
+        "inProgress": "Running",
+        "completed": "Completed",
+        "interrupted": "Interrupted",
+        "failed": "Failed",
+        "abandoned": "Abandoned"
+      },
+      "itemStatus": {
+        "inProgress": "Running",
+        "completed": "Done",
+        "failed": "Failed",
+        "declined": "Declined"
+      },
+      "changeKind": {
+        "add": "Added",
+        "update": "Modified",
+        "delete": "Deleted"
+      },
+      "effort": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "xhigh": "Extra high"
+      },
+      "usage": {
+        "input": "input",
+        "cached": "cached",
+        "cacheWrite": "cache write",
+        "output": "output",
+        "reasoning": "reasoning"
+      },
+      "ide": {
+        "files": "Files",
+        "noFiles": "No files yet",
+        "notFound": "Project {{id}} does not exist or is not yours.",
+        "backToList": "Back to projects",
+        "openAgent": "Open Agent"
+      },
+      "editor": {
+        "unsaved": "Unsaved",
+        "readOnlyRunning": "Read-only while a turn runs",
+        "view": "View",
+        "source": "Source",
+        "preview": "Preview",
+        "saving": "Saving…",
+        "saveHint": "Save (⌘/Ctrl+S)",
+        "saved": "Saved {{path}}",
+        "conflict": "The coding agent changed this file since you opened it. Reload it to drop your edits, or overwrite the newer version with yours.",
+        "changedOnDisk": "This file changed on disk while you had unsaved edits.",
+        "reload": "Reload",
+        "overwrite": "Overwrite",
+        "binary": "Binary file, not shown.",
+        "closeTab": "Close {{name}}",
+        "missing": "This file no longer exists in the project (the coding agent may have deleted or moved it)."
+      },
+      "changes": {
+        "tab": "Changes",
+        "scope": "Diff scope",
+        "turn": "Last turn",
+        "worktree": "Uncommitted",
+        "count": "Changed: {{count}}",
+        "files": "Changed files",
+        "copyPatch": "Copy patch",
+        "copied": "Patch copied",
+        "emptyTurn": "The last turn changed no files.",
+        "emptyWorktree": "No uncommitted changes.",
+        "status": {
+          "A": "Added",
+          "M": "Modified",
+          "D": "Deleted",
+          "R": "Renamed"
+        }
+      },
+      "conversation": {
+        "title": "Conversation",
+        "empty": "Describe the agent you want to build. The coding agent writes the code, runs it and tests it in this project's microVM.",
+        "you": "You",
+        "working": "Working…",
+        "reasoning": "Reasoning",
+        "reasoningLive": "Reasoning…",
+        "command": "Command",
+        "running": "Running",
+        "exit": "exit {{code}}",
+        "noOutput": "No output",
+        "waitingOutput": "Waiting for output…",
+        "truncated": "… earlier output truncated",
+        "fileChanges": "Changed files ({{count}})",
+        "openDiff": "Show the diff",
+        "plan": "Plan",
+        "retrying": "{{message}} (retrying)",
+        "other": "Activity: {{type}}",
+        "effortOf": "effort {{effort}}",
+        "tokens": "{{value}} tokens"
+      },
+      "notice": {
+        "appServerExited": "The coding agent process restarted.",
+        "serverRequestDeclined": "An approval request was declined automatically (commands run without approval):",
+        "restored": "The project was restored from its latest snapshot.",
+        "threadResumeFailed": "The previous conversation could not be resumed; the coding agent continues in a new thread without its earlier context."
+      },
+      "composer": {
+        "placeholder": "Describe what to build or change (Enter to send, Shift+Enter for a new line)",
+        "model": "Model",
+        "effort": "Reasoning effort",
+        "hint": "Runs in the background: you can leave this page.",
+        "send": "Send",
+        "sending": "Starting…",
+        "interrupt": "Interrupt",
+        "interrupting": "Interrupting…",
+        "runtimeNotReady": "The coding runtime is not ready.",
+        "tooLong": "The prompt is over {{max}} KB."
+      },
+      "stream": {
+        "connecting": "Connecting…",
+        "retrying": "Reconnecting…",
+        "paused": "Paused while the tab is hidden"
+      },
+      "deploy": {
+        "button": "Deploy as Agent",
+        "redeploy": "Redeploy",
+        "title": "Deploy as an Agent",
+        "redeployTitle": "Redeploy the Agent",
+        "body": "Launchpad snapshots and exports this project and deploys it through the bring-your-own-code pipeline, with the same checks, IAM, registry and observability as an uploaded zip.",
+        "agentName": "Agent name",
+        "agentNameHint": "3–48 characters: lowercase letters, digits and hyphens, starting with a letter.",
+        "nameInvalid": "Use 3–48 lowercase letters, digits or hyphens, starting with a letter.",
+        "description": "Description",
+        "artifactKind": "Artifact",
+        "kind": {
+          "auto": "Detect automatically",
+          "code_zip": "Code zip (Python)",
+          "container_source": "Dockerfile context"
+        },
+        "kindHint": {
+          "auto": "A Dockerfile at the project root builds a container; otherwise the project deploys as a Python code zip.",
+          "code_zip": "Packaged as a Python code zip and run on the AgentCore Python runtime.",
+          "container_source": "Built by CodeBuild from the project's root Dockerfile into an ARM64 container."
+        },
+        "entrypoint": "Entrypoint",
+        "python": "Python version",
+        "submit": "Deploy",
+        "deploying": "Deploying…",
+        "created": "Agent {{id}} created. Its deployment is running.",
+        "updated": "Agent {{id}} is being redeployed.",
+        "openAgent": "Open the Agent",
+        "redeployNote": "This project already deployed an Agent. Deploying again publishes a new version of it:",
+        "noPermission": "You do not have permission to deploy Agents.",
+        "whileRunning": "Wait for the running turn to finish."
       }
     }
   },

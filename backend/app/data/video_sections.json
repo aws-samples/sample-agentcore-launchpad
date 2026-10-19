@@ -12,6 +12,7 @@
     {"id": "home", "categoryId": "home", "title": {"en": "Workbench", "zh-CN": "工作台"}, "path": "/v2"},
     {"id": "assistant", "categoryId": "build", "title": {"en": "Architect assistant", "zh-CN": "架构助手"}, "path": "/v2/assistant"},
     {"id": "agents", "categoryId": "build", "title": {"en": "Agent Management", "zh-CN": "Agent 管理"}, "path": "/v2/agents"},
+    {"id": "coding", "categoryId": "build", "title": {"en": "Coding Agent", "zh-CN": "编码 Agent"}, "path": "/v2/coding"},
     {"id": "registry", "categoryId": "build", "title": {"en": "Registry", "zh-CN": "注册中心"}, "path": "/v2/registry"},
     {"id": "knowledge-bases", "categoryId": "build", "title": {"en": "Knowledge Bases", "zh-CN": "知识库"}, "path": "/v2/knowledge-bases"},
     {"id": "context-layer", "categoryId": "build", "title": {"en": "Context layer", "zh-CN": "上下文层"}, "path": "/v2/context-layer"},

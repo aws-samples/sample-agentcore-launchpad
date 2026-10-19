@@ -7021,3 +7021,188 @@ export const v2KnowledgeApi = {
       body: JSON.stringify({ text, number_of_results: numberOfResults }),
     }),
 };
+
+// ---- coding agent (remote web IDE over the platform coding runtime) ----
+/* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A project is private
+ * to its creator: a foreign or missing id is `404 coding.project_not_found`. Every
+ * non-GET answers with a JSON body (the client refuses an empty 2xx). */
+
+export type CodingRuntimeState = "not_installed" | "installing" | "ready" | "failed" | "uninstalling";
+
+/** The install / uninstall job behind the runtime card (`log_tail`: admins only). */
+export interface CodingRuntimeJob {
+  id: string;
+  type: string;
+  status: string;
+  error: string | null;
+  /** administrators only */
+  log_tail?: string[];
+}
+
+/** `GET /api/coding/runtime` — the workspace's platform-owned coding runtime. */
+export interface CodingRuntimeStatus {
+  installed: boolean;
+  status: CodingRuntimeState;
+  runtime_arn: string | null;
+  image_tag: string | null;
+  job: CodingRuntimeJob | null;
+  models: string[];
+  efforts: string[];
+  default_model: string;
+  default_effort: string;
+}
+
+export type CodingProjectStatus = "idle" | "running";
+
+export interface CodingProject {
+  id: string;
+  name: string;
+  description: string;
+  status: CodingProjectStatus;
+  active_turn_id: string | null;
+  model: string | null;
+  effort: string | null;
+  /** the Agent this project deployed (redeploys update it) */
+  agent_id: string | null;
+  snapshot_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  created_by_name: string | null;
+  /** the caller owns this project — only owned rows open in the IDE (an admin's
+   *  "all" view lists other members' projects for deletion only) */
+  owned?: boolean;
+}
+
+export type CodingTurnStatus = "running" | "completed" | "interrupted" | "failed" | "abandoned";
+
+/** Ledger token usage of a settled turn. */
+export interface CodingTurnUsage {
+  input?: number;
+  cached_input?: number;
+  cache_write?: number;
+  output?: number;
+  reasoning_output?: number;
+}
+
+/** One ledger turn (`coding_turns`); `turn_id` is codex's id, the event stream's key. */
+export interface CodingTurnRow {
+  id: string;
+  turn_id: string | null;
+  thread_id?: string | null;
+  prompt: string;
+  model: string;
+  effort: string;
+  status: CodingTurnStatus;
+  error: string | null;
+  usage: CodingTurnUsage | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface CodingProjectDetail extends CodingProject {
+  /** latest turns (≤ 20), oldest first */
+  turns: CodingTurnRow[];
+  /** codex id of the running turn, if any */
+  active_turn?: string | null;
+}
+
+export interface CodingTreeEntry {
+  /** relative to the project root, `/`-separated */
+  path: string;
+  dir: boolean;
+  size: number | null;
+}
+
+/** Working tree (omitted), `HEAD`, or the tree the latest turn started from. */
+export type CodingFileRev = "head" | "turn";
+
+/** A file read. `exists: false` (absent at that revision, or deleted from the working
+ *  tree) carries no content, hash, size or binary flag; a binary file has no content. */
+export interface CodingFile {
+  path?: string;
+  content?: string | null;
+  sha256?: string | null;
+  size?: number | null;
+  binary?: boolean;
+  exists?: boolean;
+}
+
+export type CodingChangeScope = "turn" | "worktree";
+export type CodingChangeStatus = "A" | "M" | "D" | "R";
+
+export interface CodingChange {
+  path: string;
+  status: CodingChangeStatus;
+  old_path?: string | null;
+}
+
+export interface CodingDeployRequest {
+  agent_name?: string;
+  description?: string;
+  artifact_kind?: "code_zip" | "container_source";
+  entrypoint?: string;
+  python_version?: ByocPythonVersion;
+}
+
+export interface CodingDeployResult {
+  agent_id: string;
+  job_id: string;
+  /** true = a new Agent, false = a redeploy of the project's Agent */
+  created: boolean;
+}
+
+function codingPath(projectId: string, rest = ""): string {
+  return `/api/coding/projects/${encodeURIComponent(projectId)}${rest}`;
+}
+
+export const codingApi = {
+  runtime: () => request<CodingRuntimeStatus>("/api/coding/runtime"),
+  /** Install or repair (202 + job); re-read `runtime()` for the progress. */
+  installRuntime: () =>
+    request<{ job_id: string; status: string }>("/api/coding/runtime/install", { method: "POST" }),
+  uninstallRuntime: () =>
+    request<{ job_id: string; status: string }>("/api/coding/runtime", { method: "DELETE" }),
+  /** Own projects; `all` (admins) lists every project in the workspace. */
+  listProjects: (all = false) =>
+    request<{ projects: CodingProject[] }>(`/api/coding/projects${all ? "?all=1" : ""}`),
+  createProject: (body: { name: string; description?: string }) =>
+    request<CodingProject>("/api/coding/projects", { method: "POST", body: JSON.stringify(body) }),
+  getProject: (id: string) => request<CodingProjectDetail>(codingPath(id)),
+  updateProject: (id: string, body: { name?: string; description?: string }) =>
+    request<CodingProject>(codingPath(id), { method: "PATCH", body: JSON.stringify(body) }),
+  deleteProject: (id: string) => request<{ deleted: boolean }>(codingPath(id), { method: "DELETE" }),
+  /** Starts a turn asynchronously (`409 coding.turn_running` while one runs; a `402
+   *  budget.*` refusal arrives as an `ApiError`). */
+  startTurn: (id: string, body: { prompt: string; model: string; effort: string }) =>
+    request<CodingTurnRow>(codingPath(id, "/turns"), { method: "POST", body: JSON.stringify(body) }),
+  interrupt: (id: string) =>
+    request<{ interrupted: boolean }>(codingPath(id, "/interrupt"), { method: "POST" }),
+  /** `GET …/events?after=<seq>` — the raw SSE response (`v2/pages/coding/stream.ts`
+   *  parses it); a non-2xx answer throws an `ApiError` before any stream. */
+  events: async (id: string, after: number, signal?: AbortSignal): Promise<Response> => {
+    const path = codingPath(id, `/events?after=${Math.max(0, Math.floor(after))}`);
+    const res = await fetch(path, { headers: { Accept: "text/event-stream" }, signal });
+    if (!res.ok) await parseResponse<never>(path, res);
+    return res;
+  },
+  tree: (id: string, path = ".", depth = 1) =>
+    request<{ entries: CodingTreeEntry[] }>(
+      codingPath(id, `/tree?${new URLSearchParams({ path, depth: String(depth) }).toString()}`),
+    ),
+  readFile: (id: string, path: string, rev?: CodingFileRev) => {
+    const q = new URLSearchParams({ path });
+    if (rev) q.set("rev", rev);
+    return request<CodingFile>(codingPath(id, `/file?${q.toString()}`));
+  },
+  /** `409 coding.file_conflict` (detail `{sha256}`) when the file changed since
+   *  `expected_sha256`; `409 coding.turn_running` while a turn runs. */
+  writeFile: (id: string, body: { path: string; content: string; expected_sha256?: string | null }) =>
+    request<{ sha256: string }>(codingPath(id, "/file"), { method: "PUT", body: JSON.stringify(body) }),
+  changes: (id: string, scope: CodingChangeScope) =>
+    request<{ changes: CodingChange[] }>(codingPath(id, `/changes?scope=${scope}`)),
+  diff: (id: string, scope: CodingChangeScope) =>
+    request<{ diff: string }>(codingPath(id, `/diff?scope=${scope}`)),
+  deploy: (id: string, body: CodingDeployRequest) =>
+    request<CodingDeployResult>(codingPath(id, "/deploy"), { method: "POST", body: JSON.stringify(body) }),
+};

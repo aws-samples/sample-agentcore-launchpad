@@ -70,4 +70,14 @@ describe("navGroupsFor", () => {
     navGroupsFor("business", false);
     expect(paths(V2_NAV)).toEqual(before);
   });
+
+  it("lists the coding console as an expert-only Build entry for everyone", () => {
+    const build = V2_NAV.find((g) => g.key === "build");
+    const item = build?.items.find((entry) => entry.to === "/v2/coding");
+    expect(item).toMatchObject({ v2: true, labelKey: "v2.nav.coding" });
+    expect(item?.admin).toBeUndefined();
+    expect(item?.business).toBeUndefined();
+    expect(paths(navGroupsFor("expert", false))).toContain("/v2/coding");
+    expect(paths(navGroupsFor("business", false))).not.toContain("/v2/coding");
+  });
 });
