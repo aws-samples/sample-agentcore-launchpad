@@ -9744,7 +9744,15 @@
         "retrying": "{{message}} (retrying)",
         "other": "Activity: {{type}}",
         "effortOf": "effort {{effort}}",
-        "tokens": "{{value}} tokens"
+        "tokens": "{{value}} tokens",
+        "outsideProject": "Outside the project — no diff to show"
+      },
+      "markdown": {
+        "openFile": "Open {{path}} in the editor",
+        "openFileLine": "Open {{path}} at line {{line}}",
+        "linkOutside": "Points outside this project — not followed.",
+        "linkBlocked": "Link not followed.",
+        "image": "[image not loaded: {{alt}} {{src}}]"
       },
       "notice": {
         "appServerExited": "The coding agent process restarted.",

@@ -14,7 +14,7 @@ import { ProjectStatusTag } from "./common";
 import { Composer, type ComposerError } from "./Composer";
 import { Conversation } from "./Conversation";
 import { DeployModal } from "./DeployModal";
-import { CHANGES_TAB, type ChangeFocus, EditorPane } from "./EditorPane";
+import { CHANGES_TAB, type ChangeFocus, EditorPane, type LineReveal } from "./EditorPane";
 import { FileTree } from "./FileTree";
 import { fmtClock } from "./format";
 import { loadPrefs, pickOffered, savePrefs } from "./prefs";
@@ -122,6 +122,8 @@ export function ProjectIde({ id }: { id: string }) {
   const openFiles = useOpenFiles(id);
   const [active, setActive] = useState<string>(CHANGES_TAB);
   const [focus, setFocus] = useState<ChangeFocus | null>(null);
+  const [reveal, setReveal] = useState<LineReveal | null>(null);
+  const revealNonce = useRef(0);
   const refreshAll = openFiles.refreshAll;
   useEffect(() => {
     if (filesVersion > 0) refreshAll();
@@ -133,6 +135,7 @@ export function ProjectIde({ id }: { id: string }) {
       const rest = openFiles.files.filter((f) => f.path !== path);
       setActive(rest[Math.min(at, rest.length - 1)]?.path ?? CHANGES_TAB);
     }
+    setReveal((r) => (r?.path === path ? null : r));
     openFiles.close(path);
   };
 
@@ -156,6 +159,19 @@ export function ProjectIde({ id }: { id: string }) {
     setFocus({ path, scope: lastTurnId.current === turnId ? "turn" : "worktree", nonce: Date.now() });
     setActive(CHANGES_TAB);
   }, []);
+
+  // a Markdown link into the project (agent text, a `.md` preview): open that file,
+  // at the linked line when there is one (stable: the conversation rows are memoized)
+  const openTab = openFiles.open;
+  const openFile = useCallback(
+    (path: string, line: number | null = null, column: number | null = null) => {
+      const opened = openTab(path);
+      setActive(opened);
+      setReveal(line === null ? null : { path: opened, line, column, nonce: ++revealNonce.current });
+    },
+    [openTab],
+  );
+  const revealed = useCallback((nonce: number) => setReveal((r) => (r?.nonce === nonce ? null : r)), []);
 
   /* ---------- composer ---------- */
   const stored = useMemo(() => loadPrefs(id), [id]);
@@ -289,7 +305,7 @@ export function ProjectIde({ id }: { id: string }) {
               projectId={id}
               version={filesVersion}
               activePath={active === CHANGES_TAB ? null : active}
-              onOpen={(path) => setActive(openFiles.open(path))}
+              onOpen={(path) => openFile(path)}
             />
           </section>
           <section className="v2-coding-pane v2-coding-pane-main">
@@ -304,9 +320,12 @@ export function ProjectIde({ id }: { id: string }) {
               onReload={openFiles.reload}
               onOverwrite={(path) => void save(path, true)}
               onTogglePreview={openFiles.togglePreview}
+              onOpenFile={openFile}
               running={running}
               version={filesVersion}
               focus={focus}
+              reveal={reveal}
+              onRevealed={revealed}
             />
           </section>
           <section className="v2-coding-pane v2-coding-pane-chat">
@@ -328,7 +347,7 @@ export function ProjectIde({ id }: { id: string }) {
                 {stream.error}
               </Alert>
             )}
-            <Conversation view={view} onOpenChange={openChange} />
+            <Conversation view={view} onOpenChange={openChange} onOpenFile={openFile} />
             <Composer
               models={models}
               efforts={efforts}

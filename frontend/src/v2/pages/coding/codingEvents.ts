@@ -7,6 +7,7 @@
 // Type-only imports keep this loadable in the node test environment.
 import type { CodingTurnRow } from "../../../lib/api";
 import { parseTimestamp } from "../../../lib/timestamps";
+import { displayPath, projectPath } from "./paths";
 
 export interface CodingEventRecord {
   seq: number;
@@ -22,11 +23,16 @@ export type NoticeCode = "appServerExited" | "serverRequestDeclined" | "restored
 
 /** One file of a `fileChange` item. Only the counts are kept: codex sends an added
  *  file's whole content as its "diff", and the Changes tab reads diffs from the
- *  workspace anyway, so keeping the text would hold every written file in memory. */
+ *  workspace anyway, so keeping the text would hold every written file in memory.
+ *  codex reports absolute paths (`/mnt/workspace/project/README.md`); `path` and
+ *  `movePath` are project-relative when inside the project, else as reported. */
 export interface FileChangeView {
   path: string;
   kind: FileChangeKind;
   movePath: string | null;
+  /** the project-relative path the Changes tab lists this change under (a move's
+   *  destination); null when the file is outside the project (nothing to diff there) */
+  openPath: string | null;
   added: number;
   removed: number;
 }
@@ -223,10 +229,13 @@ function fileChanges(value: unknown): FileChangeView[] {
     const kindObj = obj(kindRaw);
     const kindName = typeof kindRaw === "string" ? kindRaw : str(kindObj.type);
     const kind: FileChangeKind = kindName === "add" || kindName === "delete" ? kindName : "update";
+    const path = str(change.path) ?? "";
+    const movePath = str(kindObj.move_path) ?? str(kindObj.movePath);
     return {
-      path: str(change.path) ?? "",
+      path: displayPath(path),
       kind,
-      movePath: str(kindObj.move_path) ?? str(kindObj.movePath),
+      movePath: movePath === null ? null : displayPath(movePath),
+      openPath: projectPath(movePath ?? path),
       ...diffStats(kind, str(change.diff) ?? ""),
     };
   });
@@ -321,13 +330,16 @@ export function itemFromThreadItem(raw: unknown, completed: boolean, prev?: Item
       const kept = !completed && prev?.type === "plan" && prev.text.length > text.length ? prev.text : text;
       return { type, id, text: kept, streaming };
     }
-    default:
+    default: {
+      // e.g. `imageView` carries the (absolute) path it showed
+      const path = str(item.path);
       return {
         type: "other",
         id,
         itemType: type,
-        label: str(item.query) ?? str(item.path) ?? str(item.review) ?? null,
+        label: str(item.query) ?? (path === null ? null : displayPath(path)) ?? str(item.review) ?? null,
       };
+    }
   }
 }
 

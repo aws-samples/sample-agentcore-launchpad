@@ -195,7 +195,49 @@ describe("applyCodingEvents", () => {
       method: "item/completed",
       params: { turnId: T, item: { type: "fileChange", id: "f2", status: "completed", changes: [{ path: "a.py", kind: { type: "update", move_path: "b.py" }, diff: "@@ -1 +1 @@\n-x\n+y\n" }] } },
     });
-    expect(moved.turns[0].items[0]).toMatchObject({ changes: [{ kind: "update", movePath: "b.py", added: 1, removed: 1 }] });
+    expect(moved.turns[0].items[0]).toMatchObject({ changes: [{ kind: "update", movePath: "b.py", openPath: "b.py", added: 1, removed: 1 }] });
+  });
+
+  it("makes codex's absolute file-change paths project-relative", () => {
+    const state = applyCodingEvents(
+      emptyConversation(),
+      log(
+        1,
+        [
+          "item/fileChange/patchUpdated",
+          { turnId: T, itemId: "f1", changes: [{ path: "/mnt/workspace/project/README.md", kind: { type: "update", move_path: null }, diff: "" }] },
+        ],
+        [
+          "item/completed",
+          {
+            turnId: T,
+            item: {
+              type: "fileChange",
+              id: "f2",
+              status: "completed",
+              changes: [
+                { path: "/mnt/workspace/project/README.md", kind: { type: "add" }, diff: "# Hi\n" },
+                { path: "/mnt/workspace/project/src/a.py", kind: { type: "update", move_path: "/mnt/workspace/project/src/b.py" }, diff: "" },
+                { path: "/tmp/scratch.txt", kind: { type: "add" }, diff: "x\n" },
+              ],
+            },
+          },
+        ],
+        ["item/completed", { turnId: T, item: { type: "imageView", id: "v1", path: "/mnt/workspace/project/shot.png" } }],
+      ),
+    );
+    const [patched, done, image] = state.turns[0].items;
+    expect(patched).toMatchObject({ status: "inProgress", changes: [{ path: "README.md", movePath: null, openPath: "README.md" }] });
+    expect(done).toMatchObject({
+      changes: [
+        { path: "README.md", kind: "add", movePath: null, openPath: "README.md", added: 1 },
+        // a move opens under its destination, as the Changes tab lists it
+        { path: "src/a.py", kind: "update", movePath: "src/b.py", openPath: "src/b.py" },
+        // outside the project: shown as reported, nothing to open
+        { path: "/tmp/scratch.txt", kind: "add", movePath: null, openPath: null },
+      ],
+    });
+    expect(image).toMatchObject({ type: "other", itemType: "imageView", label: "shot.png" });
   });
 
   it("ends interrupted, failed and abandoned turns", () => {

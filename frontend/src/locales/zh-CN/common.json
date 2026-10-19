@@ -9744,7 +9744,15 @@
         "retrying": "{{message}}（重试中）",
         "other": "活动：{{type}}",
         "effortOf": "推理强度 {{effort}}",
-        "tokens": "{{value}} tokens"
+        "tokens": "{{value}} tokens",
+        "outsideProject": "位于项目之外，无差异可显示"
+      },
+      "markdown": {
+        "openFile": "在编辑器中打开 {{path}}",
+        "openFileLine": "在编辑器中打开 {{path}} 第 {{line}} 行",
+        "linkOutside": "链接指向本项目之外，不会跟随。",
+        "linkBlocked": "不会跟随该链接。",
+        "image": "[图片未加载：{{alt}} {{src}}]"
       },
       "notice": {
         "appServerExited": "编码 Agent 进程已重启。",

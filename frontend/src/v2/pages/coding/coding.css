@@ -86,6 +86,15 @@
 .v2 .v2-coding-editor-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .v2 .v2-coding-editor-main > section { flex: 1; min-height: 0; }
 .v2 .v2-coding-md { flex: 1; min-height: 0; overflow: auto; padding: 16px 24px; }
+/* Markdown links into the project open the file in the IDE (a button, styled as the
+   shared .md link); links that are not followed stay plain text */
+.v2 .md .v2-coding-mdlink {
+  border: 0; background: none; padding: 0; margin: 0; font: inherit; color: var(--v2-primary); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; text-align: inherit; overflow-wrap: anywhere;
+}
+.v2 .md .v2-coding-mdlink:hover { color: var(--v2-primary-hover); }
+.v2 .md .v2-coding-mdlink:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 1px; border-radius: 2px; }
+.v2 .md .v2-coding-mdlink-off { cursor: default; }
 
 /* ---------- changes ---------- */
 .v2 .v2-coding-changes { display: flex; flex-direction: column; min-height: 0; flex: 1; }
@@ -152,7 +161,9 @@
 }
 .v2 .v2-coding-files ul, .v2 .v2-coding-plan ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .v2 .v2-coding-files li { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; }
-.v2 .v2-coding-files li .v2-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.v2 .v2-coding-files li .v2-link, .v2 .v2-coding-files li .v2-coding-files-off {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+}
 .v2 .v2-coding-files li .v2-tag { flex: none; }
 .v2 .v2-coding-stat { font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
 .v2 .v2-coding-stat.add { color: #008026; margin-left: auto; }

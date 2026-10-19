@@ -3,11 +3,12 @@ import { Copy, FileDiff, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Markdown } from "../../../components/Markdown";
 import { type CodingChange, type CodingChangeScope, codingApi, errorMessage } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
 import { copyText } from "../observability/common";
 import { Alert, Button, LinkButton, Segmented, Spin, Tag } from "../../ui";
+import { CodingMarkdown, type OpenFileHandler } from "./CodingMarkdown";
+import { parentOf, ROOT } from "./fileTree";
 import { languageFor, isMarkdown } from "./language";
 import { isDirty, type OpenFile } from "./useOpenFiles";
 
@@ -20,6 +21,24 @@ export interface ChangeFocus {
   nonce: number;
 }
 
+/** A request to put the cursor on a line of an open file (a Markdown link `…#L12`). */
+export interface LineReveal {
+  path: string;
+  line: number;
+  column: number | null;
+  nonce: number;
+}
+
+/*
+ * `occurrencesHighlight: "off"` on every editor here, deliberately. Monaco 0.55's word
+ * highlighter debounces each cursor move / focus through a 50 ms `Delayer` whose promise
+ * nobody handles; disposing the editor inside that window (a tab switch, picking another
+ * change, leaving the IDE right after a click or an agent edit) rejects it with an
+ * uncaught `Canceled`. The rejection comes from the cross-origin CDN script, so the
+ * browser mutes it — no `unhandledrejection` reaches `window` and it cannot be filtered
+ * there; the only fix is not to start that work. Selection highlighting (select a word →
+ * its other matches light up) is a separate feature and stays on.
+ */
 const EDITOR_OPTIONS = {
   minimap: { enabled: false },
   automaticLayout: true,
@@ -27,7 +46,14 @@ const EDITOR_OPTIONS = {
   scrollBeyondLastLine: false,
   renderWhitespace: "selection" as const,
   tabSize: 4,
+  occurrencesHighlight: "off" as const,
 };
+
+/** The directory a previewed file's relative links resolve against (`""` = the root). */
+function dirOf(path: string): string {
+  const dir = parentOf(path);
+  return dir === ROOT ? "" : dir;
+}
 
 function modelUri(projectId: string, path: string): string {
   return `file:///coding/${encodeURIComponent(projectId)}/${path.split("/").map(encodeURIComponent).join("/")}`;
@@ -76,9 +102,12 @@ export function EditorPane({
   onReload,
   onOverwrite,
   onTogglePreview,
+  onOpenFile,
   running,
   version,
   focus,
+  reveal,
+  onRevealed,
 }: {
   projectId: string;
   files: OpenFile[];
@@ -90,9 +119,14 @@ export function EditorPane({
   onReload: (path: string) => void;
   onOverwrite: (path: string) => void;
   onTogglePreview: (path: string) => void;
+  onOpenFile: OpenFileHandler;
   running: boolean;
   version: number;
   focus: ChangeFocus | null;
+  reveal: LineReveal | null;
+  /** the reveal `nonce` was applied (the IDE drops the request, so a later visit to the
+   *  tab does not jump back to that line) */
+  onRevealed: (nonce: number) => void;
 }) {
   const { t } = useTranslation();
   const monacoRef = useRef<Monaco | null>(null);
@@ -182,6 +216,9 @@ export function EditorPane({
             onReload={() => onReload(file.path)}
             onOverwrite={() => onOverwrite(file.path)}
             onTogglePreview={() => onTogglePreview(file.path)}
+            onOpenFile={onOpenFile}
+            reveal={reveal && reveal.path === file.path ? reveal : null}
+            onRevealed={onRevealed}
           />
         )}
       </div>
@@ -199,6 +236,9 @@ function FileView({
   onReload,
   onOverwrite,
   onTogglePreview,
+  onOpenFile,
+  reveal,
+  onRevealed,
 }: {
   projectId: string;
   file: OpenFile;
@@ -209,6 +249,10 @@ function FileView({
   onReload: () => void;
   onOverwrite: () => void;
   onTogglePreview: () => void;
+  onOpenFile: OpenFileHandler;
+  /** a line to show in this file, once its editor holds the content */
+  reveal: LineReveal | null;
+  onRevealed: (nonce: number) => void;
 }) {
   const { t } = useTranslation();
   const dirty = isDirty(file);
@@ -220,12 +264,29 @@ function FileView({
   const draftRef = useRef(file.draft);
   draftRef.current = file.draft;
   const editorRef = useRef<CodeEditor | null>(null);
+  // bumped by every editor mount: the reveal below waits for an editor showing the file
+  const [editorEpoch, setEditorEpoch] = useState(0);
+  const revealed = useRef(0);
   const options = useMemo(() => ({ ...EDITOR_OPTIONS, readOnly: running }), [running]);
   // a tab switch re-attaches that file's model as it was (runs after the library's own
   // path/value effects: a child's effects run first)
   useEffect(() => {
     syncModel(editorRef.current, draftRef.current);
   }, [file.path]);
+  // a link to `file#L12` / `file:12:3`: cursor to that line once the content is in
+  useEffect(() => {
+    const editor = editorRef.current;
+    // a disposed editor (the tab showed a spinner or the preview meanwhile) has no model
+    const model = editor?.getModel();
+    if (!reveal || reveal.nonce === revealed.current || !editor || !model || file.loading) return;
+    revealed.current = reveal.nonce;
+    const lineNumber = Math.min(reveal.line, model.getLineCount());
+    const column = Math.min(reveal.column ?? 1, model.getLineMaxColumn(lineNumber));
+    editor.setPosition({ lineNumber, column });
+    editor.revealLineInCenter(lineNumber);
+    editor.focus();
+    onRevealed(reveal.nonce);
+  }, [reveal, editorEpoch, file.loading, file.path, onRevealed]);
 
   return (
     <>
@@ -294,7 +355,7 @@ function FileView({
           <div className="v2-coding-placeholder">{t("v2.coding.editor.binary")}</div>
         ) : markdown && file.preview ? (
           <div className="v2-coding-md" data-testid="v2-coding-md-preview">
-            <Markdown text={file.draft} />
+            <CodingMarkdown text={file.draft} baseDir={dirOf(file.path)} onOpenFile={onOpenFile} />
           </div>
         ) : (
           <Editor
@@ -315,6 +376,7 @@ function FileView({
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                 if (!runningRef.current) saveRef.current();
               });
+              setEditorEpoch((n) => n + 1);
             }}
             options={options}
           />
@@ -458,10 +520,14 @@ const DIFF_OPTIONS = {
   scrollBeyondLastLine: false,
   renderSideBySide: true,
   fontSize: 13,
+  // see EDITOR_OPTIONS: no word highlighter, so disposing never rejects with `Canceled`
+  occurrencesHighlight: "off" as const,
 };
 
 /** Monaco's DiffEditor, read-only. The models are kept past the editor's own dispose and
- *  dropped afterwards (the library otherwise disposes them under the live diff widget). */
+ *  dropped afterwards (the library otherwise disposes them under the live diff widget):
+ *  this cleanup runs before the library's (React cleans a deleted tree parent-first) and
+ *  only schedules the disposal, so the editor is always gone before its models. */
 function DiffView({ original, modified, language }: { original: string; modified: string; language: string }) {
   const editorRef = useRef<MonacoDiffEditor | null>(null);
   useEffect(

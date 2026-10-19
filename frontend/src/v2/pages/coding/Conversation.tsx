@@ -14,11 +14,11 @@ import {
 import { Fragment, memo, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Markdown } from "../../../components/Markdown";
 import { fmtDuration } from "../../format";
 import { Alert, LinkButton, Tag } from "../../ui";
 import type { ConversationNotice, ConversationState, FileChangeView, ItemView, TurnView } from "./codingEvents";
 import { liveTurn, turnPrompt } from "./codingEvents";
+import { CodingMarkdown, type OpenFileHandler } from "./CodingMarkdown";
 import { TurnStatusTag } from "./common";
 import { fmtTokens, usageBreakdown } from "./format";
 
@@ -27,14 +27,18 @@ import { fmtTokens, usageBreakdown } from "./format";
  * prompt, then every item in arrival order — streamed text (Markdown, caret), reasoning
  * summaries (open while streaming), commands with live output and exit code, file
  * changes (click → the Changes tab), MCP tool calls, plans, errors — and a per-turn
- * footer (model, effort, duration, tokens). Follows the tail unless scrolled up.
+ * footer (model, effort, duration, tokens). Follows the tail unless scrolled up. A link
+ * into the project in the agent's Markdown opens that file in the editor (`onOpenFile`,
+ * which must be stable: the turns and items are memoized).
  */
 export function Conversation({
   view,
   onOpenChange,
+  onOpenFile,
 }: {
   view: ConversationState;
   onOpenChange: (path: string, turnId: string) => void;
+  onOpenFile: OpenFileHandler;
 }) {
   const { t } = useTranslation();
   const box = useRef<HTMLDivElement>(null);
@@ -73,7 +77,7 @@ export function Conversation({
       {view.turns.map((turn, i) => (
         <Fragment key={turn.turnId}>
           {notices(i)}
-          <TurnBlock turn={turn} onOpenChange={onOpenChange} />
+          <TurnBlock turn={turn} onOpenChange={onOpenChange} onOpenFile={onOpenFile} />
         </Fragment>
       ))}
       {notices(view.turns.length)}
@@ -86,9 +90,11 @@ export function Conversation({
 const TurnBlock = memo(function TurnBlock({
   turn,
   onOpenChange,
+  onOpenFile,
 }: {
   turn: TurnView;
   onOpenChange: (path: string, turnId: string) => void;
+  onOpenFile: OpenFileHandler;
 }) {
   const { t } = useTranslation();
   const live = turn.status === "inProgress";
@@ -104,7 +110,7 @@ const TurnBlock = memo(function TurnBlock({
       )}
       {turn.plan && turn.plan.steps.length > 0 && <PlanSteps plan={turn.plan} />}
       {items.map((item) => (
-        <ItemRow key={item.id} item={item} live={live} turnId={turn.turnId} onOpenChange={onOpenChange} />
+        <ItemRow key={item.id} item={item} live={live} turnId={turn.turnId} onOpenChange={onOpenChange} onOpenFile={onOpenFile} />
       ))}
       {live && !items.some((item) => item.type === "agentMessage" || item.type === "commandExecution") && (
         <div className="v2-coding-working">
@@ -173,18 +179,20 @@ const ItemRow = memo(function ItemRow({
   live,
   turnId,
   onOpenChange,
+  onOpenFile,
 }: {
   item: ItemView;
   live: boolean;
   turnId: string;
   onOpenChange: (path: string, turnId: string) => void;
+  onOpenFile: OpenFileHandler;
 }) {
   const { t } = useTranslation();
   switch (item.type) {
     case "agentMessage":
       return (
         <div className="v2-coding-msg">
-          <Markdown text={item.text} />
+          <CodingMarkdown text={item.text} onOpenFile={onOpenFile} />
           {item.streaming && live && <span className="v2-coding-caret" />}
         </div>
       );
@@ -199,7 +207,7 @@ const ItemRow = memo(function ItemRow({
             <Brain size={13} aria-hidden="true" />
             {t(streaming ? "v2.coding.conversation.reasoningLive" : "v2.coding.conversation.reasoning")}
           </summary>
-          {text ? <Markdown text={text} /> : <span className="v2-muted">…</span>}
+          {text ? <CodingMarkdown text={text} onOpenFile={onOpenFile} /> : <span className="v2-muted">…</span>}
         </details>
       );
     }
@@ -232,7 +240,7 @@ const ItemRow = memo(function ItemRow({
             <ListChecks size={14} aria-hidden="true" />
             {t("v2.coding.conversation.plan")}
           </div>
-          <Markdown text={item.text} />
+          <CodingMarkdown text={item.text} onOpenFile={onOpenFile} />
         </div>
       );
     case "error":
@@ -343,19 +351,32 @@ function FileChangeCard({
         {(status === "failed" || status === "declined") && <Tag tone="red">{t(`v2.coding.itemStatus.${status}`)}</Tag>}
       </div>
       <ul>
-        {changes.map((change, i) => (
-          <li key={`${change.path}:${i}`}>
-            <Tag tone={KIND_TONE[change.kind]}>{t(`v2.coding.changeKind.${change.kind}`)}</Tag>
-            <LinkButton onClick={() => onOpen(change.movePath ?? change.path)} title={t("v2.coding.conversation.openDiff")}>
-              <span className="mono">
-                {change.path}
-                {change.movePath ? ` → ${change.movePath}` : ""}
-              </span>
-            </LinkButton>
-            <span className="v2-coding-stat add">+{change.added}</span>
-            <span className="v2-coding-stat del">−{change.removed}</span>
-          </li>
-        ))}
+        {changes.map((change, i) => {
+          const target = change.openPath;
+          const label = (
+            <>
+              {change.path}
+              {change.movePath ? ` → ${change.movePath}` : ""}
+            </>
+          );
+          return (
+            <li key={`${change.path}:${i}`}>
+              <Tag tone={KIND_TONE[change.kind]}>{t(`v2.coding.changeKind.${change.kind}`)}</Tag>
+              {target !== null ? (
+                <LinkButton onClick={() => onOpen(target)} title={t("v2.coding.conversation.openDiff")}>
+                  <span className="mono">{label}</span>
+                </LinkButton>
+              ) : (
+                // outside the project (codex wrote elsewhere in the microVM): no diff to show
+                <span className="mono v2-muted v2-coding-files-off" title={t("v2.coding.conversation.outsideProject")}>
+                  {label}
+                </span>
+              )}
+              <span className="v2-coding-stat add">+{change.added}</span>
+              <span className="v2-coding-stat del">−{change.removed}</span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
