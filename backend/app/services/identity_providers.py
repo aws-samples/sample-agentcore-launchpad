@@ -24,7 +24,7 @@ from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import Agent, IdentityProvider
+from app.models.ledger import Agent, ContextLayer, IdentityProvider
 from app.schemas.inbound_auth import (
     discovery_url_for_issuer,
     issuer_from_discovery_url,
@@ -211,6 +211,17 @@ def _references(
     bound_targets: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     refs = referencing_agents(db, workspace_id, name)
+    # The connected COA context layer authenticates through one Connection, and the
+    # agents attaching the layer reach COA through it without naming it in a tool.
+    layer = (
+        db.query(ContextLayer)
+        .filter(ContextLayer.workspace_id == workspace_id, ContextLayer.connection == name)
+        .first()
+    )
+    if layer is not None:
+        refs.append({
+            "type": "context_layer", "id": layer.id, "name": f"{layer.prefix}-{layer.env}",
+        })
     refs.extend(
         {"type": "gateway_target", "id": t["target_id"], "name": t["name"]}
         for t in bound_targets
@@ -341,6 +352,12 @@ def _ledger_row(
         )
         .first()
     )
+
+
+def ledger_client_id(db: Session, workspace_id: str, name: str) -> str | None:
+    """The client id the audit row recorded for an OAuth2 Connection, if any."""
+    row = _ledger_row(db, workspace_id, KIND_OAUTH2, name)
+    return row.client_id if row is not None else None
 
 
 def list_connections(

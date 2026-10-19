@@ -192,6 +192,21 @@ def pending_revocations(
     ]
 
 
+def authorized_since(
+    db: Session,
+    workspace_id: str,
+    *,
+    user_id: str,
+    provider: str,
+    agent_id: str,
+    since: datetime,
+) -> bool:
+    """Whether this grant was (re-)authorized after ``since``."""
+    grant = _grant(db, workspace_id, user_id, provider, agent_id)
+    authorized = _aware(grant.authorized_at) if grant is not None else None
+    return authorized is not None and authorized > _aware(since)
+
+
 def record_pending(
     db: Session,
     workspace_id: str,

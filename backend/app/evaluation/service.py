@@ -1047,6 +1047,17 @@ def submit_run(
         log_groups = list(log_source["log_group_names"])
         log_group = log_groups[0]
     else:
+        if dataset_items and (agent.spec or {}).get("context_layer"):
+            # a replay invokes with no signed-in console user, so a COA context
+            # layer would have nobody to act as: refused by name, not run tool-less
+            raise AppError(
+                "context_layer.unsupported_method",
+                "evaluation replays cannot invoke an agent with a COA context layer — "
+                "they run without a signed-in console user to act as in COA; evaluate "
+                "its existing Chat sessions instead",
+                {"reason": "evaluation", "agent_id": agent.id},
+                status_code=422,
+            )
         if dataset_items and agent.inbound_auth_mode == "jwt":
             # replay turns Bearer-invoke with the workspace M2M token; an agent on
             # another IdP refuses it, so say so before a run row is created

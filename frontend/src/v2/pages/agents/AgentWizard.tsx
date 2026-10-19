@@ -15,6 +15,7 @@ import {
   authToolIssues,
   buildAgentSpec,
   byocIssues,
+  contextLayerValid,
   defaultModelForMethod,
   emptyAgentForm,
   entrypointAfterUpload,
@@ -53,6 +54,8 @@ import {
   StrandsToolsCard,
 } from "./MethodSections";
 import { MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
+import { sectionVisible } from "../contextLayer/state";
+import { ContextLayerSection } from "./ContextLayerSection";
 import { IdentityCard } from "./IdentityCard";
 import { InboundCard } from "./InboundAuthFields";
 import { WizardReview } from "./WizardReview";
@@ -157,6 +160,9 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const connections = connectionsLoad.data?.connections ?? null;
   // what an "inherit" choice resolves to at deploy; a failed read reads as IAM
   const inboundDefault = useLoad(() => api.getInboundAuthDefault(), "inbound-default");
+  // the workspace's COA context layer + the member's own authorization; a failed
+  // read hides the section unless the stored spec already attaches a namespace
+  const contextStatus = useLoad(() => api.getContextLayer(), "context-layer");
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
@@ -262,6 +268,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     const out: Record<string, string> = {};
     if (!AGENT_NAME_RE.test(form.name)) out.name = t("v2.agents.wizard.errName");
     if (!inboundValid(form)) out.inbound = "inbound";
+    if (!contextLayerValid(form)) out.contextLayer = "contextLayer";
     if (form.authTools.length) {
       const auth = authToolIssues(form, connections);
       if (auth.unsupported || auth.catalogPending || Object.keys(auth.rows).length) out.identity = "identity";
@@ -342,6 +349,15 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       kbSlot={<KnowledgeField form={form} set={set} cat={cat} kb={kb} note={kbNote} />}
     />
   );
+  const contextCard = sectionVisible(contextStatus.data, form) ? (
+    <ContextLayerSection
+      form={form}
+      set={set}
+      status={contextStatus.data}
+      onStatusChanged={contextStatus.reload}
+      touched={touched}
+    />
+  ) : null;
   const inboundCard = (
     <InboundCard
       form={form}
@@ -454,6 +470,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           {modelCard({ knobs: true })}
           <HarnessToolsCard {...section} />
           {skillsKb(t("create.configure.kbNote"))}
+          {contextCard}
           <FilesystemCard form={form} set={set} touched={touched} />
           <MemoryCard {...section} loop />
         </>
@@ -483,6 +500,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           )}
           {inboundCard}
           {skillsKb(t("create.configure.kbNoteDirect"))}
+          {contextCard}
           <FilesystemCard form={form} set={set} touched={touched} />
           <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
         </>

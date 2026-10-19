@@ -1,10 +1,13 @@
 /** What AgentCore Identity appends to the return URL. `state` is the
- *  customState the generated agent sent: `{agent_id, tool, session_id}`. */
+ *  customState the asker sent: `{agent_id, tool, session_id}` from a Chat turn,
+ *  or `{kind: "context_layer"}` from the Context Layer page. */
 export interface ReturnParams {
   sessionUri: string | null;
   agentId: string | null;
   tool: string | null;
   chatSession: string | null;
+  /** the console surface that asked, when it was not a Chat turn */
+  kind: string | null;
 }
 
 export function parseReturnParams(search: string): ReturnParams {
@@ -22,11 +25,14 @@ export function parseReturnParams(search: string): ReturnParams {
     agentId: str(state.agent_id),
     tool: str(state.tool),
     chatSession: str(state.session_id),
+    kind: str(state.kind),
   };
 }
 
-/** The Chat conversation that asked for consent, for when the tab can't close. */
+/** Where a consent goes back to, for when the tab can't close: the Chat
+ *  conversation that asked, or the Context Layer page for a module consent. */
 export function chatPathFor(ret: ReturnParams): string {
+  if (!ret.agentId && ret.kind === "context_layer") return "/v2/context-layer";
   if (!ret.agentId) return "/v2/chat";
   const q = new URLSearchParams({ agent: ret.agentId });
   if (ret.chatSession) q.set("session", ret.chatSession);

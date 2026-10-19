@@ -40,6 +40,7 @@ from app.routers.auth import router as auth_router
 from app.routers.budgets import router as budgets_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
+from app.routers.context_layer import router as context_layer_router
 from app.routers.conversations import router as conversations_router
 from app.routers.execution import router as execution_router
 from app.routers.feedback import router as feedback_router
@@ -207,6 +208,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(system_agents_router)
     app.include_router(assistant_router)  # architect assistant (SE-039)
     app.include_router(knowledge_router)  # managed knowledge bases + retrieval playground
+    app.include_router(context_layer_router)  # the connected COA deployment + member consent
     app.include_router(chat_router)
     app.include_router(feedback_router)  # thumbs on chat answers + the Insights list
     app.include_router(memory_router)  # read-only short-/long-term memory console

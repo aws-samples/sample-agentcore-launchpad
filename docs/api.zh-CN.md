@@ -624,6 +624,46 @@ Skill Lab 评估与任务生成作业只在启动前检查。当作业的估算�
 `aws.conflict` 等）。资源映射里没有 `kb_role_arn`（创建）或没有 `artifacts_bucket`
 （上传）的工作区尚未完成引导，会返回点明缺失键的 `500`。
 
+## 控制台上下文层 API（COA）/ Console Context Layer API
+
+`/api/context-layer/*` 把工作区连接到一个 COA（Context Ontology Accelerator）部署，并
+**以当前登录成员的身份**读取 COA。账本 `context_layers` 行只存标识；运行时状态、回调登记
+和 Agent OAuth 均实时读取。响应中永远不出现 COA 令牌、客户端密钥或授权会话 uri；授权 URL
+只返回给为其签发的成员本人。详见 [identity.md](identity.md) §7.7。
+
+| 方法 | 路径 | 策略 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/context-layer` | member | `{connected, can_manage}`；已连接时另含 `{name, prefix, env, region, console_url, api_endpoint, issuer, mcp_runtime_arn, serve_runtime_arn, connection, console_workload, runtimes: {mcp, serve}, ready, agent_oauth_enabled, callback_registered, authorization: {status: none\|pending\|authorized\|revoked, authorized_at}, referenced_by, probe_errors}`。管理员还会拿到 `callback_url`、`agent_client_id`、`user_pool_id` 和 `callback_context_key`（`agentOauthCallbackUrls`）。失败的实时探测读作 `null`，并列入 `probe_errors` |
+| `PUT` | `/api/context-layer` | admin | `{prefix, env="dev", region, connection?}` → 从 SSM `/<prefix>/*` 与 `<prefix>-<env>-{api,web,auth}` 栈输出（COA 区域）发现部署，确认两个运行时均为 READY，创建 OAuth2 Connection `coa-<prefix>`（或采用 `connection`／已存在且客户端 id 为 COA Agent 客户端的 `coa-<prefix>`），确保控制台工作负载身份 `launchpad-console-<workspace>`，并写入账本行。响应为状态 |
+| `DELETE` | `/api/context-layer` | admin | 断开上下文层 → `{disconnected, connection, console_workload}`；Connection 与工作负载身份保留。仍有 Agent 挂载时返回 `409 context_layer.referenced`（`detail.referenced_by`） |
+| `POST` | `/api/context-layer/authorize` | member | 调用者本人的授权：令牌库已有其 COA 令牌时返回 `{authorized: true, connection}`，否则返回 `{authorized: false, authorization_url, connection}`（一次性；由 `/auth/return` 完成绑定） |
+| `POST` | `/api/context-layer/revoke` | member | 对调用者在该 Connection 上强制重新授权（`user_token_revocations`）→ `{revoked, provider, agents}` |
+| `GET` | `/api/context-layer/namespaces` | member | 以调用者身份调用 COA `GET /namespaces` → `{namespaces: [{namespace_id, name, display_name, status, source_count, created_at, updated_at}]}` |
+
+所有非 GET 路由在计费表中都是 `FREE`：COA 自身的开销不由 Launchpad 计量。
+
+`AgentSpec.context_layer` = `{namespace_id（UUID）, namespace_name?}`，为 `harness` 或
+HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议、`code`/`code_bundle`，或
+名为 `coa` 的工具，都会返回 `422 validation.invalid_request`，错误行类型为
+`context_layer.unsupported_method`；未连接上下文层时创建或重新发布返回
+`409 context_layer.not_connected`。挂载了 COA 的 Agent 在 `/v1` 上返回
+`409 identity.as_user_requires_console`（流式调用为一个 `error` 事件）。
+调用者尚未授权时，对挂载了 COA 的 Agent 调用 `POST /api/agents/{id}/invoke` 返回
+`409 context_layer.authorization_required`（该接口没有授权卡片）；Chat 则显示
+`auth_required` 授权卡片。
+
+错误码：`context_layer.not_connected`（409）、`context_layer.authorization_required`
+（409，`detail.authorization_url`）、`context_layer.forbidden`（403——COA 拒绝：无授权）、
+`context_layer.reauthorize`（409——COA 拒绝了该令牌，下次获取会强制重新授权。不用 401，
+否则会结束控制台会话）、`context_layer.upstream`（502／504——COA 5xx 或超时）、
+`context_layer.referenced`（409）、`context_layer.unsupported_method`（422——也用于对挂载
+COA 的 Agent 做评估回放或转换）、`context_layer.not_found`（404——SSM 参数或栈不存在）、
+`context_layer.agent_oauth_disabled`（409）、`context_layer.cross_account`（422）、
+`context_layer.runtime_not_ready`（409）、`context_layer.discovery_failed`（502）、
+`context_layer.connection_mismatch`（422）、`context_layer.connection_not_found`（404）、
+`context_layer.identity_failed`（502——令牌库拒绝；detail 只含步骤与 AWS 错误码）、
+`context_layer.invalid_request`（422）。
+
 ## 控制台 Memory API / Console Memory API
 
 `/api/memory/*` 支撑只读的 Memory 控制台（控制台 05），底层是共享的 `launchpad_memory` 单例。

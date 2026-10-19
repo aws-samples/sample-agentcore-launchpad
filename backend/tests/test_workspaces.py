@@ -64,6 +64,8 @@ def _pre_p2_database(tmp_path):
         conn.execute(sa.text("DROP INDEX uq_managed_memories_workspace_memory"))
         # and the AWS-only resource-creator index
         conn.execute(sa.text("DROP INDEX uq_resource_creators_workspace_kind_resource"))
+        # and the one-layer-per-workspace index of the COA context layer
+        conn.execute(sa.text("DROP INDEX uq_context_layers_workspace"))
         for table in WORKSPACE_SCOPED_TABLES:
             conn.execute(sa.text(f"DROP INDEX ix_{table}_workspace_id"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))

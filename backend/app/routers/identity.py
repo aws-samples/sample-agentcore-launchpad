@@ -26,10 +26,12 @@ from app.schemas.inbound_auth import InboundAuth
 from app.services import (
     agent_access,
     consent_portals,
+    context_layer,
     inbound_auth,
     oauth_sessions,
     policy_identity,
 )
+from app.services import context_layer_tokens as coa_tokens
 from app.services import identity_gateway_targets as gateway_targets
 from app.services import identity_providers as connections
 from app.services.agentcore.client import control_client, data_client
@@ -350,10 +352,14 @@ def grant_status(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """What the Chat auth card polls until the consent completes."""
-    return oauth_sessions.grant_status(
-        db, ws.id, user_id=_caller(request), provider=connection, agent_id=agent_id
+    """What the Chat auth card polls until the consent completes. A Harness agent's
+    COA consent is the console grant (``context_layer.grant_agent_id``); the card
+    still sees the agent id it asked with."""
+    grant_agent = context_layer.grant_agent_id(db, ws.id, agent_id, connection)
+    state = oauth_sessions.grant_status(
+        db, ws.id, user_id=_caller(request), provider=connection, agent_id=grant_agent
     )
+    return {**state, "agent_id": agent_id}
 
 
 @router.delete("/grants/{connection}")
@@ -364,7 +370,11 @@ def revoke_grant(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Force re-auth: the next call through this Connection restarts consent."""
-    return oauth_sessions.revoke(db, ws.id, user_id=_caller(request), provider=connection)
+    caller = _caller(request)
+    result = oauth_sessions.revoke(db, ws.id, user_id=caller, provider=connection)
+    # a COA token the broker cached for the console must not outlive the revoke
+    coa_tokens.forget(ws.id, caller)
+    return result
 
 
 # ── Consent Portal (as_user Gateway targets) ─────────────────────────────────

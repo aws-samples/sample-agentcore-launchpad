@@ -993,6 +993,9 @@ export interface AgentSpecInput {
   /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
    * default at deploy time; an explicit value pins the agent. */
   inbound_auth?: InboundAuth | null;
+  /** The COA namespace the agent reads governed context from (harness + HTTP
+   * zip_runtime); `null` detaches it. Omitted ⇒ a re-publish carries the stored ref. */
+  context_layer?: ContextLayerRef | null;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -3084,6 +3087,78 @@ export interface CompleteOauthSessionResult {
   agent_id: string;
   agent_name: string | null;
   tool: string;
+}
+
+/* ── COA context layer (`/api/context-layer`) ── */
+
+/** The caller's own console grant for the layer's Connection. */
+export type ContextLayerAuthStatus = "none" | "pending" | "authorized" | "revoked";
+
+/** `GET /api/context-layer`. Everything past `can_manage` is present only when
+ *  `connected`; the callback/client fields only for administrators. Live probes
+ *  that failed read `null` (unknown), never false. No secret is ever included. */
+export interface ContextLayerStatus {
+  connected: boolean;
+  can_manage: boolean;
+  name?: string;
+  prefix?: string;
+  env?: string;
+  region?: string;
+  console_url?: string;
+  api_endpoint?: string;
+  issuer?: string;
+  mcp_runtime_arn?: string;
+  serve_runtime_arn?: string;
+  connection?: string;
+  console_workload?: string;
+  runtimes?: { mcp: string | null; serve: string | null };
+  ready?: boolean;
+  agent_oauth_enabled?: boolean | null;
+  callback_registered?: boolean | null;
+  authorization?: { status: ContextLayerAuthStatus; authorized_at: string | null };
+  /** agents attaching the layer; a hidden agent keeps its slot with null id/name */
+  referenced_by?: { type: string; id: string | null; name: string | null }[];
+  created_by_name?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  probe_errors?: { probe: string; code: string }[];
+  // administrators only
+  callback_url?: string | null;
+  agent_client_id?: string | null;
+  user_pool_id?: string | null;
+  callback_context_key?: string;
+}
+
+export interface ContextLayerConnectInput {
+  prefix: string;
+  env: string;
+  region: string;
+  /** adopt an existing OAuth2 Connection; omitted ⇒ create (or re-adopt) `coa-<prefix>` */
+  connection?: string | null;
+}
+
+export interface ContextLayerAuthorizeResult {
+  authorized: boolean;
+  /** single-use, only when `authorized` is false */
+  authorization_url?: string;
+  connection: string;
+}
+
+/** One namespace COA lets the signed-in member see. */
+export interface ContextLayerNamespace {
+  namespace_id: string;
+  name: string;
+  display_name: string | null;
+  status: string | null;
+  source_count: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** `AgentSpec.context_layer`: one COA namespace (harness + HTTP zip_runtime). */
+export interface ContextLayerRef {
+  namespace_id: string;
+  namespace_name?: string;
 }
 
 export interface ConsentPortalInfo {
@@ -5948,6 +6023,26 @@ export const api = {
       `/api/identity/grants/${encodeURIComponent(connection)}`,
       { method: "DELETE" },
     ),
+  getContextLayer: () => request<ContextLayerStatus>("/api/context-layer"),
+  connectContextLayer: (input: ContextLayerConnectInput) =>
+    request<ContextLayerStatus>("/api/context-layer", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  disconnectContextLayer: () =>
+    request<{ disconnected: boolean; connection: string; console_workload: string }>(
+      "/api/context-layer",
+      { method: "DELETE" },
+    ),
+  authorizeContextLayer: () =>
+    request<ContextLayerAuthorizeResult>("/api/context-layer/authorize", { method: "POST" }),
+  revokeContextLayer: () =>
+    request<{ revoked: boolean; provider: string; agents: number }>(
+      "/api/context-layer/revoke",
+      { method: "POST" },
+    ),
+  listContextLayerNamespaces: () =>
+    request<{ namespaces: ContextLayerNamespace[] }>("/api/context-layer/namespaces"),
   getConsentPortal: () =>
     request<{ gateway_id: string | null; portal: ConsentPortalInfo | null }>(
       "/api/identity/consent-portal",

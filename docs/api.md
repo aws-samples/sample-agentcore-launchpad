@@ -980,6 +980,52 @@ AWS `ClientError` goes through the global mapping above (`aws.validation`,
 or no `artifacts_bucket` (uploads) has not been bootstrapped and raises a `500`
 naming the missing key.
 
+## Console Context Layer API (COA)
+
+`/api/context-layer/*` connects a workspace to one COA (Context Ontology
+Accelerator) deployment and reads COA **as the signed-in member**. The ledger
+`context_layers` row holds identifiers only; runtime status, the callback
+registration and agent OAuth are read live. No COA token, client secret or
+consent session uri is ever in a response; an authorization URL goes only to the
+member it was minted for. See [identity.md](identity.md) §7.7.
+
+| Method | Path | Policy | Result |
+|---|---|---|---|
+| `GET` | `/api/context-layer` | member | `{connected, can_manage}`, plus when connected: `{name, prefix, env, region, console_url, api_endpoint, issuer, mcp_runtime_arn, serve_runtime_arn, connection, console_workload, runtimes: {mcp, serve}, ready, agent_oauth_enabled, callback_registered, authorization: {status: none\|pending\|authorized\|revoked, authorized_at}, referenced_by, probe_errors}`. Administrators also get `callback_url`, `agent_client_id`, `user_pool_id` and `callback_context_key` (`agentOauthCallbackUrls`). A live probe that failed reads `null` and is listed in `probe_errors` |
+| `PUT` | `/api/context-layer` | admin | `{prefix, env="dev", region, connection?}` → discover from SSM `/<prefix>/*` + the `<prefix>-<env>-{api,web,auth}` stack outputs (COA region), check both runtimes are READY, create the OAuth2 Connection `coa-<prefix>` (or adopt `connection` / an existing `coa-<prefix>` whose client id is the COA agent client), ensure the console workload identity `launchpad-console-<workspace>`, upsert the row. Answers the status |
+| `DELETE` | `/api/context-layer` | admin | Forget the layer → `{disconnected, connection, console_workload}`; the Connection and the workload identity stay. `409 context_layer.referenced` (with `detail.referenced_by`) while an agent attaches it |
+| `POST` | `/api/context-layer/authorize` | member | The caller's consent: `{authorized: true, connection}` when the vault holds their COA token, else `{authorized: false, authorization_url, connection}` (single-use; `/auth/return` binds it) |
+| `POST` | `/api/context-layer/revoke` | member | Force re-consent for the caller on the layer's Connection (`user_token_revocations`) → `{revoked, provider, agents}` |
+| `GET` | `/api/context-layer/namespaces` | member | COA `GET /namespaces` as the caller → `{namespaces: [{namespace_id, name, display_name, status, source_count, created_at, updated_at}]}` |
+
+Every non-GET route is `FREE` in the billing table: COA's own spend is not metered
+by Launchpad.
+
+`AgentSpec.context_layer` = `{namespace_id (UUID), namespace_name?}` attaches one
+namespace to a `harness` or HTTP `zip_runtime` agent. Any other method, protocol
+`a2a`, `code`/`code_bundle`, or a tool named `coa` answers `422
+validation.invalid_request` with an error row of type
+`context_layer.unsupported_method`; a create or redeploy while no layer is
+connected answers `409 context_layer.not_connected`. A COA-attached agent on `/v1`
+answers `409 identity.as_user_requires_console` (an `error` event on the stream).
+`POST /api/agents/{id}/invoke` on a COA-attached agent whose caller has not
+consented yet answers `409 context_layer.authorization_required` (it has no consent
+card); Chat shows its `auth_required` card instead.
+
+Error codes: `context_layer.not_connected` (409), `context_layer.authorization_required`
+(409, `detail.authorization_url`), `context_layer.forbidden` (403 — COA refused: no
+grant), `context_layer.reauthorize` (409 — COA rejected the token; the next fetch
+forces consent. Not 401, which would end the console session),
+`context_layer.upstream` (502 / 504 — COA 5xx or timeout), `context_layer.referenced`
+(409), `context_layer.unsupported_method` (422 — also an evaluation replay or a
+conversion of a COA-attached agent), `context_layer.not_found` (404 — no SSM
+parameters or stack), `context_layer.agent_oauth_disabled` (409),
+`context_layer.cross_account` (422), `context_layer.runtime_not_ready` (409),
+`context_layer.discovery_failed` (502), `context_layer.connection_mismatch` (422),
+`context_layer.connection_not_found` (404), `context_layer.identity_failed` (502 —
+the token vault refused; the detail names the step and the AWS code only),
+`context_layer.invalid_request` (422).
+
 ## Console Memory API
 
 `/api/memory/*` backs the read-only Memory console (console 05) over the shared

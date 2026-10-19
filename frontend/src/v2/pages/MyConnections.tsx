@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, errorMessage, type UserGrantInfo } from "../../lib/api";
-import { revokeDisabled, runRevoke } from "../../lib/user-grants";
+import { isConsoleGrant, revokeDisabled, runRevoke } from "../../lib/user-grants";
 import { fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Card, Confirm, LinkButton, PageHeader, Table, Tag, type TagTone } from "../ui";
@@ -68,6 +68,11 @@ export function V2MyConnections() {
                 g.agent_id ? (
                   <Link to={`/v2/agents?view=detail&id=${encodeURIComponent(g.agent_id)}`}>
                     {g.agent_name ?? g.agent_id}
+                  </Link>
+                ) : isConsoleGrant(g) ? (
+                  // the COA context layer's console grant: the module + Harness agents
+                  <Link to="/v2/context-layer" data-testid="grant-console-context-layer">
+                    {t("v2.myConnections.contextLayerConsole")}
                   </Link>
                 ) : (
                   "—"

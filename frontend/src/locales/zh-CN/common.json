@@ -118,7 +118,8 @@
     "videos": "视频介绍",
     "announcements": "公告管理",
     "connections": "出站凭证",
-    "myConnections": "我的授权"
+    "myConnections": "我的授权",
+    "contextLayer": "上下文层"
   },
   "videos": {
     "kicker": "// 学习",
@@ -2443,7 +2444,23 @@
     "run.compare_unsupported": "只能对比已结束的评估器运行：洞察任务和仍在运行的任务不能对比。",
     "run.not_found": "未找到该评估运行。",
     "run.rerun_unsupported": "只有数据集回放或时间窗的评估器运行可以再评一次。",
-    "dataset.not_found": "数据集已不存在，或你无权查看。"
+    "dataset.not_found": "数据集已不存在，或你无权查看。",
+    "context_layer.not_connected": "此工作区尚未连接 COA 上下文层。请管理员在上下文层页面连接。",
+    "context_layer.authorization_required": "请先授权 Launchpad 以你的身份读取 COA。",
+    "context_layer.forbidden": "COA 拒绝了此操作：你在 COA 中没有相应授权。",
+    "context_layer.reauthorize": "COA 不再接受你的授权，请重新授权。",
+    "context_layer.upstream": "COA 未正常响应，请稍后重试。",
+    "context_layer.referenced": "仍有 Agent 挂载上下文层，请先解除挂载。",
+    "context_layer.unsupported_method": "此 Agent 不能使用 COA 上下文层。",
+    "context_layer.not_found": "找不到对应前缀、环境和区域的 COA 部署。",
+    "context_layer.agent_oauth_disabled": "该 COA 部署没有 Agent OAuth 客户端。请先带上 agentOauthCallbackUrls 上下文部署 COA。",
+    "context_layer.cross_account": "COA 部署必须位于此工作区的 AWS 账号中。",
+    "context_layer.runtime_not_ready": "COA 运行时尚未就绪（READY）。",
+    "context_layer.discovery_failed": "Launchpad 无法读取该 COA 部署。",
+    "context_layer.connection_mismatch": "该出站凭证不是 COA 的 Agent OAuth 客户端。",
+    "context_layer.connection_not_found": "此工作区中没有该名称的 OAuth2 出站凭证。",
+    "context_layer.identity_failed": "AgentCore Identity 无法提供你的 COA 令牌。",
+    "context_layer.invalid_request": "前缀、环境或区域无效。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -8619,7 +8636,8 @@
       "confirmTitle": "撤销 {{connection}}？",
       "confirmBody_one": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
       "confirmBody_other": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
-      "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。"
+      "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。",
+      "contextLayerConsole": "上下文层（控制台）"
     },
     "runCoverage": {
       "tagTelemetry": "已完成 · {{scored}}/{{total}} 会话",
@@ -9335,6 +9353,93 @@
           "other": "其他",
           "overhead": "工作区开销（从不计入个人）"
         }
+      }
+    },
+    "contextLayer": {
+      "title": "上下文层",
+      "desc": "此工作区读取受治理上下文的 COA（Context Ontology Accelerator）部署。Agent 和本页面都以你的身份调用 COA，因此你能看到什么由 COA 的授权决定。",
+      "notConnected": "未连接",
+      "askAdmin": "此工作区尚未连接 COA 部署。请联系管理员连接。",
+      "deployment": "部署",
+      "openConsole": "打开 COA 控制台",
+      "region": "区域",
+      "connection": "出站凭证",
+      "apiEndpoint": "REST 端点",
+      "connectedBy": "连接人",
+      "updatedAt": "更新时间",
+      "callbackMissing": "Launchpad 的 OAuth 回调地址尚未登记到 COA 的 Agent 客户端，授权无法完成。请把它加入 COA 部署的 agentOauthCallbackUrls 上下文。",
+      "agentOauthOff": "该 COA 部署已没有 Agent OAuth 客户端。",
+      "myAuth": "我的授权",
+      "myAuthSub": "你授权一次后，Launchpad 才会以你的身份访问 COA。",
+      "agents": "使用它的 Agent",
+      "hiddenAgent": "你无权查看的 Agent",
+      "health": {
+        "mcp": "MCP 运行时",
+        "serve": "Serve 运行时",
+        "agentOauth": "Agent OAuth",
+        "callback": "回调已登记",
+        "unknown": "未知"
+      },
+      "connect": {
+        "intro": "按栈前缀、环境和区域指定 COA 部署，其余信息由 Launchpad 自动发现，并创建 OAuth2 出站凭证。",
+        "prefix": "栈前缀",
+        "prefixHint": "部署 COA 时使用的前缀，例如 coa-w2。",
+        "env": "环境",
+        "region": "COA 区域",
+        "regionHint": "可以与此工作区的区域不同。",
+        "connection": "已有出站凭证（可选）",
+        "connectionHint": "留空则创建 coa-<prefix>；也可以填写已持有 COA Agent 客户端的 OAuth2 出站凭证。",
+        "submit": "连接",
+        "reconnect": "重新连接",
+        "busy": "连接中…",
+        "done": "上下文层已连接。"
+      },
+      "disconnect": {
+        "action": "断开连接",
+        "title": "断开上下文层？",
+        "body": "断开后 Agent 无法再挂载它。出站凭证 {{connection}} 和控制台工作负载身份会保留，可在出站凭证页删除，或通过 teardown 删除。",
+        "done": "上下文层已断开。",
+        "refused": "仍有 Agent 挂载上下文层：{{agents}}。请先解除挂载。"
+      },
+      "auth": {
+        "none": "未授权",
+        "pending": "待完成",
+        "authorized": "已授权",
+        "revoked": "已撤销",
+        "authorize": "授权",
+        "reauthorize": "重新授权",
+        "waiting": "请在新标签页中完成 COA 登录…",
+        "open": "打开 COA 登录",
+        "revoke": "撤销",
+        "revokedToast": "已撤销。下次调用 COA 时会要求你重新登录。",
+        "myConnections": "我的授权",
+        "since": "授权于 {{at}}"
+      },
+      "namespaces": {
+        "title": "命名空间",
+        "sub": "COA 允许你查看的范围",
+        "needAuth": "请先授权，再列出 COA 允许你查看的命名空间。",
+        "empty": "COA 没有向你开放任何命名空间。",
+        "colName": "名称",
+        "colId": "ID",
+        "colStatus": "状态",
+        "colSources": "数据源"
+      },
+      "wizard": {
+        "title": "上下文层（COA）",
+        "sub": "受治理的指标、本体和文档，以对话者本人的身份读取",
+        "notConnected": "此 Agent 挂载了 COA 命名空间，但工作区尚未连接上下文层。",
+        "authHint": "只在从列表中选择时需要：Agent 会请每个人分别授权。",
+        "namespace": "命名空间",
+        "pickHint": "每个 Agent 一个命名空间，其 ID 会写入 Agent 的指令。",
+        "manualHint": "授权后可从你能看到的命名空间中选择，也可以直接粘贴命名空间 ID。",
+        "badId": "命名空间 ID 是 UUID。",
+        "none": "无",
+        "namePlaceholder": "显示名称（可选）",
+        "remove": "移除",
+        "module": "打开上下文层页面",
+        "noteHarness": "每轮对话都携带提问者本人的 COA 令牌；未授权时，对话中会先出现授权卡片。公开 /v1 API 无法调用此 Agent。",
+        "noteStrands": "Agent 会自行获取每位成员的 COA 令牌，每位成员在对话中授权一次即可。公开 /v1 API 无法调用此 Agent。"
       }
     }
   },

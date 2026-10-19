@@ -3187,6 +3187,47 @@ canvas and `protocol="a2a"`.
 teardown sweeps it by name together with its targets — see
 [teardown.md](teardown.md).
 
+## Context layer (COA)
+
+`/v2/context-layer` connects a workspace to one **COA** (Context Ontology
+Accelerator) deployment — a separately deployed product with governed metrics, an
+induced ontology, a document knowledge graph and access-controlled SQL over source
+data. Launchpad never deploys or tears COA down, and never creates COA users,
+grants or namespaces: authoring stays in the COA console (the page links to it;
+COA forbids framing). Everything is read **as the signed-in member**, so COA's
+per-user grants decide what an agent may see.
+
+- **Connect** (`services/context_layer.py`, admin): discovery reads SSM
+  `/<prefix>/*` and the `<prefix>-<env>-{api,web,auth}` stack outputs in the COA
+  region (`replace(workspace, region=…)`, which may differ from the workspace's),
+  refuses a cross-account deployment, a missing agent OAuth client or a runtime
+  that is not READY, then creates or adopts the OAuth2 Connection for COA's agent
+  client and ensures the console workload identity `launchpad-console-<workspace>`.
+  The `context_layers` row (one per workspace) holds identifiers only.
+- **Tokens** (`services/context_layer_tokens.py`): a member's COA token comes only
+  from the token vault, through the console workload identity, and lives only in
+  process memory and on requests to COA — the custody exception documented in
+  [identity.md](identity.md) §7.7.
+- **Agents** (`AgentSpec.context_layer = {namespace_id, namespace_name}`; pure
+  helpers in `templates/context_layer_support.py`):
+  - *Harness*: the deploy adds a prompt addendum (namespace id + tool guidance)
+    and no COA tool. Each console turn (`services/invoke.harness_turn_overrides`)
+    re-reads the deployed tools, appends a `remote_mcp` server `coa` pointing at
+    COA's MCP runtime with the member's bearer, and adds `@coa` to
+    `allowedTools`. No consent yet ⇒ the turn is an `auth_required` event and
+    InvokeHarness never runs.
+  - *Strands* (`zip_runtime`, HTTP): every deploy stage builds from
+    `context_layer.deploy_spec`, which expands the ref into one `as_user` MCP tool
+    on the layer's Connection plus the addendum — the template, the execution
+    role, the environment and the return-URL allow-list all read that one
+    expansion, and the stored spec keeps only the ref.
+  - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
+    COA-attached agent: none of them has a console user to act as.
+- **Module** (`routers/context_layer.py`): status (live runtime / callback /
+  agent-OAuth probes), the member's authorization (authorize / revoke) and the
+  namespaces COA lets them see (`services/context_layer_api.py`, COA REST as the
+  member). The browse pages, the playground and the attach action are a follow-up.
+
 ## The Memory console (console 05)
 
 `/memory` is a **read-only** window onto the shared `launchpad_memory` singleton

@@ -12,6 +12,7 @@ import type {
   ConnectionKind,
   ByocConfigInput,
   ByocPythonVersion,
+  ContextLayerRef,
   HarnessNativeTool,
   InboundAuth,
   Toolkit,
@@ -477,7 +478,48 @@ export interface AgentForm {
    */
   inbound?: InboundChoice;
   inboundJwt?: JwtFormState;
+  /**
+   * The COA context-layer namespace (harness + HTTP zip_runtime). Optional for the
+   * same reason as `inbound`: a form that does not own it (the classic wizard) omits
+   * `context_layer`, so a re-publish carries the stored ref; the V2 wizard always
+   * states it (`null` ⇒ none).
+   */
+  contextLayer?: ContextLayerChoice | null;
 }
+
+/** The namespace a form attaches; `namespaceName` is display-only. */
+export interface ContextLayerChoice {
+  namespaceId: string;
+  namespaceName: string;
+}
+
+/** COA namespace ids are UUIDs (the backend refuses anything else). */
+export const NAMESPACE_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Where a context layer can be wired: a Harness, or an HTTP Strands runtime. */
+export const contextLayerSupported = (form: Pick<AgentForm, "method" | "protocol">) =>
+  form.method === "harness" || (form.method === "zip_runtime" && form.protocol === "http");
+
+/** The spec's `context_layer`: omitted when the form does not own it, `null` when
+ *  nothing is attached (or the method cannot carry one), else the ref. */
+export function contextLayerSpec(form: AgentForm): Pick<AgentSpecInput, "context_layer"> {
+  if (form.contextLayer === undefined) return {};
+  const choice = form.contextLayer;
+  if (!choice || !contextLayerSupported(form) || !choice.namespaceId.trim()) return { context_layer: null };
+  return {
+    context_layer: {
+      namespace_id: choice.namespaceId.trim(),
+      ...(choice.namespaceName.trim() ? { namespace_name: choice.namespaceName.trim() } : {}),
+    },
+  };
+}
+
+/** A typed-in namespace id must be a UUID before the form can submit. */
+export const contextLayerValid = (form: AgentForm) =>
+  !form.contextLayer ||
+  !contextLayerSupported(form) ||
+  !form.contextLayer.namespaceId.trim() ||
+  NAMESPACE_ID_RE.test(form.contextLayer.namespaceId.trim());
 
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
 export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
@@ -523,6 +565,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   authTools: [],
   inbound: "inherit",
   inboundJwt: { ...EMPTY_JWT_FORM },
+  contextLayer: null,
 });
 
 /** Spec fields read back when an existing agent is loaded into the form. */
@@ -555,6 +598,7 @@ export interface StoredAgentSpec {
   network?: { subnets?: string[]; security_groups?: string[] };
   byoc?: ByocConfigInput;
   inbound_auth?: InboundAuth | null;
+  context_layer?: ContextLayerRef | null;
 }
 
 /** What a loaded agent contributes besides the form itself: the gateway configs and
@@ -636,6 +680,9 @@ export function formFromStoredSpec(
     });
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
+  form.contextLayer = spec.context_layer?.namespace_id
+    ? { namespaceId: spec.context_layer.namespace_id, namespaceName: spec.context_layer.namespace_name ?? "" }
+    : null;
   const inbound = choiceFromSpec(spec.inbound_auth);
   form.inbound = inbound.choice;
   form.inboundJwt = inbound.form;
@@ -838,6 +885,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
       ? { allowed_tools: form.allowedTools, native_tools: form.nativeTools }
       : {}),
     ...inboundAuthSpec(form),
+    ...contextLayerSpec(form),
     ...(method === "container" && form.mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
       : {}),
@@ -878,6 +926,7 @@ export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSp
 export const REPUBLISH_CARRIED_FIELDS = [
   "code",
   "code_bundle",
+  "context_layer", // the classic wizard has no context-layer input; the V2 form states it
   "conversion_notes",
   // the classic wizard has no inbound input; the V2 form states it (null ⇒ inherit)
   "inbound_auth",
@@ -1102,6 +1151,7 @@ export function agentFormValid(
 ): boolean {
   if (!authToolsValid(form, opts.connections)) return false;
   if (!inboundValid(form)) return false;
+  if (!contextLayerValid(form)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
   }

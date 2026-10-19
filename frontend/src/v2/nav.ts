@@ -13,6 +13,7 @@ import {
   LibraryBig,
   ListChecks,
   MessagesSquare,
+  Network,
   PlayCircle,
   Radar,
   ScrollText,
@@ -95,6 +96,8 @@ export const V2_NAV: V2NavGroup[] = [
         business: true,
         hintKey: "glossary.knowledgeBase",
       },
+      // expert mode only (D7): the COA context layer this workspace is connected to
+      { to: "/v2/context-layer", labelKey: "nav.contextLayer", icon: Network, v2: true },
     ],
   },
   {

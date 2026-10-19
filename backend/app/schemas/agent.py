@@ -5,11 +5,13 @@ from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.core.config import Settings, get_settings
 from app.schemas.attachments import AttachmentRequest
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
+from app.templates import context_layer_support
 
 # The BUILT-IN model of a spec submitted without a model_id. The live value is
 # settings.agent_default_model_id (env LAUNCHPAD_AGENT_DEFAULT_MODEL_ID, launchpad.yaml,
@@ -223,6 +225,20 @@ class KnowledgeBaseRef(BaseModel):
     kb_id: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9]+$")
     name: str = Field(default="", max_length=200)
     description: str = Field(default="", max_length=1000)
+
+
+class ContextLayerRef(BaseModel):
+    """One namespace of the workspace's connected COA context layer.
+
+    ``namespace_name`` is denormalized at selection time for the prompt and the
+    detail view; COA itself is addressed by ``namespace_id`` only. Which COA
+    deployment answers is the workspace's (``context_layers``), never the spec's.
+    """
+
+    namespace_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    namespace_name: str = Field(default="", max_length=256)
 
 
 class MemoryConfig(BaseModel):
@@ -561,6 +577,10 @@ class AgentSpec(BaseModel):
     protocol: Literal["http", "a2a"] = "http"
     # AgentCard skills served by the A2A server and published to the Registry
     a2a_skills: list[A2ASkill] = Field(default_factory=list, max_length=20)
+    # The COA namespace this agent reads governed context from, as the invoking
+    # member (harness + HTTP zip_runtime; see app/templates/context_layer_support.py).
+    # Omitted from the dump when unset, so every other stored spec keeps its shape.
+    context_layer: ContextLayerRef | None = Field(default=None, exclude_if=lambda v: v is None)
     # Bring-your-own-code settings — required iff method="byoc"
     byoc: ByocConfig | None = None
     # Inbound authentication of this agent's Runtime. None = inherit the
@@ -839,6 +859,37 @@ class AgentSpec(BaseModel):
             raise ValueError(
                 "knowledge_bases are not supported by protocol=a2a runtimes "
                 "(the A2A template carries no retrieval tool)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _context_layer_supported(self) -> "AgentSpec":
+        """Where a COA context layer can be wired: a Harness (per-request tools
+        override) or an HTTP Strands runtime rendered from the template (an as_user
+        MCP tool). Refused, not dropped, everywhere else."""
+        if self.context_layer is None:
+            return self
+        unsupported = None
+        if self.method not in context_layer_support.SUPPORTED_METHODS:
+            unsupported = (
+                f"the {self.method} method cannot attach a COA context layer — only "
+                "harness and zip_runtime agents can"
+            )
+        elif self.protocol != "http":
+            unsupported = "protocol=a2a runtimes cannot attach a COA context layer"
+        elif self.code or self.code_bundle:
+            unsupported = (
+                "a context layer cannot be combined with code/code_bundle — those specs "
+                "deploy their own source and never render the COA tool"
+            )
+        elif any(tool.name == context_layer_support.TOOL_NAME for tool in self.tools):
+            unsupported = (
+                f"tool name {context_layer_support.TOOL_NAME!r} is reserved for the COA "
+                "context layer"
+            )
+        if unsupported:
+            raise PydanticCustomError(
+                "context_layer.unsupported_method", unsupported, {"method": self.method}
             )
         return self
 

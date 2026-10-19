@@ -32,6 +32,7 @@ from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stag
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
+from app.services import context_layer as context_layer_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -469,8 +470,16 @@ def _method_requirements(spec: AgentSpec) -> list[str]:
     )
 
 
+def _deploy_spec(spec: dict[str, Any], workspace: WorkspaceContext) -> AgentSpec:
+    """The spec every stage builds from: the stored one, with an attached COA context
+    layer expanded into its as_user MCP tool + prompt addendum. One expansion feeds
+    the template, the execution role, the environment and the return-URL allow-list;
+    the stored spec (and its snapshots) keep only ``context_layer``."""
+    return context_layer_service.deploy_spec(spec, workspace.id)
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
-    spec = AgentSpec(**agent.spec)
+    spec = _deploy_spec(agent.spec, ctx.workspace)
     code, source = _generate_code(spec)
     requirements = _method_requirements(spec)
     ctx.scratch["code"] = code
@@ -487,7 +496,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         raise RuntimeError(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
-    spec = AgentSpec(**agent.spec)
+    spec = _deploy_spec(agent.spec, ctx.workspace)
     code = ctx.scratch.get("code") or _generate_code(spec)[0]
     requirements = ctx.scratch.get("requirements") or _method_requirements(spec)
 
@@ -525,7 +534,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
-    spec = AgentSpec(**agent.spec)
+    spec = _deploy_spec(agent.spec, ctx.workspace)
     role_arn, detail = agent_iam.provision_execution_role(
         agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
     )
@@ -547,7 +556,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
         def _kwargs() -> dict:
-            spec = AgentSpec(**row.spec)
+            spec = _deploy_spec(row.spec, ctx.workspace)
             environment = runtime_environment(spec, resources, agent_id=row.id)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
@@ -618,7 +627,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)
         detail = f"READY · {ready['agentRuntimeArn']}"
-        if not register_return_url_stage(client, AgentSpec(**row.spec), runtime_id, ctx.log):
+        if not register_return_url_stage(
+            client, _deploy_spec(row.spec, ctx.workspace), runtime_id, ctx.log
+        ):
             detail += f" · {RETURN_URL_WARNING}"
         return StageResult(detail=detail)
     finally:

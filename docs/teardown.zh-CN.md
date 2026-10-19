@@ -36,6 +36,7 @@ Agent 删除失败时可能遗留的孤儿角色：
 launchpad-gw / launchpad-kb-gw 的网关 target            # 网关的依赖方
    → 网关 launchpad-gw、launchpad-kb-gw                  # 按名称匹配；等待 target 从列表消失
       → 凭据提供方                                       # launchpad-office-facts-key（API key）、launchpad-gw-m2m（OAuth2）
+        → 控制台工作负载身份                              # launchpad-console-*（COA 上下文层）
          → 逐 Agent IAM 角色                             # launchpad-agent-* 且带 launchpad:agent-id 标签
             → AgentCore memory  (launchpad_memory-*)
                → AgentCore registry (launchpad-registry)   # 先删记录
@@ -71,6 +72,11 @@ uv run python ../scripts/teardown.py --yes        # 删除（网关层 → 凭�
   属于 CDK 栈，绝不会被匹配。每个逐 Agent 角色在创建时就带上了该标签，因此清扫也会
   列出你尚未删除的 Agent 的角色，而不只是 Agent 删除失败留下的孤儿角色。请先删除
   演示 Agent（第 1 节），并在确认前审阅 dry-run 输出。
+- 控制台工作负载身份 `launchpad-console-<workspace>` 是管理员连接 COA 部署时，COA 上下文层
+  创建的令牌库身份（`/v2/context-layer`，见 [identity.md](identity.md) §7.7）。所有带此名称
+  前缀的身份都会被清扫；runtime 自己的工作负载身份以 runtime 命名，绝不会被匹配。该层的
+  OAuth2 Connection（默认 `coa-<prefix>`）是普通的 Connection：先断开上下文层，再到出站凭证中
+  删除它。COA 本身是独立产品，绝不会被触及。
 - 已部署的 Agent runtime 与 Policy engine 属于演示资源（第 1 节），脚本不会触及；先删除
   你的演示 Agent 可让共享基础设施的清理保持干净。X-Ray Transaction Search 是账号级的
   共享可观测性设施，不在清理范围内。

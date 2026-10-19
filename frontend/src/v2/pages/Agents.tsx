@@ -9,6 +9,7 @@ import {
   type AgentInfo,
   type AgentVersionsInfo,
   api,
+  type ContextLayerRef,
   type DeploymentInfo,
   errorMessage,
   type InboundAuth,
@@ -594,6 +595,7 @@ function AgentDetail({ id }: { id: string }) {
   const spec = (agent.spec ?? {}) as Record<string, unknown>;
   const deployment = agent.deployments?.[0] ?? agent.deployment ?? null;
   const kbs = (spec.knowledge_bases as { kb_id: string; name: string }[] | undefined) ?? [];
+  const contextRef = spec.context_layer as ContextLayerRef | null | undefined;
   const source = spec.source_harness as { agent_name?: string } | undefined;
   const notes = (spec.conversion_notes as Record<string, string> | undefined) ?? {};
   const byoc = agent.method === "byoc" ? ((spec.byoc as ByocSummary | undefined) ?? null) : null;
@@ -729,6 +731,20 @@ function AgentDetail({ id }: { id: string }) {
           ) : (
             <span className="v2-muted">—</span>
           )}
+        </Card>
+      )}
+      {contextRef?.namespace_id && (
+        <Card title={t("v2.contextLayer.wizard.title")} testId="v2-agent-context-layer">
+          <Descriptions
+            items={[
+              { label: t("v2.contextLayer.wizard.namespace"), value: contextRef.namespace_name || "—" },
+              { label: t("v2.contextLayer.namespaces.colId"), value: <span className="mono">{contextRef.namespace_id}</span> },
+              {
+                label: t("v2.contextLayer.title"),
+                value: <Link to="/v2/context-layer">{t("v2.contextLayer.wizard.module")}</Link>,
+              },
+            ]}
+          />
         </Card>
       )}
       {kbs.length > 0 && (

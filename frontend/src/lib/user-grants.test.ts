@@ -6,6 +6,7 @@ import {
   AUTH_POLL_MS,
   authCardView,
   effectiveStatus,
+  isConsoleGrant,
   liveAuthAsk,
   pollGrant,
   restoredAuthAsk,
@@ -224,12 +225,33 @@ describe("revoke", () => {
   });
 });
 
+describe("the COA console grant", () => {
+  it("is the grant with no agent and the context_layer tool only", () => {
+    expect(isConsoleGrant({ agent_id: "", tool: "context_layer" })).toBe(true);
+    expect(isConsoleGrant({ agent_id: "a1", tool: "context_layer" })).toBe(false);
+    expect(isConsoleGrant({ agent_id: "", tool: "calendar" })).toBe(false);
+  });
+});
+
 describe("/auth/return params", () => {
   it("reads the session uri and the customState way back", () => {
     const state = JSON.stringify({ agent_id: "a1", tool: "calendar", session_id: "s1" });
     const ret = parseReturnParams(`?session_id=urn%3Asess&state=${encodeURIComponent(state)}`);
-    expect(ret).toEqual({ sessionUri: "urn:sess", agentId: "a1", tool: "calendar", chatSession: "s1" });
+    expect(ret).toEqual({
+      sessionUri: "urn:sess", agentId: "a1", tool: "calendar", chatSession: "s1", kind: null,
+    });
     expect(chatPathFor(ret)).toBe("/v2/chat?agent=a1&session=s1");
+  });
+
+  it("sends a Context Layer consent back to that page, a Chat-started one to its chat", () => {
+    const module = JSON.stringify({ kind: "context_layer", tool: "context_layer" });
+    const ret = parseReturnParams(`?session_id=urn%3Asess&state=${encodeURIComponent(module)}`);
+    expect(ret.kind).toBe("context_layer");
+    expect(chatPathFor(ret)).toBe("/v2/context-layer");
+    const chat = JSON.stringify({ agent_id: "h1", tool: "context_layer", session_id: "s9" });
+    expect(chatPathFor(parseReturnParams(`?state=${encodeURIComponent(chat)}`))).toBe(
+      "/v2/chat?agent=h1&session=s9",
+    );
   });
 
   it("survives a missing or mangled state", () => {
@@ -238,6 +260,7 @@ describe("/auth/return params", () => {
       agentId: null,
       tool: null,
       chatSession: null,
+      kind: null,
     });
     expect(parseReturnParams("").sessionUri).toBeNull();
     expect(chatPathFor(parseReturnParams(""))).toBe("/v2/chat");

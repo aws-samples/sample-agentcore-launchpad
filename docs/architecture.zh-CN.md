@@ -1774,6 +1774,37 @@ ingestion 失败时才暴露。
 `launchpad-kb-gw` 属于「引导邻接」而非引导创建，因此拆除脚本按名字连同它的目标一起
 清扫——见 [teardown.zh-CN.md](teardown.zh-CN.md)。
 
+## 上下文层（COA）
+
+`/v2/context-layer` 把工作区连接到一个 **COA**（Context Ontology Accelerator）部署——一个
+独立部署的产品，提供受治理的指标、归纳出的本体、文档知识图谱，以及对源数据受访问控制的
+SQL。Launchpad 从不部署或销毁 COA，也从不创建 COA 用户、授权或命名空间：编写工作留在 COA
+控制台（页面提供跳转链接；COA 禁止被内嵌）。所有读取都**以当前登录成员的身份**进行，因此
+Agent 能看到什么由 COA 的逐用户授权决定。
+
+- **连接**（`services/context_layer.py`，管理员）：在 COA 区域（`replace(workspace,
+  region=…)`，可与工作区区域不同）读取 SSM `/<prefix>/*` 和 `<prefix>-<env>-{api,web,auth}`
+  栈输出；拒绝跨账号部署、缺少 Agent OAuth 客户端或运行时未 READY 的情况；然后为 COA 的
+  Agent 客户端创建或采用 OAuth2 Connection，并确保控制台工作负载身份
+  `launchpad-console-<workspace>`。`context_layers` 行（每个工作区一行）只存标识。
+- **令牌**（`services/context_layer_tokens.py`）：成员的 COA 令牌只来自令牌库，经由控制台
+  工作负载身份获取，只存在于进程内存和发往 COA 的请求中——即
+  [identity.md](identity.md) §7.7 记录的托管例外。
+- **Agent**（`AgentSpec.context_layer = {namespace_id, namespace_name}`；纯函数在
+  `templates/context_layer_support.py`）：
+  - *Harness*：部署时只追加一段提示词（命名空间 id 与工具指引），不部署 COA 工具。每轮控制台
+    对话（`services/invoke.harness_turn_overrides`）重新读取已部署的工具，追加一个指向 COA
+    MCP 运行时、携带成员 bearer 的 `remote_mcp` 服务 `coa`，并在 `allowedTools` 中加入
+    `@coa`。尚未授权时，该轮就是一个 `auth_required` 事件，InvokeHarness 不会执行。
+  - *Strands*（HTTP `zip_runtime`）：每个部署阶段都基于 `context_layer.deploy_spec` 构建，它把
+    引用展开为该层 Connection 上的一个 `as_user` MCP 工具并追加提示词——模板、执行角色、
+    环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。
+  - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
+    的控制台用户。
+- **模块**（`routers/context_layer.py`）：状态（实时运行时／回调／Agent OAuth 探测）、成员
+  本人的授权（授权／撤销），以及 COA 允许其查看的命名空间（`services/context_layer_api.py`，
+  以成员身份调用 COA REST）。浏览页面、Playground 与挂载操作是后续工作。
+
 ## 记忆控制台(控制台 05)
 
 `/memory` 是共享 `launchpad_memory` 单例的**只读**视图

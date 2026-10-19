@@ -118,7 +118,8 @@
     "videos": "Video introductions",
     "announcements": "Announcements",
     "connections": "Outbound credentials",
-    "myConnections": "My authorizations"
+    "myConnections": "My authorizations",
+    "contextLayer": "Context layer"
   },
   "videos": {
     "kicker": "// LEARN",
@@ -2443,7 +2444,23 @@
     "run.compare_unsupported": "Only finished evaluator runs can be compared: insights runs and runs still in progress cannot.",
     "run.not_found": "Evaluation run not found.",
     "run.rerun_unsupported": "Only a dataset replay or a time-window evaluator run can be evaluated again.",
-    "dataset.not_found": "The dataset no longer exists, or you cannot see it."
+    "dataset.not_found": "The dataset no longer exists, or you cannot see it.",
+    "context_layer.not_connected": "This workspace has no connected COA context layer. An administrator connects one on the Context layer page.",
+    "context_layer.authorization_required": "Authorize Launchpad to read COA as you first.",
+    "context_layer.forbidden": "COA refused this: you have no grant for it in COA.",
+    "context_layer.reauthorize": "COA no longer accepts your authorization. Authorize again.",
+    "context_layer.upstream": "COA did not answer correctly. Try again later.",
+    "context_layer.referenced": "Agents still attach the context layer. Detach it from them first.",
+    "context_layer.unsupported_method": "This agent cannot use a COA context layer.",
+    "context_layer.not_found": "No COA deployment was found with this prefix, env and region.",
+    "context_layer.agent_oauth_disabled": "The COA deployment has no agent OAuth client. Deploy COA with the agentOauthCallbackUrls context first.",
+    "context_layer.cross_account": "The COA deployment must be in this workspace's AWS account.",
+    "context_layer.runtime_not_ready": "A COA runtime is not READY yet.",
+    "context_layer.discovery_failed": "Launchpad could not read the COA deployment.",
+    "context_layer.connection_mismatch": "That Connection does not hold the COA agent OAuth client.",
+    "context_layer.connection_not_found": "No OAuth2 Connection with that name exists in this workspace.",
+    "context_layer.identity_failed": "AgentCore Identity could not provide your COA token.",
+    "context_layer.invalid_request": "The prefix, env or region is not valid."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -8619,7 +8636,8 @@
       "confirmTitle": "Revoke {{connection}}?",
       "confirmBody_one": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grant listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
       "confirmBody_other": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grants listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
-      "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them."
+      "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them.",
+      "contextLayerConsole": "Context layer (console)"
     },
     "runCoverage": {
       "tagTelemetry": "Completed · {{scored}}/{{total}} sessions",
@@ -9335,6 +9353,93 @@
           "other": "Other",
           "overhead": "Workspace overhead (never charged to people)"
         }
+      }
+    },
+    "contextLayer": {
+      "title": "Context layer",
+      "desc": "The COA (Context Ontology Accelerator) deployment this workspace reads governed context from. Agents and this page call COA as you, so COA's grants decide what you see.",
+      "notConnected": "Not connected",
+      "askAdmin": "No COA deployment is connected to this workspace. Ask an administrator to connect one.",
+      "deployment": "Deployment",
+      "openConsole": "Open COA console",
+      "region": "Region",
+      "connection": "Connection",
+      "apiEndpoint": "REST endpoint",
+      "connectedBy": "Connected by",
+      "updatedAt": "Updated",
+      "callbackMissing": "Launchpad's OAuth callback is not registered on the COA agent client, so consent cannot finish. Add it to the agentOauthCallbackUrls context of COA's deploy.",
+      "agentOauthOff": "The COA deployment no longer has its agent OAuth client.",
+      "myAuth": "My authorization",
+      "myAuthSub": "Launchpad acts as you in COA only after you authorize it once.",
+      "agents": "Agents using it",
+      "hiddenAgent": "an agent you cannot see",
+      "health": {
+        "mcp": "MCP runtime",
+        "serve": "Serve runtime",
+        "agentOauth": "Agent OAuth",
+        "callback": "Callback registered",
+        "unknown": "Unknown"
+      },
+      "connect": {
+        "intro": "Name the COA deployment by its stack prefix, env and region. Launchpad discovers everything else and creates the OAuth2 Connection.",
+        "prefix": "Stack prefix",
+        "prefixHint": "The prefix COA was deployed with, e.g. coa-w2.",
+        "env": "Env",
+        "region": "COA region",
+        "regionHint": "It may differ from this workspace's region.",
+        "connection": "Existing Connection (optional)",
+        "connectionHint": "Leave empty to create coa-<prefix>, or name an OAuth2 Connection that already holds the COA agent client.",
+        "submit": "Connect",
+        "reconnect": "Re-connect",
+        "busy": "Connecting…",
+        "done": "Context layer connected."
+      },
+      "disconnect": {
+        "action": "Disconnect",
+        "title": "Disconnect the context layer?",
+        "body": "Agents can no longer attach it. The Connection {{connection}} and the console workload identity stay, and can be deleted under Outbound credentials or by teardown.",
+        "done": "Context layer disconnected.",
+        "refused": "Agents still attach the context layer: {{agents}}. Detach it from them first."
+      },
+      "auth": {
+        "none": "Not authorized",
+        "pending": "Pending",
+        "authorized": "Authorized",
+        "revoked": "Revoked",
+        "authorize": "Authorize",
+        "reauthorize": "Authorize again",
+        "waiting": "Finish signing in to COA in the new tab…",
+        "open": "Open COA sign-in",
+        "revoke": "Revoke",
+        "revokedToast": "Revoked. The next COA call asks you to sign in again.",
+        "myConnections": "My authorizations",
+        "since": "Authorized at {{at}}"
+      },
+      "namespaces": {
+        "title": "Namespaces",
+        "sub": "What COA lets you see",
+        "needAuth": "Authorize first to list the namespaces COA lets you see.",
+        "empty": "COA shows you no namespace.",
+        "colName": "Name",
+        "colId": "ID",
+        "colStatus": "Status",
+        "colSources": "Sources"
+      },
+      "wizard": {
+        "title": "Context layer (COA)",
+        "sub": "Governed metrics, ontology and documents, read as whoever chats with the agent",
+        "notConnected": "This agent attaches a COA namespace, but the workspace has no connected context layer.",
+        "authHint": "Only needed to pick from a list: the agent asks each person for their own authorization.",
+        "namespace": "Namespace",
+        "pickHint": "One namespace per agent. Its id goes into the agent's instructions.",
+        "manualHint": "Authorize to pick from the namespaces you can see, or paste a namespace id.",
+        "badId": "A namespace id is a UUID.",
+        "none": "None",
+        "namePlaceholder": "Display name (optional)",
+        "remove": "Remove",
+        "module": "Open the Context layer page",
+        "noteHarness": "Each chat turn carries the asking member's COA token. Without their authorization, Chat shows a consent card first. The public /v1 API cannot call this agent.",
+        "noteStrands": "The agent fetches each member's COA token itself. Each member authorizes it once in Chat. The public /v1 API cannot call this agent."
       }
     }
   },
