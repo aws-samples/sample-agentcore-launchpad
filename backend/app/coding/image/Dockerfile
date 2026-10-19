@@ -9,10 +9,11 @@ FROM public.ecr.aws/docker/library/node:22-bookworm-slim
 
 # git: the project repo + per-turn baselines; python3: export zips, and what most
 # agents are written in; tar/procps/curl: snapshots, diagnostics, the agent's
-# own smoke tests (curl localhost:8080).
+# own smoke tests (on a port other than 8080, which this server holds). python-is-python3:
+# agents reach for `python` first; without it every first test run fails.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git ca-certificates curl python3 python3-venv procps tar ripgrep \
+      git ca-certificates curl python3 python3-venv python-is-python3 procps tar ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 # uv / uvx: Python envs for the projects, and the Toolkit's aws-mcp proxy.

@@ -14,8 +14,11 @@ a `Dockerfile` sits at the project root, and `code_zip` otherwise.
 
 Both shapes must follow these rules:
 
-- **Serve HTTP on port 8080**, with `POST /invocations` and `GET /ping`. `/ping` answers
-  `200` with `{"status": "Healthy"}`.
+- **Serve HTTP on port 8080** when deployed, with `POST /invocations` and `GET /ping`.
+  `/ping` answers `200` with `{"status": "Healthy"}`. Read the port from the `PORT`
+  environment variable with 8080 as the default: **port 8080 inside this workspace is
+  already taken by the coding runtime you are running in**, so local tests must use
+  another port (e.g. `PORT=9080`).
 - **Request body:** `POST /invocations` receives JSON:
   `{"prompt": "<user message>", "actor_id": "<user id>"}`. Ignore any field you do not
   use; more may appear.
@@ -37,7 +40,8 @@ Both shapes must follow these rules:
       return {"result": f"you said: {payload.get('prompt', '')}"}
 
   if __name__ == "__main__":
-      app.run()
+      import os
+      app.run(port=int(os.environ.get("PORT", "8080")))
   ```
 - **Models:** call Amazon Bedrock with the model id in the env var `MODEL_ID`. The
   agent's role may call only the models in `ALLOWED_MODEL_IDS` (a comma-separated
@@ -89,12 +93,13 @@ Both shapes must follow these rules:
   to S3 and deployed as-is.
 - **Commands run without approval** and the user can interrupt you. Prefer short,
   bounded commands. Do not start servers that run forever. Start them in the
-  background and stop them when you are done (for example
-  `python main.py & sleep 3; curl -s localhost:8080/ping; kill %1`).
+  background on a port other than 8080 and stop them when you are done (for example
+  `PORT=9080 python3 main.py & sleep 3; curl -s localhost:9080/ping; kill %1`).
+  Never send requests to `localhost:8080`: that is the coding runtime itself.
 - **Test locally before you say you are done:**
 
   ```bash
-  curl -s -X POST localhost:8080/invocations \
+  curl -s -X POST localhost:9080/invocations \
     -H 'content-type: application/json' \
     -d '{"prompt": "hello", "actor_id": "test"}'
   ```
