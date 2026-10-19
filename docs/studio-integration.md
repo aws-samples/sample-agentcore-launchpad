@@ -63,13 +63,20 @@ agent then appears in the platform launch feed with a `STUDIO` method chip.
 `backend/app/templates/studio_agent/adapt_studio_code()` converts the studio
 script into an AgentCore module **without rewriting user code**:
 
-1. If the code already contains `@app.entrypoint`, it is used as-is.
-2. Otherwise the module is kept **verbatim** (imports, MCP clients, model
+1. Tools the platform no longer packages are stripped first. Canvas code
+   generated before `0b380650` (2026-08-10) imports `strands_tools.mem0_memory`,
+   whose `mem0` extra the package stage stopped installing, so a rebuild (redeploy,
+   canary mint or rollback) would die at import behind a generic 30 s init
+   timeout. The name is dropped from the generator's one-line `strands_tools`
+   import and from any list literal (`tools=[…]`); string literals are never
+   touched. This edits generator-owned lines only, never user-written code.
+2. If the code already contains `@app.entrypoint`, it is used as-is.
+3. Otherwise the module is kept **verbatim** (imports, MCP clients, model
    config, `async def main(...)`), the trailing argparse `__main__` block is
    cut, and a `BedrockAgentCoreApp` entrypoint is appended that calls `main()`
    (arity-probed: `main()`, `main(user_input)`, or `main(user_input, messages)`)
    and captures its streamed stdout as the result.
-3. The platform config-bundle shim (`launchpad_config_bundle()`) is injected
+4. The platform config-bundle shim (`launchpad_config_bundle()`) is injected
    unless the code already reads `get_config_bundle` — studio authors can call
    it to opt into A/B config bundles (system prompt overrides are never forced
    onto arbitrary user code).
@@ -80,7 +87,7 @@ client definitions.
 
 Requirements added on top of the studio code: the platform zip baseline
 (`strands-agents[otel]`, `bedrock-agentcore`, `aws-opentelemetry-distro` for
-ADOT traces) plus `strands-agents-tools[mem0_memory]`, which studio's
+ADOT traces) plus `strands-agents-tools` (no extras), which studio's
 generated import line always references. When any node uses the **OpenAI** or
 **Amazon Bedrock (Mantle)** provider, `CreateAgentStudio.tsx` adds
 `strands-agents[openai]` to `spec.requirements` — both providers import
@@ -200,7 +207,7 @@ Publish body assembled by `CreateAgentStudio.tsx`:
 | `method` | `"studio"` | fixed |
 | `system_prompt` | execution agent's systemPrompt (the agent/orchestrator/swarm reached from the input node), fallback `"Strands Studio generated agent"` | trimmed to 20000; doubles as the registry A2A card description |
 | `code` | `imports + '\n\n' + code` | ≤ 200000 chars (client-checked; schema max) |
-| `requirements` | `["strands-agents[openai]"]` iff any node `data.modelProvider` is `'OpenAI'` or `'Amazon Bedrock (Mantle)'`, else omitted | base reqs + mem0 extra come from the backend, never sent by the client |
+| `requirements` | `["strands-agents[openai]"]` iff any node `data.modelProvider` is `'OpenAI'` or `'Amazon Bedrock (Mantle)'`, else omitted | base reqs + `strands-agents-tools` come from the backend, never sent by the client |
 | `env` | `{OPENAI_API_KEY?, BEDROCK_API_KEY?}` — first non-empty `apiKey` per provider; omitted when empty (the Mantle default sets nothing — it authenticates with IAM) | passed to the runtime as `environmentVariables`; platform keys win same-named conflicts |
 | `memory` | `{short_term: false, long_term: false}` | generated code manages no launchpad memory |
 | `studio_flow` | `{nodes, edges, graphMode}` (React Flow arrays verbatim) | round-trips into edit mode; carries skill nodes for the package-stage bundler |
@@ -262,10 +269,13 @@ tsc-checked). Current baseline: **PR #31**, merge `69318ab`. The `@/lib/models`
 alias is the only path rewrite → relative `./models`. Local edits are tracked
 in a TWO-CLASS LEDGER — re-apply ALL of it on every upstream re-sync:
 
-**Deviations** (restore upstream behavior we keep): `file_write` +
-`mem0_memory` in both generators' static `strands_tools` import line AND tool
-map — upstream drops both (silent `calculator` fallback); launchpad keeps them
-so saved graphs' tool nodes don't downgrade.
+**Deviations** (restore upstream behavior we keep): `file_write` in both
+generators' static `strands_tools` import line AND tool map — upstream drops it
+(silent `calculator` fallback); launchpad keeps it so saved graphs' tool nodes
+don't downgrade. `mem0_memory` was kept the same way until `0b380650`
+(2026-08-10) and is now gone from both generators; a saved `mem0_memory` tool
+node regenerates as `calculator`, and code published before then is cleaned up
+by the adapter (see Artifact adaptation).
 
 **Extensions** (launchpad-only features, every block comment-marked
 `// launchpad extension:` in the generators; grep for that marker to relocate
@@ -290,8 +300,8 @@ Node components must preserve every React Flow Handle `id`/`type`/`Position`
 and every node `data` key + destructuring default — the generators read them.
 Styling is launchpad CSS tokens only (namespaced `studio.css`); no Tailwind.
 
-上游库文件的本地改动采用**两级台账**:偏差(`file_write`/`mem0_memory` 工具映射,
-上游移除、launchpad 保留)与扩展(生成器中全部以 `// launchpad extension:` 注释
+上游库文件的本地改动采用**两级台账**:偏差(`file_write` 工具映射,
+上游移除、launchpad 保留;`mem0_memory` 已于 2026-08-10 移除)与扩展(生成器中全部以 `// launchpad extension:` 注释
 标记:`cacheSystem`→`cache_prompt` 系统缓存、Bedrock `output_config.effort`
 推理档位(xhigh 仅 Sonnet 5/Opus 4.8,其余钳制为 high)、max_tokens 32000 默认
 + Nova 钳制(Pro 10000/Premier 32000)、streaming 默认开、aws-knowledge MCP
@@ -304,7 +314,7 @@ from upstream PR #31's conversation/fix subsystems; task
 `07-11-studio-local-debug-and-defaults`):
 
 - **Exec env**: `scripts/setup_exec_env.sh` provisions `data/exec-venv`
-  (strands-agents[openai] **≥1.47** + strands-agents-tools[mem0_memory] + mcp +
+  (strands-agents[openai] **≥1.47** + strands-agents-tools + mcp +
   bedrock-agentcore). Settings: `studio_exec_python` (both run and chat spawn
   THIS interpreter — upstream's `sys.executable` vs `uv run` split is
   deliberately unified), `execute_timeout_s` (300). The control-plane backend
