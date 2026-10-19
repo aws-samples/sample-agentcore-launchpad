@@ -174,7 +174,10 @@ aarch64、glibc 2.34,因此最高可加载 `manylinux_2_34` 的 wheel;官方文�
 `manylinux2014` 的完整标签阶梯。
 
 调用方提供的 `spec.requirements` 还会在 **schema** 校验阶段被要求固定版本
-(`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
+（`app/schemas/requirements.py`），因此控制台会在构建启动前就拒掉范围写法。每项必须是单行 ASCII，
+不含控制字符，也不能带以 `-` 开头的环境标记；检查发生在剥离标记之前，防止合法的固定版本后面藏有
+`--index-url` 等第二行 requirements 文件内容。固定版本解析和 lock 编译在写入输入文件前也会重复
+检查，覆盖旧版已存储的 spec。平台自带的
 清单保留范围——`MANTLE_EXTRA_REQUIREMENTS` 的注释解释了 pip 本就应当对同一个项目的两条
 规格求交集——可复现性由 lock 提供。Harness 转换是平台唯一一处从别处派生依赖的地方(源
 Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。它还会把这些

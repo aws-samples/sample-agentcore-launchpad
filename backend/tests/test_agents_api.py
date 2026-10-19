@@ -97,6 +97,44 @@ def test_invalid_spec_envelope(client):
     assert res.json()["code"] == "validation.invalid_request"
 
 
+@pytest.mark.parametrize("method", ["zip_runtime", "studio"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        'six==1.16.0; python_version>"3"\n--index-url http://127.0.0.1:9/simple',
+        "six==1.16.0\r\n--extra-index-url http://127.0.0.1:9/simple",
+        'six==1.16.0; python_version>"3"\x85-i x',
+        'six==1.16.0; python_version>"3"\u2028-i x',
+        "six==1.16.0;-i x",
+        "six==1.16.0; --extra-index-url x",
+    ],
+)
+def test_requirement_injection_is_422_on_create_and_redeploy(
+    client, no_real_deploy, method, entry
+):
+    spec = {**SPEC, "method": method}
+    injected = {**spec, "requirements": [entry]}
+    rejected = client.post("/api/agents", json=injected)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["code"] == "validation.invalid_request"
+    assert no_real_deploy == []
+    with SessionLocal() as db:
+        assert db.query(Agent).count() == 0
+
+    created = client.post("/api/agents", json=spec).json()
+    agent_id = created["agent"]["id"]
+    _activate(agent_id)
+    before = client.get(f"/api/agents/{agent_id}").json()
+    rejected = client.post(f"/api/agents/{agent_id}/redeploy", json=injected)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["code"] == "validation.invalid_request"
+    assert no_real_deploy == [created["job_id"]]
+    after = client.get(f"/api/agents/{agent_id}").json()
+    assert after["spec"] == before["spec"]
+    assert after["status"] == "active"
+    assert after["deployments"] == before["deployments"]
+
+
 def test_invoke_requires_active(client):
     agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
     res = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "hi"})

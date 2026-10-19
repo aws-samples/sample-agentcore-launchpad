@@ -31,7 +31,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.schemas.requirements import reresolve_inputs, resolve_pins
+from app.schemas.requirements import assert_safe_requirement_lines, reresolve_inputs, resolve_pins
 from app.services import agent_iam
 from app.services import context_layer as context_layer_service
 from app.services import inbound_auth as inbound_auth_service
@@ -96,6 +96,7 @@ def _compile_lock(
     Deliberately no fallback: if the resolve fails, the stage fails. A supply-chain
     control that silently reverts to the unchecked install is decoration.
     """
+    assert_safe_requirement_lines(requirements)
     declared = build_dir / "requirements.in"
     lock = build_dir / LOCK_FILENAME
     declared.write_text("\n".join(requirements) + "\n", encoding="utf-8")

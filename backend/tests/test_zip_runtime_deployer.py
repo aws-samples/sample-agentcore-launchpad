@@ -7,6 +7,7 @@ import pytest
 
 from app.deployer.environment import runtime_environment
 from app.deployer.zip_runtime import (
+    _compile_lock,
     _method_requirements,
     build_zip,
     platform_requirements,
@@ -98,6 +99,27 @@ def test_build_zip_reports_the_locked_package_count(tmp_path: Path):
         on_lock_ready=seen.append,
     )
     assert seen == [2]  # FAKE_LOCK pins two packages
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        'a==1.0; python_version > "3"\n--index-url x',
+        "a==1.0\r\n--extra-index-url x",
+        "a==1.0\x85-i x",
+        "a==1.0\u2028-i x",
+        "a==1.0\u2029-i x",
+        "a==1.0;-i x",
+    ],
+)
+def test_compile_lock_refuses_unsafe_entries_before_writing_or_running(tmp_path, entry):
+    def explode(*args, **kwargs):
+        pytest.fail("unsafe requirements reached the lock compiler")
+
+    with pytest.raises(ValueError, match="single ASCII lines"):
+        _compile_lock(["platform-package>=1,<2", entry], tmp_path, explode)
+    assert not (tmp_path / "requirements.in").exists()
+    assert not (tmp_path / "requirements.lock").exists()
 
 
 def test_build_zip_fails_when_the_resolve_fails(tmp_path: Path):

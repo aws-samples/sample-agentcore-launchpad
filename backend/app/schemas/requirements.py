@@ -14,7 +14,8 @@ What counts as pinned:
 
 Everything else is refused — including `>=`, `~=`, `<`, `!=`, `==1.2.*`, a bare
 name, and a VCS ref pointing at a branch or tag, all of which resolve differently
-over time.
+over time. Entries must also be single ASCII lines without control characters or
+option-like markers: a pin must not smuggle requirements-file options into a build.
 
 Deliberately **not** applied to the platform's own requirement lists
 (`base_requirements()`, `STUDIO_EXTRA_REQUIREMENTS`, `MANTLE_EXTRA_REQUIREMENTS`,
@@ -46,11 +47,35 @@ _PINNED_RE = re.compile(
 )
 
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 REQUIRED_FORM = (
     "pin it as name==version (e.g. requests==2.32.3), a direct URL carrying "
     "#sha256=<hash>, or pkg @ git+https://host/repo@<full 40-character commit>"
 )
+
+
+def _is_safe_requirement_line(entry: str) -> bool:
+    """Check the entire entry before stripping a marker or any whitespace.
+
+    ASCII excludes NEL and Unicode line separators as well as non-ASCII spaces;
+    the control check excludes newlines, carriage returns and tabs. Otherwise a
+    single list element could become multiple requirements-file lines.
+    """
+    if not entry.isascii() or _CONTROL_RE.search(entry):
+        return False
+    return not entry.partition(";")[2].lstrip().startswith("-")
+
+
+def assert_safe_requirement_lines(entries: list[str]) -> None:
+    """Refuse unsafe compiler input, including inputs loaded from older specs."""
+    bad = [entry for entry in entries if not _is_safe_requirement_line(entry)]
+    if bad:
+        listed = ", ".join(repr(entry) for entry in bad)
+        raise ValueError(
+            "requirements must be single ASCII lines without control characters "
+            f"or pip option markers: {listed}"
+        )
 
 
 def _strip_marker(entry: str) -> str:
@@ -78,6 +103,8 @@ def _is_pinned_vcs(candidate: str) -> bool:
 
 def is_pinned(entry: str) -> bool:
     """Whether one requirement line names exactly one immutable artifact."""
+    if not _is_safe_requirement_line(entry):
+        return False
     candidate = _strip_marker(entry)
     if not candidate:
         return False
@@ -97,6 +124,7 @@ def unpinned(entries: list[str]) -> list[str]:
 
 def assert_all_pinned(entries: list[str]) -> None:
     """Raise `ValueError` naming every offending entry and the required form."""
+    assert_safe_requirement_lines(entries)
     loose = unpinned(entries)
     if not loose:
         return
@@ -176,6 +204,7 @@ def resolve_pins(
     which would silently change what gets installed, so extras are re-attached here
     from the input.
     """
+    assert_safe_requirement_lines([*platform, *entries])
     loose = [entry for entry in entries if not is_pinned(entry) and _strip_marker(entry)]
     if not loose:
         return list(entries)
@@ -269,7 +298,6 @@ _PLAIN_RANGE_RE = re.compile(
     \s*$""",
     re.VERBOSE,
 )
-_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def is_plain_range(entry: str) -> bool:
@@ -286,8 +314,7 @@ def is_plain_range(entry: str) -> bool:
     if (
         not entry
         or len(entry) > MAX_RANGE_LENGTH
-        or not entry.isascii()
-        or _CONTROL_RE.search(entry)
+        or not _is_safe_requirement_line(entry)
     ):
         return False
     if re.search(r"\s-", entry):

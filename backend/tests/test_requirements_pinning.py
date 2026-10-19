@@ -27,6 +27,8 @@ PINNED = [
     "strands-agents[otel]==1.47.0",
     "strands-agents[otel,openai]==1.47.0",
     "pydantic==2.13.4 ; python_version >= '3.12'",
+    'some-pkg==1.0 ; python_version >= "3.10"',
+    'some-pkg==1.0 ; sys_platform != "win32"',
     "some-pkg==1.0.0rc1",
     "some-pkg==1.0.0.post1",
     "some-pkg==1!2.0.0",
@@ -51,6 +53,21 @@ UNPINNED = [
     "",
 ]
 
+UNSAFE_REQUIREMENTS = [
+    "a==1.0; m\n-i x",
+    "a==1.0\r\n--extra-index-url x",
+    'a==1.0; python_version > "3"\x85--index-url x',
+    'a==1.0; python_version > "3"\u2028--index-url x',
+    'a==1.0; python_version > "3"\u2029--index-url x',
+    "a==1.0;-i x",
+    "a==1.0; --extra-index-url x",
+    "\na==1.0",
+    "a==1.0\n",
+    "a[\nextra]==1.0",
+    "pkg @ https://example.com/pkg.whl#sha256=" + "a" * 64 + "; m\n-i x",
+    "pkg @ git+https://github.com/o/r@" + "0" * 40 + ";-i x",
+]
+
 
 class TestIsPinned:
     @pytest.mark.parametrize("entry", PINNED)
@@ -60,6 +77,18 @@ class TestIsPinned:
     @pytest.mark.parametrize("entry", UNPINNED)
     def test_rejects(self, entry):
         assert is_pinned(entry) is False, entry
+
+    @pytest.mark.parametrize("entry", UNSAFE_REQUIREMENTS)
+    def test_rejects_requirements_file_injection(self, entry):
+        assert not is_pinned(entry)
+        with pytest.raises(ValueError):
+            _spec(requirements=[entry])
+
+    @pytest.mark.parametrize(
+        "control", [chr(code) for code in range(32)] + ["\x7f", "\x85", "\u2028", "\u2029"]
+    )
+    def test_checks_control_characters_before_stripping_the_marker(self, control):
+        assert not is_pinned(f'a==1.0; python_version > "3"{control}')
 
     def test_unpinned_preserves_input_order(self):
         assert unpinned(["a==1", "b", "c==2", "d>=1"]) == ["b", "d>=1"]
@@ -151,6 +180,16 @@ class TestResolvePins:
             "a==1.0.0",
             "b==2.0.0",
         ]
+
+    @pytest.mark.parametrize("entry", UNSAFE_REQUIREMENTS)
+    @pytest.mark.parametrize("source", ["entries", "platform"])
+    def test_unsafe_input_is_refused_before_resolving(self, entry, source):
+        def explode(*args, **kwargs):
+            pytest.fail("unsafe requirements reached the resolver")
+
+        entries, platform = ([entry], []) if source == "entries" else (["a>=1"], [entry])
+        with pytest.raises(ValueError, match="single ASCII lines"):
+            resolve_pins(entries, platform, runner=explode)
 
     def test_a_range_becomes_a_pin(self):
         out = resolve_pins(

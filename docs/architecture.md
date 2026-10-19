@@ -239,8 +239,12 @@ from the configured level down to `manylinux2014`.
 
 Caller-supplied `spec.requirements` must additionally be pinned at *schema*
 validation (`app/schemas/requirements.py`), so the console rejects a range before a
-build starts. The platform's own lists keep their ranges — the
-`MANTLE_EXTRA_REQUIREMENTS` comment explains that pip is meant to intersect two
+build starts. Each entry must be a single ASCII line without control characters
+or a marker starting with `-`; this check runs before stripping markers, so a
+valid pin cannot hide a second requirements-file line such as `--index-url`.
+Both pin resolution and lock compilation repeat the check before writing their
+input files, including for older stored specs. The platform's own lists keep their
+ranges — the `MANTLE_EXTRA_REQUIREMENTS` comment explains that pip is meant to intersect two
 specs for the same project — and the lock is what makes the resolved set
 reproducible. Harness conversion is the one place the platform derives
 requirements from somewhere else (the source Harness's `pyproject.toml`), so it
