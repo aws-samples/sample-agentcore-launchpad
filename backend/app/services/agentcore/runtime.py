@@ -89,8 +89,8 @@ def create_code_runtime(
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
     ``python_version``/``entrypoint`` default to the platform artifact contract
-    (PYTHON_3_13, main.py); BYOC passes the user's choices through and disables
-    the ADOT launcher (user zips don't necessarily vendor the distro).
+    (PYTHON_3_13, main.py); BYOC passes the user's choices through and keeps
+    the ADOT launcher only when its bundle ships one (user zips don't always).
     ``authorizer_configuration`` is the inbound JWT authorizer
     ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted)."""
     params: dict[str, Any] = {

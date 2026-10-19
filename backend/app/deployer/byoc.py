@@ -34,7 +34,7 @@ from app.deployer.environment import runtime_environment
 from app.deployer.input_contract import record_input_contract, stamp_input_contract
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
-from app.models.ledger import Agent
+from app.models.ledger import Agent, Job
 from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
 from app.services import agent_iam, byoc_uploads
 from app.services import inbound_auth as inbound_auth_service
@@ -60,6 +60,8 @@ from .zip_runtime import _compile_lock, sanitize_runtime_name
 logger = logging.getLogger(__name__)
 
 PACKAGE_KEY_TMPL = "agents/{name}/byoc_package.zip"
+# what `pip install -t` writes when the bundle carries aws-opentelemetry-distro
+ADOT_LAUNCHER = Path("bin") / "opentelemetry-instrument"
 
 
 def _config(spec: AgentSpec) -> ByocConfig:
@@ -82,6 +84,21 @@ def _requirements_lines(path: Path) -> list[str]:
         return parse_requirements_txt(path.read_text(encoding="utf-8"))
     except RequirementsFileError as exc:
         raise RuntimeError(f"the zip's requirements.txt was refused — {exc}") from exc
+
+
+def _record_instrument(ctx: StageContext, instrument: bool) -> None:
+    """Persist on the job at package success: a resumed deploy has no scratch."""
+    with ctx.session() as db:
+        job = db.get(Job, ctx.job_id)
+        if job:
+            job.payload = {**job.payload, "byoc_instrument": instrument}
+            db.commit()
+
+
+def _recorded_instrument(ctx: StageContext) -> bool:
+    with ctx.session() as db:
+        job = db.get(Job, ctx.job_id)
+        return bool(job and job.payload.get("byoc_instrument"))
 
 
 def _stamp_provenance(ctx: StageContext, agent: Agent, provenance: dict[str, Any]) -> None:
@@ -283,6 +300,11 @@ def _build_code_zip(
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     # the entrypoint opts into native attachments the same way generated code does
     record_input_contract(ctx, entry.read_text(encoding="utf-8", errors="replace"))
+    # start under ADOT only when the bundle ships the launcher; an absent one fails at start
+    instrument = (src_root / ADOT_LAUNCHER).is_file()
+    _record_instrument(ctx, instrument)
+    if instrument:
+        ctx.log("ADOT launcher in the bundle — runtime starts under opentelemetry-instrument")
     ctx.log(f"package {secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
     detail = f"code_zip · {size_mb:.1f}MB · s3 ✓"
     if installed:
@@ -398,9 +420,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "environment": environment,
                     "python_version": cfg.python_version,
                     "entrypoint": cfg.entrypoint,
-                    # user zips don't necessarily vendor the ADOT distro; an
-                    # absent opentelemetry-instrument launcher fails at start
-                    "instrument": False,
+                    # only when the package stage found the launcher in the
+                    # bundle; an absent opentelemetry-instrument fails at start
+                    "instrument": _recorded_instrument(ctx),
                     # echoed on every update; omitted (None) = IAM/SigV4
                     "authorizer_configuration": authorizer,
                 }

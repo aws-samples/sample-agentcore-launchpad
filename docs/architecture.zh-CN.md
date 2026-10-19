@@ -95,7 +95,7 @@ generate → package → provision → deploy → register
 | **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) | *不生成代码。* 校验已暂存的上传(或 ECR 镜像),并把服务端核验的溯源信息(sha256、上传者、时间)写入 spec |
 | **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 | `code_zip`:下载 → 安全解压 → 校验入口文件 → 为 linux/aarch64 解析 zip 内的 `requirements.txt`(带 hash 锁定)→ zip → S3;`container_source`:校验 Dockerfile → 与方式A 相同的 CodeBuild → ECR → digest → 扫描闸门;`container_image`:*跳过* |
 | **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 | 按 Agent 的最小权限角色(同一套机制) |
-| **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY | `CreateAgentRuntime`——`codeConfiguration`(用户选择的 Python 版本与入口,不带 ADOT 启动器)或 `containerConfiguration`——+ 轮询 READY |
+| **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY | `CreateAgentRuntime`——`codeConfiguration`(用户选择的 Python 版本与入口;仅当部署包内含 ADOT 启动器时才使用它)或 `containerConfiguration`——+ 轮询 READY |
 | **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | 同一个共享 register 阶段——byoc Agent 是 Runtime 型,聊天/版本/可观测按 Runtime 处理 |
 
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
@@ -350,6 +350,14 @@ Chat 会把原始图片/PDF 以 `attachments: [{name, media_type, data}]`(base64
 一起发送——前提是 `spec.model_id` 为多模态模型。代码必须在回答前确认收到附件(JSON
 回复带 `"attachment_contract": "v1"`,或 SSE 首个事件 `{"event": "attachments", "contract": "v1"}`)。
 容器类 artifact 从不记录约定,仍只接受文本/文本 PDF 输入。
+
+**可观测性(`code_zip`)。** span 由 agent 进程自身产生,因此直接代码运行时只有在 ADOT
+下启动才会出现在可观测性页面。package 阶段检查最终部署包中是否存在
+`bin/opentelemetry-instrument`——zip 的 `requirements.txt` 列出 `aws-opentelemetry-distro`
+(或成员自行 vendor)时 `pip install -t` 会写入它——并把结果记录在 job 上;deploy 阶段随后与
+平台生成的代码一样使用 `["opentelemetry-instrument", <入口>]`。没有启动器时入口直接运行(缺失的
+启动器会让运行时启动失败),agent 不产生 span;其 stdout 仍写入运行时日志组。容器类 artifact
+自己掌控 `CMD`,插桩由镜像负责。
 
 ### 推荐的 trace 来源
 

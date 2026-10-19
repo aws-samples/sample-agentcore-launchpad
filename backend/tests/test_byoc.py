@@ -1368,3 +1368,46 @@ def test_code_zip_entrypoint_contract_enables_native_attachments(monkeypatch, ma
     ctx.scratch["execution_role_arn"] = "arn:agent-role"
     byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
     assert _get_agent(agent_id).attachment_version == expected
+
+
+@pytest.mark.parametrize("ships_launcher, entry", [
+    (True, ["opentelemetry-instrument", "main.py"]),
+    (False, ["main.py"]),
+])
+def test_code_zip_with_the_adot_launcher_deploys_instrumented(monkeypatch, ships_launcher, entry):
+    """A bundle carrying bin/opentelemetry-instrument (the distro installed from the
+    zip's requirements) starts under ADOT, so its spans reach Observability; the
+    decision survives a resumed deploy whose scratch is empty."""
+    from app.deployer.pipeline import create_deployment
+
+    s3 = StubS3()
+    stub = StubRuntimeControl()
+    _client_router(monkeypatch, {"s3": s3})
+    monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: stub)
+    _seed_upload(s3, "u1", {"main.py": SDK_MAIN,
+                            "requirements.txt": b"aws-opentelemetry-distro\n"})
+
+    def fake_resolve(src_root, build_dir, python_version, log, **_kw):
+        if ships_launcher:
+            (src_root / "bin").mkdir()
+            (src_root / "bin" / "opentelemetry-instrument").write_text("#!python\n")
+        return 1
+
+    monkeypatch.setattr(byoc_dep, "resolve_requirements_into", fake_resolve)
+    spec = AgentSpec(**_byoc_spec())
+    with SessionLocal() as db:
+        agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=spec.name, method="byoc",
+                      status="deploying", spec=spec.model_dump())
+        db.add(agent)
+        db.commit()
+        deployment, job = create_deployment(db, agent)
+        ids = agent.id, deployment.id, job.id
+
+    byoc_dep._stage_package(
+        StageContext(*ids, workspace=ws_ctx(RESOURCES)), _get_agent(ids[0])
+    )
+    resumed = StageContext(*ids, workspace=ws_ctx(RESOURCES))
+    resumed.scratch["execution_role_arn"] = "arn:agent-role"
+    byoc_dep._stage_deploy(resumed, _get_agent(ids[0]))
+    cfg = stub.created_with["agentRuntimeArtifact"]["codeConfiguration"]
+    assert cfg["entryPoint"] == entry

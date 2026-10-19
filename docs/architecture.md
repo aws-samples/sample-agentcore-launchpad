@@ -140,7 +140,7 @@ type fails the suite until the inventory classifies it.
 | **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) | *No code generated.* Verify the staged upload (or the ECR image) and stamp server-verified provenance (sha256, uploader, timestamp) onto the spec |
 | **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate | `code_zip`: download → safe-extract → verify entrypoint → resolve the zip's `requirements.txt` for linux/aarch64 (hashed lock) → zip → S3. `container_source`: verify Dockerfile → same CodeBuild → ECR → digest → scan gate as 方式A. `container_image`: *skipped* |
 | **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role | Per-agent least-privilege role (same machinery) |
-| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY | `CreateAgentRuntime` — `codeConfiguration` (user's Python version + entrypoint, no ADOT launcher) or `containerConfiguration` — + poll READY |
+| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY | `CreateAgentRuntime` — `codeConfiguration` (user's Python version + entrypoint; ADOT launcher only when the bundle ships it) or `containerConfiguration` — + poll READY |
 | **register** | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | Same shared register stage — byoc agents are runtime-backed for chat/versions/observability |
 
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
@@ -480,6 +480,17 @@ sends the original images/PDFs as `attachments: [{name, media_type, data}]`
 code must acknowledge them before its answer (`"attachment_contract": "v1"` on a
 JSON reply, or a leading `{"event": "attachments", "contract": "v1"}` SSE event).
 Container kinds never record a contract, so they keep text/text-PDF input.
+
+**Observability (`code_zip`).** Spans come from the agent process itself, so a
+direct-code runtime is visible on Observability only when it starts under ADOT.
+The package stage checks the finished bundle for `bin/opentelemetry-instrument`
+— what `pip install -t` writes when the zip's `requirements.txt` lists
+`aws-opentelemetry-distro` (or the member vendored it) — records the result on the
+job, and the deploy stage then uses `["opentelemetry-instrument", <entrypoint>]`,
+exactly like generated code. Without the launcher the entrypoint runs bare (an
+absent launcher would fail the runtime at start) and the agent emits no spans;
+its stdout still lands in the runtime log group. Container kinds own their
+`CMD`, so instrumenting them is the image's job.
 
 ### Recommendation trace source
 
