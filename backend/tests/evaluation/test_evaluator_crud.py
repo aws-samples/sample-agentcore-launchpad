@@ -635,6 +635,33 @@ def test_list_success_carries_no_unavailable_marker(client, monkeypatch):
     assert any(r["id"] == "my_judge-abc123" for r in body["evaluators"])
 
 
+def test_list_hides_builtins_the_region_does_not_offer(client, monkeypatch):
+    """A documented built-in still rolling out (absent from the region's ListEvaluators)
+    is not offered: StartBatchEvaluation would refuse the whole run over it."""
+    from app.evaluation import agentcore_eval as ac
+
+    offered = [e for e in {**ac.ALL_BUILTIN_EVALUATORS, **ac.TRAJECTORY_EVALUATORS}
+               if e != "Builtin.ContextRelevance"]
+    stub = stub_control(monkeypatch)
+    stub.list_evaluators.return_value = {
+        "evaluators": [{"evaluatorId": e, "evaluatorType": "Builtin"} for e in offered]
+    }
+    body = client.get("/api/eval/evaluators").json()
+    builtin = [r["id"] for r in body["evaluators"] if r["source"] == "builtin"]
+    assert "Builtin.ContextRelevance" not in builtin
+    assert sorted(builtin) == sorted(offered) and body["builtin_count"] == len(offered)
+
+
+def test_list_without_builtin_rows_keeps_the_documented_catalog(client, monkeypatch):
+    # a listing that names no built-ins says nothing about them — never hide them all
+    stub = stub_control(monkeypatch)
+    stub.list_evaluators.return_value = {
+        "evaluators": [{"evaluatorId": "my_judge-abc123", "evaluatorType": "Custom"}]
+    }
+    body = client.get("/api/eval/evaluators").json()
+    assert any(r["id"] == "Builtin.ContextRelevance" for r in body["evaluators"])
+
+
 def test_list_access_denied_reports_custom_unavailable(client, monkeypatch, caplog):
     stub = stub_control(monkeypatch)
     role = "arn:aws:sts::111122223333:assumed-role/launchpad-spoke/session"

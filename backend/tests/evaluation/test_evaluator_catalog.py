@@ -72,15 +72,19 @@ LIVE_EVALUATORS = [
         "evaluatorType": "CustomDerived",
         "provider": "DeepEval",
     },
-    # the account listing echoes builtins too — must not duplicate the local rows
-    {
-        "evaluatorId": "Builtin.Helpfulness",
-        "evaluatorName": "Helpfulness",
-        "level": "TRACE",
-        "status": "ACTIVE",
-        "evaluatorType": "Builtin",
-        "provider": "AWS",
-    },
+    # the account listing echoes the region's builtins too — must not duplicate the
+    # local rows (and a builtin it leaves out is not offered)
+    *(
+        {
+            "evaluatorId": evaluator_id,
+            "evaluatorName": evaluator_id.removeprefix("Builtin."),
+            "level": level,
+            "status": "ACTIVE",
+            "evaluatorType": "Builtin",
+            "provider": "AWS",
+        }
+        for evaluator_id, level in EXPECTED_BUILTIN_EVALUATORS.items()
+    ),
 ]
 
 

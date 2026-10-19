@@ -884,10 +884,12 @@ def list_evaluators(
 ) -> dict[str, Any]:
     builtin = [{**row, **creators.empty()} for row in _builtin_evaluator_rows()]
     live: list[dict[str, Any]] = []
+    offered: set[str] = set()
     try:
         for ev in ac.list_evaluators(control_client(ws.context)):
             evaluator_id = ev.get("evaluatorId", "")
             if evaluator_id.startswith("Builtin."):
+                offered.add(evaluator_id)
                 continue  # rendered from the local dicts above
             evaluator_type = ev.get("evaluatorType")
             third_party = evaluator_type == "ThirdParty" or evaluator_id.startswith(
@@ -926,6 +928,11 @@ def list_evaluators(
         viewer, db, ws.id, creators.EVALUATOR, (row["id"] for row in live)
     )
     live = [row for row in live if row["id"] not in hidden]
+    # A documented built-in can still be rolling out in this region, and
+    # StartBatchEvaluation refuses the whole run over one it does not have. A
+    # listing that names no built-ins says nothing about them, so it hides none.
+    if offered:
+        builtin = [row for row in builtin if row["id"] in offered]
     known = creators.lookup(db, ws.id, creators.EVALUATOR, (row["id"] for row in live))
     for row in live:
         row.update(known.get(row["id"]) or creators.empty())
