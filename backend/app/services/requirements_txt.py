@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.runtime_target import TARGET_PYTHON, uv_platform
+from app.schemas.requirements import _canonical, _split_name_extras
 
 MAX_REQUIREMENT_ENTRIES = 500
 
@@ -212,6 +213,66 @@ def summarize_resolver_failure(
     if not all_hints:
         return f"{summary}."
     return f"{summary}. Fixes: {'; '.join(all_hints)}."
+
+
+# uv names the caller's own inputs in `you require A and B, we can conclude` (or
+# `you require A, we can conclude`). The match is per line and stops at the first
+# `, we can conclude`, so the derived `… we can conclude that you require
+# mcp>=1.23.0,<2.0.0.` — a consequence, not an input — is never captured.
+_YOU_REQUIRE_RE = re.compile(r"you require (.+?), we can conclude")
+# One requirement as uv prints it: no whitespace inside (`botocore[crt]==1.43.65`,
+# `mcp>=1.23.0,<2.0.0`). A clause piece with spaces is prose, not an input.
+_REQ_PIECE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]\s]*\])?\S*$")
+
+
+def _project_key(entry: str) -> tuple[str, frozenset[str]] | None:
+    """(PEP 503 name, extras) of one requirement, or None when it has no name."""
+    name, extras = _split_name_extras(entry)
+    if not name:
+        return None
+    return _canonical(name), frozenset(
+        _canonical(extra) for extra in (extras or "").split(",") if extra.strip()
+    )
+
+
+def conflicting_requirements(raw: str, entries: Sequence[str]) -> list[str]:
+    """The `entries` a failed resolve names as its own conflicting inputs.
+
+    ``raw`` is uv's stderr/stdout. Returns the entries whose project appears in a
+    `you require …, we can conclude` clause, in ``entries`` order, or ``[]`` when
+    nothing parses. Projects match by PEP 503 name; where ``entries`` holds the
+    same project with different extras (the Mantle platform list names
+    `strands-agents[otel]` and `strands-agents[openai]`), only the one whose extras
+    uv printed is returned, falling back to every entry of that name.
+
+    Also ``[]`` when the failure is about an artifact rather than a conflict — a
+    project with no usable wheel, absent from the index, or without the requested
+    release. uv phrases those through the same clause (`Because x has no usable
+    wheels and you require x==1, …`), but naming `x` as "conflicting" would
+    misreport them; `summarize_resolver_failure` already says what is wrong.
+    """
+    if any(pattern.search(raw) for pattern, _ in _FAILURE_PATTERNS):
+        return []
+    required: dict[str, set[frozenset[str]]] = {}
+    for line in raw.splitlines():
+        for match in _YOU_REQUIRE_RE.finditer(line):
+            for piece in match.group(1).split(" and "):
+                piece = piece.strip()
+                key = _project_key(piece) if _REQ_PIECE_RE.match(piece) else None
+                if key:
+                    required.setdefault(key[0], set()).add(key[1])
+    keyed = [(entry, _project_key(entry)) for entry in entries]
+    exact = {
+        key for _, key in keyed if key and key[1] in required.get(key[0], set())
+    }
+    exact_names = {name for name, _ in exact}
+    return [
+        entry
+        for entry, key in keyed
+        if key
+        and key[0] in required
+        and (key in exact or key[0] not in exact_names)
+    ]
 
 
 # ---------------------------------------------------------------------------

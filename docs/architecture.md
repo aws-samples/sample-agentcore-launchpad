@@ -244,7 +244,31 @@ build starts. The platform's own lists keep their ranges — the
 specs for the same project — and the lock is what makes the resolved set
 reproducible. Harness conversion is the one place the platform derives
 requirements from somewhere else (the source Harness's `pyproject.toml`), so it
-resolves those ranges to pins rather than being exempted from the rule.
+resolves those ranges to pins rather than being exempted from the rule. It also
+records the ranges themselves on `spec.requirement_ranges` (plain
+`name[extras] <specifiers> [; marker]` lines only — URLs, VCS references, options
+and control characters are refused, so the field cannot widen the build's index
+boundary), and re-publishes from either console carry the field.
+
+Those pins were resolved against the platform's lists *as they stood at conversion
+time*, and the platform's own pins move (`boto3>=1.43.66` forcing
+`botocore>=1.43.66`; `strands-agents==1.47.0` capping `mcp<2.0.0`). Every zip build of
+an agent spec — the package stage and the canary's candidate/restore mint — goes
+through `zip_runtime.build_agent_zip`. When the lock fails for a **conversion twin**
+(`spec.source_harness` set), it re-resolves the twin's pins once against the
+*current* platform lists — from the recorded range of each project, or, for a twin
+converted before ranges were recorded, from the bare `name[extras]` — and retries the
+lock. Pins that still lock are never re-resolved. The job log names each changed pin
+(`mcp==2.1.1 → mcp==1.30.0`). The healed pins are persisted where each caller's
+contract allows: the package stage writes them to `agent.spec.requirements` (so the
+as-deployed snapshot names them); canary setup writes them to the candidate's
+`artifacts.edited_spec` (the mint never writes the agent row; promotion copies that
+spec); canary rollback writes them to the agent row with the restored version and
+records a `canary rolled back` snapshot. A non-twin spec is never re-resolved. If a
+lock still fails, the error names the agent's own conflicting pin(s) and the platform
+requirement uv cites against them (with an "update or remove" fix for a non-twin);
+for a twin whose source ranges no longer fit, it says so. Failures that name no pin of
+the agent's own (no usable wheel, unknown package) read exactly as before.
 
 **Container images are scanned, and deployed by digest.** ECR scans on push. After
 the build, `_stage_package` resolves the pushed tag to its immutable digest,

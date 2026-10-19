@@ -1176,7 +1176,8 @@ def test_rollback_rolls_forward_current_spec(monkeypatch):
     )
     minted: dict = {}
 
-    def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role):
+    def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role,
+                  on_repinned=None):
         minted["agent_id"] = agent.id
         minted["spec"] = edited_spec
         minted["role"] = role
@@ -1234,7 +1235,8 @@ def test_rollback_allowed_and_rolls_forward_on_partial_setup(monkeypatch):
     )
     minted: dict = {}
 
-    def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role):
+    def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role,
+                  on_repinned=None):
         minted["spec"] = edited_spec
         return ("1", "5", f"agents/subject/canary/{canary_id}-{role}.zip")
 
@@ -1250,6 +1252,113 @@ def test_rollback_allowed_and_rolls_forward_on_partial_setup(monkeypatch):
     assert result["restored_version"] == "5"
     assert _reload(row.id).status == "rolled_back"
     assert _reload_agent(agent_id).version == "5"
+
+
+# ─── a converted agent's stale pins heal on the canary's own builds (#300) ───
+TWIN_SOURCE = {"agent_id": "src", "agent_name": "src", "harness_arn": "arn:h"}
+STALE_PINS = ["botocore[crt]==1.43.114", "mcp==2.1.1"]
+HEALED_PINS = ["botocore[crt]==1.43.114", "mcp==1.30.0"]
+
+
+def _twin_spec(prompt: str) -> dict:
+    return AgentSpec(
+        name="subject", method="zip_runtime", system_prompt=prompt,
+        requirements=STALE_PINS, requirement_ranges=["mcp >= 1.19.0"],
+        source_harness=TWIN_SOURCE, code_bundle={"main.py": "print('exported')"},
+    ).model_dump()
+
+
+def test_setup_records_healed_pins_on_the_candidate_spec_not_the_agent(monkeypatch):
+    """AC5: the mint never writes the agent row, so the pins the candidate was really
+    built from land on `artifacts.edited_spec` — which promotion copies onto the
+    agent, so the promoted snapshot names them."""
+    (agent_id,) = _persist_agents(_agent("subject", spec=_twin_spec("orig")))
+    row = _mk_canary(
+        agent_id=agent_id,
+        artifacts={
+            "agent_meta": {"id": agent_id, "name": "subject", "arn": "arn:agent",
+                           "resource_id": "subject-res", "runtime_name": "SubjectRuntime"},
+            "edited_spec": _twin_spec("edited"),
+            "rounds": [],
+        },
+    )
+
+    def fake_mint(**kw):
+        assert kw["edited_spec"].requirements == STALE_PINS
+        kw["on_repinned"](HEALED_PINS)
+        return ("1", "2", "agents/subject/canary/x-candidate.zip")
+
+    monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version", fake_mint)
+    monkeypatch.setattr(canary_svc.canary_infra, "current_version", lambda control, rid: "1")
+    monkeypatch.setattr(canary_svc.canary_infra, "create_canary_gateway",
+                        lambda **kw: {"gateway_id": "gw-can", "gateway_arn": "arn:gw",
+                                      "gateway_url": "https://gw"})
+    monkeypatch.setattr(canary_svc.canary_infra, "ensure_endpoint_ready",
+                        lambda control, **kw: {"status": "READY"})
+    monkeypatch.setattr(exp_svc, "create_runtime_target_idempotent",
+                        lambda control, gateway_id, name, arn, qualifier="DEFAULT": f"id-{name}")
+    monkeypatch.setattr(exp_svc, "create_online_eval_idempotent",
+                        lambda control, **kw: {"onlineEvaluationConfigId": f"id-{kw['name']}",
+                                               "onlineEvaluationConfigArn": f"arn:{kw['name']}"})
+    data = MagicMock()
+    data.create_ab_test.return_value = {"abTestId": "ab-canary"}
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+
+    canary_svc.act_setup(row.id, lambda message: None)
+
+    edited = _reload(row.id).artifacts["edited_spec"]
+    assert edited["requirements"] == HEALED_PINS
+    assert edited["system_prompt"] == "edited"  # the rest of the candidate is kept
+    assert edited["requirement_ranges"] == ["mcp >= 1.19.0"]
+    # production's row is untouched until a promotion
+    assert _reload_agent(agent_id).spec["requirements"] == STALE_PINS
+
+
+@pytest.mark.parametrize("healed", [True, False])
+def test_rollback_writes_healed_pins_with_the_restored_version(monkeypatch, healed):
+    """AC5: the restored version was built from healed pins, so the agent row names
+    them next to `version` — and, being a spec change outside the pipeline, the
+    change joins the snapshot history at that version. Without a heal the row's spec
+    is untouched and no snapshot is written."""
+    from app.models.ledger import SpecSnapshot
+
+    (agent_id,) = _persist_agents(_agent("subject", spec=_twin_spec("orig")))
+    row = _mk_canary(
+        agent_id=agent_id,
+        artifacts={"agent_meta": {"id": agent_id}, "edited_spec": {},
+                   "setup": _setup_artifact(), "rounds": []},
+    )
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+    monkeypatch.setattr(canary_svc, "data_client", MagicMock)
+    monkeypatch.setattr(exp_svc, "_stop_ab_test",
+                        lambda *a, **k: {"executionStatus": "STOPPED"})
+
+    def fake_mint(**kw):
+        assert kw["role"] == "restore"
+        if healed:
+            kw["on_repinned"](HEALED_PINS)
+        return ("1", "9", f"agents/subject/canary/{kw['canary_id']}-restore.zip")
+
+    monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version", fake_mint)
+
+    canary_svc.act_rollback(row.id, lambda message: None)
+
+    agent = _reload_agent(agent_id)
+    assert agent.version == "9"
+    assert agent.spec["requirements"] == (HEALED_PINS if healed else STALE_PINS)
+    assert agent.spec["system_prompt"] == "orig"
+    db = SessionLocal()
+    try:
+        snaps = db.query(SpecSnapshot).filter(SpecSnapshot.agent_id == agent_id).all()
+    finally:
+        db.close()
+    if healed:
+        (snap,) = snaps
+        assert snap.spec["requirements"] == HEALED_PINS
+        assert (snap.aws_version, snap.note) == ("9", "canary rolled back")
+    else:
+        assert snaps == []
 
 
 def test_second_concurrent_canary_for_same_agent_is_rejected(client):

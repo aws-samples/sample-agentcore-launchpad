@@ -31,11 +31,16 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.schemas.requirements import reresolve_inputs, resolve_pins
 from app.services import agent_iam
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
-from app.services.requirements_txt import RESOLVE_FIX_HINTS, summarize_resolver_failure
+from app.services.requirements_txt import (
+    RESOLVE_FIX_HINTS,
+    conflicting_requirements,
+    summarize_resolver_failure,
+)
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.services.workspace import WorkspaceContext
 from app.templates.strands_agent import base_requirements, render_main_py
@@ -57,6 +62,22 @@ def sanitize_runtime_name(name: str) -> str:
 # aarch64 would produce a lock that does not match the artifact.
 
 LOCK_FILENAME = "requirements.lock"
+
+_LOCK_FAILED = "could not resolve the requirements into a hashed lockfile"
+
+
+class LockResolveError(RuntimeError):
+    """The hashed-lock compile failed. ``raw`` is the resolver's own output.
+
+    Still a ``RuntimeError`` with the same message as before, so byoc's use of
+    ``_compile_lock`` and every caller matching on the text are unaffected; the
+    subclass only lets ``build_agent_zip`` tell a lock failure (which a conversion
+    twin may heal) from a failed install (which it never does).
+    """
+
+    def __init__(self, message: str, raw: str) -> None:
+        super().__init__(message)
+        self.raw = raw
 
 
 def _compile_lock(
@@ -93,13 +114,15 @@ def _compile_lock(
         text=True,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            "could not resolve the requirements into a hashed lockfile: "
+        raw = proc.stderr or proc.stdout or ""
+        raise LockResolveError(
+            f"{_LOCK_FAILED}: "
             + summarize_resolver_failure(
-                proc.stderr or proc.stdout or "",
+                raw,
                 python_version=python_version or TARGET_PYTHON,
                 hints=RESOLVE_FIX_HINTS,
-            )
+            ),
+            raw,
         )
     return lock
 
@@ -469,12 +492,182 @@ def _method_requirements(spec: AgentSpec) -> list[str]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Building an agent's zip, healing a conversion twin's stale pins (#300)
+#
+# A Runtime converted from a Harness stores exact pins resolved against the
+# platform's requirement lists as they stood at conversion time. When those lists
+# later move (`boto3>=1.43.66` forcing `botocore>=1.43.66`; `strands-agents==1.47.0`
+# capping `mcp<2.0.0`), the twin's pins stop locking and every rebuild — redeploy,
+# canary candidate, canary rollback — fails at the lock compile. The forms cannot
+# edit a twin's requirements, so the member has no way out; the build re-resolves
+# them once instead. Pins that still lock are never touched (T10: a rebuild of an
+# unchanged spec installs the same thing).
+# ---------------------------------------------------------------------------
+
+_HEAL_REASON = "conversion pins no longer lock against the platform's current requirements"
+
+
+def _named_conflict(
+    err: LockResolveError,
+    own: list[str],
+    platform: list[str],
+    *,
+    twin: bool,
+    note: str = "",
+) -> str | None:
+    """A lock failure restated around the agent's own pins, or ``None`` when the
+    resolver names none of them — no usable wheel, unknown package, or a conflict
+    entirely inside the platform's lists — so the caller re-raises the original.
+
+    The summary drops the container/vendor hints the plain message carries: those
+    fix a missing wheel, not a version conflict. A twin gets no ``Fix:`` clause —
+    its pins came from the conversion, not from anything the member can edit.
+    """
+    own_hit = conflicting_requirements(err.raw, own)
+    if not own_hit:
+        return None
+    platform_hit = conflicting_requirements(err.raw, platform)
+    pins = ", ".join(own_hit)
+    other = (
+        f"the platform's {', '.join(platform_hit)}"
+        if platform_hit
+        else "the other requirements of the build"
+    )
+    message = (
+        f"{_LOCK_FAILED}{note}: {summarize_resolver_failure(err.raw)} "
+        f"This agent's pin(s) {pins} conflict with {other}."
+    )
+    if not twin:
+        message += f" Fix: update or remove {pins} in the agent's requirements."
+    return message
+
+
+def _ranges_no_longer_fit(
+    first: LockResolveError,
+    stale: list[str],
+    inputs: list[str],
+    platform: list[str],
+    exc: ValueError,
+) -> str:
+    """The twin's re-resolve itself failed: the Harness's own ranges no longer fit.
+
+    No re-convert suggestion — a re-export of the same Harness yields the same
+    ranges, so it would fail the same way.
+    """
+    head = _named_conflict(first, stale, platform, twin=True) or (
+        f"{_LOCK_FAILED}: {summarize_resolver_failure(first.raw)}"
+    )
+    detail = str(exc)
+    range_hit = conflicting_requirements(detail, inputs)
+    platform_hit = conflicting_requirements(detail, platform)
+    where = ""
+    if range_hit:
+        against = f" against the platform's {', '.join(platform_hit)}" if platform_hit else ""
+        where = f" ({', '.join(range_hit)}{against})"
+    message = (
+        f"{head} This agent was converted from a Harness; re-resolving its pins from the "
+        f"source Harness's ranges against the platform's current requirements also "
+        f"failed — the source ranges no longer fit the platform's current "
+        f"requirements{where}."
+    )
+    if not range_hit:
+        message += f" Resolver: {summarize_resolver_failure(detail)}"
+    return message
+
+
+def build_agent_zip(
+    spec: AgentSpec,
+    code: str,
+    build_dir: Path,
+    *,
+    log: Callable[[str], None],
+    resolver: Callable[[list[str], list[str]], list[str]] | None = None,
+    **build_zip_kwargs: Any,
+) -> tuple[Path, list[str] | None]:
+    """Build ``spec``'s zip from ``platform + spec.requirements`` → ``(zip, repinned)``.
+
+    The one entry point for every zip build of an agent spec (the package stage and
+    the canary mint), so both heal the same way. ``repinned`` is ``None`` unless a
+    conversion twin's pins were re-resolved, in which case it is the list the zip
+    was actually built from and the caller persists it where its contract allows.
+
+    On a lock failure:
+
+    * not a twin (no ``spec.source_harness``) → never re-resolved; the error names
+      the agent's own conflicting pin(s) and the fix when the resolver names them;
+    * a twin → re-resolve ``reresolve_inputs(spec.requirements,
+      spec.requirement_ranges)`` against the *current* platform lists and retry the
+      lock once. A re-resolve that changes nothing, fails, or still does not lock
+      raises with the conflict named, never a second retry.
+
+    A failed pip install is never healed — only the lock compile is.
+    ``resolver`` defaults to ``resolve_pins`` (looked up at call time, so tests can
+    patch it); ``build_zip_kwargs`` go to both ``build_zip`` attempts.
+    """
+    platform = platform_requirements(spec.method, spec.model_source, spec.protocol)
+    try:
+        return build_zip(code, _method_requirements(spec), build_dir, **build_zip_kwargs), None
+    except LockResolveError as first:
+        stale = list(spec.requirements)
+        if not spec.source_harness:
+            named = _named_conflict(first, stale, platform, twin=False)
+            if named is None:
+                raise
+            raise LockResolveError(named, first.raw) from first
+        inputs = reresolve_inputs(stale, spec.requirement_ranges or [])
+        try:
+            repinned = (resolver or resolve_pins)(inputs, platform)
+        except ValueError as exc:
+            raise LockResolveError(
+                _ranges_no_longer_fit(first, stale, inputs, platform, exc), first.raw
+            ) from exc
+        if repinned == stale:
+            named = _named_conflict(first, stale, platform, twin=True)
+            if named is None:
+                raise
+            raise LockResolveError(named, first.raw) from first
+
+    changed = [f"{old} → {new}" for old, new in zip(stale, repinned, strict=False) if old != new]
+    log(f"{_HEAL_REASON} — re-resolved: {', '.join(changed)}")
+    try:
+        zip_path = build_zip(code, platform + repinned, build_dir, **build_zip_kwargs)
+    except LockResolveError as second:
+        named = _named_conflict(
+            second, repinned, platform, twin=True,
+            note=" after re-resolving this converted agent's pins against the "
+                 "platform's current requirements",
+        )
+        if named is None:
+            raise
+        raise LockResolveError(named, second.raw) from second
+    return zip_path, repinned
+
+
+def _persist_requirements(ctx: StageContext, agent: Agent, requirements: list[str]) -> None:
+    """Write healed pins onto the row's spec and the in-memory ``agent``.
+
+    Same shape as byoc's ``_stamp_provenance``: a fresh session and a new dict, so
+    the JSON column is seen as changed. ``_finish`` then stamps this spec as the one
+    deployed, the next rebuild starts from pins that lock, and a resumed job's
+    package stage locks them first time instead of healing again.
+    """
+    db = ctx.session()
+    try:
+        row = db.get(Agent, agent.id)
+        spec = dict(row.spec)
+        spec["requirements"] = list(requirements)
+        row.spec = spec
+        db.commit()
+        agent.spec = spec
+    finally:
+        db.close()
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
     code, source = _generate_code(spec)
-    requirements = _method_requirements(spec)
     ctx.scratch["code"] = code
-    ctx.scratch["requirements"] = requirements
     ctx.log(f"{source} · {len(code)} bytes · model {spec.model_id}")
     return StageResult(detail=f"{source} · {len(code)} bytes")
 
@@ -489,7 +682,6 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         )
     spec = AgentSpec(**agent.spec)
     code = ctx.scratch.get("code") or _generate_code(spec)[0]
-    requirements = ctx.scratch.get("requirements") or _method_requirements(spec)
 
     build_dir = Path(f"/tmp/launchpad_build_{agent.name}")
     t0 = time.monotonic()
@@ -501,15 +693,19 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
             ctx.log(f"bundle files staged: {count} (+ main.py)")
         bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log, ctx.workspace))
 
-    zip_path = build_zip(
+    zip_path, repinned = build_agent_zip(
+        spec,
         code,
-        requirements,
         build_dir,
+        log=ctx.log,
         on_pkg_ready=_on_pkg_ready,
         on_lock_ready=lambda count: ctx.log(
             f"requirements locked · {count} packages pinned with hashes"
         ),
     )
+    if repinned is not None:
+        # only after the healed pins actually built — a failed retry persists nothing
+        _persist_requirements(ctx, agent, repinned)
     pip_secs = time.monotonic() - t0
     size_mb = zip_path.stat().st_size / 1e6
 

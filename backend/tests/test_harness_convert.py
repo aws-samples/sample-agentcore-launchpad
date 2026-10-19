@@ -698,6 +698,61 @@ def test_the_pin_platform_matches_what_the_package_stage_will_prepend(monkeypatc
         assert _method_requirements(spec) == platform + spec.requirements
 
 
+def test_the_source_ranges_are_recorded_beside_the_pins(monkeypatch):
+    """#300 AC6: pyproject.toml is dropped from the bundle, so the conversion keeps
+    the Harness's flattened ranges on `requirement_ranges` — what a later rebuild
+    re-resolves from once the platform's lists move past the stored pins."""
+    source = _source_agent()
+    platform = platform_requirements(*hc.conversion_platform_inputs(source))
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
+    spec = hc.build_conversion_spec(source, files, platform, "aurora-support-rt", ws_ctx())
+
+    assert spec.requirement_ranges == hc.flatten_requirements(files, platform)
+    assert spec.requirement_ranges == ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"]
+    # the pins are still what the (stubbed) resolver made of those same ranges
+    assert spec.requirements == ["botocore[crt]==9.9.9", "mcp==9.9.9"]
+    # and the field round-trips through the ledger shape a redeploy validates
+    assert AgentSpec(**spec.model_dump()).requirement_ranges == spec.requirement_ranges
+
+
+def test_a_harness_with_no_extra_dependencies_records_no_ranges(monkeypatch):
+    source = _source_agent()
+    platform = platform_requirements(*hc.conversion_platform_inputs(source))
+    no_extras = "\n".join(
+        line for line in PYPROJECT.splitlines() if "botocore" not in line and "mcp" not in line
+    )
+    spec = hc.build_conversion_spec(
+        source, {"main.py": MAIN_PY, "pyproject.toml": no_extras}, platform,
+        "aurora-support-rt", ws_ctx(),
+    )
+    assert spec.requirements == []
+    assert spec.requirement_ranges is None
+
+
+def test_ranges_that_do_not_fit_the_field_are_left_out_not_fatal(monkeypatch):
+    """The field refuses non-plain lines and more than 100 entries; the conversion
+    records what fits instead of failing — an unrecorded pin re-resolves from its
+    bare name, like a pre-#300 twin."""
+    source = _source_agent()
+    platform = platform_requirements(*hc.conversion_platform_inputs(source))
+    many = [f"pkg{i} >= 1.0" for i in range(105)]
+    pyproject = PYPROJECT.replace(
+        '"mcp >= 1.19.0",',
+        '"mcp >= 1.19.0",\n    "legacy-paren (>=1.0)",\n'
+        + "\n".join(f'    "{entry}",' for entry in many),
+    )
+    spec = hc.build_conversion_spec(
+        source, {"main.py": MAIN_PY, "pyproject.toml": pyproject}, platform,
+        "aurora-support-rt", ws_ctx(),
+    )
+    assert len(spec.requirements) == 2 + 1 + 105
+    assert len(spec.requirement_ranges) == 100
+    assert "legacy-paren (>=1.0)" not in spec.requirement_ranges
+    assert spec.requirement_ranges[:3] == [
+        "botocore[crt] >= 1.35.0", "mcp >= 1.19.0", "pkg0 >= 1.0",
+    ]
+
+
 def test_code_bundle_validation():
     base = {"name": "x-agent", "method": "zip_runtime", "system_prompt": "p"}
     with pytest.raises(ValueError, match="main.py"):

@@ -143,6 +143,95 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
         db3.close()
 
 
+UV_MCP_CONFLICT = (
+    "error: No solution found when resolving dependencies\n"
+    "  cause: Because strands-agents==1.47.0 depends on mcp>=1.23.0,<2.0.0 and you "
+    "require strands-agents[otel]==1.47.0, we can conclude that you require "
+    "mcp>=1.23.0,<2.0.0.\n"
+    "         And because you require mcp==2.1.1, we can conclude that your "
+    "requirements are unsatisfiable.\n"
+)
+
+
+@pytest.mark.parametrize("stale", [True, False])
+def test_mint_heals_a_twins_stale_pins_without_touching_the_ledger(
+    monkeypatch, tmp_path, stale
+):
+    """#300 AC5: a canary candidate (or rollback restore) of a converted agent whose
+    pins no longer lock is healed exactly like a redeploy. The healed pins go to
+    `on_repinned` — the mint itself still never writes the agent row. Pins that
+    still lock are built as they are and nothing is reported."""
+    import app.deployer.zip_runtime as zr
+
+    pins = ["botocore[crt]==1.43.114", "mcp==2.1.1" if stale else "mcp==1.30.0"]
+    workspace = _workspace(monkeypatch)
+    db = SessionLocal()
+    try:
+        agent = Agent(
+            workspace_id=DEFAULT_WORKSPACE_ID, name="twinmint", method="zip_runtime",
+            status="active", arn=RUNTIME_ARN, resource_id="twinmint-abcdefghij",
+            version="7", spec={"name": "twinmint", "method": "zip_runtime",
+                               "system_prompt": "orig", "requirements": pins},
+        )
+        db.add(agent)
+        db.commit()
+        agent_id = agent.id
+    finally:
+        db.close()
+
+    def pip(cmd, **kwargs):
+        if "compile" in cmd and "mcp==2.1.1" in Path(
+            cmd[cmd.index("compile") + 1]
+        ).read_text(encoding="utf-8").splitlines():
+            return SimpleNamespace(returncode=1, stdout="", stderr=UV_MCP_CONFLICT)
+        return _fake_pip(cmd, **kwargs)
+
+    resolved: list[list[str]] = []
+    monkeypatch.setattr(
+        zr, "resolve_pins",
+        lambda entries, platform: resolved.append(list(entries))
+        or ["botocore[crt]==1.43.114", "mcp==1.30.0"],
+    )
+    control = MagicMock()
+    control.get_agent_runtime.return_value = {
+        "agentRuntimeVersion": "7", "status": "READY", "agentRuntimeArn": RUNTIME_ARN,
+    }
+    control.update_agent_runtime.return_value = {"agentRuntimeVersion": "8"}
+    spec = AgentSpec(
+        name="twinmint", method="zip_runtime", system_prompt="edited",
+        requirements=pins, requirement_ranges=["mcp >= 1.19.0"],
+        source_harness={"agent_id": "src", "agent_name": "src", "harness_arn": "arn:h"},
+        code_bundle={"main.py": "print('exported')"},
+    )
+    reported: list[list[str]] = []
+    logs: list[str] = []
+
+    db2 = SessionLocal()
+    try:
+        _, v_candidate, _ = infra.mint_candidate_version(
+            agent=db2.get(Agent, agent_id), edited_spec=spec, control_client=control,
+            workspace=workspace, canary_id="can300", log=logs.append, pip_runner=pip,
+            uploader=lambda *_a: None, build_root=tmp_path, on_repinned=reported.append,
+        )
+    finally:
+        db2.close()
+
+    assert v_candidate == "8"
+    if stale:
+        assert resolved == [["botocore[crt]", "mcp >= 1.19.0"]]
+        assert reported == [["botocore[crt]==1.43.114", "mcp==1.30.0"]]
+        assert any("mcp==2.1.1 → mcp==1.30.0" in line for line in logs)
+    else:
+        assert resolved == [] and reported == []
+    db3 = SessionLocal()
+    try:
+        row = db3.get(Agent, agent_id)
+        assert row.spec["requirements"] == pins  # the mint never writes the ledger
+        assert row.version == "7"
+    finally:
+        db3.close()
+
+
 def test_mint_candidate_container_is_follow_up(monkeypatch, tmp_path):
     workspace = _workspace(monkeypatch)
     spec = AgentSpec(name="containeragent", method="container", system_prompt="p")

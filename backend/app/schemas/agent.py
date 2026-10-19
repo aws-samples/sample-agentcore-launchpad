@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.core.config import Settings, get_settings
 from app.schemas.attachments import AttachmentRequest
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
-from app.schemas.requirements import assert_all_pinned
+from app.schemas.requirements import assert_all_pinned, assert_plain_ranges
 
 # The BUILT-IN model of a spec submitted without a model_id. The live value is
 # settings.agent_default_model_id (env LAUNCHPAD_AGENT_DEFAULT_MODEL_ID, launchpad.yaml,
@@ -535,6 +535,10 @@ class AgentSpec(BaseModel):
     code_bundle: dict[str, str] | None = None
     # provenance of a harness→runtime conversion: {agent_id, agent_name, harness_arn}
     source_harness: dict[str, str] | None = None
+    # the source Harness's own dependency ranges (`name[extras] <specifiers>`), kept
+    # beside the pins conversion resolved from them, so a rebuild whose pins no longer
+    # lock against the platform re-resolves from the Harness's floors (#300)
+    requirement_ranges: list[str] | None = None
     # per-capability wiring outcome of a conversion (memory/kb_gateway/…) — UI renders it
     conversion_notes: dict[str, str] | None = None
     # Strands Studio canvas graph {nodes, edges, graphMode} — persisted for later edit/re-publish
@@ -809,6 +813,13 @@ class AgentSpec(BaseModel):
         # platform's own lists keep their ranges by design and the package
         # stage's hashed lockfile is what makes the resolved set reproducible.
         assert_all_pinned(self.requirements)
+        return self
+
+    @model_validator(mode="after")
+    def _requirement_ranges_are_plain(self) -> "AgentSpec":
+        # Compile input on a later rebuild, so it is held to the index-only boundary:
+        # no URL, VCS reference, option, or newline that would add a second line.
+        assert_plain_ranges(self.requirement_ranges)
         return self
 
     @model_validator(mode="after")

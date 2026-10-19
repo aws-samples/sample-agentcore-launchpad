@@ -13,7 +13,10 @@ import pytest
 from app.schemas.agent import AgentSpec
 from app.schemas.requirements import (
     REQUIRED_FORM,
+    assert_plain_ranges,
     is_pinned,
+    is_plain_range,
+    reresolve_inputs,
     resolve_pins,
     unpinned,
 )
@@ -293,3 +296,136 @@ class TestResolvePins:
     def test_platform_is_required_so_no_call_site_can_resolve_in_a_vacuum(self):
         with pytest.raises(TypeError):
             resolve_pins(["mcp>=1.19.0"])  # type: ignore[call-arg]
+
+
+class TestReresolveInputs:
+    """What a conversion twin's stale pins are re-resolved FROM (#300, PRD R2/AC4)."""
+
+    def test_a_recorded_range_replaces_the_pin_of_the_same_project(self):
+        assert reresolve_inputs(
+            ["botocore[crt]==1.43.65", "mcp==2.1.1"],
+            ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"],
+        ) == ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"]
+
+    def test_range_lookup_uses_the_pep503_name(self):
+        """`_`/`-`/`.` and case all normalise — the pin's spelling comes from the
+        resolver output, the range's from the Harness's pyproject.toml."""
+        assert reresolve_inputs(
+            ["strands-agents-tools==0.2.0", "Zope.Interface==7.0"],
+            ["Strands_Agents_Tools >= 0.1", "zope-interface>=6"],
+        ) == ["Strands_Agents_Tools >= 0.1", "zope-interface>=6"]
+
+    def test_a_legacy_twin_relaxes_each_pin_to_its_name(self):
+        """Twins converted before `requirement_ranges` existed have no ranges: the
+        project name is the input, and extras survive — `botocore[crt]` must not
+        quietly become `botocore`."""
+        assert reresolve_inputs(["botocore[crt]==1.43.65", "mcp==2.1.1"], []) == [
+            "botocore[crt]",
+            "mcp",
+        ]
+
+    def test_the_legacy_relax_keeps_the_marker(self):
+        assert reresolve_inputs(['tomli==2.0.1 ; python_version < "3.11"'], []) == [
+            'tomli ; python_version < "3.11"'
+        ]
+
+    def test_url_and_vcs_pins_pass_through_unchanged(self):
+        url = "pkg @ https://example.com/pkg-1.0-py3-none-any.whl#sha256=" + "a" * 64
+        vcs = "other @ git+https://github.com/o/r@" + "0" * 40
+        # even with a range recorded for the same name: a direct reference was chosen
+        assert reresolve_inputs([url, vcs], ["pkg>=1", "other>=1"]) == [url, vcs]
+
+    def test_order_is_kept_and_ranges_for_unpinned_projects_are_ignored(self):
+        assert reresolve_inputs(
+            ["b==2.0", "a==1.0", "c==3.0"], ["a>=1", "unrelated>=9"]
+        ) == ["b", "a>=1", "c"]
+
+    def test_legacy_inputs_resolve_back_to_pins(self):
+        """End to end with `resolve_pins`: the relaxed names compile, and the
+        extra is re-attached to the new pin."""
+        def run(cmd, capture_output=True, text=True):
+            out = cmd[cmd.index("-o") + 1]
+            Path(out).write_text("botocore==1.43.114\nmcp==1.30.0\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        inputs = reresolve_inputs(["botocore[crt]==1.43.65", "mcp==2.1.1"], [])
+        assert resolve_pins(inputs, ["boto3>=1.43.66,<2"], runner=run) == [
+            "botocore[crt]==1.43.114",
+            "mcp==1.30.0",
+        ]
+
+
+class TestRequirementRanges:
+    """`AgentSpec.requirement_ranges` is compile input on a later rebuild, so it may
+    hold plain index requirements only (#300, PRD R4/AC6)."""
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "botocore[crt] >= 1.35.0",
+            "mcp >= 1.19.0",
+            "aws-opentelemetry-distro",
+            "requests>=2.32,<3",
+            "strands-agents[otel,openai]~=1.47",
+            "bedrock-agentcore==1.18.*",
+            "pkg!=1.0.1",
+            'tomli>=2 ; python_version < "3.11"',
+            "foo>=1; platform_machine == 'aarch64' and sys_platform == 'linux'",
+            'foo; sys_platform != "win32"',
+            'foo; extra == "x"',
+            'foo; (python_version >= "3.10")',
+            "foo; '3.10' <= python_version",
+        ],
+    )
+    def test_plain_ranges_are_accepted(self, entry):
+        assert is_plain_range(entry), entry
+        _spec(requirement_ranges=[entry])
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "https://evil.example/pkg-1.0-py3-none-any.whl",
+            "pkg @ https://example.com/pkg-1.0.tar.gz",
+            "pkg @ git+https://github.com/o/r@" + "0" * 40,
+            "git+https://github.com/o/r",
+            "-i https://evil.example/simple",
+            "--extra-index-url https://evil.example/simple",
+            "-r other.txt",
+            "mcp>=1.19\n--index-url https://evil.example/simple",
+            "mcp>=1.19\r",
+            "mcp>=1.19\t",
+            "mcp>=1.19 --no-index",
+            "mcp>=1.19 # comment",
+            "mcp>=1.19 \\",
+            # C1 NEL / Unicode line separator: str.splitlines() breaks on both
+            "mcp>=1.19\x85--index-url=https://evil.example/simple",
+            "mcp >=1.19",
+            "mcp\xa0>=1.19",
+            # a marker opens with a variable, `(` or a quote — never an option
+            "mcp>=1.19;-i https://evil.example/simple",
+            "./local/path",
+            "",
+            "x" * 301,
+        ],
+    )
+    def test_anything_else_is_refused(self, entry):
+        assert not is_plain_range(entry), entry
+        with pytest.raises(ValueError, match="requirement_ranges"):
+            _spec(requirement_ranges=[entry])
+
+    def test_none_and_empty_are_valid(self):
+        assert _spec().requirement_ranges is None
+        assert _spec(requirement_ranges=[]).requirement_ranges == []
+        assert_plain_ranges(None)
+
+    def test_the_entry_count_is_bounded(self):
+        assert_plain_ranges([f"pkg{i}>=1" for i in range(100)])
+        with pytest.raises(ValueError, match="at most 100"):
+            _spec(requirement_ranges=[f"pkg{i}>=1" for i in range(101)])
+
+    def test_every_offender_is_named(self):
+        with pytest.raises(ValueError) as excinfo:
+            _spec(requirement_ranges=["ok>=1", "-i https://x", "pkg @ https://y"])
+        message = str(excinfo.value)
+        assert "-i https://x" in message and "pkg @ https://y" in message
+        assert "'ok>=1'" not in message

@@ -80,6 +80,20 @@ describe("tool-level auth round trip", () => {
 });
 
 describe("republish carry-through", () => {
+  it("carries a converted agent's requirement ranges and pins", () => {
+    const converted = {
+      ...STORED,
+      requirements: ["botocore[crt]==1.43.114", "mcp==1.30.0"],
+      requirement_ranges: ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"],
+      source_harness: { agent_id: "src", agent_name: "aurora-support", harness_arn: "arn:h" },
+    };
+    const built = buildAgentSpec(load(converted), CATALOGS);
+    const spec = republishSpec(built, converted) as unknown as Record<string, unknown>;
+    expect(spec.requirement_ranges).toEqual(["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"]);
+    expect(spec.requirements).toEqual(["botocore[crt]==1.43.114", "mcp==1.30.0"]);
+    expect(spec.source_harness).toEqual(converted.source_harness);
+  });
+
   it("fills in auth only for a built tool that does not state it", () => {
     const built = { name: "auth-agent", method: "zip_runtime" as const, system_prompt: "p", tools: [{ type: "rest", name: "crm" }] };
     expect(republishSpec(built, STORED).tools?.[0].auth).toEqual(CRM.auth);

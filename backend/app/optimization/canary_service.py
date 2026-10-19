@@ -776,9 +776,19 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     # (5) Mint the candidate (DEFAULT auto-rolls to it; invoke now routes to the
     # stable endpoint = v_current until the gateway A/B goes live).
     progress("minting candidate runtime version…")
+    edited = row.artifacts["edited_spec"]
+
+    def _record_candidate_pins(pins: list[str]) -> None:
+        # A converted agent's stale pins were re-resolved to build the candidate.
+        # The mint never writes the agent row, so they land on the candidate's own
+        # spec — promotion copies `edited_spec` onto the agent, and its snapshot then
+        # records the pins the candidate was really built from.
+        _update(canary_id, artifact={"edited_spec": {**edited, "requirements": pins}})
+
     _, v_candidate, candidate_key = canary_infra.mint_candidate_version(
         agent=agent, edited_spec=spec, control_client=control, workspace=workspace,
         log=progress, canary_id=canary_id, role="candidate",
+        on_repinned=_record_candidate_pins,
     )
 
     # (6) Treatment endpoint pinned to the candidate, READY.
@@ -1370,15 +1380,27 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     # runtime version" helper — re-publishing v_current's unchanged spec rolls
     # DEFAULT off the rejected candidate back to current behavior.
     progress("rolling production forward off the rejected candidate…")
+    healed: list[list[str]] = []
     _, v_restored, restored_key = canary_infra.mint_candidate_version(
         agent=agent, edited_spec=current_spec, control_client=control,
         workspace=workspace, log=progress, canary_id=canary_id, role="restore",
+        on_repinned=healed.append,
     )
     db = SessionLocal()
     try:
         fresh = db.get(Agent, meta["id"])
         if fresh is not None:
             fresh.version = v_restored
+            if healed:
+                # A converted agent's stale pins were re-resolved to build the restored
+                # version: the row must name what now runs, or the next rebuild starts
+                # from pins that no longer lock. That changes the spec outside the
+                # pipeline, so it joins the snapshot history at the restored version.
+                fresh.spec = {**(fresh.spec or {}), "requirements": healed[-1]}
+                snap = snapshots.record_snapshot(
+                    db, fresh, actor=_canary_actor(row), note="canary rolled back"
+                )
+                snap.aws_version = str(v_restored)
             db.commit()
     finally:
         db.close()

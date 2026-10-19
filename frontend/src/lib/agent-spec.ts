@@ -870,7 +870,8 @@ export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSp
 
 /**
  * Spec fields no form input owns: a converted agent's exported code and its
- * provenance, extra requirements, tool-description overrides, a canvas artifact.
+ * provenance, extra requirements (and, on a converted agent, the source Harness's
+ * ranges they were resolved from), tool-description overrides, a canvas artifact.
  * A re-publish replaces the stored spec wholesale (`POST /api/agents/{id}/redeploy`),
  * so without these a converted agent silently lost its exported code bundle and was
  * rebuilt from the template.
@@ -881,6 +882,8 @@ export const REPUBLISH_CARRIED_FIELDS = [
   "conversion_notes",
   // the classic wizard has no inbound input; the V2 form states it (null ⇒ inherit)
   "inbound_auth",
+  // a converted agent's re-resolve input when the platform's pins move past its own
+  "requirement_ranges",
   "requirements",
   "source_harness",
   "studio_flow",

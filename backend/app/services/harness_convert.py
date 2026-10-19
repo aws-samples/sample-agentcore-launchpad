@@ -39,7 +39,7 @@ from app.schemas.agent import (
     ToolRef,
     agent_default_model_id,
 )
-from app.schemas.requirements import resolve_pins
+from app.schemas.requirements import MAX_RANGE_ENTRIES, is_plain_range, resolve_pins
 from app.services.workspace import WorkspaceContext
 from app.templates.attachment_support import render_attachment_source
 from app.templates.kb_support import (
@@ -1252,6 +1252,7 @@ def build_conversion_spec(
             f"wired ({key})" if value is not None
             else f"not wired — {key} unset; exported code degrades gracefully"
         )
+    ranges = flatten_requirements(grafted, platform)
     return AgentSpec(
         name=new_name,
         method="zip_runtime",
@@ -1266,9 +1267,16 @@ def build_conversion_spec(
         # them here rather than either refusing the conversion or storing a spec
         # that installs something different on every rebuild. `platform` is what
         # keeps the resolved pins lockable by the package stage — see resolve_pins.
-        requirements=resolve_pins(
-            flatten_requirements(grafted, platform), platform
-        ),
+        requirements=resolve_pins(ranges, platform),
+        # The ranges themselves are kept too: pyproject.toml is dropped from the
+        # bundle below, and when the platform's lists later move past these pins,
+        # the package stage re-resolves them from the Harness's own floors
+        # (zip_runtime.build_agent_zip, #300). Only plain index requirements, up to
+        # the field's cap, are recorded: a URL/VCS entry is already a pin that a
+        # re-resolve passes through, and any other pin without a recorded range
+        # falls back to its bare name, exactly like a pre-#300 twin.
+        requirement_ranges=[r for r in ranges if is_plain_range(r)][:MAX_RANGE_ENTRIES]
+        or None,
         code_bundle={k: v for k, v in grafted.items() if k != "pyproject.toml"},
         source_harness={
             "agent_id": source_agent.id,

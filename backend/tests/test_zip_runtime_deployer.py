@@ -909,3 +909,363 @@ def test_a_real_validation_error_is_not_retried(monkeypatch):
             agent,
         )
     assert stub.calls == 1
+
+
+# --- a conversion twin's stale pins heal at build time (#300) ---------------
+
+from app.deployer import zip_runtime as zr  # noqa: E402
+from app.deployer.zip_runtime import LockResolveError, build_agent_zip  # noqa: E402
+
+# Measured with uv 0.13.1 against the deploy target (trimmed): a twin converted
+# before `strands-agents==1.47.0` capped mcp, and one before `boto3>=1.43.66`.
+UV_MCP_CONFLICT = (
+    "error: No solution found when resolving dependencies\n"
+    "  cause: Because strands-agents==1.47.0 depends on mcp>=1.23.0,<2.0.0 and you "
+    "require strands-agents[otel]==1.47.0, we can conclude that you require "
+    "mcp>=1.23.0,<2.0.0.\n"
+    "         And because you require mcp==2.1.1, we can conclude that your "
+    "requirements are unsatisfiable.\n"
+)
+UV_BOTOCORE_CONFLICT = (
+    "error: No solution found when resolving dependencies\n"
+    "  cause: Because boto3==1.43.113 depends on botocore>=1.43.113 and "
+    "boto3>=1.43.114 depends on botocore>=1.43.114, we can conclude that "
+    "boto3>=1.43.66 depends on botocore>=1.43.66.\n"
+    "         And because you require boto3>=1.43.66 and botocore[crt]==1.43.65, we "
+    "can conclude that your requirements are unsatisfiable.\n"
+)
+
+SOURCE = {"agent_id": "src1", "agent_name": "aurora-support", "harness_arn": "arn:h"}
+STALE = ["botocore[crt]==1.43.114", "mcp==2.1.1"]
+RANGES = ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"]
+HEALED = ["botocore[crt]==1.43.114", "mcp==1.30.0"]
+
+
+def _lock_runner(failing: dict[str, str]):
+    """A build runner whose lock compile fails with `failing[entry]` (uv's output)
+    whenever its input names that entry, and otherwise behaves like `fake_pip_ok`.
+    Records every compile input on `.inputs`."""
+    inputs: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        if "compile" in cmd:
+            lines = Path(cmd[cmd.index("compile") + 1]).read_text(encoding="utf-8").splitlines()
+            inputs.append(lines)
+            for entry, raw in failing.items():
+                if entry in lines:
+                    return SimpleNamespace(returncode=1, stdout="", stderr=raw)
+        return fake_pip_ok(cmd, **kwargs)
+
+    run.inputs = inputs
+    return run
+
+
+def _twin(**over) -> AgentSpec:
+    return _spec(**{
+        "name": "twin-rt",
+        "requirements": STALE,
+        "requirement_ranges": RANGES,
+        "source_harness": SOURCE,
+        **over,
+    })
+
+
+def _never(*_args, **_kwargs):  # pragma: no cover - must not be called
+    raise AssertionError("resolver invoked")
+
+
+def test_a_twin_whose_pins_still_lock_is_built_from_them_unchanged(tmp_path):
+    """AC2: the heal only runs when the lock would otherwise fail (T10 — a rebuild of
+    an unchanged spec installs the same thing)."""
+    spec = _twin(requirements=HEALED)
+    runner = _lock_runner({})
+    _, repinned = build_agent_zip(
+        spec, "print('x')", tmp_path / "b", log=_never, resolver=_never, pip_runner=runner,
+    )
+    assert repinned is None
+    assert runner.inputs == [_method_requirements(spec)]
+
+
+def test_a_twin_with_a_stale_pin_reresolves_and_retries(tmp_path):
+    """AC1: one re-resolve against the CURRENT platform lists, one retry, the zip
+    built from the new pins, and one log line naming each changed pin."""
+    spec = _twin()
+    platform = platform_requirements(spec.method, spec.model_source, spec.protocol)
+    runner = _lock_runner({"mcp==2.1.1": UV_MCP_CONFLICT})
+    calls: list[tuple[list[str], list[str]]] = []
+
+    def resolver(entries, against):
+        calls.append((list(entries), list(against)))
+        return HEALED
+
+    logs: list[str] = []
+    zip_path, repinned = build_agent_zip(
+        spec, "print('x')", tmp_path / "b", log=logs.append, resolver=resolver,
+        pip_runner=runner,
+    )
+
+    assert repinned == HEALED
+    assert calls == [(RANGES, platform)]
+    assert runner.inputs == [platform + STALE, platform + HEALED]
+    requirements_txt = zipfile.ZipFile(zip_path).read("requirements.txt").decode()
+    assert "mcp==1.30.0" in requirements_txt and "mcp==2.1.1" not in requirements_txt
+    (line,) = logs
+    assert "no longer lock against the platform's current requirements" in line
+    assert "mcp==2.1.1 → mcp==1.30.0" in line
+    assert "botocore" not in line  # unchanged pins are not listed
+
+
+def test_a_legacy_twin_reresolves_from_project_names(tmp_path):
+    """AC4: a twin converted before `requirement_ranges` existed relaxes each pin to
+    its name; extras survive."""
+    spec = _twin(requirement_ranges=None)
+    seen: list[list[str]] = []
+    build_agent_zip(
+        spec, "print('x')", tmp_path / "b", log=lambda _m: None,
+        resolver=lambda entries, _p: seen.append(list(entries)) or HEALED,
+        pip_runner=_lock_runner({"mcp==2.1.1": UV_MCP_CONFLICT}),
+    )
+    assert seen == [["botocore[crt]", "mcp"]]
+
+
+def test_a_non_twin_is_not_reresolved_and_its_pin_is_named(tmp_path):
+    """AC3 + AC7: a member's own pins are the member's to fix — no heal, but the
+    error says which pin collides with which platform requirement, and how to fix."""
+    spec = _spec(name="plain-rt", requirements=["mcp==2.1.1"])
+    with pytest.raises(LockResolveError) as excinfo:
+        build_agent_zip(
+            spec, "print('x')", tmp_path / "b", log=_never, resolver=_never,
+            pip_runner=_lock_runner({"mcp==2.1.1": UV_MCP_CONFLICT}),
+        )
+    message = str(excinfo.value)
+    assert message.startswith("could not resolve the requirements into a hashed lockfile")
+    assert (
+        "This agent's pin(s) mcp==2.1.1 conflict with the platform's "
+        "strands-agents[otel]==1.47.0." in message
+    )
+    assert "Fix: update or remove mcp==2.1.1 in the agent's requirements." in message
+    # the wheel-availability fixes do not apply to a version conflict
+    assert "container path" not in message
+
+
+def test_the_botocore_conflict_names_the_boto3_floor(tmp_path):
+    """AC7, the second measured case: the conflict is with the platform's own
+    `boto3` floor, which is what drags botocore up."""
+    spec = _spec(name="plain-boto", requirements=["botocore[crt]==1.43.65"])
+    with pytest.raises(LockResolveError) as excinfo:
+        build_agent_zip(
+            spec, "print('x')", tmp_path / "b", log=_never,
+            pip_runner=_lock_runner({"botocore[crt]==1.43.65": UV_BOTOCORE_CONFLICT}),
+        )
+    assert (
+        "This agent's pin(s) botocore[crt]==1.43.65 conflict with the platform's "
+        "boto3>=1.43.66,<2." in str(excinfo.value)
+    )
+
+
+def test_a_failure_that_names_no_own_pin_reads_exactly_as_before(tmp_path):
+    """R5: no usable wheel / unknown package keep today's message."""
+    raw = (
+        "Because google-re2==1.1.20240702 has no usable wheels and you require "
+        "google-re2==1.1.20240702, we can conclude that your requirements are "
+        "unsatisfiable.\n"
+    )
+    spec = _spec(name="plain-wheel", requirements=["google-re2==1.1.20240702"])
+    runner = _lock_runner({"google-re2==1.1.20240702": raw})
+    with pytest.raises(LockResolveError) as direct:
+        build_zip("print('x')", _method_requirements(spec), tmp_path / "a", pip_runner=runner)
+    with pytest.raises(LockResolveError) as built:
+        build_agent_zip(spec, "print('x')", tmp_path / "b", log=_never, pip_runner=runner)
+    assert str(built.value) == str(direct.value)
+    assert "no wheel installable" in str(built.value)
+
+
+def test_a_twin_whose_ranges_no_longer_fit_says_so(tmp_path):
+    """AC7: the re-resolve itself fails — the Harness's own ranges no longer fit the
+    platform. No `Fix:` and no re-convert suggestion: a re-export yields the same
+    ranges."""
+    spec = _twin(requirement_ranges=["botocore[crt] >= 1.35.0", "mcp >= 2.0"])
+
+    def resolver(entries, _platform):
+        raise ValueError(
+            "could not resolve requirements to pinned versions — the input includes "
+            "the platform's own requirement lists, so the conflict may be between "
+            "those and the requested entries: Because strands-agents==1.47.0 depends "
+            "on mcp>=1.23.0,<2.0.0 and you require strands-agents[otel]==1.47.0, we "
+            "can conclude that you require mcp>=1.23.0,<2.0.0.\nAnd because you "
+            "require mcp>=2.0, we can conclude that your requirements are "
+            "unsatisfiable."
+        )
+
+    with pytest.raises(LockResolveError) as excinfo:
+        build_agent_zip(
+            spec, "print('x')", tmp_path / "b", log=_never, resolver=resolver,
+            pip_runner=_lock_runner({"mcp==2.1.1": UV_MCP_CONFLICT}),
+        )
+    message = str(excinfo.value)
+    assert "the source ranges no longer fit the platform's current requirements" in message
+    assert "(mcp >= 2.0 against the platform's strands-agents[otel]==1.47.0)" in message
+    assert "This agent's pin(s) mcp==2.1.1 conflict with the platform's" in message
+    assert "Fix:" not in message
+    assert "convert" not in message.replace("converted from a Harness", "")
+
+
+def test_a_reresolve_that_changes_nothing_fails_named_without_a_retry(tmp_path):
+    spec = _twin()
+    runner = _lock_runner({"mcp==2.1.1": UV_MCP_CONFLICT})
+    with pytest.raises(LockResolveError) as excinfo:
+        build_agent_zip(
+            spec, "print('x')", tmp_path / "b", log=_never,
+            resolver=lambda entries, _p: list(STALE), pip_runner=runner,
+        )
+    assert len(runner.inputs) == 1  # no second compile of the same pins
+    message = str(excinfo.value)
+    assert "This agent's pin(s) mcp==2.1.1 conflict with the platform's" in message
+    assert "Fix:" not in message  # a twin's pins are not the member's to edit
+
+
+def test_a_retry_that_still_does_not_lock_is_named_and_not_retried_again(tmp_path):
+    spec = _twin()
+    still = UV_MCP_CONFLICT.replace("mcp==2.1.1", "mcp==2.2.0")
+    runner = _lock_runner({"mcp==2.1.1": UV_MCP_CONFLICT, "mcp==2.2.0": still})
+    with pytest.raises(LockResolveError) as excinfo:
+        build_agent_zip(
+            spec, "print('x')", tmp_path / "b", log=lambda _m: None,
+            resolver=lambda entries, _p: ["botocore[crt]==1.43.114", "mcp==2.2.0"],
+            pip_runner=runner,
+        )
+    assert len(runner.inputs) == 2
+    message = str(excinfo.value)
+    assert "after re-resolving this converted agent's pins" in message
+    assert "This agent's pin(s) mcp==2.2.0 conflict with the platform's" in message
+
+
+def test_a_failed_install_is_never_healed(tmp_path):
+    """Only the lock compile is healable; an install failure is not a pin problem."""
+
+    def runner(cmd, **kwargs):
+        if "compile" in cmd:
+            return fake_pip_ok(cmd, **kwargs)
+        return SimpleNamespace(returncode=1, stderr="ERROR: disk full")
+
+    with pytest.raises(RuntimeError, match="pip install of the locked requirements failed"):
+        build_agent_zip(
+            _twin(), "print('x')", tmp_path / "b", log=_never, resolver=_never,
+            pip_runner=runner,
+        )
+
+
+def test_lock_resolve_error_keeps_the_plain_message_and_class(tmp_path):
+    """byoc imports `_compile_lock`; it still raises a RuntimeError with the same
+    text, now carrying the resolver's raw output for the heal."""
+    with pytest.raises(RuntimeError) as excinfo:
+        zr._compile_lock(
+            ["mcp==2.1.1"], tmp_path,
+            lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr=UV_MCP_CONFLICT),
+        )
+    assert isinstance(excinfo.value, LockResolveError)
+    assert excinfo.value.raw == UV_MCP_CONFLICT
+    assert str(excinfo.value).startswith(
+        "could not resolve the requirements into a hashed lockfile: the requirements conflict"
+    )
+
+
+class _UploadOnlyS3:
+    def __init__(self):
+        self.uploads: list[tuple[str, str]] = []
+
+    def upload_file(self, _local, bucket, key):
+        self.uploads.append((bucket, key))
+
+
+def _package_twin(monkeypatch, name: str, failing: dict[str, str], resolver):
+    """Run the real package stage for a twin row, with the build runners and the
+    resolver stubbed. Returns (agent_id, in-memory agent, logs, s3 stub)."""
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+    from app.deployer.pipeline import StageContext
+    from app.models.ledger import Agent
+    from app.services import workspace as workspace_mod
+
+    spec = _twin(name=name, code_bundle={"main.py": "print('exported')", "lib/x.py": "X = 1"})
+    db = SessionLocal()
+    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=name, method="zip_runtime",
+                  status="deploying", spec=spec.model_dump())
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+
+    runner = _lock_runner(failing)
+    real_build_zip = zr.build_zip
+    monkeypatch.setattr(
+        zr, "build_zip", lambda *a, **kw: real_build_zip(*a, pip_runner=runner, **kw)
+    )
+    monkeypatch.setattr(zr, "resolve_pins", resolver)
+    s3 = _UploadOnlyS3()
+    monkeypatch.setattr(workspace_mod.WorkspaceContext, "client", lambda self, name, **_k: s3)
+
+    logs: list[str] = []
+    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j-none",
+                       workspace=_fake_ws(), log=logs.append)
+    db = SessionLocal()
+    loaded = db.get(Agent, agent_id)
+    db.close()
+    try:
+        zr._stage_package(ctx, loaded)
+    finally:
+        import shutil
+
+        shutil.rmtree(f"/tmp/launchpad_build_{name}", ignore_errors=True)
+    return agent_id, loaded, logs, s3
+
+
+def _row_spec(agent_id: str) -> dict:
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    db = SessionLocal()
+    try:
+        return db.get(Agent, agent_id).spec
+    finally:
+        db.close()
+
+
+def test_the_package_stage_persists_the_healed_pins(monkeypatch):
+    """AC1: the row and the in-memory agent both carry what was built, so the
+    as-deployed snapshot and the next rebuild use pins that lock."""
+    agent_id, loaded, logs, s3 = _package_twin(
+        monkeypatch, "twin-heal-pkg", {"mcp==2.1.1": UV_MCP_CONFLICT},
+        lambda entries, _platform: HEALED,
+    )
+    assert _row_spec(agent_id)["requirements"] == HEALED
+    assert loaded.spec["requirements"] == HEALED
+    # the rest of the spec is untouched
+    assert _row_spec(agent_id)["requirement_ranges"] == RANGES
+    assert _row_spec(agent_id)["source_harness"] == SOURCE
+    assert s3.uploads == [("bkt", "agents/twin-heal-pkg/deployment_package.zip")]
+    assert any("mcp==2.1.1 → mcp==1.30.0" in line for line in logs)
+
+
+def test_the_package_stage_leaves_a_lockable_twin_alone(monkeypatch):
+    agent_id, _, logs, _ = _package_twin(monkeypatch, "twin-ok-pkg", {}, _never)
+    assert _row_spec(agent_id)["requirements"] == STALE
+    assert not any("re-resolved" in line for line in logs)
+
+
+def test_a_failed_retry_persists_nothing(monkeypatch):
+    still = UV_MCP_CONFLICT.replace("mcp==2.1.1", "mcp==2.2.0")
+    with pytest.raises(LockResolveError):
+        _package_twin(
+            monkeypatch, "twin-fail-pkg",
+            {"mcp==2.1.1": UV_MCP_CONFLICT, "mcp==2.2.0": still},
+            lambda entries, _platform: ["botocore[crt]==1.43.114", "mcp==2.2.0"],
+        )
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    db = SessionLocal()
+    try:
+        (row,) = db.query(Agent).filter(Agent.name == "twin-fail-pkg").all()
+        assert row.spec["requirements"] == STALE
+    finally:
+        db.close()

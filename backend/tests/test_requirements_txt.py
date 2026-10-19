@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.services.requirements_txt import (
     MAX_REQUIREMENT_ENTRIES,
     RequirementsFileError,
+    conflicting_requirements,
     parse_requirements_txt,
     pip_python_version,
     preresolve,
@@ -131,6 +132,101 @@ def test_summarizer_appends_caller_hints():
 def test_summarizer_bounds_unknown_output():
     msg = summarize_resolver_failure("mystery " * 500)
     assert len(msg) < 600
+
+
+# ── naming the caller's conflicting inputs (#300) ────────────────────────────
+# Both outputs measured with uv 0.13.1 against the deploy target (trimmed): a
+# converted twin's stale pins against the platform's current requirement lists.
+
+UV_MCP_CONFLICT = (
+    "error: No solution found when resolving dependencies\n"
+    "  cause: Because strands-agents==1.47.0 depends on mcp>=1.23.0,<2.0.0 and you "
+    "require strands-agents[otel]==1.47.0, we can conclude that you require "
+    "mcp>=1.23.0,<2.0.0.\n"
+    "         And because you require mcp==2.0.0, we can conclude that your "
+    "requirements are unsatisfiable.\n"
+)
+
+UV_BOTOCORE_CONFLICT = (
+    "error: No solution found when resolving dependencies\n"
+    "  cause: Because boto3==1.43.107 depends on botocore>=1.43.107 and "
+    "boto3==1.43.108 depends on botocore>=1.43.108, we can conclude that "
+    "boto3>=1.43.107,<1.43.109 depends on botocore>=1.43.107.\n"
+    "         And because boto3==1.43.113 depends on botocore>=1.43.113 and "
+    "boto3>=1.43.114 depends on botocore>=1.43.114, we can conclude that "
+    "boto3>=1.43.66 depends on botocore>=1.43.66.\n"
+    "         And because you require boto3>=1.43.66 and botocore[crt]==1.43.65, we "
+    "can conclude that your requirements are unsatisfiable.\n"
+)
+
+PLATFORM = [
+    "strands-agents[otel]==1.47.0",
+    "bedrock-agentcore==1.18.*",
+    "boto3>=1.43.66,<2",
+    "aws-opentelemetry-distro>=0.10,<1",
+]
+
+
+def test_conflict_names_the_stale_mcp_pin_and_the_platform_cap():
+    own = ["botocore[crt]==1.43.114", "mcp==2.0.0"]
+    assert conflicting_requirements(UV_MCP_CONFLICT, own) == ["mcp==2.0.0"]
+    assert conflicting_requirements(UV_MCP_CONFLICT, PLATFORM) == [
+        "strands-agents[otel]==1.47.0"
+    ]
+
+
+def test_a_derived_clause_is_not_an_input():
+    """`… we can conclude that you require mcp>=1.23.0,<2.0.0.` is a consequence
+    the resolver drew, not something the caller asked for — the agent below never
+    named mcp, so nothing of its own conflicts."""
+    raw = UV_MCP_CONFLICT.replace("you require mcp==2.0.0", "you require httpx==0.28.1")
+    assert conflicting_requirements(raw, ["mcp==1.30.0"]) == []
+
+
+def test_conflict_names_the_stale_botocore_pin_and_the_boto3_floor():
+    own = ["botocore[crt]==1.43.65", "mcp==1.30.0"]
+    assert conflicting_requirements(UV_BOTOCORE_CONFLICT, own) == [
+        "botocore[crt]==1.43.65"
+    ]
+    # "boto3 depends on botocore" in the derivation is prose; only the clause counts
+    assert conflicting_requirements(UV_BOTOCORE_CONFLICT, PLATFORM) == ["boto3>=1.43.66,<2"]
+
+
+def test_names_match_by_pep503_name_in_input_order():
+    raw = "Because you require Foo_Bar==1 and baz.qux==2, we can conclude that …"
+    assert conflicting_requirements(raw, ["baz-qux>=1", "other==1", "foo-bar==9"]) == [
+        "baz-qux>=1",
+        "foo-bar==9",
+    ]
+
+
+def test_the_same_project_with_other_extras_is_not_named():
+    """A Mantle platform list names strands-agents twice; uv cites the `[otel]` one,
+    so the `[openai]` entry is not part of this conflict."""
+    mantle = [*PLATFORM, "strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
+    assert conflicting_requirements(UV_MCP_CONFLICT, mantle) == [
+        "strands-agents[otel]==1.47.0"
+    ]
+    # with no extras-exact entry, every entry of that project is named
+    assert conflicting_requirements(UV_MCP_CONFLICT, ["strands-agents>=1.40"]) == [
+        "strands-agents>=1.40"
+    ]
+
+
+def test_unparsable_output_names_nothing():
+    assert conflicting_requirements("mystery failure", ["mcp==2.0.0"]) == []
+    assert conflicting_requirements("", ["mcp==2.0.0"]) == []
+
+
+def test_an_artifact_failure_is_not_reported_as_a_conflict():
+    """uv words a missing wheel through the same clause; that is not a conflict,
+    and the summarizer already names the package and the reason."""
+    raw = (
+        "  ╰─▶ Because google-re2==1.1.20240702 has no usable wheels and you "
+        "require google-re2==1.1.20240702, we can conclude that your "
+        "requirements are unsatisfiable.\n"
+    )
+    assert conflicting_requirements(raw, ["google-re2==1.1.20240702"]) == []
 
 
 # ── resolution platform: default + override ──────────────────────────────────

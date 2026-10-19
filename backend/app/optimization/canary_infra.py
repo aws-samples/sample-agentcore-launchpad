@@ -27,8 +27,7 @@ from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.zip_runtime import (
     _generate_code,
-    _method_requirements,
-    build_zip,
+    build_agent_zip,
     bundle_skills,
     write_bundle_files,
 )
@@ -117,6 +116,7 @@ def mint_candidate_version(
     pip_runner: Callable[..., Any] = subprocess.run,
     uploader: Callable[[str, str, str], None] | None = None,
     build_root: Path | None = None,
+    on_repinned: Callable[[list[str]], None] | None = None,
 ) -> tuple[str, str, str]:
     """Publish a candidate immutable version of ``agent``'s runtime from an
     edited spec, returning ``(v_current, v_candidate, s3_key)``.
@@ -126,7 +126,7 @@ def mint_candidate_version(
     delete it.
 
     The candidate zip is built with the same blocks as the deploy pipeline
-    (``_generate_code`` / ``_method_requirements`` / ``build_zip``), uploaded to
+    (``_generate_code`` / ``build_agent_zip``), uploaded to
     a canary-scoped S3 key, then published in place via ``UpdateAgentRuntime``
     (same ARN — a new version). ``UpdateAgentRuntime`` auto-rolls DEFAULT to the
     candidate; the caller (Phase 2b) pins a stable endpoint to ``v_current`` so
@@ -136,6 +136,12 @@ def mint_candidate_version(
     spec/status write). Versions are recorded only in the canary's artifacts by
     the caller. ``pip_runner`` / ``uploader`` / ``build_root`` are test seams so
     unit tests run no real pip, S3, or AWS.
+
+    A conversion twin whose pins no longer lock against the platform is healed by
+    ``build_agent_zip``, exactly as on a redeploy. The healed pins are handed to
+    ``on_repinned`` once the zip is built — the caller decides where they belong
+    (setup: the canary's ``edited_spec``; rollback: the agent row it already
+    writes), which keeps this function free of ledger writes.
     """
     if edited_spec.method not in {"zip_runtime", "studio"}:
         # FOLLOW-UP: container candidates need a CodeBuild image push (not a
@@ -166,7 +172,6 @@ def mint_candidate_version(
     log(f"current production version {v_current}")
 
     code, source = _generate_code(edited_spec)
-    requirements = _method_requirements(edited_spec)
     root = build_root or Path(tempfile.gettempdir())
     build_dir = root / f"launchpad_canary_{agent.name}"
 
@@ -175,10 +180,12 @@ def mint_candidate_version(
             write_bundle_files(edited_spec, pkg_dir)
         bundle_skills(edited_spec, code, pkg_dir, log, workspace)
 
-    zip_path = build_zip(
-        code, requirements, build_dir, pip_runner=pip_runner,
+    zip_path, repinned = build_agent_zip(
+        edited_spec, code, build_dir, log=log, pip_runner=pip_runner,
         on_pkg_ready=_on_pkg_ready,
     )
+    if repinned is not None and on_repinned is not None:
+        on_repinned(repinned)
     s3_key = candidate_s3_key(agent.name, canary_id, role)
     (uploader or _uploader_for(workspace))(str(zip_path), bucket, s3_key)
     log(f"candidate artifact → s3://{bucket}/{s3_key} · {source}")

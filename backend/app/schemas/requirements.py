@@ -232,3 +232,130 @@ def resolve_pins(
             pin = f"{pinned_name}[{extras}]=={version}"
         out_entries.append(pin)
     return out_entries
+
+
+# ---------------------------------------------------------------------------
+# Re-resolving a conversion's pins when the platform moves (#300)
+#
+# A converted Runtime stores exact pins that were resolved against the platform's
+# requirement lists *as they were at conversion time*. When the platform later
+# raises a floor or a cap (`boto3>=1.43.66`, `strands-agents==1.47.0` capping
+# `mcp<2.0.0`), those pins stop locking and every rebuild fails. The package stage
+# then re-resolves them from the source Harness's ranges — recorded on
+# `AgentSpec.requirement_ranges` — or, for a twin converted before that field
+# existed, from the bare project names.
+# ---------------------------------------------------------------------------
+
+MAX_RANGE_ENTRIES = 100
+MAX_RANGE_LENGTH = 300
+
+# name[extras] (op version (, op version)*)? (; marker)?
+#
+# Deliberately narrower than PEP 508: the field is copied verbatim into a
+# requirements file, so anything that file format would treat as more than one
+# index requirement — an option, a URL, a `pkg @ <url>` direct reference, a
+# comment, a line continuation — must not fit. The marker alphabet therefore has
+# no `@`, `/`, `:`, `#` or `\`.
+_VERSION_OP = r"(?:~=|===|==|!=|<=|>=|<|>)"
+_VERSION = r"[A-Za-z0-9][A-Za-z0-9.*+!_-]*"
+_PLAIN_RANGE_RE = re.compile(
+    rf"""^
+    [A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?               # project name
+    (?:\s*\[\s*[A-Za-z0-9][A-Za-z0-9._-]*
+        (?:\s*,\s*[A-Za-z0-9][A-Za-z0-9._-]*)*\s*\])?        # optional extras
+    (?:\s*{_VERSION_OP}\s*{_VERSION}
+        (?:\s*,\s*{_VERSION_OP}\s*{_VERSION})*)?             # optional specifiers
+    (?:\s*;\s*[A-Za-z('"][A-Za-z0-9 _.'"<>=!~(),*+-]*)?       # optional marker
+    \s*$""",
+    re.VERBOSE,
+)
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def is_plain_range(entry: str) -> bool:
+    """Whether `entry` is one index requirement and nothing else.
+
+    Refuses options (`-i …`), URLs, VCS references, `@` direct references, and any
+    control character (`\\n`, `\\r`, tab): a newline would let one entry carry a
+    second line — an `--index-url` — into the compile input, and a ` -` would be
+    read as a per-requirement option. ASCII only: a PEP 508 requirement needs no
+    more, and it keeps the C1 `\\x85` and Unicode line separators — which
+    `str.splitlines()` (pip's requirements reader) treats as line breaks — and
+    every other non-ASCII space out of the regex's `\\s`.
+    """
+    if (
+        not entry
+        or len(entry) > MAX_RANGE_LENGTH
+        or not entry.isascii()
+        or _CONTROL_RE.search(entry)
+    ):
+        return False
+    if re.search(r"\s-", entry):
+        return False
+    return bool(_PLAIN_RANGE_RE.match(entry))
+
+
+def assert_plain_ranges(entries: list[str] | None) -> None:
+    """Validation for `AgentSpec.requirement_ranges`; `None` and `[]` are valid.
+
+    Raises `ValueError` naming every offending entry. The ranges are compile input
+    on a later rebuild, so they must not be able to widen the build's
+    package-index boundary (see `services/requirements_txt` for the same rule on an
+    uploaded requirements.txt).
+    """
+    if not entries:
+        return
+    if len(entries) > MAX_RANGE_ENTRIES:
+        raise ValueError(
+            f"requirement_ranges lists {len(entries)} entries — at most "
+            f"{MAX_RANGE_ENTRIES} are allowed"
+        )
+    bad = [entry for entry in entries if not is_plain_range(entry)]
+    if not bad:
+        return
+    listed = ", ".join(repr(entry[:80]) for entry in bad)
+    raise ValueError(
+        f"requirement_ranges must hold plain 'name[extras] <specifiers> [; marker]' "
+        f"lines of at most {MAX_RANGE_LENGTH} characters — URLs, VCS references, "
+        f"options and control characters are refused: {listed}"
+    )
+
+
+def reresolve_inputs(pins: list[str], ranges: list[str]) -> list[str]:
+    """The entries a re-resolve of `pins` should compile, in `pins` order.
+
+    For each pin:
+
+    * a recorded range for the same project (PEP 503 name match) → that range, so
+      the source Harness's own floors survive;
+    * else a `name[extras]==version[; marker]` pin → `name[extras][; marker]` —
+      the legacy fallback for a twin converted before ranges were recorded. Extras
+      stay (`botocore[crt]` must not quietly become `botocore`), and so does the
+      marker;
+    * else (URL / VCS / anything this module cannot parse) → unchanged.
+      `resolve_pins` passes pinned entries through, so they stay as they are.
+    """
+    by_name: dict[str, str] = {}
+    for entry in ranges:
+        name, _ = _split_name_extras(entry)
+        if name:
+            by_name.setdefault(_canonical(name), entry)
+
+    out: list[str] = []
+    for pin in pins:
+        requirement, has_marker, marker = pin.partition(";")
+        requirement = requirement.strip()
+        match = _PINNED_RE.match(requirement)
+        if not match or "*" in requirement:
+            out.append(pin)
+            continue
+        recorded = by_name.get(_canonical(match.group("name")))
+        if recorded is not None:
+            out.append(recorded)
+            continue
+        name, extras = _split_name_extras(requirement)
+        relaxed = f"{name}[{extras}]" if extras else name
+        if has_marker and marker.strip():
+            relaxed = f"{relaxed} ; {marker.strip()}"
+        out.append(relaxed)
+    return out
