@@ -39,6 +39,7 @@ roles, including the orphans a failed agent deletion can leave behind:
 Gateway targets of launchpad-gw / launchpad-kb-gw     # dependents of the gateways
    → Gateways launchpad-gw, launchpad-kb-gw             # matched by name; waits for targets to drop out
       → Credential providers                            # launchpad-office-facts-key (API key), launchpad-gw-m2m (OAuth2)
+        → Console workload identities                   # launchpad-console-* (the COA context layer)
          → Per-agent IAM roles                          # launchpad-agent-* AND tagged launchpad:agent-id
             → AgentCore memory  (launchpad_memory-*)
                → AgentCore registry (launchpad-registry)   # records deleted first
@@ -80,6 +81,14 @@ Notes:
   the roles of agents you have not deleted yet — not only the orphans a failed
   agent deletion leaves behind. Delete demo agents first (section 1) and review
   the dry-run before confirming.
+- Console workload identities `launchpad-console-<workspace>` are the token-vault
+  identities the COA context layer creates when an admin connects a COA
+  deployment (`/v2/context-layer`, see [identity.md](identity.md) §7.7). Every
+  identity with that name prefix is swept; a runtime's own workload identity is
+  named after the runtime and never matches. The layer's OAuth2 Connection
+  (default `coa-<prefix>`) is an ordinary Connection: disconnect the layer, then
+  delete it under Outbound credentials. COA itself is a separate product and is
+  never touched.
 - Deployed agent runtimes and the Policy engine are demo-scoped (section 1) and
   are not touched by the script; deleting your demo agents first keeps the
   shared-infra teardown clean. X-Ray Transaction Search is account-wide shared

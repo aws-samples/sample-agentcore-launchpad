@@ -4,6 +4,7 @@ import {
   type AgentForm,
   byocEnv,
   byocModelList,
+  contextLayerSupported,
   hasByoMounts,
   pythonLabel,
   resolveKb,
@@ -130,9 +131,20 @@ export function WizardReview({
       { label: t("v2.agents.model"), value: mono(form.modelId.trim()) },
       { label: t("v2.agents.wizard.modelSource"), value: t(`v2.agents.wizard.source.${form.modelSource}`) },
     ];
+    const context = form.contextLayer && contextLayerSupported(form)
+      ? [{
+          label: t("v2.contextLayer.wizard.title"),
+          value: (
+            <span data-testid="v2-agent-review-context">
+              {form.contextLayer.namespaceName || none} · {mono(form.contextLayer.namespaceId)}
+            </span>
+          ),
+        }]
+      : [];
     const common = [
       { label: t("v2.agents.wizard.skills"), value: list(skillNames) },
       { label: t("v2.agents.kbTitle"), value: kbValue },
+      ...context,
       memory,
     ];
     // harness / Strands: managed session storage is their only mount

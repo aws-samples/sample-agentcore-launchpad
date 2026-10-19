@@ -300,6 +300,21 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/query"): MEMBER,  # retrieval playground
+    # ---- COA context layer: connecting a deployment creates a Connection (a vaulted
+    # client secret) and a workload identity, so it is ADMIN; a member's own
+    # consent, revocation and COA reads (as that member) stay MEMBER ----
+    ("GET", "/api/context-layer"): MEMBER,
+    ("PUT", "/api/context-layer"): ADMIN,
+    ("DELETE", "/api/context-layer"): ADMIN,
+    ("POST", "/api/context-layer/authorize"): MEMBER,
+    ("POST", "/api/context-layer/revoke"): MEMBER,
+    ("GET", "/api/context-layer/namespaces"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}/sources"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}/metrics"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}/ontology"): MEMBER,
+    ("GET", "/api/context-layer/health"): MEMBER,
+    ("POST", "/api/context-layer/playground"): MEMBER,
     # ---- governance ----
     ("GET", "/api/governance/gateways"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,

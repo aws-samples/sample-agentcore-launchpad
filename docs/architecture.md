@@ -3211,6 +3211,85 @@ canvas and `protocol="a2a"`.
 teardown sweeps it by name together with its targets — see
 [teardown.md](teardown.md).
 
+## Context layer (COA)
+
+`/v2/context-layer` connects a workspace to one **COA** (Context Ontology
+Accelerator) deployment — a separately deployed product with governed metrics, an
+induced ontology, a document knowledge graph and access-controlled SQL over source
+data. Launchpad never deploys or tears COA down, and never creates COA users,
+grants or namespaces: authoring stays in the COA console (the page links to it;
+COA forbids framing). Everything is read **as the signed-in member**, so COA's
+per-user grants decide what an agent may see.
+
+- **Connect** (`services/context_layer.py`, admin): discovery reads SSM
+  `/<prefix>/*` and the `<prefix>-<env>-{api,web,auth}` stack outputs in the COA
+  region (`replace(workspace, region=…)`, which may differ from the workspace's),
+  refuses a cross-account deployment, a missing agent OAuth client or a runtime
+  that is not READY, then creates or adopts the OAuth2 Connection for COA's agent
+  client and ensures the console workload identity `launchpad-console-<workspace>`.
+  The `context_layers` row (one per workspace) holds identifiers only.
+- **Tokens** (`services/context_layer_tokens.py`): a member's COA token comes only
+  from the token vault, through the console workload identity, and lives only in
+  process memory and on requests to COA — the custody exception documented in
+  [identity.md](identity.md) §7.7.
+- **Agents** (`AgentSpec.context_layer = {namespace_id, namespace_name}`; pure
+  helpers in `templates/context_layer_support.py`):
+  - *Harness*: the deploy adds a prompt addendum (namespace id + tool guidance)
+    and no COA tool. Each console turn (`services/invoke.harness_turn_overrides`)
+    re-reads the deployed tools, appends a `remote_mcp` server `coa` pointing at
+    COA's MCP runtime with the member's bearer, and adds `@coa` to
+    `allowedTools`. No consent yet ⇒ the turn is an `auth_required` event and
+    InvokeHarness never runs.
+  - *Strands* (`zip_runtime`, HTTP): every deploy stage builds from
+    `context_layer.deploy_spec`, which expands the ref into one `as_user` MCP tool
+    on the layer's Connection plus the addendum — the template, the execution
+    role, the environment and the return-URL allow-list all read that one
+    expansion, and the stored spec keeps only the ref.
+  - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
+    COA-attached agent: none of them has a console user to act as.
+- **Module** (`routers/context_layer.py`, page `frontend/src/v2/pages/ContextLayer.tsx`
+  + `contextLayer/`, expert-mode nav only). The status is read once and shared by
+  three `?view=` sub-pages:
+  - *overview*: the deployment card (live runtime / callback / agent-OAuth probes),
+    the member's authorization (authorize / revoke), the namespaces COA lets them
+    see, and COA's own `/system-health` (`GET /api/context-layer/health`). Admins
+    connect, re-connect or disconnect here. Not connected: members are told to ask
+    an admin. No consent: an authorize call to action and **no COA call**. No
+    namespaces: grants come from the COA admin, with a link to the COA console.
+  - `namespace&id=<uuid>[&tab=sources|metrics|ontology]`: the namespace as COA
+    shows it, with tabs for sources (type, status, tables), governed metrics
+    (unit, synonyms, per-dialect expressions) and ontology classes (one
+    `graph/ontology-overview` per ontology, at most 8 read concurrently, 200
+    classes each). Each tab deep-links into the matching COA console route
+    (`/namespaces/{id}/sources|metrics|ontology/graph`): authoring stays in COA.
+    "Attach to agent" opens the V2 wizard (new Harness or Strands agent) or an
+    existing agent's editor with `context_ns` / `context_name` prefilled; saving is
+    the ordinary create / redeploy.
+  - `playground[&ns=<uuid>]`: one question at a time to COA's **Serve runtime**
+    (`services/context_layer_playground.py`). The backend proxies
+    `POST <serve invocations URL>` with `stream: true`, the member's bearer and a
+    runtime session id stable per member + namespace (`lp-` + 40 hex), and
+    normalizes COA's frames into `step`, `token`, `done` (answer, tier, confidence,
+    up to 200 result rows, COA's `sessionId` for the next turn) and `error`
+    (`context_layer.*`) events, with `: keep-alive` comments while COA is silent.
+    It never sets COA's `includeDebugInfo`, and never forwards the generated SQL
+    (`queryUsed`), because COA withholds it by default: it exposes internal schema. Missing consent is one `auth_required` event, the same card Chat
+    shows. The upstream is an `httpx.AsyncClient` stream inside the response
+    generator, so a client disconnect closes COA's connection. The read timeout
+    is 180 s against COA's 170 s budget.
+  - COA REST reads (`services/context_layer_api.py`) are allowlisted projections
+    (`schemas/context_layer.py`), never a passthrough. Errors map COA 401 to
+    `context_layer.reauthorize` (409), 403 to `forbidden`, 404 to `coa_not_found`,
+    and 429 / 5xx / timeout to `upstream`, with at most 200 characters of COA's own
+    message.
+- **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
+  link opens a new tab. COA's REST data layer caps at 29 s, which is why questions
+  go to the streaming Serve runtime and not to `POST /namespaces/{id}/query`. `/v1`
+  answers 409 for COA-attached agents; canary / A-B, evaluation replays and
+  Harness conversion refuse them, because none of them has a console user to act
+  as. COA's spend is in COA's account: the playground is `FREE` in the billing
+  table and Launchpad does not meter it.
+
 ## The Memory console (console 05)
 
 `/memory` is a **read-only** window onto the shared `launchpad_memory` singleton

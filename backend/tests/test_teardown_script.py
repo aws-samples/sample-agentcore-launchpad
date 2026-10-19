@@ -46,12 +46,16 @@ class _Calls:
 class StubControl(_Calls):
     """bedrock-agentcore-control with a configurable account."""
 
-    def __init__(self, *, gateways=(), targets=None, api_key_providers=(), oauth_providers=()):
+    def __init__(
+        self, *, gateways=(), targets=None, api_key_providers=(), oauth_providers=(),
+        workload_identities=(),
+    ):
         super().__init__()
         self.gateways = list(gateways)
         self.targets = dict(targets or {})  # gateway_id -> [target summaries]
         self.api_key_providers = list(api_key_providers)
         self.oauth_providers = list(oauth_providers)
+        self.workload_identities = list(workload_identities)
 
     # --- listings -----------------------------------------------------------
     def list_gateways(self, **kwargs):
@@ -69,6 +73,13 @@ class StubControl(_Calls):
     def list_memories(self, **kwargs):
         return {"memories": []}
 
+    def list_workload_identities(self, **kwargs):
+        # two pages, to prove the walk follows nextToken
+        if kwargs.get("nextToken") is None and len(self.workload_identities) > 1:
+            return {"workloadIdentities": self.workload_identities[:1], "nextToken": "p2"}
+        start = 1 if kwargs.get("nextToken") else 0
+        return {"workloadIdentities": self.workload_identities[start:]}
+
     def list_agent_runtimes(self, **kwargs):
         return {"agentRuntimes": []}
 
@@ -84,6 +95,9 @@ class StubControl(_Calls):
 
     def delete_oauth2_credential_provider(self, **kwargs):
         return self._record("delete_oauth2_credential_provider", **kwargs)
+
+    def delete_workload_identity(self, **kwargs):
+        return self._record("delete_workload_identity", **kwargs)
 
 
 class StubRegistryControl:
@@ -342,3 +356,22 @@ def test_scope_constants_match_the_services_that_create_the_resources():
     assert teardown.GATEWAY_M2M_PROVIDER_NAME == gateway_bootstrap.GATEWAY_M2M_PROVIDER_NAME
     assert SHARED_ROLE.startswith(agent_iam._ROLE_PREFIX)  # why the tag is load-bearing
     assert SHARED_ROLE == teardown.EXECUTION_ROLE_BASE
+
+
+def test_collect_targets_sweeps_only_console_workload_identities(monkeypatch):
+    """The COA context layer's console workload identities, across pages; a
+    runtime's own workload identity (named after the runtime) is never matched."""
+    control = StubControl(workload_identities=[
+        {"name": "launchpad-console-default", "workloadIdentityArn": "arn:wi/console"},
+        {"name": "hr_agent_ab12cd-Xy12345678", "workloadIdentityArn": "arn:wi/runtime"},
+        {"name": "launchpad-console-acct2", "workloadIdentityArn": "arn:wi/console2"},
+    ])
+    _wire(monkeypatch, control, StubIam())
+    targets = teardown.collect_targets("us-west-2")
+    assert [t for t in targets if t[0] == "console-workload"] == [
+        ("console-workload", "launchpad-console-default", "arn:wi/console"),
+        ("console-workload", "launchpad-console-acct2", "arn:wi/console2"),
+    ]
+
+    teardown.delete_target("console-workload", "launchpad-console-default", "us-west-2")
+    assert control.ops("delete_workload_identity") == [{"name": "launchpad-console-default"}]

@@ -993,6 +993,9 @@ export interface AgentSpecInput {
   /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
    * default at deploy time; an explicit value pins the agent. */
   inbound_auth?: InboundAuth | null;
+  /** The COA namespace the agent reads governed context from (harness + HTTP
+   * zip_runtime); `null` detaches it. Omitted ⇒ a re-publish carries the stored ref. */
+  context_layer?: ContextLayerRef | null;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -3084,6 +3087,207 @@ export interface CompleteOauthSessionResult {
   agent_id: string;
   agent_name: string | null;
   tool: string;
+}
+
+/* ── COA context layer (`/api/context-layer`) ── */
+
+/** The caller's own console grant for the layer's Connection. */
+export type ContextLayerAuthStatus = "none" | "pending" | "authorized" | "revoked";
+
+/** `GET /api/context-layer`. Everything past `can_manage` is present only when
+ *  `connected`; the callback/client fields only for administrators. Live probes
+ *  that failed read `null` (unknown), never false. No secret is ever included. */
+export interface ContextLayerStatus {
+  connected: boolean;
+  can_manage: boolean;
+  name?: string;
+  prefix?: string;
+  env?: string;
+  region?: string;
+  console_url?: string;
+  api_endpoint?: string;
+  issuer?: string;
+  mcp_runtime_arn?: string;
+  serve_runtime_arn?: string;
+  connection?: string;
+  console_workload?: string;
+  runtimes?: { mcp: string | null; serve: string | null };
+  ready?: boolean;
+  agent_oauth_enabled?: boolean | null;
+  callback_registered?: boolean | null;
+  authorization?: { status: ContextLayerAuthStatus; authorized_at: string | null };
+  /** agents attaching the layer; a hidden agent keeps its slot with null id/name */
+  referenced_by?: { type: string; id: string | null; name: string | null }[];
+  created_by_name?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  probe_errors?: { probe: string; code: string }[];
+  // administrators only
+  callback_url?: string | null;
+  agent_client_id?: string | null;
+  user_pool_id?: string | null;
+  callback_context_key?: string;
+}
+
+export interface ContextLayerConnectInput {
+  prefix: string;
+  env: string;
+  region: string;
+  /** adopt an existing OAuth2 Connection; omitted ⇒ create (or re-adopt) `coa-<prefix>` */
+  connection?: string | null;
+}
+
+export interface ContextLayerAuthorizeResult {
+  authorized: boolean;
+  /** single-use, only when `authorized` is false */
+  authorization_url?: string;
+  connection: string;
+}
+
+/** One namespace COA lets the signed-in member see. `description` and `owner`
+ *  come with the list and the single read alike (both may be null). */
+export interface ContextLayerNamespace {
+  namespace_id: string;
+  name: string;
+  display_name: string | null;
+  description?: string | null;
+  owner?: string | null;
+  status: string | null;
+  source_count: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** `GET /api/context-layer/namespaces/{id}/sources` — every source type. COA
+ *  statuses are passed through verbatim (an unknown one renders as-is). */
+export interface ContextLayerSource {
+  source_id: string;
+  name: string;
+  source_type: string | null;
+  source_subtype: string | null;
+  status: string | null;
+  tables_discovered: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** One governed metric (`GET …/metrics`): only what COA returns to the member. */
+export interface ContextLayerMetric {
+  name: string;
+  description: string;
+  unit: string | null;
+  return_type: string | null;
+  default_time_grain: string | null;
+  synonyms: string[];
+  dialects: { dialect: string; expression: string }[];
+  source_table: string | null;
+  data_source_id: string | null;
+}
+
+export interface ContextLayerOntology {
+  ontology_id: string;
+  title: string;
+  description: string | null;
+  ontology_type: string | null;
+  status: string | null;
+  class_count: number | null;
+  property_count: number | null;
+  updated_at: string | null;
+}
+
+export interface ContextLayerOntologyClass {
+  uri: string;
+  label: string;
+  description: string | null;
+  ontology_id: string;
+  /** the owning ontology's title */
+  ontology: string;
+}
+
+/** `GET …/ontology`: the namespace's ontologies and their classes. `failed` lists
+ *  ontologies whose overview COA could not answer; `truncated` = more classes (or
+ *  ontologies) exist than were read. */
+export interface ContextLayerOntologyView {
+  namespace_id: string;
+  ontologies: ContextLayerOntology[];
+  classes: ContextLayerOntologyClass[];
+  failed: string[];
+  truncated: boolean;
+}
+
+/** `GET /api/context-layer/health`. `coa` is COA's own `/system-health` read as
+ *  the member — null without consent (`authorization_required`) or when COA
+ *  refused (`coa_error`). A runtime probe that failed reads `null`. */
+export interface ContextLayerHealth {
+  runtimes: { mcp: string | null; serve: string | null };
+  ready: boolean;
+  authorization_required: boolean;
+  coa: { status: string | null; components: { key: string; status: string | null }[] } | null;
+  coa_error: { code: string; status: number | null } | null;
+  probe_errors: { probe: string; code: string }[];
+}
+
+export type ContextLayerMode = "standard" | "deep-reasoning";
+export type ContextLayerStrategy =
+  | "best"
+  | "ontop"
+  | "nl_to_sql"
+  | "ontop_first"
+  | "nl_to_sql_first"
+  | "deep-reasoning";
+
+/** `POST /api/context-layer/playground` body. `session_id` is COA's conversation
+ *  id from the previous turn's `done` (omitted ⇒ a new conversation). */
+export interface ContextLayerPlaygroundInput {
+  namespace_id: string;
+  query: string;
+  session_id?: string | null;
+  mode?: ContextLayerMode | null;
+  strategy?: ContextLayerStrategy | null;
+}
+
+/** Playground SSE events (the backend's normalization of COA Serve frames). */
+export interface ContextLayerStepEvent {
+  name: string;
+  status: string;
+  duration_ms: number | null;
+  tool: string | null;
+  detail: string | null;
+}
+
+export interface ContextLayerDoneEvent {
+  answer: string | null;
+  tier: number | null;
+  confidence: number | null;
+  rationale: string | null;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  rows_truncated: boolean;
+  partial: boolean;
+  guardrail_blocked: boolean;
+  data_sources: string[];
+  citations: { name: string | null; text: string | null; score: number | null }[];
+  total_ms: number | null;
+  session_id: string | null;
+}
+
+export interface ContextLayerErrorEvent {
+  code: string;
+  message: string;
+  status: number | null;
+  coa_error: string | null;
+}
+
+/** `/api/context-layer/namespaces/{id}{rest}` — the id is one encoded path segment. */
+function contextNsPath(id: string, rest = ""): string {
+  return `/api/context-layer/namespaces/${encodeURIComponent(id)}${rest}`;
+}
+
+/** `AgentSpec.context_layer`: one COA namespace (harness + HTTP zip_runtime). */
+export interface ContextLayerRef {
+  namespace_id: string;
+  namespace_name?: string;
 }
 
 export interface ConsentPortalInfo {
@@ -5948,6 +6152,49 @@ export const api = {
       `/api/identity/grants/${encodeURIComponent(connection)}`,
       { method: "DELETE" },
     ),
+  getContextLayer: () => request<ContextLayerStatus>("/api/context-layer"),
+  connectContextLayer: (input: ContextLayerConnectInput) =>
+    request<ContextLayerStatus>("/api/context-layer", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  disconnectContextLayer: () =>
+    request<{ disconnected: boolean; connection: string; console_workload: string }>(
+      "/api/context-layer",
+      { method: "DELETE" },
+    ),
+  authorizeContextLayer: () =>
+    request<ContextLayerAuthorizeResult>("/api/context-layer/authorize", { method: "POST" }),
+  revokeContextLayer: () =>
+    request<{ revoked: boolean; provider: string; agents: number }>(
+      "/api/context-layer/revoke",
+      { method: "POST" },
+    ),
+  listContextLayerNamespaces: () =>
+    request<{ namespaces: ContextLayerNamespace[] }>("/api/context-layer/namespaces"),
+  getContextLayerNamespace: (id: string) =>
+    request<{ namespace: ContextLayerNamespace }>(contextNsPath(id)),
+  listContextLayerSources: (id: string) =>
+    request<{ namespace_id: string; sources: ContextLayerSource[] }>(contextNsPath(id, "/sources")),
+  listContextLayerMetrics: (id: string) =>
+    request<{ namespace_id: string; metrics: ContextLayerMetric[] }>(contextNsPath(id, "/metrics")),
+  getContextLayerOntology: (id: string) => request<ContextLayerOntologyView>(contextNsPath(id, "/ontology")),
+  getContextLayerHealth: () => request<ContextLayerHealth>("/api/context-layer/health"),
+  /** `POST /api/context-layer/playground` — the raw SSE response (read it with
+   *  `sseEvents`). A non-2xx answer (not connected, a vault failure, a bad body)
+   *  throws an `ApiError` before any stream; COA's own refusals arrive as `error`
+   *  events and missing consent as one `auth_required` event. */
+  contextLayerPlayground: async (body: ContextLayerPlaygroundInput, signal?: AbortSignal): Promise<Response> => {
+    const path = "/api/context-layer/playground";
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) await parseResponse<never>(path, res);
+    return res;
+  },
   getConsentPortal: () =>
     request<{ gateway_id: string | null; portal: ConsentPortalInfo | null }>(
       "/api/identity/consent-portal",

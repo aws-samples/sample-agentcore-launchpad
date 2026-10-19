@@ -24,6 +24,7 @@ from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
 from app.services.memory import memory_arn_for
 from app.services.workspace import WorkspaceContext
+from app.templates import context_layer_support
 
 logger = logging.getLogger("launchpad.deploy")
 
@@ -109,14 +110,27 @@ _KB_MARKER = "\n## Knowledge bases\nRetrieval tools are mounted for you."
 _KB_END = "Ground answers on retrieved content and cite sources when you use them."
 
 
-def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
-    """Remove the platform-appended KB section from a prompt read back from AWS.
+def _context_prompt(spec: AgentSpec) -> str:
+    """The COA context-layer section (namespace + tool guidance), or ''. The COA tool
+    itself is never deployed: it rides each console turn's tools override with the
+    member's token (``services/invoke.harness_turn_overrides``)."""
+    return context_layer_support.addendum_for(
+        spec, tool_prefix=context_layer_support.HARNESS_TOOL_PREFIX
+    )
 
-    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec)``, so a
-    prompt revised from the LIVE Harness (an AI recommendation) carries that section
-    too; storing it as the spec prompt would make the next deploy append it twice
-    (measured live 2026-09-30). Exact block first; otherwise the marker through the
-    section's closing line, in case the revision reflowed the KB bullet lines."""
+
+def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
+    """Remove the platform-appended sections from a prompt read back from AWS.
+
+    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec)`` (+ the
+    COA context-layer section), so a prompt revised from the LIVE Harness (an AI
+    recommendation) carries them too; storing it as the spec prompt would make the next
+    deploy append them twice (measured live 2026-09-30). Exact block first; otherwise
+    the KB marker through the section's closing line, in case the revision reflowed
+    the KB bullet lines."""
+    context = _context_prompt(spec)
+    if context and context in text:
+        text = text.replace(context, "").rstrip()
     if not spec.knowledge_bases:
         return text
     block = _kb_prompt(spec)
@@ -153,6 +167,7 @@ def build_create_params(
     system_prompt = spec.system_prompt
     if spec.knowledge_bases:
         system_prompt += _kb_prompt(spec)
+    system_prompt += _context_prompt(spec)
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
         "executionRoleArn": execution_role_arn,

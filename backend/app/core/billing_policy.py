@@ -177,6 +177,15 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("DELETE", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}"): FREE,
     ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): Billable(SOURCE_KNOWLEDGE),
     ("POST", "/api/knowledge-bases/{kb_id}/query"): Billable(SOURCE_KNOWLEDGE),
+    # ---- COA context layer: connect / consent / revoke are control-plane writes; COA's
+    # own spend is not metered by Launchpad ----
+    ("PUT", "/api/context-layer"): FREE,
+    ("DELETE", "/api/context-layer"): FREE,
+    ("POST", "/api/context-layer/authorize"): FREE,
+    ("POST", "/api/context-layer/revoke"): FREE,
+    # the playground asks COA's Serve runtime: COA spend is in COA's account, and
+    # Launchpad does not meter it
+    ("POST", "/api/context-layer/playground"): FREE,
     # ---- governance: policy test calls a Gateway tool; NL policy authoring bills tokens ----
     ("POST", "/api/governance/gateways/{gateway_id}/manage"): FREE,
     ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): FREE,

@@ -633,6 +633,44 @@ class UserGrant(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class ContextLayer(Base):
+    """The workspace's connected COA (Context Ontology Accelerator) deployment.
+
+    One row per workspace (``services/context_layer.py``). Identifiers only:
+    ``resources`` holds what discovery read from SSM + CloudFormation (runtime ARNs,
+    the REST endpoint, the console URL, the COA user pool, issuer and agent OAuth
+    client id). The client secret lives in the token vault behind ``connection``.
+    Whether the runtimes are READY or the callback is registered is read live, never
+    stored. Launchpad connects to COA; it never deploys or deletes it.
+    """
+
+    __tablename__ = "context_layers"
+    __table_args__ = (
+        # An index rather than a table constraint so the workspace migration
+        # rehearsal can drop workspace_id (as uq_identity_providers_*).
+        Index("uq_context_layers_workspace", "workspace_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    prefix: Mapped[str] = mapped_column(String(64))
+    env: Mapped[str] = mapped_column(String(32), default="dev")
+    # the COA deployment's region; may differ from the workspace's
+    coa_region: Mapped[str] = mapped_column(String(32))
+    resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # the OAuth2 Connection (credential provider name) holding the COA agent client
+    connection: Mapped[str] = mapped_column(String(128))
+    # the console workload identity the module and Harness agents fetch tokens with
+    console_workload: Mapped[str] = mapped_column(String(255))
+    # The connecting console principal (`app.services.creators`). Not a FK.
+    created_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class PolicyDecision(Base):
     __tablename__ = "policy_decisions"
 

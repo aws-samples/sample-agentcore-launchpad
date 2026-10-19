@@ -55,6 +55,7 @@ WORKSPACE_SCOPED_TABLES = (
     "chat_feedback",
     "alert_rules",
     "spec_snapshots",
+    "context_layers",
 )
 
 
@@ -306,6 +307,7 @@ def _migrate(bind) -> None:
     _migrate_api_key_lifecycle_columns(bind)
     _migrate_creator_columns(bind)
     _migrate_resource_creators_index(bind)
+    _migrate_context_layer_index(bind)
     _migrate_branch_creators(bind)
 
 
@@ -483,6 +485,23 @@ def _migrate_resource_creators_index(bind) -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_resource_creators_workspace_kind_resource "
                 "ON resource_creators (workspace_id, kind, resource_id)"
+            )
+        )
+
+
+def _migrate_context_layer_index(bind) -> None:
+    """One COA context layer per workspace (`context_layers`). `create_all` builds
+    the unique index with the table; this keeps a ledger whose table lost it
+    honest. Runs after `_migrate_workspace_columns` because it spans `workspace_id`."""
+    from sqlalchemy import inspect, text
+
+    if "context_layers" not in inspect(bind).get_table_names():
+        return
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_context_layers_workspace "
+                "ON context_layers (workspace_id)"
             )
         )
 
@@ -827,6 +846,9 @@ def _migrate_workspace_columns(bind) -> None:
         # born with the column (a console-v3-era table too); listed so the
         # scoped-tables drift test holds and the index is ensured
         "spec_snapshots": "ALTER TABLE spec_snapshots ADD COLUMN workspace_id VARCHAR(32)",
+        # born with the column (the COA context layer); listed so the scoped-tables
+        # drift test holds and the index is ensured
+        "context_layers": "ALTER TABLE context_layers ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

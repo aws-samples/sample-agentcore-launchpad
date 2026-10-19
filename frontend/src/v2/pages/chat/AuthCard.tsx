@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type UserGrantStatus } from "../../../lib/api";
-import { type AuthAsk, authCardView, pollGrant, safeAuthUrl } from "../../../lib/user-grants";
+import { type AuthAsk, authCardView, canPollGrant, pollGrant, safeAuthUrl } from "../../../lib/user-grants";
 import { Button, Tag } from "../../ui";
 
 /**
@@ -35,15 +35,16 @@ export function AuthCard({
   const view = authCardView({ live, status, expired, retryPrompt, retryDisabled });
   const authorized = view.phase === "authorized";
 
+  const pollable = canPollGrant(ask);
   useEffect(() => {
-    if (!ask.agent_id) return;
+    if (!pollable) return;
     return pollGrant({
       check: () => api.userTokenStatus(ask.provider, ask.agent_id),
       live,
       onStatus: setStatus,
       onExpired: () => setExpired(true),
     });
-  }, [ask.provider, ask.agent_id, live]);
+  }, [ask.provider, ask.agent_id, pollable, live]);
 
   const tone = authorized ? "green" : view.phase === "expired" ? "gray" : "orange";
   const label = t(

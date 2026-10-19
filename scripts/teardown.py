@@ -7,6 +7,9 @@ Scope (reverse creation order, dependents before the shared substrate):
      the IAM roles that go with the stack)
   2. Credential providers launchpad-office-facts-key (API key) and
      launchpad-gw-m2m (OAuth2), matched by exact name
+  2b. Console workload identities launchpad-console-* (the COA context layer's
+     token-vault identity, one per workspace; the Connection it used is a
+     Connection like any other and is deleted from the console)
   3. Per-agent IAM roles: launchpad-agent-* carrying the launchpad:agent-id
      tag. Every per-agent role is tagged at creation, so this matches the roles
      of agents you have not deleted yet as well as the orphans a failed agent
@@ -39,6 +42,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 from app.services import agent_iam  # noqa: E402
 from app.services import bootstrap as bs  # noqa: E402
 from app.services.agentcore import policy as policy_api  # noqa: E402
+from app.services.context_layer import CONSOLE_WORKLOAD_PREFIX  # noqa: E402
 from app.services.gateway_bootstrap import (  # noqa: E402
     API_KEY_PROVIDER_NAME,
     GATEWAY_M2M_PROVIDER_NAME,
@@ -113,6 +117,25 @@ def _credential_provider_targets(control) -> list[tuple[str, str, str]]:
     return targets
 
 
+def _console_workload_targets(control) -> list[tuple[str, str, str]]:
+    """The COA context layer's console workload identities (launchpad-console-*).
+    Runtime-owned workload identities are named after their runtime and never match."""
+    targets: list[tuple[str, str, str]] = []
+    kwargs: dict = {"maxResults": 20}
+    while True:
+        page = control.list_workload_identities(**kwargs)
+        for identity in page.get("workloadIdentities", []):
+            name = identity.get("name", "")
+            if name.startswith(CONSOLE_WORKLOAD_PREFIX):
+                targets.append(
+                    ("console-workload", name, identity.get("workloadIdentityArn", ""))
+                )
+        token = page.get("nextToken")
+        if not token:
+            return targets
+        kwargs = {"maxResults": 20, "nextToken": token}
+
+
 def _agent_role_targets(iam) -> list[tuple[str, str, str]]:
     """Per-agent execution roles: `launchpad-agent-*` **and** tagged
     `launchpad:agent-id`. Both are required — the tag alone is what separates
@@ -154,6 +177,7 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
     # providers the gateway targets and harnesses used, then per-agent roles.
     targets.extend(_gateway_targets(control))
     targets.extend(_credential_provider_targets(control))
+    targets.extend(_console_workload_targets(control))
     targets.extend(_agent_role_targets(iam))
 
     memories = control.list_memories(maxResults=100).get("memories", [])
@@ -238,6 +262,8 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
         control.delete_api_key_credential_provider(name=identifier)
     elif kind == "oauth2-provider":
         control.delete_oauth2_credential_provider(name=identifier)
+    elif kind == "console-workload":
+        control.delete_workload_identity(name=identifier)
     elif kind == "agent-role":
         _delete_role(bs._client("iam", region), identifier)
     elif kind == "memory":

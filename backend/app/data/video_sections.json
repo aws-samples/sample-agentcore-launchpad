@@ -14,6 +14,7 @@
     {"id": "agents", "categoryId": "build", "title": {"en": "Agent Management", "zh-CN": "Agent 管理"}, "path": "/v2/agents"},
     {"id": "registry", "categoryId": "build", "title": {"en": "Registry", "zh-CN": "注册中心"}, "path": "/v2/registry"},
     {"id": "knowledge-bases", "categoryId": "build", "title": {"en": "Knowledge Bases", "zh-CN": "知识库"}, "path": "/v2/knowledge-bases"},
+    {"id": "context-layer", "categoryId": "build", "title": {"en": "Context layer", "zh-CN": "上下文层"}, "path": "/v2/context-layer"},
     {"id": "chat", "categoryId": "run", "title": {"en": "Chat Playground", "zh-CN": "对话演练场"}, "path": "/v2/chat"},
     {"id": "observability", "categoryId": "run", "title": {"en": "Observability", "zh-CN": "可观测"}, "path": "/v2/observability"},
     {"id": "memory", "categoryId": "run", "title": {"en": "Memory", "zh-CN": "记忆"}, "path": "/v2/memory"},

@@ -265,6 +265,17 @@ def discover_agent_tools(spec: dict[str, Any]) -> dict[str, str]:
     return tools
 
 
+# A COA context layer acts as the signed-in member; experiment and canary traffic has
+# no console user to act for (and a COA token never rides a canary gateway).
+_CONTEXT_LAYER_REFUSAL = {
+    "reason_code": "context-layer",
+    "reason": (
+        "Agents with a COA context layer act as the signed-in member, and experiment "
+        "or canary traffic has no console user to act for."
+    ),
+}
+
+
 def experiment_capability(agent_row: Any) -> dict[str, Any]:
     """Backend-owned config-bundle experiment capability projection."""
     spec = agent_row.spec or {}
@@ -281,6 +292,8 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "system-managed",
             "reason": "System-managed presets cannot be modified by an experiment.",
         }
+    if (spec or {}).get("context_layer"):
+        return {**base, **_CONTEXT_LAYER_REFUSAL}
     if agent_row.method == "byoc":
         # Same verdict as spec.code/code_bundle below — BYOC is user source by
         # definition, and it never reaches that branch because the method gate
@@ -362,6 +375,8 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "not-active",
             "reason": "Canary agent must be active.",
         }
+    if (agent_row.spec or {}).get("context_layer"):
+        return {**base, **_CONTEXT_LAYER_REFUSAL}
     if agent_row.method == "harness":
         # A Harness canary A/Bs two EXISTING versions (control vs the latest)
         # behind passthrough gateway targets — nothing to mint from a spec.

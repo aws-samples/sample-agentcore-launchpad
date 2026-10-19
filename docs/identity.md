@@ -282,8 +282,9 @@ The v2 page is `/v2/agents?view=identity&id=<agent>`.
 
 An `as_user` downstream is called with **the end user's own token**. That token
 comes from a one-time consent at the IdP and is kept in the AgentCore Identity
-token vault under (workload identity, user). Launchpad never sees it. The ledger
-holds only derived progress: pending sessions, grants and revocations.
+token vault under (workload identity, user). Launchpad never sees it, with one
+documented exception: the COA context layer (§7.7). The ledger holds only derived
+progress: pending sessions, grants and revocations.
 
 ### 7.1 The four legs
 
@@ -487,6 +488,70 @@ Sources (AWS devguide, `https://docs.aws.amazon.com/bedrock-agentcore/latest/dev
 [identity-create-consent-portal-console](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-create-consent-portal-console.html),
 and the AWS ML blog post
 [Manage end-user OAuth consent for AI agents with Amazon Bedrock AgentCore](https://aws.amazon.com/blogs/machine-learning/manage-end-user-oauth-consent-for-ai-agents-with-amazon-bedrock-agentcore/).
+
+### 7.7 COA context layer: the console workload identity
+
+The COA context layer (`/api/context-layer`, `services/context_layer*.py`) connects
+a workspace to one Context Ontology Accelerator deployment. COA accepts only tokens
+from its own Cognito pool, and its **agent OAuth client** (a confidential 3LO
+client) is the only client a platform may act for a user with. Connecting:
+
+- creates (or adopts by name) one OAuth2 Connection holding that client, default
+  name `coa-<prefix>`. The client secret is read from `DescribeUserPoolClient`
+  during the connect request and passed straight to
+  `CreateOauth2CredentialProvider`; it is never stored, logged or returned;
+- ensures the **console workload identity** `launchpad-console-<workspace>` in the
+  workspace region, with `allowedResourceOauth2ReturnUrls ⊇ [oauth_return_url]`.
+  Unlike an agent's identity, no runtime owns it: Launchpad creates it, and
+  `scripts/teardown.py` sweeps every `launchpad-console-*` identity.
+
+The Connection's callback URL must be registered on the COA agent client, through
+the `agentOauthCallbackUrls` context of COA's own deploy. `GET /api/context-layer`
+reads `callback_registered` live and shows the URL to administrators only.
+
+**Who uses which identity.**
+
+| Caller | Workload identity | Vault user | Grant row |
+|---|---|---|---|
+| The Context Layer page (`/api/context-layer/*` COA reads) | console | console username | `agent_id=""`, `tool="context_layer"` |
+| A Harness agent with `spec.context_layer` | console | console username (Chat's `runtimeUserId`) | the same console grant |
+| A Strands (`zip_runtime`) agent with `spec.context_layer` | the agent's own runtime identity | console username | `agent_id=<agent>`, per agent (§7.1) |
+
+A Strands agent's deploy expands `context_layer` into one `as_user` MCP tool named
+`coa` on the layer's Connection, so its path is exactly §7.1–§7.3. A Harness has no
+tool-level auth, so the backend fetches the member's token and adds it to that
+turn's `InvokeHarness.tools` as a `remote_mcp` server (`Authorization: Bearer …`),
+with `@coa` in `allowedTools`.
+
+**The custody exception (D1).** For the console identity, the *backend* holds a
+member's COA token. The rules (`services/context_layer_tokens.py`):
+
+1. **Source.** Only `GetResourceOauth2Token(oauth2Flow=USER_FEDERATION)`, presenting
+   `GetWorkloadAccessTokenForUserId(console workload, userId=<console username>)`.
+2. **Sinks.** Process memory, and outbound requests to the COA deployment: its REST
+   API, its Serve runtime, and its MCP runtime URL inside an InvokeHarness tools
+   override. Never the ledger, a log line, an SSE event, an API response, an
+   exception or a trace. Errors name the COA status code only.
+3. **Cache.** In process, keyed (workspace, username), until `exp − 120 s`. A cached
+   token is used only while no revocation is in force.
+4. **Revocation.** The existing `user_token_revocations` (user, Connection) row:
+   the next fetch sends `forceAuthentication=true` until the console grant is
+   re-authorized. Revoking under 我的授权 or on the Context Layer page also drops the
+   cache entry. A COA 401 drops the entry and forces consent until the member
+   consents again.
+5. **Consent.** The four legs of §7.1, with `agent_id=""`. `customState` is
+   `{kind: "context_layer"}` from the page (so `/auth/return` goes back to
+   `/v2/context-layer`) or `{agent_id, tool, session_id}` from a Chat turn. The Chat
+   auth card polls `grants/{connection}/status?agent_id=<harness agent>`, which
+   reads the console grant for a Harness agent on the layer.
+
+**Refusals.** `/v1` never acts as anyone in COA: a COA-attached agent answers
+`identity.as_user_requires_console` (409) before any vault call, even when a token is
+vaulted. Evaluation replays, canary / A-B setup (`reason_code: "context-layer"`) and
+Harness → runtime conversion refuse COA-attached agents, because none of them has a
+signed-in console user to act as. A Connection the layer uses cannot be deleted
+while the layer is connected, and disconnecting is refused while an agent attaches
+the layer.
 
 ## 8. P3: identity passthrough
 

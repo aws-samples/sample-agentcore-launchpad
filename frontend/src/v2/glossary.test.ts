@@ -53,9 +53,9 @@ describe("glossaryMatches", () => {
 });
 
 describe("glossary terms", () => {
-  it("are the 19 platform terms, without the Agent-DLC criteria", () => {
-    expect(GLOSSARY_TERMS).toHaveLength(19);
-    expect(new Set(GLOSSARY_TERMS).size).toBe(19);
+  it("are the 20 platform terms, without the Agent-DLC criteria", () => {
+    expect(GLOSSARY_TERMS).toHaveLength(20);
+    expect(new Set(GLOSSARY_TERMS).size).toBe(20);
     expect(isGlossaryTerm("criteria")).toBe(false);
   });
 

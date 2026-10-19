@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.agent import AgentSpec, ToolRef
+from app.templates import context_layer_support
 
 IDENTITY_TEMPLATE = Path(__file__).with_name("identity_tools.py.tmpl")
 
@@ -121,11 +122,23 @@ def uses_as_user(spec: AgentSpec) -> bool:
     return bool(as_user_connections(spec))
 
 
-def as_user_connections_stored(spec_dict: Mapping[str, Any] | None) -> list[str]:
+def as_user_connections_stored(
+    spec_dict: Mapping[str, Any] | None, context_layer_connection: str | None = None
+) -> list[str]:
     """Raw-dict variant for the invoke hot path (a stored spec may predate the
     current schema; the revocation lookup must still see it). Reads both the
-    v2 ``{connection, mode}`` and the earlier fork's ``{provider, flow}`` shape."""
+    v2 ``{connection, mode}`` and the earlier fork's ``{provider, flow}`` shape.
+
+    A runtime that attaches the COA context layer deploys one as_user tool on the
+    layer's Connection without naming it in the stored spec; the caller passes that
+    Connection (``context_layer_connection``) so its revocation is honoured too."""
     names: set[str] = set()
+    if (
+        context_layer_connection
+        and (spec_dict or {}).get("method") != "harness"
+        and context_layer_support.attached(spec_dict)
+    ):
+        names.add(context_layer_connection)
     for tool in (spec_dict or {}).get("tools") or []:
         auth = tool.get("auth") if isinstance(tool, dict) else None
         if not isinstance(auth, dict):
