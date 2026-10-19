@@ -6294,6 +6294,7 @@
         "deleteBody": "确定删除「{{name}}」？删除后不可恢复。",
         "deleteOk": "删除"
       },
+      "prunedEvaluators": "已移除本区域暂未提供的评估器：{{names}}",
       "copySuffix": " 副本",
       "createdOnline": "持续评估任务已创建",
       "createdRun": "评估任务已启动",

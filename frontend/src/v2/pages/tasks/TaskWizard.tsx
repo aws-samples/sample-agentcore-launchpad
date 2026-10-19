@@ -6,7 +6,7 @@ import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } 
 import { rememberBudgetNotice } from "../../../lib/budgets";
 import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { loadModelDefaults, STATIC_MODEL_DEFAULTS, withCurrentModel } from "../../../lib/model-defaults";
-import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { builtinsNotInCatalog, evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { CustomUnavailableNote } from "../../EvaluatorPicker";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -173,6 +173,16 @@ export function TaskWizard() {
   useEffect(() => {
     if (seed.data && draft === null) setDraft(seed.data);
   }, [seed.data, draft]);
+  // a copied run or a handoff can carry a built-in this region does not offer: it is
+  // not in the picker (so it could not be unticked) and would fail the whole batch
+  const [prunedEvaluators, setPrunedEvaluators] = useState<string[]>([]);
+  useEffect(() => {
+    if (!draft || !evaluators.data) return;
+    const dropped = builtinsNotInCatalog(draft.evaluators, evaluators.data.evaluators);
+    if (dropped.length === 0) return;
+    setDraft({ ...draft, evaluators: draft.evaluators.filter((id) => !dropped.includes(id)) });
+    setPrunedEvaluators((prev) => [...prev, ...dropped]);
+  }, [draft, evaluators.data]);
 
   const activeAgents = useMemo(() => (agents.data?.agents ?? []).filter((a) => a.status === "active"), [agents.data]);
   const agent = activeAgents.find((a) => a.id === draft?.agentId) ?? null;
@@ -681,6 +691,11 @@ export function TaskWizard() {
       {step === 1 && draft.mode === "evaluators" && (
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
           <CustomUnavailableNote marker={evaluators.data?.custom_unavailable} />
+          {prunedEvaluators.length > 0 && (
+            <Alert tone="warn">
+              {t("v2.tasks.prunedEvaluators", { names: prunedEvaluators.map((id) => evaluatorLabel(t, id)).join(", ") })}
+            </Alert>
+          )}
           <div className="v2-toolbar">
             <FilterSelect
               label={t("v2.evaluators.colLevel")}

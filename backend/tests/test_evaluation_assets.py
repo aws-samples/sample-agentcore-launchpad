@@ -3677,3 +3677,25 @@ def test_deleted_and_rejected_evaluators_free_their_names(app_ready):
         assert "kid_pii_judge" not in assets.ledger_evaluator_names(db, DEFAULT_WORKSPACE_ID)
     finally:
         db.close()
+
+
+def test_builtin_the_region_lacks_refuses_the_run_before_any_effect(gated, monkeypatch):
+    """A documented built-in still rolling out (absent from the region's ListEvaluators,
+    e.g. a run copied from an older selection) is refused up front — not after the agent
+    was invoked, when StartBatchEvaluation rejects the whole batch."""
+    admin, _, _ = gated
+    aid = _route_agent()
+    r = admin.post("/api/eval/datasets", json={"name": "region-builtins", "items": [
+        {"scenario_id": "s1", "turns": [{"input": "hello"}]}]})
+    assert r.status_code == 201, r.text
+    control = FakeControl()
+    control.evaluators["Builtin.Helpfulness"] = {
+        "evaluatorId": "Builtin.Helpfulness", "evaluatorType": "Builtin", "level": "TRACE"}
+    resp, effects = _post_run(admin, monkeypatch, control, {
+        "agent_id": aid, "dataset_id": r.json()["id"],
+        "evaluators": ["Builtin.Helpfulness", "Builtin.ContextRelevance"]})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "run.evaluator_not_found"
+    assert resp.json()["detail"] == {"evaluator": "Builtin.ContextRelevance"}
+    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
+                       "state": None}, effects

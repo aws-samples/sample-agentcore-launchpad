@@ -182,9 +182,17 @@ def _assert_target_references(
     problems: dict[str, list[str]] = {}
     control = None
     hidden = visibility.hidden_aws_ids(viewer, db, ws.id, creators.EVALUATOR, evaluators)
+    offered = None
+    if any(e in coverage.KNOWN_BUILTINS for e in evaluators):
+        control = control_client(ws.context)
+        offered = _region_builtins(control)
     for evaluator in dict.fromkeys(evaluators):
         if evaluator in hidden:
             # workspace isolation: a hidden custom evaluator is a missing one
+            raise _evaluator_missing(evaluator)
+        if offered and evaluator in coverage.KNOWN_BUILTINS and evaluator not in offered:
+            # documented but still rolling out here: StartBatchEvaluation would reject
+            # the whole batch only after the agent was invoked
             raise _evaluator_missing(evaluator)
         if evaluator in coverage.KNOWN_BUILTINS:
             needs, level = coverage.builtin_needs(evaluator), coverage.KNOWN_BUILTINS[evaluator]
@@ -259,6 +267,18 @@ def _assert_target_references(
             "evaluator.",
             {"evaluators": problems}, status_code=422,
         )
+
+
+def _region_builtins(control: Any) -> set[str] | None:
+    """The built-ins this region's ListEvaluators names; None (check nothing) when the
+    listing fails or names none — it then says nothing about them. One page: the
+    service lists built-ins first, and they fit well within it."""
+    try:
+        listed = control.list_evaluators(maxResults=100).get("evaluators") or []
+        ids = {str(e.get("evaluatorId") or "") for e in listed}
+    except Exception:
+        return None
+    return {e for e in ids if e.startswith("Builtin.")} or None
 
 
 def _evaluator_missing(evaluator: str) -> AppError:

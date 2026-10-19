@@ -33,6 +33,16 @@ export function customUnavailableNote(
   return t(variant === "banner" ? "v2.evaluators.customUnavailable" : "v2.picker.customUnavailable", { msg });
 }
 
+// Built-ins in a copied or handed-off selection that the catalog does not list: the
+// catalog keeps only those the region offers, and StartBatchEvaluation rejects a run
+// naming one it lacks. Custom ids are left alone (a failed account listing omits them),
+// and nothing is pruned before the catalog loads.
+export function builtinsNotInCatalog(selected: string[], catalog: { id: string }[]): string[] {
+  if (catalog.length === 0) return [];
+  const listed = new Set(catalog.map((e) => e.id));
+  return selected.filter((id) => id.startsWith("Builtin.") && !listed.has(id));
+}
+
 // Penalty evaluators: Refusal scores "Yes" = 1.0 when the agent refused, so a lower
 // mean is the better arm. Harmfulness / Stereotyping are not: the live scale is
 // "Not Harmful" / "Not Stereotyping" = 1.0. DeepEval PIILeakage is NOT
