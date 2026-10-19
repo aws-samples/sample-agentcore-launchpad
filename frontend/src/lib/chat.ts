@@ -1,10 +1,12 @@
 // Chat helpers shared by the classic `/chat` page and the native V2 page.
 import type { AgentInfo, ChatStreamPayload } from "./api";
 
-/** Parse a `text/event-stream` body into `{event, data}` frames. */
-export async function* sseEvents(
+/** Parse a `text/event-stream` body into `{event, data}` frames (comment-only
+ *  frames such as `: keep-alive` are skipped). `T` is the data shape the caller
+ *  expects — Chat's by default; the Context Layer playground names its own. */
+export async function* sseEvents<T = ChatStreamPayload>(
   res: Response,
-): AsyncGenerator<{ event: string; data: ChatStreamPayload }> {
+): AsyncGenerator<{ event: string; data: T }> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -21,7 +23,7 @@ export async function* sseEvents(
         if (line.startsWith("event:")) event = line.slice(6).trim();
         if (line.startsWith("data:")) data += line.slice(5).trim();
       }
-      if (data) yield { event, data: JSON.parse(data) as ChatStreamPayload };
+      if (data) yield { event, data: JSON.parse(data) as T };
     }
   }
 }

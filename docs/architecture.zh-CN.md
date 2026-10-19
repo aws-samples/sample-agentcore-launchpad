@@ -1801,9 +1801,39 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。
   - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
     的控制台用户。
-- **模块**（`routers/context_layer.py`）：状态（实时运行时／回调／Agent OAuth 探测）、成员
-  本人的授权（授权／撤销），以及 COA 允许其查看的命名空间（`services/context_layer_api.py`，
-  以成员身份调用 COA REST）。浏览页面、Playground 与挂载操作是后续工作。
+- **模块**（`routers/context_layer.py`，页面 `frontend/src/v2/pages/ContextLayer.tsx` 与
+  `contextLayer/`，仅在专家模式导航中出现）。状态只读取一次，由三个 `?view=` 子页面共用：
+  - *概览*：部署卡片（实时运行时／回调／Agent OAuth 探测）、成员本人的授权（授权／撤销）、
+    COA 允许其查看的命名空间，以及 COA 自身的 `/system-health`
+    （`GET /api/context-layer/health`）。管理员在此连接、重新连接或断开。未连接时，成员会被
+    提示联系管理员；未授权时，显示授权入口且**不调用 COA**；没有命名空间时，说明授权由 COA
+    管理员授予，并附 COA 控制台链接。
+  - `namespace&id=<uuid>[&tab=sources|metrics|ontology]`：COA 所呈现的命名空间，分为数据源
+    （类型、状态、表数）、受治理指标（单位、同义词、各方言表达式）和本体类（每个本体一次
+    `graph/ontology-overview`，最多并发读取 8 个本体，每个 200 个类）三个标签页。每个标签页
+    都深链到对应的 COA 控制台路由（`/namespaces/{id}/sources|metrics|ontology/graph`）：编写
+    工作留在 COA。“挂到 Agent”会打开 V2 创建向导（新建 Harness 或 Strands Agent），或打开
+    已有 Agent 的编辑器，并预填 `context_ns`／`context_name`；保存即普通的创建／重新发布。
+  - `playground[&ns=<uuid>]`：每次向 COA 的 **Serve 运行时**提一个问题
+    （`services/context_layer_playground.py`）。后端以 `stream: true`、成员的 bearer 和按成员
+    + 命名空间固定的运行时会话 id（`lp-` + 40 位十六进制）代理
+    `POST <serve invocations URL>`，并把 COA 的帧规范化为 `step`、`token`、`done`（答案、
+    层级、置信度、最多 200 行结果、供下一轮使用的 COA `sessionId`）和 `error`
+    （`context_layer.*`）事件；COA 静默时发送 `: keep-alive` 注释。后端从不设置 COA 的
+    `includeDebugInfo`，也从不转发生成的 SQL（`queryUsed`）：COA 默认不返回它，因为它会暴露内部
+    schema。未授权时只有一个
+    `auth_required` 事件，与 Chat 的授权卡片相同。上游是响应生成器内部的
+    `httpx.AsyncClient` 流，客户端断开时会关闭到 COA 的连接。读超时为 180 秒，COA 自身预算为
+    170 秒。
+  - COA REST 读取（`services/context_layer_api.py`）返回白名单投影
+    （`schemas/context_layer.py`），从不透传。错误映射：COA 401 → `context_layer.reauthorize`
+    （409），403 → `forbidden`，404 → `coa_not_found`，429／5xx／超时 → `upstream`，最多附带
+    200 个字符的 COA 原始消息。
+- **限制**：COA 不允许被内嵌（`X-Frame-Options: DENY`），所以所有编写链接都在新标签页打开。
+  COA 的 REST 数据层上限为 29 秒，因此提问走流式 Serve 运行时，而不是
+  `POST /namespaces/{id}/query`。挂载 COA 的 Agent 在 `/v1` 上返回 409；金丝雀／A-B、评估回放
+  与 Harness 转换都会拒绝它们，因为都没有可代表的控制台用户。COA 的开销记在 COA 的账号上：
+  Playground 在计费表中是 `FREE`，Launchpad 不计量。
 
 ## 记忆控制台(控制台 05)
 

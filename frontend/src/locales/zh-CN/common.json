@@ -2460,7 +2460,11 @@
     "context_layer.connection_mismatch": "该出站凭证不是 COA 的 Agent OAuth 客户端。",
     "context_layer.connection_not_found": "此工作区中没有该名称的 OAuth2 出站凭证。",
     "context_layer.identity_failed": "AgentCore Identity 无法提供你的 COA 令牌。",
-    "context_layer.invalid_request": "前缀、环境或区域无效。"
+    "context_layer.invalid_request": "前缀、环境或区域无效。",
+    "context_layer.coa_not_found": "COA 中没有该命名空间或条目，或者不向你开放。",
+    "context_layer.no_result": "COA 没有找到这个问题的答案。",
+    "context_layer.coa_rejected": "COA 无法处理这个问题。",
+    "context_layer.invalid_namespace": "COA 命名空间 ID 是 UUID。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -9423,7 +9427,9 @@
         "colName": "名称",
         "colId": "ID",
         "colStatus": "状态",
-        "colSources": "数据源"
+        "colSources": "数据源",
+        "emptyHint": "命名空间及其授权由 COA 管理员在 COA 控制台中创建。获得授权后，命名空间会出现在这里。",
+        "browse": "浏览"
       },
       "wizard": {
         "title": "上下文层（COA）",
@@ -9440,6 +9446,118 @@
         "module": "打开上下文层页面",
         "noteHarness": "每轮对话都携带提问者本人的 COA 令牌；未授权时，对话中会先出现授权卡片。公开 /v1 API 无法调用此 Agent。",
         "noteStrands": "Agent 会自行获取每位成员的 COA 令牌，每位成员在对话中授权一次即可。公开 /v1 API 无法调用此 Agent。"
+      },
+      "openInCoa": "在 COA 中打开",
+      "errors": {
+        "authorize": "请先授权 Launchpad 以你的身份读取 COA。",
+        "reauthorize": "COA 已不再接受你的授权，请重新授权后继续。",
+        "forbidden": "COA 拒绝了此操作：你没有相应授权。授权由 COA 管理员在 COA 控制台中管理。",
+        "notFound": "COA 中没有该命名空间或条目，或者不向你开放。"
+      },
+      "gate": {
+        "connectFirst": "尚未连接 COA 部署，请先在概览页连接。",
+        "authorizeFirst": "本页面以你的身份读取 COA。请先授权 Launchpad 一次。"
+      },
+      "services": {
+        "title": "COA 服务",
+        "sub": "COA 向你报告的自身依赖健康状况",
+        "dynamodb": "DynamoDB",
+        "neptune_kg": "知识图谱（Neptune）",
+        "opensearch": "向量检索（OpenSearch）",
+        "graph_store": "本体图存储",
+        "vector_store": "本体向量存储",
+        "bedrock_embeddings": "Bedrock 向量化",
+        "description_llm": "描述生成模型"
+      },
+      "namespace": {
+        "basic": "命名空间",
+        "owner": "所有者",
+        "description": "描述"
+      },
+      "tabs": {
+        "sources": "数据源",
+        "metrics": "指标",
+        "ontology": "本体"
+      },
+      "sources": {
+        "title": "数据源",
+        "sub": "COA 为此命名空间读取的数据库和文档",
+        "empty": "此命名空间还没有数据源。数据源在 COA 控制台中连接。",
+        "colName": "名称",
+        "colType": "类型",
+        "colStatus": "状态",
+        "colTables": "表数",
+        "colUpdated": "更新时间"
+      },
+      "metrics": {
+        "title": "受治理指标",
+        "sub": "Agent 会优先使用这些定义，而不是自行计算",
+        "empty": "此命名空间还没有受治理指标。指标在 COA 控制台中定义。",
+        "colName": "指标",
+        "colUnit": "单位",
+        "colSynonyms": "同义词",
+        "colDialects": "表达式",
+        "colTable": "源表"
+      },
+      "ontology": {
+        "title": "本体",
+        "sub": "COA 在此命名空间中掌握的类",
+        "classCount": "{{count}} 个类",
+        "failed": "COA 未能列出 {{count}} 个本体的类，请稍后重试。",
+        "truncated": "这里只列出了本体的一部分。在 COA 中打开可查看全部内容。",
+        "search": "筛选类",
+        "empty": "此命名空间还没有本体类。本体在 COA 控制台中归纳或上传。",
+        "colClass": "类",
+        "colDescription": "描述",
+        "colOntology": "本体"
+      },
+      "playground": {
+        "title": "试问",
+        "openCoa": "COA 试问页",
+        "reset": "新对话",
+        "you": "你",
+        "streaming": "回答中",
+        "thinking": "COA 正在处理…",
+        "tierHint": "作答的 COA 层级：T1 受治理指标，T2 生成 SQL，T3 文档与图谱",
+        "confidence": "置信度 {{pct}}%",
+        "partial": "部分结果",
+        "guardrail": "已被护栏拦截",
+        "stopped": "已停止",
+        "citations": "参考来源（{{count}}）",
+        "steps": "执行轨迹（{{count}} 步）",
+        "rows": "{{count}} 行",
+        "rowsTruncated": "显示 {{count}} 行中的 {{shown}} 行",
+        "pickNamespace": "选择命名空间",
+        "needNamespace": "请选择要提问的命名空间。",
+        "mode": "模式",
+        "modeHint": "深度推理会运行 COA 的多步推理循环，速度较慢。",
+        "modeStandard": "标准",
+        "modeDeep": "深度推理",
+        "strategy": "SQL 策略",
+        "strategyHint": "由哪个引擎回答结构化问题。",
+        "strategyDefault": "COA 默认",
+        "empty": "就此命名空间提一个问题。COA 会在你的授权范围内作答。",
+        "placeholder": "例如：每个部门各有多少名员工？",
+        "send": "提问",
+        "stop": "停止",
+        "hint": "Enter 发送，Shift+Enter 换行。COA 以你的身份作答，追问会延续同一段对话。"
+      },
+      "attach": {
+        "action": "挂到 Agent",
+        "title": "把 {{name}} 挂到 Agent",
+        "noPermission": "你没有部署 Agent 的权限。",
+        "newTitle": "新建 Agent",
+        "newHint": "打开 Agent 创建向导，并已选好此命名空间。",
+        "newHarness": "新建 Harness Agent",
+        "newStrands": "新建 Strands Agent",
+        "existingTitle": "已有 Agent",
+        "existingHint": "你可以重新发布的 Harness 和 HTTP Strands Agent。保存后会发布新版本。",
+        "agent": "Agent",
+        "pick": "选择 Agent",
+        "none": "你没有可重新发布的 Harness 或 HTTP Strands Agent。",
+        "replaces": "此 Agent 当前挂载的是 {{name}}，保存后将替换为此命名空间。",
+        "already": "此 Agent 已挂载此命名空间。",
+        "openEditor": "打开编辑器"
       }
     }
   },
@@ -9598,6 +9716,7 @@
     "mcp": "模型上下文协议（MCP），连接 Agent 与外部工具和数据的开放标准。",
     "cedarPolicy": "用 Cedar 语言编写的规则，决定 Agent 的工具能做什么、不能做什么，每次调用都会校验。",
     "knowledgeBase": "可检索的文档库，Agent 从中查找资料，用你自己的内容作答。",
+    "contextLayer": "来自已连接 COA 部署的受治理业务上下文：指标、本体和文档。Agent 以对话者本人的身份、在其 COA 授权范围内读取。",
     "memory": "让 Agent 记住当前对话，并可选地记住每位用户的长期信息。",
     "evaluator": "评分规则（通常是 LLM 评审），从正确性、有用性等维度给 Agent 的回答打分。",
     "onlineEvaluation": "持续抽样给线上真实对话打分，尽早发现质量下滑。",
@@ -9618,6 +9737,7 @@
       "mcp": "MCP",
       "cedarPolicy": "Cedar 策略",
       "knowledgeBase": "知识库",
+      "contextLayer": "上下文层",
       "memory": "记忆",
       "evaluator": "评估器",
       "onlineEvaluation": "在线评估",

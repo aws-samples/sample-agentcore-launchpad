@@ -638,9 +638,16 @@ Skill Lab 评估与任务生成作业只在启动前检查。当作业的估算�
 | `DELETE` | `/api/context-layer` | admin | 断开上下文层 → `{disconnected, connection, console_workload}`；Connection 与工作负载身份保留。仍有 Agent 挂载时返回 `409 context_layer.referenced`（`detail.referenced_by`） |
 | `POST` | `/api/context-layer/authorize` | member | 调用者本人的授权：令牌库已有其 COA 令牌时返回 `{authorized: true, connection}`，否则返回 `{authorized: false, authorization_url, connection}`（一次性；由 `/auth/return` 完成绑定） |
 | `POST` | `/api/context-layer/revoke` | member | 对调用者在该 Connection 上强制重新授权（`user_token_revocations`）→ `{revoked, provider, agents}` |
-| `GET` | `/api/context-layer/namespaces` | member | 以调用者身份调用 COA `GET /namespaces` → `{namespaces: [{namespace_id, name, display_name, status, source_count, created_at, updated_at}]}` |
+| `GET` | `/api/context-layer/namespaces` | member | 以调用者身份调用 COA `GET /namespaces` → `{namespaces: [{namespace_id, name, display_name, description, owner, status, source_count, created_at, updated_at}]}` |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}` | member | 以调用者身份调用 COA `GET /namespaces/{id}` → `{namespace: {…同上字段}}`。`namespace_id` 必须是 UUID（否则返回 422，且不调用 COA） |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/sources` | member | COA `GET …/sources`（读完所有分页）→ `{namespace_id, sources: [{source_id, name, source_type, source_subtype, status, tables_discovered, created_at, updated_at}]}`。COA 的 epoch 时间转为 RFC 3339；状态原样保留 |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/metrics` | member | COA `GET …/metrics`（读完所有分页）→ `{namespace_id, metrics: [{name, description, unit, return_type, default_time_grain, synonyms, dialects: [{dialect, expression}], source_table, data_source_id}]}`：只包含 COA 返回给调用者的内容 |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/ontology` | member | COA `GET …/ontologies`，再对每个本体调用一次 `GET …/graph/ontology-overview?ontology_id=`（最多 8 个，每个 200 个类）→ `{namespace_id, ontologies: [{ontology_id, title, description, ontology_type, status, class_count, property_count, updated_at}], classes: [{uri, label, description, ontology_id, ontology}], failed: [ontology_id], truncated}`。COA 未能返回的本体概览列入 `failed`，其余照常显示 |
+| `GET` | `/api/context-layer/health` | member | `{runtimes: {mcp, serve}, ready, authorization_required, coa: {status, components: [{key, status}]} \| null, coa_error: {code, status} \| null, probe_errors}`：COA 区域的 `GetAgentRuntime`，加上以调用者身份调用的 COA `GET /system-health`。未授权时不调用 COA（`authorization_required: true`） |
+| `POST` | `/api/context-layer/playground` | member | `{namespace_id, query（≤ 4000）, session_id?, mode?: standard\|deep-reasoning, strategy?: best\|ontop\|nl_to_sql\|ontop_first\|nl_to_sql_first\|deep-reasoning}` → **SSE**。以调用者身份代理 COA 的 Serve 运行时（`stream: true`）。事件：`step {name, status, duration_ms, tool, detail}`、`token {text}`、`done {answer, tier, confidence, rationale, columns, rows（≤ 200）, row_count, rows_truncated, partial, guardrail_blocked, data_sources, citations, total_ms, session_id}`、`error {code, message, status, coa_error}`；调用者未授权时为 `auth_required {provider, tool: "context_layer", url, scopes, agent_id: ""}`，随后流结束。COA 静默时发送 `: keep-alive` 注释。`done` 中的 `session_id` 用于延续 COA 对话。未连接、令牌库失败或请求体无效时，在任何流开始之前以普通错误返回 |
 
-所有非 GET 路由在计费表中都是 `FREE`：COA 自身的开销不由 Launchpad 计量。
+所有非 GET 路由在计费表中都是 `FREE`，Playground 也一样：COA 自身的开销记在 COA 的账号上，
+不由 Launchpad 计量。
 
 `AgentSpec.context_layer` = `{namespace_id（UUID）, namespace_name?}`，为 `harness` 或
 HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议、`code`/`code_bundle`，或
@@ -655,14 +662,19 @@ HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议�
 错误码：`context_layer.not_connected`（409）、`context_layer.authorization_required`
 （409，`detail.authorization_url`）、`context_layer.forbidden`（403——COA 拒绝：无授权）、
 `context_layer.reauthorize`（409——COA 拒绝了该令牌，下次获取会强制重新授权。不用 401，
-否则会结束控制台会话）、`context_layer.upstream`（502／504——COA 5xx 或超时）、
+否则会结束控制台会话）、`context_layer.upstream`（502／504——COA 429、5xx 或超时）、
+`context_layer.coa_not_found`（404——COA 中没有该命名空间或条目，或不向调用者开放）、
+`context_layer.invalid_namespace`（422——不是 UUID）、
 `context_layer.referenced`（409）、`context_layer.unsupported_method`（422——也用于对挂载
 COA 的 Agent 做评估回放或转换）、`context_layer.not_found`（404——SSM 参数或栈不存在）、
 `context_layer.agent_oauth_disabled`（409）、`context_layer.cross_account`（422）、
 `context_layer.runtime_not_ready`（409）、`context_layer.discovery_failed`（502）、
 `context_layer.connection_mismatch`（422）、`context_layer.connection_not_found`（404）、
 `context_layer.identity_failed`（502——令牌库拒绝；detail 只含步骤与 AWS 错误码）、
-`context_layer.invalid_request`（422）。
+`context_layer.invalid_request`（422）。COA 拒绝时，`detail` 可能带有 `coa_message`（COA
+自身的消息，最多 200 个字符）和 `status`。Playground 的 `error` 事件另有
+`context_layer.no_result`（COA 没有找到答案）和 `context_layer.coa_rejected`（其他 4xx，例如
+问题有歧义）。
 
 ## 控制台 Memory API / Console Memory API
 

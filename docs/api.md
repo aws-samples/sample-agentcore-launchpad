@@ -996,10 +996,16 @@ member it was minted for. See [identity.md](identity.md) §7.7.
 | `DELETE` | `/api/context-layer` | admin | Forget the layer → `{disconnected, connection, console_workload}`; the Connection and the workload identity stay. `409 context_layer.referenced` (with `detail.referenced_by`) while an agent attaches it |
 | `POST` | `/api/context-layer/authorize` | member | The caller's consent: `{authorized: true, connection}` when the vault holds their COA token, else `{authorized: false, authorization_url, connection}` (single-use; `/auth/return` binds it) |
 | `POST` | `/api/context-layer/revoke` | member | Force re-consent for the caller on the layer's Connection (`user_token_revocations`) → `{revoked, provider, agents}` |
-| `GET` | `/api/context-layer/namespaces` | member | COA `GET /namespaces` as the caller → `{namespaces: [{namespace_id, name, display_name, status, source_count, created_at, updated_at}]}` |
+| `GET` | `/api/context-layer/namespaces` | member | COA `GET /namespaces` as the caller → `{namespaces: [{namespace_id, name, display_name, description, owner, status, source_count, created_at, updated_at}]}` |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}` | member | COA `GET /namespaces/{id}` as the caller → `{namespace: {…the same fields}}`. `namespace_id` must be a UUID (422 otherwise; COA is never called) |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/sources` | member | COA `GET …/sources` (every page) → `{namespace_id, sources: [{source_id, name, source_type, source_subtype, status, tables_discovered, created_at, updated_at}]}`. COA's epoch times read back as RFC 3339; statuses are COA's, verbatim |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/metrics` | member | COA `GET …/metrics` (every page) → `{namespace_id, metrics: [{name, description, unit, return_type, default_time_grain, synonyms, dialects: [{dialect, expression}], source_table, data_source_id}]}`: only what COA returns to the caller |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/ontology` | member | COA `GET …/ontologies` plus one `GET …/graph/ontology-overview?ontology_id=` per ontology (at most 8, 200 classes each) → `{namespace_id, ontologies: [{ontology_id, title, description, ontology_type, status, class_count, property_count, updated_at}], classes: [{uri, label, description, ontology_id, ontology}], failed: [ontology_id], truncated}`. An overview COA could not answer is listed in `failed`; the rest still show |
+| `GET` | `/api/context-layer/health` | member | `{runtimes: {mcp, serve}, ready, authorization_required, coa: {status, components: [{key, status}]} \| null, coa_error: {code, status} \| null, probe_errors}`: `GetAgentRuntime` in the COA region plus COA `GET /system-health` as the caller. Without consent COA is not called (`authorization_required: true`) |
+| `POST` | `/api/context-layer/playground` | member | `{namespace_id, query (≤ 4000), session_id?, mode?: standard\|deep-reasoning, strategy?: best\|ontop\|nl_to_sql\|ontop_first\|nl_to_sql_first\|deep-reasoning}` → **SSE**. Proxies COA's Serve runtime (`stream: true`) as the caller. Events: `step {name, status, duration_ms, tool, detail}`, `token {text}`, `done {answer, tier, confidence, rationale, columns, rows (≤ 200), row_count, rows_truncated, partial, guardrail_blocked, data_sources, citations, total_ms, session_id}`, `error {code, message, status, coa_error}`, and `auth_required {provider, tool: "context_layer", url, scopes, agent_id: ""}` when the caller has not consented (then the stream ends). `: keep-alive` comments while COA is silent. `session_id` from `done` continues COA's conversation. Not connected, a vault failure or a bad body answer as ordinary errors before any stream |
 
-Every non-GET route is `FREE` in the billing table: COA's own spend is not metered
-by Launchpad.
+Every non-GET route is `FREE` in the billing table, the playground included: COA's
+own spend is in COA's account and is not metered by Launchpad.
 
 `AgentSpec.context_layer` = `{namespace_id (UUID), namespace_name?}` attaches one
 namespace to a `harness` or HTTP `zip_runtime` agent. Any other method, protocol
@@ -1016,7 +1022,10 @@ Error codes: `context_layer.not_connected` (409), `context_layer.authorization_r
 (409, `detail.authorization_url`), `context_layer.forbidden` (403 — COA refused: no
 grant), `context_layer.reauthorize` (409 — COA rejected the token; the next fetch
 forces consent. Not 401, which would end the console session),
-`context_layer.upstream` (502 / 504 — COA 5xx or timeout), `context_layer.referenced`
+`context_layer.upstream` (502 / 504 — COA 429, 5xx or timeout),
+`context_layer.coa_not_found` (404 — COA has no such namespace or item, or hides it
+from the caller), `context_layer.invalid_namespace` (422 — not a UUID),
+`context_layer.referenced`
 (409), `context_layer.unsupported_method` (422 — also an evaluation replay or a
 conversion of a COA-attached agent), `context_layer.not_found` (404 — no SSM
 parameters or stack), `context_layer.agent_oauth_disabled` (409),
@@ -1024,7 +1033,10 @@ parameters or stack), `context_layer.agent_oauth_disabled` (409),
 `context_layer.discovery_failed` (502), `context_layer.connection_mismatch` (422),
 `context_layer.connection_not_found` (404), `context_layer.identity_failed` (502 —
 the token vault refused; the detail names the step and the AWS code only),
-`context_layer.invalid_request` (422).
+`context_layer.invalid_request` (422). A COA refusal's `detail` may carry
+`coa_message` (COA's own message, at most 200 characters) and `status`. The
+playground's `error` events add `context_layer.no_result` (COA found no answer) and
+`context_layer.coa_rejected` (another 4xx, e.g. an ambiguous question).
 
 ## Console Memory API
 

@@ -2460,7 +2460,11 @@
     "context_layer.connection_mismatch": "That Connection does not hold the COA agent OAuth client.",
     "context_layer.connection_not_found": "No OAuth2 Connection with that name exists in this workspace.",
     "context_layer.identity_failed": "AgentCore Identity could not provide your COA token.",
-    "context_layer.invalid_request": "The prefix, env or region is not valid."
+    "context_layer.invalid_request": "The prefix, env or region is not valid.",
+    "context_layer.coa_not_found": "COA has no such namespace or item, or does not show it to you.",
+    "context_layer.no_result": "COA found no answer to this question.",
+    "context_layer.coa_rejected": "COA could not take this question.",
+    "context_layer.invalid_namespace": "A COA namespace id is a UUID."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -9423,7 +9427,9 @@
         "colName": "Name",
         "colId": "ID",
         "colStatus": "Status",
-        "colSources": "Sources"
+        "colSources": "Sources",
+        "emptyHint": "Namespaces and their grants are created by your COA administrator in the COA console. Once you have a grant, the namespace shows up here.",
+        "browse": "Browse"
       },
       "wizard": {
         "title": "Context layer (COA)",
@@ -9440,6 +9446,118 @@
         "module": "Open the Context layer page",
         "noteHarness": "Each chat turn carries the asking member's COA token. Without their authorization, Chat shows a consent card first. The public /v1 API cannot call this agent.",
         "noteStrands": "The agent fetches each member's COA token itself. Each member authorizes it once in Chat. The public /v1 API cannot call this agent."
+      },
+      "openInCoa": "Open in COA",
+      "errors": {
+        "authorize": "Authorize Launchpad to read COA as you first.",
+        "reauthorize": "COA no longer accepts your authorization. Authorize again to continue.",
+        "forbidden": "COA refused this: you have no grant for it. Grants are managed by your COA administrator in the COA console.",
+        "notFound": "COA has no such namespace or item, or does not show it to you."
+      },
+      "gate": {
+        "connectFirst": "No COA deployment is connected yet. Connect one on the overview first.",
+        "authorizeFirst": "This page reads COA as you. Authorize Launchpad once to continue."
+      },
+      "services": {
+        "title": "COA services",
+        "sub": "COA's own dependency health, as COA reports it to you",
+        "dynamodb": "DynamoDB",
+        "neptune_kg": "Knowledge graph (Neptune)",
+        "opensearch": "Vector search (OpenSearch)",
+        "graph_store": "Ontology graph store",
+        "vector_store": "Ontology vector store",
+        "bedrock_embeddings": "Bedrock embeddings",
+        "description_llm": "Description model"
+      },
+      "namespace": {
+        "basic": "Namespace",
+        "owner": "Owner",
+        "description": "Description"
+      },
+      "tabs": {
+        "sources": "Sources",
+        "metrics": "Metrics",
+        "ontology": "Ontology"
+      },
+      "sources": {
+        "title": "Sources",
+        "sub": "Databases and documents COA reads for this namespace",
+        "empty": "This namespace has no sources yet. Sources are connected in the COA console.",
+        "colName": "Name",
+        "colType": "Type",
+        "colStatus": "Status",
+        "colTables": "Tables",
+        "colUpdated": "Updated"
+      },
+      "metrics": {
+        "title": "Governed metrics",
+        "sub": "Agents prefer these definitions over their own calculation",
+        "empty": "This namespace has no governed metrics yet. Metrics are defined in the COA console.",
+        "colName": "Metric",
+        "colUnit": "Unit",
+        "colSynonyms": "Synonyms",
+        "colDialects": "Expression",
+        "colTable": "Source table"
+      },
+      "ontology": {
+        "title": "Ontology",
+        "sub": "The classes COA knows in this namespace",
+        "classCount": "{{count}} classes",
+        "failed": "COA could not list the classes of {{count}} ontologies. Try again later.",
+        "truncated": "Only part of the ontology is listed here. Open it in COA to see everything.",
+        "search": "Filter classes",
+        "empty": "This namespace has no ontology classes yet. Ontologies are induced or uploaded in the COA console.",
+        "colClass": "Class",
+        "colDescription": "Description",
+        "colOntology": "Ontology"
+      },
+      "playground": {
+        "title": "Playground",
+        "openCoa": "COA playground",
+        "reset": "New conversation",
+        "you": "You",
+        "streaming": "Answering",
+        "thinking": "COA is working on it…",
+        "tierHint": "The COA tier that answered: T1 governed metric, T2 generated SQL, T3 documents and graph",
+        "confidence": "Confidence {{pct}}%",
+        "partial": "Partial",
+        "guardrail": "Blocked by guardrail",
+        "stopped": "Stopped",
+        "citations": "Sources ({{count}})",
+        "steps": "Trace ({{count}} steps)",
+        "rows": "{{count}} rows",
+        "rowsTruncated": "Showing {{shown}} of {{count}} rows",
+        "pickNamespace": "Choose a namespace",
+        "needNamespace": "Choose a namespace to ask about.",
+        "mode": "Mode",
+        "modeHint": "Deep reasoning runs COA's multi-step loop. It is slower.",
+        "modeStandard": "Standard",
+        "modeDeep": "Deep reasoning",
+        "strategy": "SQL strategy",
+        "strategyHint": "Which engine answers structured questions.",
+        "strategyDefault": "COA default",
+        "empty": "Ask a question about this namespace. COA answers with what your grants allow.",
+        "placeholder": "e.g. How many employees does each department have?",
+        "send": "Ask",
+        "stop": "Stop",
+        "hint": "Enter sends, Shift+Enter adds a line. COA answers as you, and follow-up questions continue the same conversation."
+      },
+      "attach": {
+        "action": "Attach to agent",
+        "title": "Attach {{name}} to an agent",
+        "noPermission": "You do not have permission to deploy agents.",
+        "newTitle": "New agent",
+        "newHint": "Opens the agent wizard with this namespace already selected.",
+        "newHarness": "New Harness agent",
+        "newStrands": "New Strands agent",
+        "existingTitle": "Existing agent",
+        "existingHint": "Harness and HTTP Strands agents you can redeploy. Saving publishes a new version.",
+        "agent": "Agent",
+        "pick": "Choose an agent",
+        "none": "You have no Harness or HTTP Strands agent you can redeploy.",
+        "replaces": "This agent attaches {{name}} now. Saving replaces it with this namespace.",
+        "already": "This agent already attaches this namespace.",
+        "openEditor": "Open its editor"
       }
     }
   },
@@ -9598,6 +9716,7 @@
     "mcp": "Model Context Protocol — an open standard for connecting agents to external tools and data.",
     "cedarPolicy": "A rule in the Cedar language that allows or denies what an agent's tools may do, checked on every call.",
     "knowledgeBase": "A searchable store of your documents that the agent looks things up in, so it answers with your own facts.",
+    "contextLayer": "Governed business context from a connected COA deployment: metrics, an ontology and documents that agents read as the person chatting, within that person's COA grants.",
     "memory": "Lets the agent remember the current conversation and, optionally, long-term facts about each user.",
     "evaluator": "A scoring rule, often an LLM judge, that rates agent answers for qualities such as correctness or helpfulness.",
     "onlineEvaluation": "Continuously scores a sample of live conversations so quality drops show up early.",
@@ -9618,6 +9737,7 @@
       "mcp": "MCP",
       "cedarPolicy": "Cedar policy",
       "knowledgeBase": "Knowledge base",
+      "contextLayer": "Context layer",
       "memory": "Memory",
       "evaluator": "Evaluator",
       "onlineEvaluation": "Online evaluation",

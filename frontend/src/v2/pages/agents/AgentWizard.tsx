@@ -54,6 +54,7 @@ import {
   StrandsToolsCard,
 } from "./MethodSections";
 import { MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
+import { contextPrefill } from "../contextLayer/attach";
 import { sectionVisible } from "../contextLayer/state";
 import { ContextLayerSection } from "./ContextLayerSection";
 import { IdentityCard } from "./IdentityCard";
@@ -79,12 +80,18 @@ function initialDraft(params: URLSearchParams): Draft {
   const form = emptyAgentForm(isMethod(method) ? method : "harness");
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
+  // "Attach to agent" from the Context Layer page (`context_ns` / `context_name`)
+  const context = contextPrefill(params);
+  if (context) form.contextLayer = context;
   return { form, step: isMethod(method) || gateway || skill ? 1 : 0, extras: null };
 }
 
-/** An existing agent loaded for a re-publish: straight to the configure step. */
-function editDraft(agent: AgentInfo): Draft {
+/** An existing agent loaded for a re-publish: straight to the configure step. A
+ *  `context_ns` prefill (Context Layer "attach") replaces its stored namespace. */
+function editDraft(agent: AgentInfo, params: URLSearchParams): Draft {
   const { form, extras } = formFromStoredSpec(agent.method as AgentMethod, agent.name, agent.spec);
+  const context = contextPrefill(params);
+  if (context) form.contextLayer = context;
   return { form, step: 1, extras };
 }
 
@@ -109,7 +116,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const toast = useV2Toast();
   const { can } = useAuth();
   const canDeploy = can("agents.deploy");
-  const [initial] = useState(() => (edit ? editDraft(edit) : initialDraft(params)));
+  const [initial] = useState(() => (edit ? editDraft(edit, params) : initialDraft(params)));
   const [step, setStep] = useState(initial.step);
   const [form, setForm] = useState<AgentForm>(initial.form);
   const [ui, setUi] = useState<Omit<WizardUi, "customSkills">>({

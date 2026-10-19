@@ -134,6 +134,12 @@ export function retryPromptFor(messages: { kind: string; text: string }[], index
 export const isConsoleGrant = (grant: Pick<UserGrantInfo, "agent_id" | "tool">) =>
   !grant.agent_id && grant.tool === "context_layer";
 
+/** Whether an auth card can poll its grant: an agent's ask (Chat), or the console
+ *  grant, which has no agent (the Context Layer playground). Any other agentless
+ *  ask has nothing to poll. */
+export const canPollGrant = (ask: Pick<AuthAsk, "agent_id" | "tool">): boolean =>
+  !!ask.agent_id || isConsoleGrant(ask);
+
 /** Revoking is pointless while one is in flight or when it is already in force. */
 export function revokeDisabled(grant: UserGrantInfo, mayRevoke: boolean, revoking: string | null): boolean {
   return !mayRevoke || revoking !== null || (grant.status === "revoked" && grant.force_reauth);

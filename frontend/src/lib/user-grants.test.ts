@@ -5,6 +5,7 @@ import {
   AUTH_POLL_LIMIT_MS,
   AUTH_POLL_MS,
   authCardView,
+  canPollGrant,
   effectiveStatus,
   isConsoleGrant,
   liveAuthAsk,
@@ -230,6 +231,17 @@ describe("the COA console grant", () => {
     expect(isConsoleGrant({ agent_id: "", tool: "context_layer" })).toBe(true);
     expect(isConsoleGrant({ agent_id: "a1", tool: "context_layer" })).toBe(false);
     expect(isConsoleGrant({ agent_id: "", tool: "calendar" })).toBe(false);
+  });
+
+  it("lets the auth card poll it, while a Chat ask still polls only with its agent", () => {
+    // Chat: a live or restored card always names its agent, whatever the tool
+    expect(canPollGrant(liveAuthAsk({ provider: "google", tool: "calendar" }, "agent-1"))).toBe(true);
+    expect(canPollGrant(liveAuthAsk({ provider: "coa", tool: "context_layer" }, "agent-1"))).toBe(true);
+    expect(canPollGrant(restoredAuthAsk({ text: "google", name: "calendar" }, "agent-1"))).toBe(true);
+    // the playground's console grant has no agent
+    expect(canPollGrant(liveAuthAsk({ provider: "coa", tool: "context_layer", agent_id: "" }, ""))).toBe(true);
+    // any other agentless ask has nothing to poll (unchanged)
+    expect(canPollGrant({ agent_id: "", tool: "calendar" })).toBe(false);
   });
 });
 

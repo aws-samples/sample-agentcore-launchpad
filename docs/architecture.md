@@ -3223,10 +3223,48 @@ per-user grants decide what an agent may see.
     expansion, and the stored spec keeps only the ref.
   - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
     COA-attached agent: none of them has a console user to act as.
-- **Module** (`routers/context_layer.py`): status (live runtime / callback /
-  agent-OAuth probes), the member's authorization (authorize / revoke) and the
-  namespaces COA lets them see (`services/context_layer_api.py`, COA REST as the
-  member). The browse pages, the playground and the attach action are a follow-up.
+- **Module** (`routers/context_layer.py`, page `frontend/src/v2/pages/ContextLayer.tsx`
+  + `contextLayer/`, expert-mode nav only). The status is read once and shared by
+  three `?view=` sub-pages:
+  - *overview*: the deployment card (live runtime / callback / agent-OAuth probes),
+    the member's authorization (authorize / revoke), the namespaces COA lets them
+    see, and COA's own `/system-health` (`GET /api/context-layer/health`). Admins
+    connect, re-connect or disconnect here. Not connected: members are told to ask
+    an admin. No consent: an authorize call to action and **no COA call**. No
+    namespaces: grants come from the COA admin, with a link to the COA console.
+  - `namespace&id=<uuid>[&tab=sources|metrics|ontology]`: the namespace as COA
+    shows it, with tabs for sources (type, status, tables), governed metrics
+    (unit, synonyms, per-dialect expressions) and ontology classes (one
+    `graph/ontology-overview` per ontology, at most 8 read concurrently, 200
+    classes each). Each tab deep-links into the matching COA console route
+    (`/namespaces/{id}/sources|metrics|ontology/graph`): authoring stays in COA.
+    "Attach to agent" opens the V2 wizard (new Harness or Strands agent) or an
+    existing agent's editor with `context_ns` / `context_name` prefilled; saving is
+    the ordinary create / redeploy.
+  - `playground[&ns=<uuid>]`: one question at a time to COA's **Serve runtime**
+    (`services/context_layer_playground.py`). The backend proxies
+    `POST <serve invocations URL>` with `stream: true`, the member's bearer and a
+    runtime session id stable per member + namespace (`lp-` + 40 hex), and
+    normalizes COA's frames into `step`, `token`, `done` (answer, tier, confidence,
+    up to 200 result rows, COA's `sessionId` for the next turn) and `error`
+    (`context_layer.*`) events, with `: keep-alive` comments while COA is silent.
+    It never sets COA's `includeDebugInfo`, and never forwards the generated SQL
+    (`queryUsed`), because COA withholds it by default: it exposes internal schema. Missing consent is one `auth_required` event, the same card Chat
+    shows. The upstream is an `httpx.AsyncClient` stream inside the response
+    generator, so a client disconnect closes COA's connection. The read timeout
+    is 180 s against COA's 170 s budget.
+  - COA REST reads (`services/context_layer_api.py`) are allowlisted projections
+    (`schemas/context_layer.py`), never a passthrough. Errors map COA 401 to
+    `context_layer.reauthorize` (409), 403 to `forbidden`, 404 to `coa_not_found`,
+    and 429 / 5xx / timeout to `upstream`, with at most 200 characters of COA's own
+    message.
+- **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
+  link opens a new tab. COA's REST data layer caps at 29 s, which is why questions
+  go to the streaming Serve runtime and not to `POST /namespaces/{id}/query`. `/v1`
+  answers 409 for COA-attached agents; canary / A-B, evaluation replays and
+  Harness conversion refuse them, because none of them has a console user to act
+  as. COA's spend is in COA's account: the playground is `FREE` in the billing
+  table and Launchpad does not meter it.
 
 ## The Memory console (console 05)
 

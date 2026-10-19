@@ -1,0 +1,40 @@
+/* 上下文层 / Context layer (native V2) — module-local styles, scoped under .v2 */
+.v2 .v2-cl-tabs { margin: 0 0 12px; }
+.v2 .v2-cl-empty { padding: 12px 24px 20px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; font-size: 13.5px; line-height: 1.6; }
+.v2 .v2-cl-empty p { margin: 0; }
+.v2 .v2-cl-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 12px; }
+.v2 .v2-cl-desc { display: block; max-width: 520px; color: var(--v2-ink-2); font-size: 12.5px; line-height: 1.5; white-space: normal; }
+.v2 .v2-cl-break { word-break: break-all; }
+.v2 .v2-cl-ontologies { margin-bottom: 12px; }
+.v2 .v2-cl-hint { margin: 8px 0 0; font-size: 12.5px; }
+
+/* metric expressions: dialect tags open to the SQL COA returned */
+.v2 .v2-cl-expr summary { cursor: pointer; list-style: none; display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.v2 .v2-cl-expr summary::-webkit-details-marker { display: none; }
+.v2 .v2-cl-expr pre, .v2 .v2-cl-sql pre {
+  margin: 6px 0 0; padding: 8px 10px; max-width: 520px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+  font-size: 12px; line-height: 1.5; background: var(--v2-fill); border: 1px solid var(--v2-line-2); border-radius: var(--v2-radius-sm);
+}
+
+/* playground thread: answers span the card (result rows are wide) */
+.v2 .v2-cl-thread {
+  display: flex; flex-direction: column; gap: 14px; min-height: 200px; max-height: 64vh; overflow-y: auto;
+  margin: 12px 0; padding: 12px 2px; border-top: 1px solid var(--v2-line-2); border-bottom: 1px solid var(--v2-line-2);
+}
+.v2 .v2-cl-thread .v2-chat-msg.agent { max-width: 100%; width: 100%; }
+.v2 .v2-cl-answer { gap: 8px; }
+.v2 .v2-cl-rows { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.v2 .v2-cl-rows .v2-table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); background: var(--v2-card); }
+.v2 .v2-cl-sql summary, .v2 .v2-cl-steps summary { cursor: pointer; font-size: 12.5px; color: var(--v2-ink-3); }
+.v2 .v2-cl-sql pre { max-width: none; }
+.v2 .v2-cl-steps ol { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.v2 .v2-cl-steps li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; }
+.v2 .v2-cl-steps li .d { flex-basis: 100%; padding-left: 16px; color: var(--v2-ink-3); overflow-wrap: anywhere; }
+.v2 .v2-cl-citations { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; font-size: 12.5px; }
+.v2 .v2-cl-citations li { display: flex; flex-direction: column; gap: 2px; }
+.v2 .v2-cl-composer { display: flex; gap: 10px; align-items: flex-end; }
+.v2 .v2-cl-composer .v2-textarea { flex: 1; min-height: 64px; }
+@media (max-width: 720px) {
+  .v2 .v2-cl-composer { flex-direction: column; align-items: stretch; }
+  .v2 .v2-cl-desc, .v2 .v2-cl-expr pre { max-width: 100%; }
+}

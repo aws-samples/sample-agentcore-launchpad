@@ -13,6 +13,7 @@ export const GLOSSARY_TERMS = [
   "mcp",
   "cedarPolicy",
   "knowledgeBase",
+  "contextLayer",
   "memory",
   "evaluator",
   "onlineEvaluation",
