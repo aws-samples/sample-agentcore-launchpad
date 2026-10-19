@@ -496,9 +496,14 @@ def normalize_result_record(attrs: dict[str, Any]) -> dict[str, Any]:
     plus the evaluation level (Session / Trace / Span; a span-level evaluator
     writes one record per tool call, so a session can carry several rows for
     one evaluator). A failed judgement has ``error_type``/``error_message`` and
-    no score."""
+    no score.
+
+    ``evaluator_id`` is the evaluator ARN's id tail when the record carries one
+    (:func:`_record_evaluator_id`): a custom judge's evaluation name is not its id
+    (``drone_store_business_rules`` vs ``drone_store_business_rules-vNDtnlGl7J``),
+    and the run's ``scores`` — which run compare matches against — key by id."""
     return {
-        "evaluator_id": str(attrs.get("gen_ai.evaluation.name")),
+        "evaluator_id": _record_evaluator_id(attrs) or str(attrs.get("gen_ai.evaluation.name")),
         "level": attrs.get("aws.bedrock_agentcore.evaluation_level"),
         "score": _score_value(attrs.get("gen_ai.evaluation.score.value")),
         "label": attrs.get("gen_ai.evaluation.score.label"),

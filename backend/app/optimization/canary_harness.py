@@ -254,15 +254,18 @@ def ensure_log_group(logs: Any, name: str) -> None:
 
 
 # ─── paired replay ───────────────────────────────────────────────────────────
-# A Harness canary replays a dataset **paired**: every prompt goes to BOTH endpoints
-# (InvokeHarness with ``qualifier``, two fresh sessions), and the verdict compares
-# the two versions question by question. Gateway A/B assignment is random per
-# session, so a replayed set split 50/50 hands each version a different mix of
-# questions, and repeating the set only re-samples the same questions; pairing
-# removes the mix and makes each question one unit of evidence. The per-endpoint
-# online evaluations score both sessions (100 % sampling on the endpoint's own
-# service name — no variant filter), and the verdict reads those scores back by
-# session id.
+# A canary of either kind replays a dataset **paired**: every prompt goes to BOTH
+# named endpoints in two fresh sessions — InvokeHarness for a Harness canary,
+# InvokeAgentRuntime for a Runtime canary, each with ``qualifier`` = the endpoint —
+# and the verdict compares the two versions question by question. Gateway A/B
+# assignment is random per session, so a replayed set split 50/50 hands each
+# version a different mix of questions (and at 90/10 starves the treatment: 50
+# prompts once gave it 2 sessions, issue #298), and repeating the set only
+# re-samples the same questions; pairing removes the mix and makes each question
+# one unit of evidence. The per-endpoint online evaluations score both sessions
+# (100 % sampling on the endpoint's own service name — no variant filter), and the
+# verdict reads those scores back by session id. Real platform traffic still goes
+# through the canary Gateway at the stage weights.
 PAIRED_MODE = "paired"
 PAIRED_ALPHA = 0.05
 # exact sign-flip enumeration up to 2**16 sign patterns, seeded Monte Carlo beyond

@@ -126,10 +126,14 @@ def test_custom_evaluator_treated_as_higher_is_better():
 
 
 def test_verdict_contract_keys_are_stable():
-    """The console reads these keys — orientation must not rename anything."""
+    """The console reads these keys — orientation must not rename anything; the
+    per-arm counts are additive."""
     verdict = compute_verdict([_metric("Builtin.Helpfulness", 0.4, 0.6, significant=True)])
-    assert set(verdict) == {"verdict", "avg_delta", "n", "significant"}
+    assert set(verdict) == {
+        "verdict", "avg_delta", "n", "significant", "n_control", "n_treatment",
+    }
     assert verdict["n"] == 12 and verdict["significant"] is True
+    assert (verdict["n_control"], verdict["n_treatment"]) == (6, 6)
     assert compute_verdict([])["verdict"] == "insufficient-data"
     no_means = [{"evaluatorId": "Builtin.Refusal", "control": {}, "variants": [{}]}]
     assert compute_verdict(no_means) == {
@@ -157,3 +161,66 @@ def test_normalize_ab_results_carries_polarity():
     assert [m["polarity"] for m in normalized] == [-1, 1]
     # …and the verdict computed from a real normalized payload agrees
     assert compute_verdict(normalized)["verdict"] == "treatment-wins"
+
+
+# ─── min_n gates each arm (issue #298) ──────────────────────────────────────
+def _lopsided(evaluator, c_mean, t_mean, c_n, t_n):
+    return {
+        "evaluatorId": evaluator,
+        "label": evaluator,
+        "control": {"mean": c_mean, "sampleSize": c_n},
+        "variants": [{"mean": t_mean, "sampleSize": t_n}],
+    }
+
+
+def test_a_starved_treatment_arm_is_insufficient_n_not_a_loss():
+    """A 90/10 replay of 50 prompts gave 47 control and 2 treatment sessions: the
+    combined 49 passed the old ``n >= 2 * min_n``, so 2 sessions decided."""
+    verdict = compute_verdict([_lopsided("Builtin.Helpfulness", 0.8, 0.5, 47, 2)])
+    assert verdict["verdict"] == "insufficient-n"
+    assert (verdict["n"], verdict["n_control"], verdict["n_treatment"]) == (49, 47, 2)
+    assert verdict["avg_delta"] < 0  # the delta is still reported for display
+
+
+def test_an_arm_counts_its_largest_evaluator_not_the_sum():
+    """Every evaluator scores the same sessions: 2 sessions × 2 evaluators is still
+    2 sessions per arm, not 4."""
+    verdict = compute_verdict([
+        _lopsided("Builtin.Helpfulness", 0.5, 0.9, 2, 2),
+        _lopsided("Builtin.GoalSuccessRate", 0.5, 0.9, 2, 2),
+    ])
+    assert verdict["verdict"] == "insufficient-n"
+    assert (verdict["n"], verdict["n_control"], verdict["n_treatment"]) == (8, 2, 2)
+
+
+def test_balanced_arms_at_min_n_decide_as_before():
+    for c, t, expected in ((0.4, 0.6, "treatment-wins"), (0.6, 0.4, "control-wins"),
+                           (0.5, 0.5, "tie")):
+        verdict = compute_verdict([_metric("Builtin.Helpfulness", c, t, n=3)])
+        assert verdict["verdict"] == expected
+        assert (verdict["n"], verdict["n_control"], verdict["n_treatment"]) == (6, 3, 3)
+
+
+def test_an_arm_without_means_does_not_count_toward_its_samples():
+    """A metric with no comparable means contributes no per-arm count."""
+    verdict = compute_verdict([
+        _lopsided("Builtin.Helpfulness", 0.5, 0.9, 2, 2),
+        {"evaluatorId": "Builtin.Correctness", "control": {"sampleSize": 40},
+         "variants": [{"sampleSize": 40}]},
+    ])
+    assert verdict["verdict"] == "insufficient-n"
+    assert (verdict["n_control"], verdict["n_treatment"]) == (2, 2)
+
+
+def test_the_primary_verdict_gates_each_of_its_own_arms():
+    """The issue's case on the primary path: the primary's 47 / 2 split."""
+    verdict = compute_verdict(
+        [_lopsided("my_judge", 0.9, 0.2, 47, 2), _metric("Builtin.Helpfulness", 0.5, 0.6, n=40)],
+        primary="my_judge",
+    )
+    assert verdict["verdict"] == "insufficient-n" and verdict["primary"] == "my_judge"
+    assert (verdict["n"], verdict["n_control"], verdict["n_treatment"]) == (49, 47, 2)
+    assert verdict["primary_delta"] < 0
+    balanced = compute_verdict([_lopsided("my_judge", 0.2, 0.9, 3, 3)], primary="my_judge")
+    assert balanced["verdict"] == "treatment-wins"
+    assert (balanced["n"], balanced["n_control"], balanced["n_treatment"]) == (6, 3, 3)

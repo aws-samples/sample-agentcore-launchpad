@@ -482,11 +482,12 @@ def _runtime_row(attempt: dict, *, primary: str | None = JUDGE) -> str:
         champion_agent_id=agent_id, champion_agent_name="subject-r",
         challenger_agent_id=agent_id, challenger_agent_name="subject-r",
         artifacts={
-            "agent_meta": {"id": agent_id}, "edited_spec": {},
+            "agent_meta": {"id": agent_id, "arn": RUNTIME_ARN}, "edited_spec": {},
             "online_evaluators": [JUDGE, HELP],
             **({"primary_evaluator": primary} if primary else {}),
             "setup": {"ab_test_id": "ab-1", "ramp_stage": 0, "gateway_url": "https://gw",
-                      "champion": {"target_name": "champ"}},
+                      "champion": {"target_name": "champ"},
+                      "stable_endpoint": "stabler", "treatment_endpoint": "treatr"},
             "rounds": [{"ramp_stage": 0, "weights": {}, "traffic_attempts": [attempt]}],
         },
     )
@@ -507,31 +508,24 @@ def _ab_result(judge_n: int, help_n: int) -> dict:
     ]}}
 
 
-def test_runtime_traffic_records_the_primary_baseline(monkeypatch):
-    canary_id = _runtime_row({"baseline_n": 0, "sent": 1, "failed": 0})
+@pytest.mark.parametrize("primary", [JUDGE, None])
+def test_runtime_traffic_is_paired_and_records_no_metric_baseline(monkeypatch, primary):
+    """Paired replay reads scores back by session id, so a Runtime attempt no longer
+    snapshots the gateway A/B metrics (aggregate or primary) before it sends."""
+    canary_id = _runtime_row({"baseline_n": 0, "sent": 1, "failed": 0}, primary=primary)
     data = MagicMock()
-    data.get_ab_test.return_value = _ab_result(judge_n=2, help_n=5)
     monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(exp_svc, "send_gateway_traffic",
-                        lambda *a, **kw: {"session_ids": ["s1"], "sent": 1, "failed": 0})
+                        lambda *a, **kw: pytest.fail("paired replay never uses the gateway"))
+    monkeypatch.setattr(canary_svc.rt, "invoke_runtime_text",
+                        lambda client, arn, prompt, session_id=None, **kw: {
+                            "text": "ok", "session_id": session_id})
 
     attempt = canary_svc.act_traffic(canary_id, ["q"], {"dataset_id": "d"}, lambda _m: None)
 
-    assert attempt["baseline_n"] == 14
-    assert attempt["primary_baseline_n"] == 4  # the judge's own two arms
-
-
-def test_runtime_traffic_without_a_primary_records_no_primary_baseline(monkeypatch):
-    canary_id = _runtime_row({"baseline_n": 0, "sent": 1, "failed": 0}, primary=None)
-    data = MagicMock()
-    data.get_ab_test.return_value = _ab_result(judge_n=2, help_n=5)
-    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
-    monkeypatch.setattr(exp_svc, "send_gateway_traffic",
-                        lambda *a, **kw: {"session_ids": ["s1"], "sent": 1, "failed": 0})
-
-    attempt = canary_svc.act_traffic(canary_id, ["q"], {"dataset_id": "d"}, lambda _m: None)
-
+    assert attempt["mode"] == "paired" and attempt["baseline_n"] == 0
     assert "primary_baseline_n" not in attempt
+    data.get_ab_test.assert_not_called()
 
 
 def test_runtime_verdict_waits_for_the_primary_not_just_any_evaluator(monkeypatch):

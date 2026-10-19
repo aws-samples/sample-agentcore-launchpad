@@ -12,9 +12,10 @@ import { RampPlan } from "./RampPlan";
 
 /**
  * 新建金丝雀: the champion agent and the candidate edit (system prompt, plus the
- * code for a Studio agent), and the evaluators both versions are scored by plus
- * the primary evaluator that decides the verdict. `champion=` / `sourceExp=` carry
- * an experiment's promote hand-off; picking another agent drops the source experiment.
+ * code for a Studio agent), the 放量计划 (both kinds: 90/10 first, or open at 50/50),
+ * and the evaluators both versions are scored by plus the primary evaluator that
+ * decides the verdict. `champion=` / `sourceExp=` carry an experiment's promote
+ * hand-off; picking another agent drops the source experiment.
  */
 export function CanaryStart() {
   const { t } = useTranslation();
@@ -84,7 +85,13 @@ export function CanaryStart() {
               start_stage: runFirst ? 0 : 1,
               ...evaluators.body,
             }
-          : { agent_id: agentId, candidate, ...(sourceExp ? { source_experiment_id: sourceExp } : {}), ...evaluators.body },
+          : {
+              agent_id: agentId,
+              candidate,
+              start_stage: runFirst ? 0 : 1,
+              ...(sourceExp ? { source_experiment_id: sourceExp } : {}),
+              ...evaluators.body,
+            },
       );
       toast("success", t("v2.canary.created", { name: row.name }));
       setParams({ mode: "canary", canary: row.id });
@@ -121,6 +128,9 @@ export function CanaryStart() {
               value={agentId}
               onChange={(v) => {
                 setAgentId(v);
+                // the 50/50 opening is a per-agent opt-in (for a Runtime it exposes live
+                // traffic), so another agent starts back on the default: 90/10 first
+                if (v !== agentId) setRunFirst(true);
                 if (sourceExp && v !== handoffChampion) setSourceExp("");
               }}
               testId="v2-canary-agent"
@@ -176,6 +186,7 @@ export function CanaryStart() {
               />
             </Field>
           )}
+          <RampPlan kind="runtime" runFirst={runFirst} onChange={setRunFirst} disabled={busy} />
         </div>
       </Card>
       )}

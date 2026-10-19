@@ -553,12 +553,14 @@ def test_a_budget_stopped_experiment_traffic_keeps_its_prompts_and_says_why(
         db.close()
 
 
-def _paired_row(champion: str, edited_model: str | None = None) -> SimpleNamespace:
+def _paired_row(champion: str, edited_model: str | None = None, *,
+                harness: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         id="can-1", workspace_id=DEFAULT_WORKSPACE_ID, champion_agent_id=champion,
         artifacts={
+            **({"kind": "harness"} if harness else {}),
             "setup": {"stable_endpoint": "ctl", "treatment_endpoint": "trt"},
-            "agent_meta": {"arn": HARNESS_ARN},
+            "agent_meta": {"arn": HARNESS_ARN if harness else RUNTIME_ARN},
             **({"edited_spec": {"model_id": edited_model}} if edited_model else {}),
         },
     )
@@ -573,7 +575,7 @@ def test_paired_canary_calls_are_exact_rows_priced_per_arm(monkeypatch):
     budget = JobBudget(user_id=caller, user_name="caller", source="canary",
                        agent_id=agent, ref_type="canary", ref_id="can-1")
 
-    result = canary_svc._paired_harness_traffic(
+    result = canary_svc._paired_traffic(
         _paired_row(agent, edited_model="global.anthropic.claude-haiku-4-5"), ws_ctx(),
         ["q1", "q2"], None, lambda _m: None, budget=budget)
 
@@ -597,13 +599,82 @@ def test_paired_canary_traffic_skips_whole_pairs_once_the_caller_is_over(monkeyp
     budget = JobBudget(user_id=caller, user_name="caller", source="canary",
                        agent_id=agent, ref_type="canary", ref_id="can-2")
 
-    result = canary_svc._paired_harness_traffic(
+    result = canary_svc._paired_traffic(
         _paired_row(agent), ws_ctx(), ["q1", "q2", "q3"], None, lambda _m: None,
         budget=budget)
 
     # pair 1 ($0.63) runs both arms, then pairs 2 and 3 are skipped whole
     assert len(calls) == 2 and result["sent"] == 2 and result["skipped"] == 4
     assert result["stop_reason"] == "budget_exceeded"
+    pairs = result["pairs"]
+    assert pairs[0]["control_session_id"] and pairs[0]["treatment_session_id"]
+    assert all(p["skipped"] == "budget_exceeded" and not p["control_session_id"]
+               and not p["treatment_session_id"] for p in pairs[1:])
+
+
+def _runtime_invoke(calls: list, reports_usage=lambda qualifier: False):
+    """``rt.invoke_runtime_text``: a side whose ``reports_usage(qualifier)`` is true
+    reports one model call (a Claude SDK runtime), any other answers silently (Strands)."""
+    def invoke(client, arn, prompt, session_id=None, actor_id="default", on_usage=None,
+               qualifier=None, **_kw):
+        calls.append({"prompt": prompt, "sid": session_id, "qualifier": qualifier})
+        if on_usage is not None and reports_usage(qualifier):
+            on_usage(BIG_CALL["usage"])
+        return {"text": "ok", "session_id": session_id}
+
+    return invoke
+
+
+def test_paired_runtime_canary_calls_settle_one_meter_each(monkeypatch):
+    """A Runtime arm that reports usage is charged its tokens; a silent one the
+    agent's turn estimate as a flagged ``job_estimate`` — one row per call, never
+    both (the rule an eval replay turn follows)."""
+    caller = _user("caller")
+    agent = _agent(method="zip_runtime")
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: MagicMock())
+    calls: list = []
+    monkeypatch.setattr(canary_svc.rt, "invoke_runtime_text",
+                        _runtime_invoke(calls, reports_usage=lambda q: q == "ctl"))
+    budget = JobBudget(user_id=caller, user_name="caller", source="canary",
+                       agent_id=agent, ref_type="canary", ref_id="can-r1")
+
+    result = canary_svc._paired_traffic(
+        _paired_row(agent, harness=False), ws_ctx(), ["q1", "q2"], None, lambda _m: None,
+        budget=budget)
+
+    assert result["sent"] == 4 and len(calls) == 4
+    rows = _rows(ref_type="canary", ref_id="can-r1")
+    assert len(rows) == 4 and {r.session_id for r in rows} == set(result["session_ids"])
+    by_side = {c["sid"]: c["qualifier"] for c in calls}
+    exact = [r for r in rows if by_side[r.session_id] == "ctl"]
+    estimated = [r for r in rows if by_side[r.session_id] == "trt"]
+    assert all(r.kind == "tokens" and not r.estimated for r in exact)
+    assert all(r.usd == pytest.approx(BIG_CALL_USD) for r in exact)
+    # read once per action, before any call: the agent had no measured turn yet
+    assert all(r.kind == "job_estimate" and r.estimated for r in estimated)
+    assert all(r.usd == budgets.DEFAULT_SETTINGS["agent_turn_estimate_usd"] for r in estimated)
+    assert all(r.user_id == caller for r in rows)
+
+
+def test_paired_runtime_canary_traffic_skips_whole_pairs_once_the_caller_is_over(monkeypatch):
+    caller = _user("caller")
+    _limit(caller, 0.03)
+    agent = _agent(method="zip_runtime")
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: MagicMock())
+    monkeypatch.setattr(exp_svc, "TRAFFIC_MAX_CONCURRENCY", 1)  # one call at a time
+    calls: list = []
+    monkeypatch.setattr(canary_svc.rt, "invoke_runtime_text", _runtime_invoke(calls))
+    budget = JobBudget(user_id=caller, user_name="caller", source="canary",
+                       agent_id=agent, ref_type="canary", ref_id="can-r2")
+
+    result = canary_svc._paired_traffic(
+        _paired_row(agent, harness=False), ws_ctx(), ["q1", "q2", "q3"], None,
+        lambda _m: None, budget=budget)
+
+    # pair 1 runs both arms ($0.02 each crosses $0.03), then pairs 2 and 3 are skipped whole
+    assert len(calls) == 2 and result["sent"] == 2 and result["skipped"] == 4
+    assert result["stop_reason"] == "budget_exceeded"
+    assert result["stop_message"].startswith("budget_exceeded: ")
     pairs = result["pairs"]
     assert pairs[0]["control_session_id"] and pairs[0]["treatment_session_id"]
     assert all(p["skipped"] == "budget_exceeded" and not p["control_session_id"]

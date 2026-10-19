@@ -642,7 +642,7 @@ export interface RuntimeCanaryMetric {
     pValue?: number | null;
     percentChange?: number | null;
     isSignificant?: boolean;
-    /** paired replay (Harness canary): questions scored on both sides and the
+    /** paired replay (either canary kind): questions scored on both sides and the
      *  per-question outcome from the candidate's side (polarity-aware) */
     pairs?: number;
     meanDiff?: number;
@@ -654,7 +654,7 @@ export interface RuntimeCanaryMetric {
   paired?: boolean;
 }
 
-/** One replayed question of a paired Harness canary verdict. */
+/** One replayed question of a paired canary verdict (Harness or Runtime). */
 export interface CanaryPairRow {
   scenario_id: string | null;
   prompt: string | null;
@@ -681,6 +681,10 @@ export interface RuntimeCanaryInfo {
   progress: string | null;
   error: string | null;
   created_at: string | null;
+  /** server-owned rule (`canary_service.early_complete_allowed`): the canary may
+   *  `complete` straight from 50/50 on its current verdict — a treatment-wins or tie
+   *  from paired replay (either kind), or any Harness verdict. Absent on older servers. */
+  early_complete_allowed?: boolean;
   artifacts: {
     /** absent ⇒ a Runtime canary (candidate minted from an edited spec) */
     kind?: "harness";
@@ -694,6 +698,9 @@ export interface RuntimeCanaryInfo {
     };
     /** Harness canaries A/B two existing versions */
     harness?: { control_version: string; treatment_version: string; start_stage?: number };
+    /** a Runtime canary created to open at 50/50 (only stored when > 0; a Harness
+     *  canary keeps it under `harness.start_stage`) */
+    start_stage?: number;
     edited_spec?: Record<string, unknown>;
     /** the evaluators BOTH arms are scored by (chosen at create); absent on rows
      *  created before the choice existed — those use the default pair */
@@ -715,7 +722,7 @@ export interface RuntimeCanaryInfo {
       test_name?: string;
       ab_test_id?: string;
       ramp_stage?: number;
-      // the stage setup opened at (1 ⇒ a Harness canary skipped 90/10); absent = 0
+      // the stage setup opened at (1 ⇒ the canary skipped 90/10, either kind); absent = 0
       start_stage?: number;
       weights?: Record<string, number>;
       v_candidate?: string;
@@ -742,13 +749,15 @@ export interface RuntimeCanaryInfo {
       traffic_attempts: {
         sent: number;
         failed: number;
-        /** prompts (runtime) or calls (paired) never sent because the caller's monthly
-         *  spend budget was reached; with `stop_reason: budget_exceeded` */
+        /** calls (paired) or prompts (a legacy weighted Runtime attempt) never sent
+         *  because the caller's monthly spend budget was reached; with
+         *  `stop_reason: budget_exceeded` */
         skipped?: number;
         stop_reason?: BudgetStopReason | null;
         baseline_n: number;
         /** the primary evaluator's own sample count before this stage's traffic
-         *  (runtime canaries with a primary); the verdict waits for it to grow */
+         *  (legacy weighted Runtime attempts with a primary); the verdict waits for it
+         *  to grow */
         primary_baseline_n?: number;
         dataset_id?: string;
         dataset_name?: string;
@@ -756,7 +765,8 @@ export interface RuntimeCanaryInfo {
         // diagnostic breakdown of the send (e.g. {"200": 47, "429": 3});
         // absent on attempts recorded before the concurrent send landed
         status_counts?: Record<string, number>;
-        /** "paired": a Harness canary sent every question to BOTH versions */
+        /** "paired": every question went to BOTH versions (either kind); absent ⇒ a
+         *  legacy weighted Runtime attempt split by the gateway */
         mode?: string;
         pairs?: { scenario_id: string; control_session_id: string | null;
                   treatment_session_id: string | null; error?: string;
@@ -766,7 +776,12 @@ export interface RuntimeCanaryInfo {
       verdict?: {
         verdict: string;
         avg_delta?: number;
+        /** both arms' samples combined */
         n?: number;
+        /** per-arm samples; a winner or tie needs at least `min_n` (3) on EACH arm,
+         *  otherwise the verdict is `insufficient-n`. Absent on older verdicts */
+        n_control?: number;
+        n_treatment?: number;
         significant?: boolean;
         baseline_n?: number;
         reason?: string;
@@ -789,7 +804,7 @@ export interface RuntimeCanaryInfo {
       ab_test_status: string;
       completed_at: string;
       promoted_version?: string;
-      // ramp stage `complete` ran at; < 2 ⇒ a Harness canary completed early from 50/50
+      // ramp stage `complete` ran at; < 2 ⇒ the canary completed early from 50/50
       completed_at_stage?: number;
     };
     rollback?: {
@@ -5951,9 +5966,11 @@ export const api = {
   getRuntimeCanary: (id: string) =>
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
   /** Runtime agents send `candidate` (the edit to mint); a Harness sends
-   *  `harness_versions` — control (an earlier version) vs treatment (the latest) —
-   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). Both kinds may choose
-   *  their evaluators and a primary evaluator that decides the verdict. */
+   *  `harness_versions` — control (an earlier version) vs treatment (the latest).
+   *  Either kind may open at 50/50 with `start_stage: 1` (skip 90/10; a Runtime
+   *  canary then sends half of its live platform traffic to the candidate as soon
+   *  as setup finishes), and may choose its evaluators and a primary evaluator that
+   *  decides the verdict. */
   createRuntimeCanary: (input: {
     agent_id: string;
     candidate?: {

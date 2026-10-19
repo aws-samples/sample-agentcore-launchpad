@@ -83,3 +83,17 @@ def test_a_finished_run_records_the_code_evaluators_mean(monkeypatch):
     assert run.status == "completed" and seen["location"] == ("g", "s")
     assert {s["evaluatorId"]: s.get("count") for s in run.scores} == {
         "Builtin.Refusal": 19, "KbToolBoundary-f56DD97uvp": 3, "Builtin.Helpfulness": None}
+
+
+def test_a_result_record_is_keyed_by_the_evaluator_arn_id_tail():
+    """Run compare matches per-case records against the run's ``scores``, which key by
+    evaluator id; a custom judge's evaluation name is not its id (issue #298)."""
+    judge = ac.normalize_result_record(
+        _record("drone_store_business_rules-vNDtnlGl7J", 1.0, name="drone_store_business_rules"))
+    assert judge["evaluator_id"] == "drone_store_business_rules-vNDtnlGl7J"
+    assert judge["score"] == 1.0
+    # a record without an ARN keeps its evaluation name, as before
+    builtin = ac.normalize_result_record(
+        {"gen_ai.evaluation.name": "Builtin.Helpfulness", "gen_ai.evaluation.score.value": 0.5})
+    assert builtin["evaluator_id"] == "Builtin.Helpfulness"
+    assert ac.normalize_result_record({})["evaluator_id"] == "None"

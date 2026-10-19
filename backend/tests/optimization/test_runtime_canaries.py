@@ -407,7 +407,56 @@ def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
     assert [v["weight"] for v in ab_kwargs["variants"]] == [90, 10]
     stored = _reload(row.id)
     assert stored.artifacts["setup"]["ramp_stage"] == 0
+    assert stored.artifacts["setup"]["start_stage"] == 0
     assert stored.artifacts["setup"]["gateway_id"] == "gw-can"
+
+
+def test_setup_opens_a_runtime_canary_at_50_50_when_asked(monkeypatch):
+    """AC6: ``start_stage`` 1 opens the A/B test at 50/50 and records where the ramp
+    began, so the 90/10 stage reads as skipped."""
+    (agent_id,) = _persist_agents(_agent("subject"))
+    row = _mk_canary(
+        agent_id=agent_id,
+        artifacts={
+            "agent_meta": {"id": agent_id, "name": "subject", "arn": "arn:agent",
+                           "resource_id": "subject-res", "runtime_name": "SubjectRuntime"},
+            "edited_spec": AgentSpec(
+                name="subject", method="zip_runtime", system_prompt="edited"
+            ).model_dump(),
+            "start_stage": 1,
+            "rounds": [],
+        },
+    )
+    monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version",
+                        lambda **kw: ("1", "2", "agents/subject/canary/x-candidate.zip"))
+    monkeypatch.setattr(canary_svc.canary_infra, "current_version", lambda control, rid: "1")
+    monkeypatch.setattr(canary_svc.canary_infra, "create_canary_gateway",
+                        lambda **kw: {"gateway_id": "gw-can", "gateway_arn": "arn:gw",
+                                      "gateway_url": "https://gw"})
+    monkeypatch.setattr(canary_svc.canary_infra, "ensure_endpoint_ready",
+                        lambda control, **kw: {"status": "READY"})
+    monkeypatch.setattr(exp_svc, "create_runtime_target_idempotent",
+                        lambda control, gateway_id, name, arn, qualifier="DEFAULT": f"id-{name}")
+    monkeypatch.setattr(exp_svc, "create_online_eval_idempotent",
+                        lambda control, **kw: {"onlineEvaluationConfigId": f"id-{kw['name']}",
+                                               "onlineEvaluationConfigArn": f"arn:{kw['name']}"})
+    data = MagicMock()
+    data.create_ab_test.return_value = {"abTestId": "ab-canary"}
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+    messages: list[str] = []
+
+    result = canary_svc.act_setup(row.id, messages.append)
+
+    assert [v["weight"] for v in data.create_ab_test.call_args.kwargs["variants"]] == [50, 50]
+    assert result["weights"] == {"C": 50, "T1": 50}
+    assert any("50/50" in m for m in messages)
+    stored = _reload(row.id)
+    assert stored.artifacts["setup"]["start_stage"] == 1
+    assert stored.artifacts["setup"]["ramp_stage"] == 1
+    # the first round recorded is the 50/50 one, so early completion can apply to it
+    _, current = canary_svc._current_round(stored, create=True)
+    assert current["ramp_stage"] == 1
 
 
 def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
@@ -683,6 +732,81 @@ def test_complete_requires_final_stage(client):
     assert res.json()["code"] == "canary.stage_not_ready"
 
 
+def _at_50_50(verdict: dict) -> RuntimeCanary:
+    return _mk_canary(artifacts={
+        "agent_meta": _runtime_meta(), "setup": _setup_artifact(ramp_stage=1),
+        "rounds": [_round(1, verdict=verdict)],
+    })
+
+
+def _complete(client, canary_id: str, **extra):
+    return client.post(f"/api/runtime-canaries/{canary_id}/action",
+                       json={"action": "complete", **extra})
+
+
+def test_a_runtime_canary_completes_from_50_50_on_a_paired_win(client, monkeypatch):
+    """AC5: paired replay asks both versions every question, so a 50/50 win is the
+    decision — the 1/99 stage would add a verdict wait and no new evidence."""
+    row = _at_50_50({"verdict": "treatment-wins", "significant": True, "mode": "paired"})
+    runs: list[str] = []
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: runs.append(action))
+
+    assert client.get(f"/api/runtime-canaries/{row.id}").json()["early_complete_allowed"] is True
+    res = _complete(client, row.id)
+
+    assert res.status_code == 202, res.text
+    assert runs == ["complete"]
+
+
+@pytest.mark.parametrize("verdict", [
+    {"verdict": "treatment-wins", "significant": False, "mode": "paired"},
+    {"verdict": "tie", "significant": False, "mode": "paired"},
+])
+def test_a_paired_runtime_tie_or_weak_win_needs_the_override(client, monkeypatch, verdict):
+    row = _at_50_50(verdict)
+    runs: list[str] = []
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda cid, action, fn, caller=None: runs.append(action))
+
+    refused = _complete(client, row.id)
+    overridden = _complete(client, row.id, allow_non_significant=True)
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "canary.override_required"
+    assert overridden.status_code == 202, overridden.text
+    assert runs == ["complete"]
+
+
+@pytest.mark.parametrize("verdict", [
+    {"verdict": "control-wins", "significant": True, "mode": "paired"},
+    # the legacy weighted path (gateway split, GetABTest) keeps the full ramp
+    {"verdict": "treatment-wins", "significant": True},
+])
+def test_a_runtime_canary_cannot_complete_early_otherwise(client, monkeypatch, verdict):
+    row = _at_50_50(verdict)
+    monkeypatch.setattr(canary_svc, "run_action",
+                        lambda *a, **kw: pytest.fail("must not dispatch"))
+
+    assert client.get(f"/api/runtime-canaries/{row.id}").json()["early_complete_allowed"] is False
+    res = _complete(client, row.id, allow_non_significant=True)
+
+    assert res.status_code == 409
+    assert res.json()["code"] == "canary.stage_not_ready"
+
+
+def test_the_canary_list_carries_the_early_complete_flag(client):
+    _at_50_50({"verdict": "tie", "significant": False, "mode": "paired"})
+    _mk_canary(agent_id="a2", artifacts={
+        "agent_meta": _runtime_meta("a2"), "setup": _setup_artifact(), "rounds": [],
+    })
+
+    flags = sorted(c["early_complete_allowed"]
+                   for c in client.get("/api/runtime-canaries").json()["canaries"])
+
+    assert flags == [False, True]
+
+
 # ─── traffic / verdict / advance mechanics ───────────────────────────────────
 def test_traffic_action_requires_dataset(client):
     row = _mk_canary(
@@ -702,9 +826,39 @@ def test_traffic_action_requires_dataset(client):
     assert _reload(row.id).artifacts["rounds"] == []
 
 
-def test_traffic_records_metric_baseline_and_clears_prior_verdict(monkeypatch):
+def _invoke_stub(calls: list[dict], fail=None):
+    """``rt.invoke_runtime_text`` that records each call; ``fail(prompt, qualifier,
+    n)`` (n = this side's call count so far) may return an exception to raise."""
+    def invoke(client, arn, prompt, session_id=None, actor_id="default", **kw):
+        n = sum(1 for c in calls if c["prompt"] == prompt and c["qualifier"] == kw["qualifier"])
+        calls.append({"arn": arn, "prompt": prompt, "sid": session_id, "actor": actor_id, **kw})
+        exc = fail(prompt, kw["qualifier"], n) if fail else None
+        if exc is not None:
+            raise exc
+        return {"text": "ok", "session_id": session_id}
+
+    return invoke
+
+
+def _paired_stubs(monkeypatch, calls: list[dict], fail=None) -> MagicMock:
+    data = MagicMock()
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(exp_svc, "send_gateway_traffic",
+                        lambda *a, **kw: pytest.fail("paired replay never uses the gateway"))
+    monkeypatch.setattr(exp_svc, "sigv4_post",
+                        lambda *a, **kw: pytest.fail("paired replay never POSTs a gateway"))
+    monkeypatch.setattr(canary_svc.rt, "invoke_runtime_text", _invoke_stub(calls, fail))
+    return data
+
+
+def _runtime_meta(agent_id: str = "a1") -> dict:
+    return {"id": agent_id, "arn": RUNTIME_ARN}
+
+
+def test_traffic_is_paired_and_clears_prior_verdict(monkeypatch):
     row = _mk_canary(
         artifacts={
+            "agent_meta": _runtime_meta(),
             "setup": _setup_artifact(),
             "rounds": [
                 _round(
@@ -714,39 +868,140 @@ def test_traffic_records_metric_baseline_and_clears_prior_verdict(monkeypatch):
             ],
         }
     )
-    data = MagicMock()
-    data.get_ab_test.return_value = {
-        "results": {
-            "evaluatorMetrics": [
-                {
-                    "evaluatorArn": "arn:evaluator",
-                    "controlStats": {"mean": 0.5, "sampleSize": 2},
-                    "variantResults": [
-                        {"name": "T1", "mean": 0.7, "sampleSize": 3}
-                    ],
-                }
-            ]
-        }
-    }
-    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
-    monkeypatch.setattr(
-        exp_svc,
-        "send_gateway_traffic",
-        lambda *args, **kwargs: {
-            "session_ids": ["s1"],
-            "sent": 1,
-            "failed": 0,
-        },
-    )
+    data = _paired_stubs(monkeypatch, [])
 
     result = canary_svc.act_traffic(
         row.id, ["prompt"], {"dataset_id": "d1"}, lambda message: None
     )
 
-    assert result["baseline_n"] == 5
+    assert result["mode"] == "paired" and result["baseline_n"] == 0
+    data.get_ab_test.assert_not_called()  # no gateway metric baseline to snapshot
     stored_round = _reload(row.id).artifacts["rounds"][0]
     assert "verdict" not in stored_round
+    # the legacy weighted attempt stays; the paired one is appended after it
+    assert [a.get("mode") for a in stored_round["traffic_attempts"]] == [None, "paired"]
     assert stored_round["traffic_attempts"][-1]["dataset_id"] == "d1"
+
+
+def test_runtime_traffic_asks_both_endpoints_every_question(monkeypatch):
+    """AC1: two InvokeAgentRuntime calls per prompt, qualifier = the stable and the
+    treatment endpoint, each in its own fresh session, as the traffic runtime user
+    and the agent-scoped synthetic memory actor — and no gateway POST."""
+    from app.services.memory import scoped_actor
+
+    (agent_id,) = _persist_agents(_agent("subject"))
+    row = _mk_canary(agent_id=agent_id, artifacts={
+        "agent_meta": _runtime_meta(agent_id), "setup": _setup_artifact(1), "rounds": [],
+    })
+    calls: list[dict] = []
+    _paired_stubs(monkeypatch, calls)
+
+    attempt = canary_svc.act_traffic(row.id, ["hello", "world"], {"dataset_id": "d"},
+                                     lambda _m: None, scenario_ids=["S01", "S02"])
+
+    assert len(calls) == 4
+    assert sorted((c["prompt"], c["qualifier"]) for c in calls) == [
+        ("hello", "stablecan"), ("hello", "treatcan"),
+        ("world", "stablecan"), ("world", "treatcan"),
+    ]
+    assert all(c["arn"] == RUNTIME_ARN for c in calls)
+    assert all(c["runtime_user_id"] == exp_svc.TRAFFIC_USER_ID for c in calls)
+    assert {c["actor"] for c in calls} == {scoped_actor(agent_id, "canary-traffic")}
+    sids = [c["sid"] for c in calls]
+    assert len(set(sids)) == 4 and all(len(sid) >= 33 for sid in sids)
+    assert attempt["mode"] == "paired"
+    assert (attempt["sent"], attempt["failed"]) == (4, 0)
+    by_side = {(c["prompt"], c["qualifier"]): c["sid"] for c in calls}
+    first = attempt["pairs"][0]
+    assert first["scenario_id"] == "S01"
+    assert first["control_session_id"] == by_side[("hello", "stablecan")]
+    assert first["treatment_session_id"] == by_side[("hello", "treatcan")]
+    stored = _reload(row.id).artifacts["rounds"][0]
+    assert stored["ramp_stage"] == 1 and stored["traffic_attempts"][0]["mode"] == "paired"
+
+
+def test_a_failed_runtime_side_is_recorded_on_its_pair(monkeypatch):
+    """AC2: a transient error is retried once in a new session; a final one marks only
+    that side of the pair, and the replay still succeeds."""
+    row = _mk_canary(artifacts={
+        "agent_meta": _runtime_meta(), "setup": _setup_artifact(), "rounds": [],
+    })
+    calls: list[dict] = []
+
+    def fail(prompt, qualifier, n):
+        if prompt == "flaky" and qualifier == "stablecan" and n == 0:
+            return RuntimeError("runtime client error: upstream reset")
+        if prompt == "broken" and qualifier == "treatcan":
+            return RuntimeError("the agent crashed")
+        return None
+
+    _paired_stubs(monkeypatch, calls, fail)
+
+    attempt = canary_svc.act_traffic(row.id, ["flaky", "broken"], {"dataset_id": "d"},
+                                     lambda _m: None)
+
+    flaky_control = [c for c in calls if (c["prompt"], c["qualifier"]) == ("flaky", "stablecan")]
+    assert len(flaky_control) == 2 and flaky_control[0]["sid"] != flaky_control[1]["sid"]
+    # a final error is not retried
+    assert len([c for c in calls if (c["prompt"], c["qualifier"]) == ("broken", "treatcan")]) == 1
+    flaky, broken = attempt["pairs"]
+    assert flaky["control_session_id"] == flaky_control[1]["sid"] and "error" not in flaky
+    assert broken["error"] == "treatment: RuntimeError"
+    assert broken["control_session_id"] and broken["treatment_session_id"]
+    assert (attempt["sent"], attempt["failed"]) == (3, 1)
+    assert _reload(row.id).error is None
+
+
+def _paired_round(pairs: list[dict], *, prior: list[dict] | None = None) -> dict:
+    return {"ramp_stage": 1, "weights": {}, "traffic_attempts": [
+        *(prior or []),
+        {"mode": "paired", "pairs": pairs, "sent": 2 * len(pairs), "failed": 0,
+         "baseline_n": 0, "completed_at": "2026-10-19T05:00:00+00:00"},
+    ]}
+
+
+def _scored_pairs(n: int) -> list[dict]:
+    return [{"scenario_id": f"S{i:02d}", "prompt": f"q{i}", "control_session_id": f"c{i}",
+             "treatment_session_id": f"t{i}"} for i in range(n)]
+
+
+def test_a_runtime_round_with_paired_replay_gets_the_paired_verdict(monkeypatch):
+    """AC3: scores are read back by session id from both arms' online evaluations —
+    including a round that also holds a legacy weighted attempt (an in-flight canary
+    from before paired replay), whose gateway sessions are left out."""
+    weighted = {"baseline_n": 4, "sent": 12, "failed": 0, "session_ids": ["gw-1"],
+                "completed_at": "2026-10-19T04:00:00+00:00"}
+    row = _mk_canary(artifacts={
+        "agent_meta": _runtime_meta(), "setup": _setup_artifact(1),
+        "online_evaluators": ["Builtin.GoalSuccessRate"],
+        "primary_evaluator": "Builtin.GoalSuccessRate",
+        "rounds": [_paired_round(_scored_pairs(4), prior=[weighted])],
+    })
+    data = MagicMock()
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
+    seen: list[str] = []
+
+    def insights(queries, hours, **_kw):
+        seen.extend(queries.values())
+        rows = []
+        for i in range(4):
+            rows += [{"sid": f"c{i}", "evaluator": "Builtin.GoalSuccessRate", "mean": "0.25"},
+                     {"sid": f"t{i}", "evaluator": "Builtin.GoalSuccessRate", "mean": "1.0"}]
+        return {"q0": rows}
+
+    monkeypatch.setattr("app.services.observability.run_insights_queries", insights)
+
+    verdict = canary_svc.act_verdict(row.id, lambda _m: None)
+
+    data.get_ab_test.assert_not_called()
+    assert verdict["mode"] == "paired" and verdict["pairs_sent"] == 4
+    assert verdict["verdict"] == "treatment-wins"
+    assert verdict["primary"] == "Builtin.GoalSuccessRate"
+    assert (verdict["n_control"], verdict["n_treatment"]) == (4, 4)
+    (metric,) = verdict["metrics"]
+    assert metric["control"]["sampleSize"] == 4 and metric["variants"][0]["sampleSize"] == 4
+    assert '"oe-c", "oe-t"' in seen[0] and "gw-1" not in seen[0]
+    assert _reload(row.id).artifacts["rounds"][0]["verdict"]["mode"] == "paired"
 
 
 def test_verdict_waits_for_sample_growth_and_persists_current_round(monkeypatch):
@@ -780,8 +1035,11 @@ def test_verdict_waits_for_sample_growth_and_persists_current_round(monkeypatch)
 
     verdict = canary_svc.act_verdict(row.id, lambda message: None)
 
+    # a round whose last attempt is the legacy weighted shape keeps GetABTest
+    assert data.get_ab_test.called and "mode" not in verdict
     assert verdict["verdict"] == "treatment-wins"
     assert verdict["n"] == 7
+    assert (verdict["n_control"], verdict["n_treatment"]) == (3, 4)
     assert verdict["baseline_n"] == 5
     assert _reload(row.id).artifacts["rounds"][0]["verdict"]["n"] == 7
 

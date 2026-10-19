@@ -1526,6 +1526,14 @@ def compute_verdict(
     The average is weighted by ``min`` of the two arms' sample sizes: a delta is
     only as trustworthy as its smaller arm, so an evaluator that produced two
     scores no longer outvotes one that produced forty.
+
+    ``min_n`` gates EACH arm, not the two together: a weighted 90/10 split once gave
+    47 control and 2 treatment sessions, which passed a combined ``n >= 2 * min_n``
+    and let the sign over 2 sessions decide (issue #298). An arm's count here is
+    its largest ``sampleSize`` over the metrics that have means — every evaluator
+    scores the same sessions, so summing would pass 2 sessions × 2 evaluators as 4.
+    ``n`` stays the combined total (a console contract); ``n_control`` /
+    ``n_treatment`` report the per-arm counts the gate used.
     """
     if not metrics:
         if primary is not None:
@@ -1534,6 +1542,7 @@ def compute_verdict(
     weighted_delta = 0.0
     weight_total = 0.0
     total_n = 0
+    arm_n = {"control": 0, "treatment": 0}
     significant = False
     for metric in metrics:
         polarity = ac.evaluator_polarity(
@@ -1551,6 +1560,8 @@ def compute_verdict(
                 weight = float(min(c_n, v_n)) or 1.0
                 weighted_delta += polarity * (t_mean - c_mean) * weight
                 weight_total += weight
+                arm_n["control"] = max(arm_n["control"], int(c_n))
+                arm_n["treatment"] = max(arm_n["treatment"], int(v_n))
             if variant.get("isSignificant"):
                 significant = True
     if primary is not None:
@@ -1559,14 +1570,14 @@ def compute_verdict(
     if not weight_total:
         return {"verdict": "insufficient-data", "reason": "arms have no means yet"}
     avg_delta = weighted_delta / weight_total
-    if total_n < min_n * 2:
-        return {"verdict": "insufficient-n", "avg_delta": round(avg_delta, 4),
-                "n": total_n}
+    counts = {"n": total_n, "n_control": arm_n["control"], "n_treatment": arm_n["treatment"]}
+    if min(arm_n.values()) < min_n:
+        return {"verdict": "insufficient-n", "avg_delta": round(avg_delta, 4), **counts}
     winner = "treatment" if avg_delta > 0 else ("control" if avg_delta < 0 else "tie")
     return {
         "verdict": f"{winner}-wins" if winner != "tie" else "tie",
         "avg_delta": round(avg_delta, 4),
-        "n": total_n,
+        **counts,
         "significant": significant,
     }
 
@@ -1579,7 +1590,9 @@ def _primary_verdict(
 
     ``avg_delta`` (the all-evaluator aggregate) is kept for display only. A primary
     that produced no comparable means is ``insufficient-data`` — the other
-    evaluators never stand in for it."""
+    evaluators never stand in for it. Each arm needs ``min_n`` of the primary's own
+    samples (``n_control`` / ``n_treatment``): 47 control scores cannot make up
+    for 2 treatment ones."""
     base: dict[str, Any] = {"primary": primary}
     if avg_delta is not None:
         base["avg_delta"] = avg_delta
@@ -1590,16 +1603,15 @@ def _primary_verdict(
     if metric is None or c_mean is None or t_mean is None:
         return {**base, "verdict": "insufficient-data", "reason": "primary evaluator unscored",
                 "n": 0}
-    n = int(control.get("sampleSize") or 0) + int(variant.get("sampleSize") or 0)
+    c_n, t_n = int(control.get("sampleSize") or 0), int(variant.get("sampleSize") or 0)
     delta = ac.evaluator_polarity(primary) * (t_mean - c_mean)
-    base["primary_delta"] = round(delta, 4)
-    if n < min_n * 2:
-        return {**base, "verdict": "insufficient-n", "n": n}
+    base.update(primary_delta=round(delta, 4), n=c_n + t_n, n_control=c_n, n_treatment=t_n)
+    if min(c_n, t_n) < min_n:
+        return {**base, "verdict": "insufficient-n"}
     winner = "treatment" if delta > 0 else ("control" if delta < 0 else "tie")
     return {
         **base,
         "verdict": f"{winner}-wins" if winner != "tie" else "tie",
-        "n": n,
         "significant": bool(variant.get("isSignificant")),
     }
 

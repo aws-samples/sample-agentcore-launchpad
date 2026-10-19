@@ -12,8 +12,8 @@ import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, 
 import { StageCard } from "../experiments/StageCard";
 import {
   CANARY_TONE,
-  EARLY_COMPLETE_STAGE,
-  EARLY_COMPLETE_VERDICTS,
+  createdStartStage,
+  openingWeights,
   RAMP_STAGES,
   verdictTone,
   versionsLabel,
@@ -101,12 +101,12 @@ export function CanaryDetail({ id }: { id: string }) {
   const currentStage = liveSetup?.ramp_stage ?? 0;
   const terminal = canary.status !== "running";
   const isHarness = a.kind === "harness";
-  // the stage `complete` left from: the final one, or 50/50 for an early Harness completion
+  // the stage `complete` left from: the final one, or 50/50 for an early completion
   const completedStage = a.complete?.completed_at_stage ?? RAMP_STAGES.length - 1;
-  // stages before the one setup opened at never ran (a Harness canary that skipped 90/10)
+  // stages before the one setup opened at never ran (a canary that skipped 90/10)
   const startStage = liveSetup?.start_stage ?? 0;
   const skippedAt = (i: number): "start" | "early" | null =>
-    i < startStage ? "start" : isHarness && !!a.complete && i > completedStage ? "early" : null;
+    i < startStage ? "start" : !!a.complete && i > completedStage ? "early" : null;
   // the evaluators both arms are scored by; a row from before the choice used the default pair
   const configured = a.online_evaluators ?? setup?.online_evaluators ?? null;
   const primaryEvaluator = a.primary_evaluator ?? setup?.primary_evaluator ?? null;
@@ -244,9 +244,10 @@ export function CanaryDetail({ id }: { id: string }) {
       !!verdict && (verdict.verdict === "control-wins" || verdict.verdict === "insufficient-data" || verdict.verdict === "insufficient-n");
     const needsOverride = !blocked && !!verdict && (verdict.verdict === "tie" || verdict.significant === false);
     const action = index === RAMP_STAGES.length - 1 ? "complete" : "advance";
-    // a Harness canary may complete straight from 50/50 on a treatment-wins or tie verdict
-    const earlyComplete =
-      isHarness && index === EARLY_COMPLETE_STAGE && !!verdict && EARLY_COMPLETE_VERDICTS.includes(verdict.verdict);
+    // the server decides whether this verdict may complete straight from 50/50
+    // (paired replay of either kind, or a Harness canary); it only ever applies to
+    // the current stage
+    const earlyComplete = !!canary.early_complete_allowed && index === currentStage;
     const skipped = skippedAt(index);
     const done = !skipped && (index < currentStage || (index === completedStage && !!a.complete));
     const advanceLabel = action === "complete" ? t("canaryPage.complete") : t("canaryPage.advance");
@@ -273,11 +274,14 @@ export function CanaryDetail({ id }: { id: string }) {
                 <span style={{ flex: `0 0 ${ramp.control}%` }} className="c" />
                 <span style={{ flex: 1 }} className="t" />
               </div>
-              <span className="v2-muted">
-                {isHarness
-                  ? t("canaryPage.pairedReplay")
-                  : t("canaryPage.experimentalWeights", { control: ramp.control, treatment: ramp.treatment })}
-              </span>
+              <span className="v2-muted">{t("canaryPage.pairedReplay")}</span>
+              {/* test traffic is paired, but a Runtime canary's real platform traffic is
+                  still split by the gateway at this stage's weights */}
+              {!isHarness && (
+                <span className="v2-muted">
+                  {t("canaryPage.experimentalWeights", { control: ramp.control, treatment: ramp.treatment })}
+                </span>
+              )}
             </div>
             {attempts.length > 0 && paired && (
               <Descriptions
@@ -317,7 +321,11 @@ export function CanaryDetail({ id }: { id: string }) {
                       {t("v2.canary.paired.summary", { complete: verdict.pairs_complete ?? 0, sent: verdict.pairs_sent ?? 0 })}
                     </span>
                   ) : (
-                    <span className="v2-muted">n={verdict.n ?? 0}</span>
+                    <span className="v2-muted" data-testid="v2-canary-verdict-n">
+                      {verdict.n_control !== undefined && verdict.n_treatment !== undefined
+                        ? t("v2.canary.perArmN", { n: verdict.n ?? 0, control: verdict.n_control, treatment: verdict.n_treatment })
+                        : `n=${verdict.n ?? 0}`}
+                    </span>
                   )}
                   {verdict.significant === false && <Tag tone="gray">{t("canaryPage.notSignificant")}</Tag>}
                   {verdict.primary ? (
@@ -526,7 +534,11 @@ export function CanaryDetail({ id }: { id: string }) {
 
       <StageCard id="setup" index={1} title={t("canaryPage.stage.setup")} state={liveSetup ? "done" : !terminal ? "active" : "pending"}>
         <div className="v2-form">
-          {!setup && !terminal && actionButton("setup", t("canaryPage.setup"), { primary: true })}
+          {!setup &&
+            !terminal &&
+            actionButton("setup", t("canaryPage.setupAt", { weights: openingWeights(createdStartStage(a) === 0) }), {
+              primary: true,
+            })}
           {provisioning &&
             (canary.running_action === "setup" ? (
               <span className="v2-muted">{canary.progress ?? t("canaryPage.running")}</span>

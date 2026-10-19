@@ -3375,11 +3375,12 @@
     "candidatePromptPlaceholder": "编辑候选版本的系统提示词……",
     "candidateCode": "候选版本代码（studio）",
     "candidateCodePlaceholder": "编辑候选版本的 studio Agent 代码……",
-    "candidateHint": "候选版本会基于该 Agent 当前的 spec 加上你下方的编辑铸造而成；在你执行推广之前，生产始终服务当前版本。",
+    "candidateHint": "候选版本会基于该 Agent 当前的 spec 加上你下方的编辑铸造而成；在你执行推广之前，它只承接当前放量档位所分配的该 Agent 真实流量。",
     "versionFraming": "当前版本 v{{current}} → 候选版本 v{{candidate}}",
     "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可做金丝雀；禁用原因由后端能力合同统一提供。",
     "experimentalOnly": "下方权重会通过一个专属金丝雀网关，把该 Agent 的真实生产流量按比例分流。推广与回滚都会真正改变生产所服务的版本。",
     "setup": "设置 90/10",
+    "setupAt": "设置 {{weights}}",
     "setupIncomplete": "Setup 未完成：专属网关与 stable 端点已创建，但候选版本的 A/B 测试尚未建立——生产仍服务当前版本。该金丝雀无法重试 Setup：请先回滚并清理，然后重新创建。",
     "running": "运行中…",
     "retry": "重试",
@@ -3442,11 +3443,12 @@
       "note": "候选版本显著获胜可直接继续；平局或未达显著需显式覆盖；当前版本获胜或证据不足会继续阻断。"
     },
     "completeEarly": "直接完成（跳过 1/99）",
-    "completeEarlyHint": "Harness 金丝雀的流量来自 Dataset 回放，1/99 一档几乎会把所有会话都送进实验版本，并不会增加对比证据。在当前判定下可以直接完成——A/B 测试停止，生产继续使用新版本；平局或未达显著时需人工确认。也可以继续放量到 1/99。",
+    "completeEarlyHint": "测试流量是成对的 Dataset 回放：每道题都已同时发给两个版本，1/99 一档并不会增加对比证据。在当前判定下可以直接完成——A/B 测试停止，生产改为服务候选版本；平局或未达显著时需人工确认。也可以继续放量到 1/99。",
     "plan": {
       "title": "放量计划",
       "first": "先跑 90/10 流量与判定",
       "firstHint": "取消后直接从 50/50 开始：实验版本已是生产默认版本，90/10 并不限制影响范围，只会让实验组样本很少。",
+      "firstHintRuntime": "取消后直接从 50/50 开始：设置完成后，该 Agent 一半的真实平台流量会立即进入候选版本。测试流量在每一档都成对回放，因此先跑 90/10 只多一轮，不会减少样本。",
       "half": "50/50 流量与判定（必经）",
       "last": "1/99：在 50/50 判定后再决定是否需要"
     },
@@ -7103,6 +7105,7 @@
       "pipeline": "放量流程",
       "sourceExp": "来源实验",
       "targets": "Target",
+      "perArmN": "n={{n}} · 当前版本 {{control}} / 候选版本 {{treatment}}",
       "paired": {
         "budgetStop": "预算终止",
         "meanDiff": "平均差",

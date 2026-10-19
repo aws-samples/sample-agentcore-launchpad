@@ -9,16 +9,21 @@ export const RAMP_STAGES = [
   { control: 1, treatment: 99 },
 ] as const;
 
-/** A Harness canary may `complete` from this ramp stage (50/50) on a treatment-wins or
- *  tie verdict — mirrors `canary_service.EARLY_COMPLETE_STAGE` / `EARLY_COMPLETE_VERDICTS`
- *  (a tie or a non-significant win still needs the override). It may also open here. */
+/** The 50/50 ramp stage (`canary_service.EARLY_COMPLETE_STAGE`): a canary created with
+ *  `start_stage: 1` opens here, and may `complete` from here. Whether it may is the
+ *  server's call (`RuntimeCanaryInfo.early_complete_allowed`), never re-derived here. */
 export const EARLY_COMPLETE_STAGE = 1;
-export const EARLY_COMPLETE_VERDICTS: readonly string[] = ["treatment-wins", "tie"];
 
 /** `C/T1` of the stage a new canary opens at. */
 export function openingWeights(runFirst: boolean): string {
   const r = RAMP_STAGES[runFirst ? 0 : EARLY_COMPLETE_STAGE];
   return `${r.control}/${r.treatment}`;
+}
+
+/** The stage a canary was created to open at: a Harness keeps it under `harness`,
+ *  a Runtime canary at the top level (absent = 0, the 90/10 stage). */
+export function createdStartStage(artifacts: RuntimeCanaryInfo["artifacts"]): number {
+  return artifacts.harness?.start_stage ?? artifacts.start_stage ?? 0;
 }
 
 export const CANARY_TONE: Record<RuntimeCanaryInfo["status"], TagTone> = {

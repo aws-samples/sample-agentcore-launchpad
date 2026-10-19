@@ -48,6 +48,8 @@ def _out(row: RuntimeCanary) -> dict[str, Any]:
         "progress": row.progress,
         "error": row.error,
         "created_at": row.created_at.isoformat() if row.created_at else None,
+        # may `complete` run from the current 50/50 stage? (derived, ledger-only)
+        "early_complete_allowed": canary_service.early_complete_allowed(row),
         **creators.fields(row),
     }
 
@@ -114,7 +116,9 @@ class RuntimeCanaryCreate(BaseModel):
     # runtime canaries mint a candidate from this edit; harness canaries pick versions
     candidate: CandidateEdit | None = None
     harness_versions: HarnessVersions | None = None
-    # the ramp stage setup opens at: 0 = 90/10, 1 = 50/50 (skips 90/10; Harness only)
+    # the ramp stage setup opens at: 0 = 90/10, 1 = 50/50 (skips 90/10). Either kind;
+    # a Runtime canary opened at 50/50 sends half of the agent's live platform traffic
+    # to the never-served candidate as soon as setup finishes — the operator's opt-in
     start_stage: int = Field(default=0, ge=0, le=canary_service.EARLY_COMPLETE_STAGE)
     source_experiment_id: str | None = None
     # the evaluators BOTH arms' online evaluations score with; absent/empty → the
@@ -289,13 +293,6 @@ def create_runtime_canary(
             creator=creator,
         )
         return _out(row)
-    if req.start_stage:
-        # a Runtime canary's candidate is not production yet: 90/10 is its blast-radius cap
-        raise AppError(
-            "canary.start_stage_harness_only",
-            "only a Harness canary may skip the 90/10 stage",
-            status_code=400,
-        )
     candidate = req.candidate
     if candidate is None:
         raise AppError(
@@ -337,7 +334,8 @@ def create_runtime_canary(
     evaluators, primary = _validate_evaluators(req, ws, db, viewer)
     row = canary_service.start_canary(
         agent, edited_spec, ws.context, req.source_experiment_id,
-        online_evaluators=evaluators, primary_evaluator=primary, creator=creator,
+        start_stage=req.start_stage, online_evaluators=evaluators, primary_evaluator=primary,
+        creator=creator,
     )
     return _out(row)
 
@@ -414,9 +412,10 @@ def runtime_canary_action(
             "dataset_name": dataset.name,
         }
         if canary_service.is_harness(row):
-            # paired calls are metered by tokens at each arm's model: a budgeted caller
-            # is refused an arm with no price (or no known model, an imported Harness)
-            # rather than spending past the limit unseen
+            # paired Harness calls are metered by tokens at each arm's model: a budgeted
+            # caller is refused an arm with no price (or no known model, an imported
+            # Harness) rather than spending past the limit unseen. A Runtime arm with no
+            # price falls back to the agent's turn estimate, so it needs no refusal.
             payer = budgets.payer_of_request(request)
             if payer.budgeted:
                 for model in dict.fromkeys(canary_service.arm_models(row).values()):

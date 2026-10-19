@@ -3375,11 +3375,12 @@
     "candidatePromptPlaceholder": "Edit the system prompt for the candidate version…",
     "candidateCode": "CANDIDATE CODE (studio)",
     "candidateCodePlaceholder": "Edit the studio agent code for the candidate version…",
-    "candidateHint": "The candidate version is minted from this agent's current spec plus your edits below. Production keeps serving the current version until you promote.",
+    "candidateHint": "The candidate version is minted from this agent's current spec plus your edits below. Until you promote, it only receives the current ramp stage's share of this agent's live traffic.",
     "versionFraming": "current v{{current}} → candidate v{{candidate}}",
     "eligibilityHint": "Only active HTTP AgentCore Runtime agents can be canaried. Disabled reasons come from the backend capability contract.",
     "experimentalOnly": "The weights below split REAL production traffic for this agent through a dedicated canary gateway. Promote and roll back really change what production serves.",
     "setup": "SET UP 90/10",
+    "setupAt": "SET UP {{weights}}",
     "setupIncomplete": "Setup did not finish. The dedicated gateway and stable endpoint exist, but the candidate A/B test does not — production still serves the current version. Setup cannot be retried on this canary: roll back, clean up, then create a new one.",
     "running": "RUNNING…",
     "retry": "RETRY",
@@ -3442,11 +3443,12 @@
       "note": "The candidate winning advances directly. Ties and non-significant results require override; the current version winning and insufficient evidence remain blocked."
     },
     "completeEarly": "Complete now (skip 1/99)",
-    "completeEarlyHint": "Harness canary: its traffic is Dataset replay, so the 1/99 stage would send almost every session to the treatment without adding comparative evidence. On this verdict you can complete straight away — the A/B test stops and production stays on the new version; a tie or a non-significant result needs your explicit confirmation. You can also keep ramping to 1/99.",
+    "completeEarlyHint": "Test traffic is paired Dataset replay: every question already went to both versions, so the 1/99 stage would add no comparative evidence. On this verdict you can complete straight away — the A/B test stops and production serves the candidate version; a tie or a non-significant result needs your explicit confirmation. You can also keep ramping to 1/99.",
     "plan": {
       "title": "Ramp plan",
       "first": "Run the 90/10 traffic + verdict stage first",
       "firstHint": "Untick to start at 50/50: the treatment is already production DEFAULT, so 90/10 caps no exposure and only starves the treatment of samples.",
+      "firstHintRuntime": "Untick to start at 50/50: half of this agent's live platform traffic reaches the candidate as soon as setup finishes. Test traffic is paired at every stage, so 90/10 costs one more round, not samples.",
       "half": "50/50 traffic + verdict (required)",
       "last": "1/99: decided after the 50/50 verdict"
     },
@@ -7103,6 +7105,7 @@
       "pipeline": "Ramp flow",
       "sourceExp": "Source experiment",
       "targets": "Targets",
+      "perArmN": "n={{n}} · current {{control}} / candidate {{treatment}}",
       "paired": {
         "budgetStop": "budget stop",
         "meanDiff": "Mean difference",

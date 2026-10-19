@@ -22,6 +22,7 @@ from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 from app.services.memory import scoped_actor
+from app.services.usage_meter import KIND_JOB_ESTIMATE
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 logger = logging.getLogger(__name__)
@@ -306,6 +307,7 @@ def start_canary(
     workspace: WorkspaceContext,
     source_experiment_id: str | None = None,
     *,
+    start_stage: int = 0,
     online_evaluators: list[str] | None = None,
     primary_evaluator: str | None = None,
     creator: creators.Creator | None = None,
@@ -315,7 +317,9 @@ def start_canary(
     Model 1 collapses champion/challenger onto ONE agent: both columns carry the
     single agent id/name so ``_out`` and existing consumers keep working. The
     candidate is described by ``edited_spec`` (stored as a dump) and materialized
-    at setup, never here.
+    at setup, never here. ``start_stage`` 1 (the operator's opt-in) opens the A/B
+    test at 50/50; it is stored only when set, so a row from before the choice
+    reads as 90/10.
     """
     control = control_client(workspace)
     row = RuntimeCanary(
@@ -330,6 +334,7 @@ def start_canary(
             "agent_meta": _agent_meta(agent, control),
             "edited_spec": edited_spec.model_dump(),
             "rounds": [],
+            **({"start_stage": int(start_stage)} if start_stage else {}),
             **_evaluator_artifacts(online_evaluators, primary_evaluator),
         },
     )
@@ -342,6 +347,14 @@ def start_canary(
     finally:
         db.close()
     return _get(row_id)
+
+
+def _start_stage(row: RuntimeCanary) -> int:
+    """The ramp stage setup opens at (0 = 90/10, 1 = 50/50): a Harness canary keeps
+    it under ``artifacts.harness``, a Runtime canary at the top level."""
+    artifacts = row.artifacts or {}
+    stage = (artifacts.get("harness") or {}).get("start_stage", artifacts.get("start_stage"))
+    return int(stage or 0)
 
 
 def _test_name(canary_id: str) -> str:
@@ -433,22 +446,26 @@ EARLY_COMPLETE_VERDICTS = frozenset({"treatment-wins", "tie"})
 
 
 def early_complete_allowed(row: RuntimeCanary) -> bool:
-    """A Harness canary may complete straight from 50/50 on a treatment-wins or tie verdict.
+    """A canary may complete straight from 50/50 on a treatment-wins or tie verdict
+    from paired replay — a Harness canary on any such 50/50 verdict, as before.
 
-    The architect's Harness canary gets its traffic from Dataset replay, so the 1/99
-    stage would replay almost every session into the treatment and add one more
-    verdict wait without new comparative evidence — whether to run it is decided on
-    the 50/50 verdict. Runtime canaries keep the full 90/10 → 50/50 → 1/99 ramp. A tie
-    or a non-significant win still needs the operator override
-    (``assert_verdict_allows``), exactly as advancing would; control-wins and
-    insufficient evidence stay blocked."""
-    if not is_harness(row):
-        return False
-    setup = row.artifacts.get("setup") or {}
+    Paired replay asks both versions every question of the dataset, so the 1/99
+    stage would only replay the same questions into the same two endpoints and add
+    one more verdict wait without new comparative evidence — whether to run it is
+    decided on the 50/50 verdict. A Runtime canary whose 50/50 verdict came from the
+    legacy weighted path (the Gateway split, read back with GetABTest) keeps the
+    full 90/10 → 50/50 → 1/99 ramp. A tie or a non-significant win still needs the
+    operator override (``assert_verdict_allows``), exactly as advancing would;
+    control-wins and insufficient evidence stay blocked. ``_out`` exposes the
+    result, so the console never re-derives the rule."""
+    setup = (row.artifacts or {}).get("setup") or {}
     if int(setup.get("ramp_stage", 0)) != EARLY_COMPLETE_STAGE:
         return False
     _, current = _current_round(row)
-    return ((current or {}).get("verdict") or {}).get("verdict") in EARLY_COMPLETE_VERDICTS
+    verdict = (current or {}).get("verdict") or {}
+    if verdict.get("verdict") not in EARLY_COMPLETE_VERDICTS:
+        return False
+    return is_harness(row) or verdict.get("mode") == canary_harness.PAIRED_MODE
 
 
 def assert_verdict_allows(
@@ -655,7 +672,7 @@ def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> di
         }
 
     test_name = _test_name(canary_id)
-    start_stage = int(versions.get("start_stage", 0))
+    start_stage = _start_stage(row)
     control_weight, treatment_weight = RAMP_WEIGHTS[start_stage]
     variants = ac.target_variants(
         control_target, treatment_target,
@@ -699,7 +716,9 @@ def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> di
 
 def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     """Mint the candidate version, stand up the dedicated Gateway + stable/
-    treatment endpoints, and start the 90/10 target-based A/B test."""
+    treatment endpoints, and start the target-based A/B test at the canary's
+    opening stage: 90/10, or 50/50 when the operator opted in (``start_stage`` 1 —
+    from then on half of the agent's platform invokes reach the candidate)."""
     row = _get(canary_id)
     _refuse_system_subject(row, "setup")
     if is_harness(row):
@@ -802,7 +821,12 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     )
 
     test_name = _test_name(canary_id)
-    variants = ac.target_variants(control_target, treatment_target)
+    start_stage = _start_stage(row)
+    control_weight, treatment_weight = RAMP_WEIGHTS[start_stage]
+    variants = ac.target_variants(
+        control_target, treatment_target,
+        control_weight=control_weight, treatment_weight=treatment_weight,
+    )
     response = _create_target_ab_test(
         data,
         test_name=test_name,
@@ -831,7 +855,9 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
             "target_id": treatment_target_id,
             **treatment_eval,
         },
-        "ramp_stage": 0,
+        "ramp_stage": start_stage,
+        # < start_stage ⇒ skipped (never ran), as on a Harness canary
+        "start_stage": start_stage,
         "weights": {variant["name"]: variant["weight"] for variant in variants},
         "v_candidate": v_candidate,
         # the zip behind v_candidate — cleanup owns it (unless it is still live)
@@ -844,8 +870,9 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
 
 
 def arm_models(row: RuntimeCanary) -> dict[str, str | None]:
-    """The model each Harness arm's tokens are priced at: the champion's for the
-    control endpoint, the candidate spec's (when it changed it) for the treatment."""
+    """The model each arm's tokens are priced at (either canary kind): the
+    champion's for the control endpoint, the candidate spec's (when it changed it)
+    for the treatment."""
     db = SessionLocal()
     try:
         agent = db.get(Agent, row.champion_agent_id)
@@ -856,7 +883,7 @@ def arm_models(row: RuntimeCanary) -> dict[str, str | None]:
     return {"control": control, "treatment": candidate or control}
 
 
-def _paired_harness_traffic(
+def _paired_traffic(
     row: RuntimeCanary,
     workspace: WorkspaceContext,
     prompts: list[str],
@@ -864,18 +891,24 @@ def _paired_harness_traffic(
     progress: Progress,
     budget: job_budget.JobBudget | None = None,
 ) -> dict[str, Any]:
-    """Send every prompt to BOTH Harness endpoints (see ``canary_harness.PAIRED_MODE``).
+    """Send every prompt to BOTH named endpoints (see ``canary_harness.PAIRED_MODE``).
 
-    Each (prompt, arm) is one InvokeHarness call on the arm's named endpoint in a
-    fresh session; up to ``TRAFFIC_MAX_CONCURRENCY`` run at once on daemon threads,
-    while ``progress`` stays on this thread. A transient upstream error is retried
-    once in a new session; any other failure marks that side of the pair, which the
-    verdict then leaves out — it never fails the whole replay.
+    Each (prompt, arm) is one call on the arm's named endpoint in a fresh session —
+    InvokeHarness for a Harness canary, InvokeAgentRuntime with ``qualifier`` for a
+    Runtime one — carrying the traffic runtime user and one synthetic, agent-scoped
+    memory actor that keeps replay out of real users' memory. Up to
+    ``TRAFFIC_MAX_CONCURRENCY`` run at once on daemon threads, while ``progress``
+    stays on this thread. A transient upstream error is retried once in a new
+    session; any other failure marks that side of the pair, which the verdict then
+    leaves out — it never fails the whole replay.
 
-    ``budget`` (the action caller's) meters each call exactly (Harness ``metadata``)
-    and is checked once per PAIR, by whichever arm of it starts first: once the
-    caller is over their monthly limit the pairs not yet started are skipped
-    whole (``skipped: budget_exceeded``), so no half pair is ever sent."""
+    ``budget`` (the action caller's) meters each call: exactly where the agent
+    reports usage (Harness ``metadata``, a Claude SDK runtime's ``complete.usage``),
+    and a Runtime turn that reports nothing as one flagged ``job_estimate`` row at
+    the agent's turn estimate (the rule an eval replay turn follows). It is checked
+    once per PAIR, by whichever arm of it starts first: once the caller is over
+    their monthly limit the pairs not yet started are skipped whole
+    (``skipped: budget_exceeded``), so no half pair is ever sent."""
     import queue
     import threading
     import uuid
@@ -887,6 +920,17 @@ def _paired_harness_traffic(
     endpoints = {"control": setup["stable_endpoint"], "treatment": setup["treatment_endpoint"]}
     actor = scoped_actor(row.champion_agent_id, "canary-traffic")
     data = data_client(workspace)
+    harness = is_harness(row)
+    # the per-kind seams; everything else about a pair is shared
+    new_session_id = hc.new_session_id if harness else rt.new_session_id
+    invoke_text = hc.invoke_harness_text if harness else rt.invoke_runtime_text
+    opaque: dict[str, Any] = {}
+    if budget is not None and not harness:
+        # read once per action, not per call: a silent Runtime turn's estimate
+        opaque = {
+            "opaque": True, "estimate_kind": KIND_JOB_ESTIMATE,
+            "estimate_usd": experiment_service.traffic_prompt_estimate(row.champion_agent_id),
+        }
     labels = list(scenario_ids or [])
     pairs = [
         {"index": i, "scenario_id": labels[i] if i < len(labels) else f"item_{i + 1}",
@@ -927,11 +971,12 @@ def _paired_harness_traffic(
             error: str | None = None
             sid: str | None = None
             for attempt in range(2):
-                sid = hc.new_session_id()
+                sid = new_session_id()
                 meter = (budget.meter(session_id=sid, model_id=models.get(arm),
-                                      resource_id=arn) if budget is not None else None)
+                                      resource_id=arn, **opaque)
+                         if budget is not None else None)
                 try:
-                    hc.invoke_harness_text(
+                    invoke_text(
                         data, arn, prompts[i], session_id=sid, actor_id=actor,
                         qualifier=endpoints[arm],
                         runtime_user_id=experiment_service.TRAFFIC_USER_ID,
@@ -1000,60 +1045,24 @@ def act_traffic(
     scenario_ids: list[str] | None = None,
     caller: creators.Creator | None = None,
 ) -> dict[str, Any]:
-    """One traffic attempt, charged to ``caller`` (who pressed TRAFFIC): a Harness
-    canary's paired calls exactly, a runtime canary's gateway prompts as
-    ``job_estimate`` rows; either stops before its next prompt once the caller is
-    over budget, keeping what was already sent. The attempt then carries
-    ``stop_reason: budget_exceeded`` — not a row error: a retry would be refused."""
+    """One PAIRED traffic attempt for either canary kind (``_paired_traffic``),
+    charged to ``caller`` (who pressed TRAFFIC). It stops before its next pair once
+    the caller is over budget, keeping what was already sent; the attempt then
+    carries ``stop_reason: budget_exceeded`` — not a row error: a retry would be
+    refused.
+
+    A Runtime canary used to replay through its Gateway at the stage weights, which
+    at 90/10 gave the treatment 2 of 50 sessions (issue #298). That weighted attempt
+    is no longer sent; a round that still holds one keeps its GetABTest verdict
+    path in ``act_verdict``. Real platform traffic still goes through the Gateway
+    (``active_canary_route``), so the stage weights keep capping its exposure."""
     row = _get(canary_id)
     workspace = context_for_workspace(row.workspace_id)
-    setup = row.artifacts["setup"]
     budget = experiment_service.action_budget(row, caller, SOURCE_CANARY)
-    if is_harness(row):
-        attempt = {
-            **_paired_harness_traffic(row, workspace, prompts, scenario_ids, progress,
-                                      budget=budget),
-            **dataset_info,
-            "baseline_n": 0,
-            "completed_at": _now(),
-        }
-        rounds, current = _current_round(row, create=True)
-        assert current is not None
-        current.setdefault("traffic_attempts", []).append(attempt)
-        current.pop("verdict", None)
-        _update(canary_id, stage="traffic", artifact={"rounds": rounds})
-        return attempt
-    metrics = ac.normalize_ab_results(
-        ac.get_ab_test(data_client(workspace), ab_test_id=setup["ab_test_id"])
-    )
-    baseline_n = metric_sample_count(metrics)
-    primary = primary_evaluator(row)
-    harness_seams: dict[str, Any] = {}
-    if is_harness(row):
-        # passthrough targets relay the InvokeHarness body at /<target>/; one
-        # synthetic, agent-scoped memory actor keeps replay out of real users' memory
-        actor = scoped_actor(row.champion_agent_id, "canary-traffic")
-        harness_seams = {
-            "path_suffix": canary_harness.TARGET_PATH_SUFFIX,
-            "body_for": lambda prompt, _sid: canary_harness.invoke_body(prompt, actor_id=actor),
-        }
-    result = experiment_service.send_gateway_traffic(
-        setup["gateway_url"],
-        setup["champion"]["target_name"],
-        prompts,
-        workspace,
-        progress=progress,
-        budget=budget,
-        estimate_usd=experiment_service.traffic_prompt_estimate(row.champion_agent_id),
-        **harness_seams,
-    )
     attempt = {
-        **result,
+        **_paired_traffic(row, workspace, prompts, scenario_ids, progress, budget=budget),
         **dataset_info,
-        "baseline_n": baseline_n,
-        # the primary's own fresh-evidence marker: the verdict waits for IT to score
-        # this stage's traffic, not just for any evaluator to
-        **({"primary_baseline_n": evaluator_sample_count(metrics, primary)} if primary else {}),
+        "baseline_n": 0,
         "completed_at": _now(),
     }
     rounds, current = _current_round(row, create=True)
@@ -1306,7 +1315,7 @@ def act_complete(
         "promoted_version": setup["v_candidate"],
         "ab_test_status": stopped.get("executionStatus"),
         "completed_at": _now(),
-        # < the last ramp stage ⇒ a Harness canary completed early from 50/50
+        # < the last ramp stage ⇒ the canary completed early from 50/50 (either kind)
         "completed_at_stage": int(setup.get("ramp_stage", 0)),
     }
     _update(

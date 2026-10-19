@@ -173,7 +173,10 @@ def test_a_canary_never_opens_past_50_50(client, monkeypatch, stage):
     assert not SessionLocal().query(RuntimeCanary).count()
 
 
-def test_a_runtime_canary_keeps_the_90_10_stage(client):
+@pytest.mark.parametrize(("stage", "status"), [(1, 201), (0, 201), (2, 422)])
+def test_a_runtime_canary_may_open_at_50_50(client, monkeypatch, stage, status):
+    """Opening at 50/50 is the operator's opt-in for a Runtime canary too (issue #298);
+    nothing opens past 50/50, and 90/10 stays the default."""
     db = SessionLocal()
     try:
         agent = Agent(
@@ -186,14 +189,23 @@ def test_a_runtime_canary_keeps_the_90_10_stage(client):
         agent_id = agent.id
     finally:
         db.close()
+    control = MagicMock()
+    control.get_agent_runtime.return_value = {"agentRuntimeName": "runtime-r"}
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: control)
 
     res = client.post("/api/runtime-canaries", json={
-        "agent_id": agent_id, "candidate": {"system_prompt": "edited"}, "start_stage": 1,
+        "agent_id": agent_id, "candidate": {"system_prompt": "edited"}, "start_stage": stage,
     })
 
-    assert res.status_code == 400, res.text
-    assert res.json()["code"] == "canary.start_stage_harness_only"
-    assert not SessionLocal().query(RuntimeCanary).count()
+    assert res.status_code == status, res.text
+    if status != 201:
+        assert not SessionLocal().query(RuntimeCanary).count()
+        return
+    artifacts = res.json()["artifacts"]
+    assert "kind" not in artifacts
+    # stored only when set: a row from before the choice reads as 90/10
+    assert artifacts.get("start_stage") == (stage or None)
+    assert canary_svc._start_stage(_reload(res.json()["id"])) == stage
 
 
 # ─── setup ──────────────────────────────────────────────────────────────────
@@ -418,15 +430,23 @@ def test_a_50_50_tie_may_complete_with_the_override(client, monkeypatch):
     assert runs == ["complete"]
 
 
+PAIRED = {"mode": "paired"}
+
+
 @pytest.mark.parametrize(("stage", "verdict", "harness"), [
     (0, {"verdict": "treatment-wins", "significant": True}, True),   # 90/10 is too early
     (1, {"verdict": "control-wins", "significant": True}, True),     # control-wins stays blocked
     (1, {"verdict": "insufficient-n", "significant": False}, True),  # so does too little data
-    (1, {"verdict": "treatment-wins", "significant": True}, False),  # Runtime keeps the full ramp
+    # a Runtime 50/50 verdict from the legacy weighted path keeps the full ramp
+    (1, {"verdict": "treatment-wins", "significant": True}, False),
     (1, {"verdict": "tie", "significant": False}, False),
+    # paired replay does not unblock a loss or too little data on a Runtime either
+    (1, {"verdict": "control-wins", "significant": True, **PAIRED}, False),
+    (1, {"verdict": "insufficient-n", "significant": False, **PAIRED}, False),
+    (0, {"verdict": "treatment-wins", "significant": True, **PAIRED}, False),
 ])
-def test_early_complete_is_only_a_harness_50_50_win_or_tie(client, monkeypatch, stage,
-                                                           verdict, harness):
+def test_early_complete_is_a_50_50_win_or_tie_from_paired_replay(client, monkeypatch, stage,
+                                                                 verdict, harness):
     canary_id = _canary(_agent())
     _at_stage(canary_id, stage, verdict, harness=harness)
     runs: list[str] = []
