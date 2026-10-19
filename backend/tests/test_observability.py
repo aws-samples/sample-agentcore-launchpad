@@ -498,7 +498,7 @@ def _fake_logs():
             {"@message": json.dumps({**s, "traceId": "c" * 32})} for s in DEDUP_SPANS],
         # message-events query (runtime log groups) must route before the
         # span query for the same trace id
-        f'filter traceId = "{"d" * 32}"\n| fields @message, spanId': [
+        f'filter traceId = "{"d" * 32}"\n| fields jsonParse(@message) as record': [
             {"@message": json.dumps(MSG_EVENT)}],
         f'filter traceId = "{"d" * 32}"': [
             {"@message": json.dumps({**s, "traceId": "d" * 32})} for s in MSG_SPANS],

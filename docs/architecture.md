@@ -3317,6 +3317,21 @@ detail links back (`OPEN IN CHAT ↗`); `service.name` values are mapped to
 platform agent names via the ledger (`resource_id` base-name match, raw name
 fallback).
 
+**Span message formats.** Trace detail normalizes both combined
+`body.input/output.messages` envelopes (Strands, Harness, and native Claude)
+and Bedrock's individual `gen_ai.*.message` / `gen_ai.choice` events. The
+individual system, user, assistant, and tool messages describe the request
+history; `gen_ai.choice` contains the current completion and its finish reason.
+Strands envelopes may also carry a separate `tool.result` beside `message`.
+MCP tool-call spans expose their own `gen_ai.tool.call.arguments` and
+`gen_ai.tool.call.result` attributes through the same input/output panel when
+content events have not populated that side. Every projection stays attached
+to its original span: a child never inherits its parent's prompt or response.
+Message, block, and text limits keep this a bounded inspection view.
+Session provenance is collected independently from recognized content events,
+including events beyond display limits or with unrenderable payloads, so
+truncation cannot weaken the trace's privacy checks.
+
 **On-demand scoring (SCORE NOW).** The session detail can score the session
 right now with 1–5 evaluators (built-in, third-party managed or custom — the
 same list the run wizard offers) through the AgentCore **data-plane

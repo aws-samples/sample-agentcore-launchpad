@@ -743,6 +743,35 @@ def test_provenance_covers_nested_resource_attrs_and_merged_multi_sid_events(
             {"spanId": "s1", "attributes": {"session.id": sid},
              "body": {"output": {"messages": [{"role": "assistant",
                                                 "content": "CUSTOMER_SECRET_HOST"}]}}}],
+        "provider-history-and-choice": [
+            {"spanId": "s1", "eventName": "gen_ai.user.message",
+             "attributes": {"session.id": "public-session-1234567890"},
+             "body": {"content": "public"}},
+            {"spanId": "s1", "eventName": "gen_ai.choice",
+             "resource": {"attributes": {"session.id": sid}},
+             "body": {"message": {"content": [{"text": "CUSTOMER_SECRET_HOST"}]},
+                      "finish_reason": "end_turn"}}],
+        "deduplicated-tool-event": [
+            {"spanId": "s1", "eventName": "gen_ai.tool.message",
+             "attributes": {"session.id": "public-session-1234567890"},
+             "body": {"id": "call-private", "content": [{"text": "CUSTOMER_SECRET_HOST"}]}},
+            {"spanId": "s1", "eventName": "gen_ai.user.message",
+             "attributes": {"session.id": sid},
+             "body": {"content": [{"toolResult": {
+                 "toolUseId": "call-private", "content": [{"text": "CUSTOMER_SECRET_HOST"}],
+             }}]}}],
+        "content-beyond-message-span-cap": [
+            *[
+                {"spanId": f"filler-{i}", "eventName": "gen_ai.user.message",
+                 "body": {"content": "public"}}
+                for i in range(observability.MESSAGE_SPANS_CAP)
+            ],
+            {"spanId": "s1", "eventName": "gen_ai.choice",
+             "attributes": {"session.id": sid},
+             "body": {"message": {"content": "CUSTOMER_SECRET_HOST"}}}],
+        "unrenderable-content-keeps-provenance": [
+            {"spanId": "s1", "eventName": "gen_ai.choice",
+             "attributes": {"session.id": sid}, "body": None}],
     }
     def make_queries(events):
         def fake_queries(queries, hours, **kw):

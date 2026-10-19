@@ -32,6 +32,16 @@ from app.optimization.models import Experiment
 from app.services import memory, memory_ownership
 from app.services.agentcore import evaluation as agentcore_evaluation
 from app.services.agentcore.client import data_client
+from app.services.observability_messages import (
+    GEN_AI_MESSAGE_EVENTS,
+    MESSAGE_SPANS_CAP,
+    message_event_session_ids,
+    parse_message_events,
+    span_attribute_messages,
+)
+from app.services.observability_messages import (
+    MESSAGE_TEXT_CAP as MESSAGE_TEXT_CAP,
+)
 from app.services.workspace import WorkspaceContext
 
 SPANS_LOG_GROUP = "aws/spans"
@@ -498,9 +508,14 @@ def q_trace_message_events(trace_id: str) -> str:
     # SDKs emit gen_ai message events (prompts/completions) as OTel log
     # records correlated to spans via traceId/spanId.
     _require(TRACE_ID_RE, trace_id, "trace id")
+    event_names = json.dumps(GEN_AI_MESSAGE_EVENTS)
     return f"""
 filter traceId = "{trace_id}"
-| fields @message, spanId
+| fields jsonParse(@message) as record
+| filter ispresent(record.body.input.messages) or ispresent(record.body.output.messages)
+    or record.eventName in {event_names} or record.attributes.`event.name` in {event_names}
+| fields @message, spanId, @timestamp
+| sort @timestamp asc
 | limit 200
 """
 
@@ -791,118 +806,6 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
     }
 
 
-# ── gen_ai message events (prompts / completions per span) ─────────────────
-
-MESSAGE_TEXT_CAP = 2000
-MESSAGES_PER_SIDE = 20
-BLOCKS_PER_MESSAGE = 20
-
-
-def _parse_content_blocks(raw: Any) -> list[dict[str, Any]]:
-    """Message content arrives as a JSON string of content blocks
-    ([{"text"}, {"toolUse"}, {"toolResult"}]); normalize + truncate."""
-    if not isinstance(raw, str):
-        return []
-    try:
-        blocks = json.loads(raw)
-    except ValueError:
-        return [{"type": "text", "text": raw[:MESSAGE_TEXT_CAP]}]
-    if not isinstance(blocks, list):
-        blocks = [blocks]
-    out: list[dict[str, Any]] = []
-    for block in blocks[:BLOCKS_PER_MESSAGE]:
-        if not isinstance(block, dict):
-            out.append({"type": "text", "text": str(block)[:MESSAGE_TEXT_CAP]})
-        elif "text" in block:
-            out.append({"type": "text", "text": str(block["text"])[:MESSAGE_TEXT_CAP]})
-        elif "toolUse" in block:
-            use = block["toolUse"] or {}
-            out.append({
-                "type": "tool_use",
-                "name": use.get("name"),
-                "input": json.dumps(use.get("input"), ensure_ascii=False)[:500],
-            })
-        elif "toolResult" in block:
-            result = block["toolResult"] or {}
-            out.append({
-                "type": "tool_result",
-                "status": result.get("status"),
-                "text": json.dumps(result.get("content"), ensure_ascii=False)[:500],
-            })
-        else:
-            out.append({"type": "other",
-                        "text": json.dumps(block, ensure_ascii=False)[:300]})
-    return out
-
-
-def _normalize_messages(messages: Any) -> list[dict[str, Any]]:
-    if not isinstance(messages, list):
-        return []
-    out = []
-    for message in messages[:MESSAGES_PER_SIDE]:
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        finish = None
-        if isinstance(content, str):  # some scopes emit the payload directly
-            blocks = _parse_content_blocks(content)
-        elif isinstance(content, dict):
-            blocks = _parse_content_blocks(
-                content.get("content") or content.get("message")
-            )
-            finish = content.get("finish_reason")
-        else:
-            continue
-        if not blocks:
-            continue
-        entry: dict[str, Any] = {"role": message.get("role"), "blocks": blocks}
-        if finish:
-            entry["finish_reason"] = finish
-        out.append(entry)
-    return out
-
-
-def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
-    """spanId → {input: [...], output: [...]} from runtime OTel log records."""
-    by_span: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        try:
-            record = json.loads(row.get("@message", ""))
-            span_id = record.get("spanId")
-            body = record.get("body")
-            if not span_id or not isinstance(body, dict):
-                continue
-            entry = by_span.setdefault(span_id, {})
-            # Provenance survives normalization: the session id a content event was
-            # recorded under (a correlated span may carry none) is what the privacy
-            # boundary filters on, before AND after the cache.
-            resource = record.get("resource") if isinstance(record.get("resource"), dict) else {}
-            candidates = [
-                (record.get("attributes") or {}).get("session.id")
-                if isinstance(record.get("attributes"), dict) else None,
-                (resource.get("attributes") or {}).get("session.id")
-                if isinstance(resource.get("attributes"), dict) else None,
-                resource.get("session.id"),
-            ]
-            sids = entry.setdefault("session_ids", [])
-            for sid in candidates:
-                if isinstance(sid, str) and sid and sid not in sids:
-                    sids.append(sid)  # EVERY contributing event's id, not only the first
-            if sids and not entry.get("session_id"):
-                entry["session_id"] = sids[0]
-            for side in ("input", "output"):
-                payload = body.get(side)
-                if not entry.get(side) and isinstance(payload, dict):
-                    normalized = _normalize_messages(payload.get("messages"))
-                    if normalized:
-                        entry[side] = normalized
-        except (TypeError, ValueError, AttributeError):
-            continue  # malformed record — message events are best-effort
-        if len(by_span) >= 50:
-            break
-    return {k: v for k, v in by_span.items() if v.get("input") or v.get("output")}
-
-
 def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
     groups: set[str] = set()
     for span in raw_spans:
@@ -1174,6 +1077,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
         # gen_ai message events (prompts/completions) live in the agents' own
         # runtime log groups, referenced by the spans themselves; best-effort.
         messages_by_span: dict[str, dict[str, Any]] = {}
+        event_session_ids: set[str] = set()
         log_groups = _span_log_groups(raw_spans)
         if log_groups:
             try:
@@ -1181,16 +1085,25 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
                     {"events": q_trace_message_events(trace_id)},
                     hours, logs=logs, log_groups=log_groups, workspace=workspace,
                 )["events"]
+                event_session_ids = message_event_session_ids(event_rows)
                 messages_by_span = parse_message_events(event_rows)
             except Exception:  # best-effort enrichment — never fail the trace
                 messages_by_span = {}
+        message_span_ids = set(messages_by_span)
         for span in spans:
-            span["messages"] = messages_by_span.get(span["span_id"] or "")
+            messages = dict(messages_by_span.get(span["span_id"] or "") or {})
+            if messages or len(message_span_ids) < MESSAGE_SPANS_CAP:
+                for side, payload in span_attribute_messages(span["attributes"]).items():
+                    if not messages.get(side):
+                        messages[side] = payload
+                if messages:
+                    message_span_ids.add(span["span_id"])
+            span["messages"] = messages or None
         # Every session id this trace's spans OR content events were recorded under.
         session_ids = sorted({
             sid for sid in (
                 [s["attributes"].get("session.id") for s in spans]
-                + [sid for m in messages_by_span.values() for sid in (m.get("session_ids") or [])]
+                + list(event_session_ids)
             ) if isinstance(sid, str) and sid
         })
         # Strands emits each LLM call as a wrapper span (system=strands-agents)
