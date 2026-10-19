@@ -2476,7 +2476,11 @@
     "coding.effort_invalid": "This reasoning effort is not supported.",
     "coding.prompt_too_long": "The prompt is too long (32 KB at most).",
     "coding.runtime_error": "The coding runtime did not answer. Try again.",
-    "coding.deploy_failed": "Deploying the project failed."
+    "coding.deploy_failed": "Deploying the project failed.",
+    "coding.restore_failed": "The project's saved snapshot could not be restored. Try again.",
+    "coding.delete_failed": "The project's saved files could not be deleted. Try again.",
+    "coding.runtime_busy": "The coding runtime is being installed or uninstalled. Try again when it finishes.",
+    "coding.runtime_in_use": "A coding turn is still running in this workspace. Wait for it to finish or interrupt it, then uninstall."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -9795,7 +9799,13 @@
         "openAgent": "Open the Agent",
         "redeployNote": "This project already deployed an Agent. Deploying again publishes a new version of it:",
         "noPermission": "You do not have permission to deploy Agents.",
-        "whileRunning": "Wait for the running turn to finish."
+        "whileRunning": "Wait for the running turn to finish.",
+        "failure": {
+          "entrypoint_missing": "The project has no {{entrypoint}} at its root. Create it, or set the entrypoint to the file the agent serves from.",
+          "candidates": "Python files at the project root: {{files}}.",
+          "dockerfile_missing": "A Dockerfile context deploy needs a Dockerfile at the project root.",
+          "invalid_spec": "The deploy settings are not a valid Agent: {{errors}}"
+        }
       }
     }
   },

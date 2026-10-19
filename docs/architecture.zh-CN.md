@@ -2264,6 +2264,26 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 控制台在结果磁贴下方以「TOKEN 用量」表格展示，并在展开的任务行中逐任务展示，未知计数一律显示为
 破折号。
 
+## 编码 Agent —— 基于 AgentCore 上 codex 的远程 Web IDE
+
+第五种构建 Agent 的方式（父任务 `10-19-coding-agent`）：成员在浏览器 IDE（`/v2/coding`，`?view=project&id=`）中打开项目，与在 AgentCore microVM 内编写、运行和测试代码的 codex Agent 对话，然后把完成的项目交给 Launchpad，通过现有的 `byoc` 管道部署——结果是一个普通的、受治理的 Agent。
+
+**运行时（平台所有，管理员安装）。** 每个 workspace 一个 AgentCore Runtime `launchpad_coding_runtime`，镜像源码在 `backend/app/coding/image/`（零依赖的 Node 22 服务，通过 stdio JSON-RPC 驱动 `codex app-server`；codex 版本固定，内置 Agent Toolkit for AWS 插件）。模型走 codex 内置的 `amazon-bedrock-runtime` provider（bedrock-runtime `/openai/v1`，SigV4——不走 Mantle）；可选模型为 `Settings.coding_models`，每个回合可选推理强度。执行角色只授予 ECR 拉取、自己的日志组以及对编码模型和 `project/default` 的 `bedrock:InvokeModel*`：microVM 中的任何 shell 都能读到这些凭证，所以角色**没有 S3 权限**。会话存储挂载在 `/mnt/workspace`（1 GB；运行时版本更新后以及闲置 14 天后会被清空）；codex 的 SQLite 和依赖目录放在本地磁盘。只由管理员安装、修复和卸载（`/api/coding/runtime*`，一个 `Job`），绝不在启动或读取时安装；资源键 `coding_runtime_*`（不在 `REQUIRED_RESOURCE_KEYS` 中）。
+
+**动作协议。** 后端的每次调用都是一次短的 `InvokeAgentRuntime`（`app/coding/runtime_client.call`），请求为 `{action, …}`，应答为 `{ok, result | error{code}}`：`status`、`start_turn`、`interrupt`、`events`（按 seq 编号的事件日志长轮询，`compact` 会丢弃已完成条目的增量）、`tree`、`read_file`（`rev: head | turn`）、`write_file`（`expected_sha256`）、`changes`、`diff`、`snapshot` / `export`（上传到预签名 PUT）。每条 app-server 通知都写入会话存储上的 `.launchpad/events.jsonl`，读取方按 seq 获取，因此刷新、重连或后端重启都不会丢失任何内容。
+
+**项目（`backend/app/coding/`）。** 台账 `coding_projects` + `coding_turns`（workspace 作用域）。项目在**任何可见性模式下都只属于创建者**——刻意比 `resource_visibility` 更严格，因为项目是一个在线 shell 加代码：所有权绑定到不可变的主体（`assistant/principal.principal_of` → `user:<id>` | `config-admin` | `local-operator`），所有按 id 访问的路由都经过 `projects.project_in`（他人的或不存在的 → `404 coding.project_not_found`）。管理员可以列出全部项目（`?all=1`）并删除任意项目，但绝不能打开他人项目的 IDE、读取文件、订阅事件或运行回合。每个项目拥有一个稳定的 `runtimeSessionId`（64 个字符，创建时生成）；项目之间从不共享会话。
+
+**回合是异步的。** `POST …/turns` 认领项目（`UPDATE … WHERE status='idle'`——每个项目同时只有一个回合），在 microVM 中启动回合并立即返回 `running` 状态的回合行；回合在 `/ping HealthyBusy` 下运行（≤ 8 小时），所以离开或刷新页面、重启后端都不会中断它。`POST …/interrupt` 中断回合。台账丢失的运行时回合（后端在运行时应答与提交之间崩溃）会在下一次启动时被接管。
+
+**事件流（SSE）。** `GET …/events?after=<seq>`（或 `Last-Event-ID`）先发送 `status` 帧，然后以 `id: <seq>` / `event: event` 发送每条事件日志记录，空闲时发送 keep-alive 注释，25 分钟后发送 `reconnect`，失败时发送 `error {code, message}`（`app/coding/stream.py`）。**空闲模式：**回放读完且运行时没有在跑回合后，事件流每 2 秒轮询一次*台账*而不是运行时，这样打开着的 IDE 标签页不会让空闲的 microVM（按内存计费）在 15 分钟空闲超时后继续存活；一旦有新回合被认领，就切回运行时长轮询。路由以异步响应体提供事件流：阻塞的步骤在工作线程中执行，空闲时的等待则在事件循环上进行，所以打开着的空闲标签页不会占用共享工作线程池中的线程。
+
+**结算、预算与持久化。** 回合结束后，运行时立即追加 `launchpad/turnUsage`（或 `launchpad/turnAbandoned`）。先看到它的一方——SSE 代理或 **watcher**（`app/coding/watcher.py`，一个守护线程，每 15 秒一次，`LAUNCHPAD_CODING_WATCHER_ENABLED`）——用 `UPDATE coding_turns SET settled_at=… WHERE … AND settled_at IS NULL` 结算；只有胜出者向付费方计费（`UsageMeter`，来源 `coding`，引用 `coding_turn`）并请求快照。codex 的 `inputTokens` 包含缓存命中和缓存写入的 token，`outputTokens` 包含推理 token，所以计费时会拆成互不重叠的计数。启动回合是 `Billable(SOURCE_CODING)`（沿用现有的 `402` 约定），并在启动时就把会话写入 `usage_sessions`，这样对账从第一分钟起就知道这个会话（codex 运行时不产生 span，所以它的运行时计算费用是基于台账的下限：各回合的开始和结束时间点加上空闲尾巴）。watcher 还会把运行时已不再运行的回合（会话存储从较旧的快照恢复）或超过 8 小时生命周期的回合标记为 abandoned，释放失效的启动认领，并为保存过的文件做快照（30 秒防抖）。快照通过后端签发的预签名 URL 写到 `s3://<artifacts>/coding/<ws>/<project>/snapshots/<ts>.tgz`（保留最新 3 份）；每个动作都携带最新快照的预签名 GET 作为 `restore_url`，所以会话存储被清空的 microVM 会先恢复项目再做其他事。
+
+**文件。** IDE 读取目录树、文件内容（工作区、`HEAD` 或最近一个回合的基线）、变更列表和统一 diff，并以乐观的 `expected_sha256` 保存文件（`409 coding.file_conflict` 携带当前哈希）；回合运行期间拒绝保存。路径在任何调用前先由后端检查（绝对路径、`..`、NUL、`.git`），运行时的路径守卫是最终判定。
+
+**部署交接。** `POST …/deploy`（`perm:agents.deploy`）先为项目做快照，让运行时把项目文件打成 zip 上传到预签名 PUT，再下载并用 `byoc_uploads.stage_upload` 暂存（与成员上传相同的检查），然后创建一个以调用者为创建者的 `byoc` Agent（`routers.agents.start_create`，即 `POST /api/agents` 背后的代码），或重新发布该项目已有的 Agent（`republish_agent`，即重新部署背后的代码）。下载导出文件前会先按 250 MiB 的 BYOC zip 上限检查其大小（microVM 中运行的是任意代码）。项目根目录有 `Dockerfile` 时选 `container_source`，否则选 `code_zip`（`main.py`）。项目的 `AGENTS.md` 会告诉编码 Agent BYOC 约定。
+
 ## SQLite 台账与 job/event 模型
 
 廉价且本地的状态存放在 `data/launchpad.db` 的 SQLite 台账中

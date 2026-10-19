@@ -76,6 +76,14 @@ export class EventLog {
     this.seq += gap;
   }
 
+  // Never issue a seq at or below `floor`. A log (re)started on an empty or restored
+  // workspace starts at Date.now() * 1000, so its seqs exceed every seq any earlier
+  // log of the project issued — readers keep their cursor across a wiped session
+  // storage (version update, 14-day expiry) instead of dropping the new records as old.
+  advanceTo(floor) {
+    if (floor > this.seq) this.seq = floor;
+  }
+
   append(method, params = {}) {
     const rec = { seq: ++this.seq, ts: Date.now(), method, params: params ?? {} };
     this._index(rec);

@@ -1015,6 +1015,32 @@ counter_complete{<counter>: bool}}`。
 恒为 `reported`：这是对上报了用量的任务的观测统计——不是计费总额，也不做任何费用估算。在用量
 采集之前写出的旧结果，每一侧都表现为 `missing_rows == rows` 且计数全为 `null`。
 
+## 控制台编码 Agent API / Console Coding Agent API
+
+基于平台编码运行时的编码控制台（`/v2/coding`，参见[架构](architecture.zh-CN.md#编码-agent--基于-agentcore-上-codex-的远程-web-ide)）。项目在**任何可见性模式下都只属于创建者**：所有按 id 访问的路由上，他人的或不存在的 id 都是 `404 coding.project_not_found`；管理员只能通过 `GET /projects?all=1` 和 `DELETE` 接触他人的项目。所有 2xx 都返回 JSON。需要运行时的路由在 workspace 未安装运行时时，会在任何 AWS 调用前返回 `409 coding.runtime_not_installed`。
+
+| 方法 | 路径 | 策略 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/coding/runtime` | member | `{installed, status, runtime_arn（仅管理员）, image_tag, job（log_tail 仅管理员）, models[], efforts[], default_model, default_effort, repair_recommended}` |
+| `POST` | `/api/coding/runtime/install` | admin | 安装或修复 → `202 {job_id, status}` |
+| `DELETE` | `/api/coding/runtime` | admin | 卸载 → `202 {job_id, status}`；有项目正在运行回合时返回 `409 coding.runtime_in_use`（快照保留） |
+| `GET` | `/api/coding/projects` | member | `{projects: [project]}`——调用者自己的项目；`?all=1`（管理员）返回本 workspace 全部项目，`owned` 标明归属 |
+| `POST` | `/api/coding/projects` | member | 请求体 `{name（≤ 80）, description?（≤ 500）}` → `201 project`（不调用运行时） |
+| `GET` | `/api/coding/projects/{project_id}` | member（所有者） | `project` + `turns[]`（最新 20 个，按时间正序）+ `active_turn` |
+| `PATCH` | `/api/coding/projects/{project_id}` | member（所有者） | 请求体 `{name?, description?}` → `project` |
+| `DELETE` | `/api/coding/projects/{project_id}` | member（所有者或管理员） | 停止运行时会话（尽力而为），删除项目的快照、导出文件和台账行 → `{deleted: true}`；回合运行中返回 `409 coding.turn_running`；S3 拒绝时返回 `502 coding.delete_failed`（可重试） |
+| `POST` | `/api/coding/projects/{project_id}/turns` | member（所有者），计费 | 请求体 `{prompt, model?, effort?}` → `202` 回合行（`status: running`）。`409 coding.turn_running`、`422 coding.model_invalid` / `coding.effort_invalid`、`413 coding.prompt_too_long`（> 32 KB）、`409 coding.runtime_busy`（卸载中）、`402 budget.exceeded` / `budget.model_unpriced`、`502 coding.runtime_error` |
+| `POST` | `/api/coding/projects/{project_id}/interrupt` | member（所有者） | `{interrupted: bool}` |
+| `GET` | `/api/coding/projects/{project_id}/events` | member（所有者） | SSE，`?after=<seq>` 或 `Last-Event-ID`：先发 `event: status {project_status, active_turn}`；每条记录为 `id: <seq>` + `event: event`；`: keep-alive`；25 分钟后 `event: reconnect`；失败时 `event: error {code, message}` 后结束 |
+| `GET` | `/api/coding/projects/{project_id}/tree` | member（所有者） | `?path=&depth=1..4` → `{path, entries: [{path（相对根目录）, dir, size, symlink?}], truncated}` |
+| `GET` | `/api/coding/projects/{project_id}/file` | member（所有者） | `?path=&rev=head\|turn` → `{path, exists, content, sha256, size, binary}` |
+| `PUT` | `/api/coding/projects/{project_id}/file` | member（所有者） | 请求体 `{path, content, expected_sha256?}` → `{path, sha256, size}`；`409 coding.file_conflict`（`detail: {sha256}`）、`409 coding.turn_running`、`413 coding.file_too_large` |
+| `GET` | `/api/coding/projects/{project_id}/changes` | member（所有者） | `?scope=worktree\|turn` → `{scope, changes: [{path, status, old_path?}]}` |
+| `GET` | `/api/coding/projects/{project_id}/diff` | member（所有者） | `?scope=` → `{scope, diff, truncated}` |
+| `POST` | `/api/coding/projects/{project_id}/deploy` | `perm:agents.deploy`（所有者） | 请求体 `{agent_name?, description?, artifact_kind?, entrypoint?, python_version?}` → `202 {agent_id, job_id, created}`；创建 `byoc` Agent（创建者为调用者）或重新发布项目已有的 Agent。`409 coding.turn_running`、`422 coding.deploy_failed`（`detail.reason` = `dockerfile_missing` \| `entrypoint_missing`（附 `entrypoint`、`candidates`） \| `invalid_spec`（附 `errors`））、`413 byoc.upload_too_large`（导出超过 250 MiB 的 BYOC zip 上限，下载前即拒绝），以及 `POST /api/agents` / 重新部署的全部拒绝 |
+
+`usage` = `{input, cached_input, cache_write, output, reasoning_output}`（codex 计数：`input` 包含缓存命中与缓存写入，`output` 包含推理 token）。时间戳是不带时区的 UTC ISO 字符串。路径错误为 `422 coding.path_invalid`，不会到达运行时；其他运行时失败为 `502 coding.runtime_error`，快照恢复失败为 `502 coding.restore_failed`。
+
 ## 控制台账户 API / Console Accounts API
 
 `/api/auth/*` 守住控制台入口，`/api/users/*` 管理其背后的账户。两组接口都不触碰 AWS。详见

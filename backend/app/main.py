@@ -12,6 +12,7 @@ import app.deployer.harness  # noqa: F401 — registers the harness deploy metho
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
 from app.assistant.evaluation_assets import resume_operations as resume_evaluation_assets
 from app.assistant.service import clear_stale_turn_claims
+from app.coding import watcher as coding_watcher
 from app.coding.install import sweep_interrupted_jobs as sweep_coding_runtime_jobs
 from app.coding.routers import router as coding_router
 from app.core.config import get_settings
@@ -224,7 +225,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(online_eval_router)
     app.include_router(eval_pipelines_router)  # V2 数据处理: sessions → datasets
     app.include_router(skill_lab_router)
-    app.include_router(coding_router)  # coding agent: platform coding runtime
+    app.include_router(coding_router)  # coding agent: runtime, projects, turns, files
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
@@ -292,6 +293,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         alert_scheduler.start()  # opt-in background alert checks (real server only)
         # budget reconciliation: measured span cost + AgentCore fees (on by default)
         budget_scheduler.start()
+        # coding turns run in their microVMs whether or not a browser streams them:
+        # the watcher settles them (usage, snapshot) and snapshots saved files
+        coding_watcher.start()
 
     app.add_api_route("/api/health", health, methods=["GET"])
 

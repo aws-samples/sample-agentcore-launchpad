@@ -421,6 +421,25 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/coding/runtime"): MEMBER,
     ("POST", "/api/coding/runtime/install"): ADMIN,
     ("DELETE", "/api/coding/runtime"): ADMIN,
+    # ---- coding agent: a member's own projects. Every by-id route resolves through
+    # the private-owner choke point (app/coding/projects.project_in: someone else's
+    # project is 404 in every visibility mode); admins reach other members' projects
+    # only through `?all=1` and DELETE. Deploying hands the project to the byoc
+    # pipeline, so it carries the same permission as any deploy ----
+    ("GET", "/api/coding/projects"): MEMBER,
+    ("POST", "/api/coding/projects"): MEMBER,
+    ("GET", "/api/coding/projects/{project_id}"): MEMBER,
+    ("PATCH", "/api/coding/projects/{project_id}"): MEMBER,
+    ("DELETE", "/api/coding/projects/{project_id}"): MEMBER,
+    ("POST", "/api/coding/projects/{project_id}/turns"): MEMBER,
+    ("POST", "/api/coding/projects/{project_id}/interrupt"): MEMBER,
+    ("GET", "/api/coding/projects/{project_id}/events"): MEMBER,
+    ("GET", "/api/coding/projects/{project_id}/tree"): MEMBER,
+    ("GET", "/api/coding/projects/{project_id}/file"): MEMBER,
+    ("PUT", "/api/coding/projects/{project_id}/file"): MEMBER,
+    ("GET", "/api/coding/projects/{project_id}/changes"): MEMBER,
+    ("GET", "/api/coding/projects/{project_id}/diff"): MEMBER,
+    ("POST", "/api/coding/projects/{project_id}/deploy"): PERM_AGENT_DEPLOY,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
     ("POST", "/api/skill-lab/task-assets"): MEMBER,

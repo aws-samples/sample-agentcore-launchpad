@@ -6,8 +6,16 @@ from the container — AgentCore turns a container 5xx into an opaque
 ``RuntimeClientError``). ``call`` returns ``result`` or raises
 ``CodingRuntimeError(code, message)`` with the container's stable error code
 (``turn_running``, ``conflict``, ``path_invalid``, …) or one of this module's own
-codes for a call that never got a container answer. Project lookup, ownership
-and restore-URL folding are the caller's (the backend layer above).
+codes for a call that never got a container answer.
+
+``project_call`` is the project-level entry every backend path uses: it refuses
+before any AWS call when the workspace has no runtime (``409
+coding.runtime_not_installed``) and folds ``restore_url`` — a fresh presigned GET
+of the project's newest snapshot — into every action, so a microVM whose session
+storage came back empty (runtime version update, 14-day idle expiry) restores the
+project before it handles anything. Ownership is the caller's (``projects``).
+``api_error`` maps a ``CodingRuntimeError`` onto the console's ``coding.*``
+error envelope.
 """
 
 from __future__ import annotations
@@ -16,10 +24,12 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from app.core.errors import aws_error_code, aws_error_message
+from app.core.errors import AppError, aws_error_code, aws_error_message
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.harness import new_session_id
 from app.services.workspace import WorkspaceContext
+
+from . import infra, s3urls
 
 # Error codes the container answers with (image/src/util.mjs ERROR_CODES).
 CONTAINER_ERROR_CODES = frozenset({
@@ -33,7 +43,10 @@ RUNTIME_PROTOCOL = "runtime_protocol"  # an answer that is not the envelope
 # AgentCore requires runtime session ids of at least 33 characters.
 MIN_SESSION_ID_LEN = 33
 
-__all__ = ["CodingRuntimeError", "call", "new_session_id"]
+__all__ = [
+    "CodingRuntimeError", "api_error", "call", "installed_runtime_arn", "new_session_id",
+    "project_call", "run",
+]
 
 
 class CodingRuntimeError(RuntimeError):
@@ -101,3 +114,87 @@ def call(
         detail={k: v for k, v in error.items() if k not in ("code", "message")},
         boot_id=answer.get("boot_id"),
     )
+
+
+# ── the project-level entry ─────────────────────────────────────────────────
+
+# container code → (console error code, HTTP status); anything else is a 502
+_API_ERRORS: dict[str, tuple[str, int]] = {
+    "turn_running": ("coding.turn_running", 409),
+    "no_turn": ("coding.no_turn", 409),
+    "path_invalid": ("coding.path_invalid", 422),
+    "file_too_large": ("coding.file_too_large", 413),
+    "conflict": ("coding.file_conflict", 409),
+    "restore_failed": ("coding.restore_failed", 502),
+}
+RUNTIME_ERROR = "coding.runtime_error"
+
+
+def installed_runtime_arn(ctx: WorkspaceContext) -> str | None:
+    """The workspace's coding runtime ARN, or None when it is not installed."""
+    return str((ctx.resources or {}).get(infra.KEY_RUNTIME_ARN) or "") or None
+
+
+def not_installed() -> AppError:
+    return AppError(
+        "coding.runtime_not_installed",
+        "the coding runtime is not installed in this workspace — an administrator "
+        "installs it from the coding console",
+        status_code=409,
+    )
+
+
+def require_runtime_arn(ctx: WorkspaceContext) -> str:
+    arn = installed_runtime_arn(ctx)
+    if not arn:
+        raise not_installed()
+    return arn
+
+
+def project_call(
+    ctx: WorkspaceContext,
+    project: Any,
+    action: str,
+    *,
+    read_timeout: float | None = None,
+    client: Any = None,
+    **payload: Any,
+) -> Any:
+    """Run ``action`` on the project's session, restore URL folded in.
+
+    Raises ``AppError(coding.runtime_not_installed)`` before any AWS call when the
+    workspace has no runtime, and ``CodingRuntimeError`` when the action fails."""
+    arn = require_runtime_arn(ctx)
+    if getattr(project, "snapshot_key", None):
+        try:
+            payload["restore_url"] = s3urls.presign_get(ctx, project.snapshot_key)
+        except Exception as exc:  # noqa: BLE001 — a signing failure is a call failure
+            raise CodingRuntimeError(
+                RUNTIME_UNAVAILABLE, f"could not sign the snapshot restore URL: {exc}"
+            ) from exc
+    return call(
+        ctx, arn, project.session_id, action, read_timeout=read_timeout, client=client,
+        **payload,
+    )
+
+
+def api_error(exc: CodingRuntimeError) -> AppError:
+    """The console envelope for a failed action: the container's stable codes map
+    onto ``coding.*`` (a conflict carries the file's current ``sha256``); a call
+    that never got a container answer, or an unexpected one, is a 502."""
+    code, status = _API_ERRORS.get(exc.code, (RUNTIME_ERROR, 502))
+    if exc.code == "conflict":
+        detail: dict[str, Any] = {"sha256": exc.detail.get("sha256")}
+    else:
+        detail = {"runtime_code": exc.code, **exc.detail}
+        if exc.aws_code:
+            detail["aws_error_code"] = exc.aws_code
+    return AppError(code, exc.message, detail, status_code=status)
+
+
+def run(ctx: WorkspaceContext, project: Any, action: str, **payload: Any) -> Any:
+    """``project_call`` for a request handler: a failure is the console error."""
+    try:
+        return project_call(ctx, project, action, **payload)
+    except CodingRuntimeError as exc:
+        raise api_error(exc) from exc

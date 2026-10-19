@@ -266,6 +266,35 @@ describe("crashes and reboots", () => {
   });
 });
 
+describe("a wiped workspace without a snapshot", () => {
+  let lay;
+  let lay2;
+  let rt;
+  let rt2;
+  before(async () => { lay = await makeLayout(); rt = makeRuntime(lay); });
+  after(async () => { await cleanup(rt, rt2, lay?.root, lay2?.root); });
+
+  test("a fresh log starts above every seq the wiped log issued", async () => {
+    const before = Date.now() * 1000;
+    const started = await ok(rt, "start_turn", { prompt: "write-file", model: "model-a" });
+    await finished(rt, started.turn_id);
+    const oldSeq = rt.eventLog.seq;
+    assert.ok(oldSeq >= before, "a brand-new project's log starts at a time-based seq");
+
+    // a version update before any snapshot: fresh microVM, empty session storage
+    lay2 = await siblingLayout(lay);
+    rt2 = makeRuntime(lay2);
+    const status = await ok(rt2, "status");
+    assert.equal(status.restored, false);
+    assert.ok(rt2.eventLog.seq > oldSeq, "the fresh log's counter starts above the wiped log");
+    const again = await ok(rt2, "start_turn", { prompt: "write-file", model: "model-a" });
+    await finished(rt2, again.turn_id);
+    const page = await ok(rt2, "events", { after: oldSeq, wait_ms: 0 });
+    assert.ok(page.events.length > 0, "a reader holding the old cursor still sees the new log");
+    assert.ok(page.events.every((e) => e.seq > oldSeq));
+  });
+});
+
 describe("restore from a snapshot", () => {
   let lay;
   let lay2;

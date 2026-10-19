@@ -230,10 +230,21 @@ def test_startup_sweep_fails_interrupted_jobs_only():
     assert _job("j-deploy").status == "running", "other job types are not ours"
 
 
-def test_running_projects_is_zero_without_the_projects_ledger():
+def test_running_projects_counts_this_workspaces_running_projects_only():
+    from app.coding.models import CodingProject
+
     db = SessionLocal()
     try:
         assert install.running_projects(db, DEFAULT_WORKSPACE_ID) == 0
+        db.add_all([
+            CodingProject(workspace_id=DEFAULT_WORKSPACE_ID, owner_principal="user:u1",
+                          name=f"p{i}", session_id=f"s{i}".ljust(40, "x"), status=state)
+            for i, state in enumerate(("running", "running", "idle"))
+        ])
+        db.add(CodingProject(workspace_id="west", owner_principal="user:u1", name="w",
+                             session_id="w".ljust(40, "x"), status="running"))
+        db.commit()
+        assert install.running_projects(db, DEFAULT_WORKSPACE_ID) == 2
     finally:
         db.close()
 

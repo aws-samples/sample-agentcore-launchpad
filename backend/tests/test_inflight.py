@@ -19,6 +19,7 @@ import botocore.session
 import pytest
 from sqlalchemy import create_engine, select
 
+from app.coding.models import CodingProject
 from app.core import config as config_mod
 from app.core.db import Base, SessionLocal, engine
 from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
@@ -158,6 +159,11 @@ def _seed_every_kind() -> dict[str, str]:
         _conversation("conv-turn", active_turn=3,
                       active_turn_started_at=NOW - timedelta(minutes=5)),
         _conversation("conv-prep", preparation_token="tok"),
+        CodingProject(id="cp-run", workspace_id="default", owner_principal="user:u1",
+                      name="p", session_id="s-run".ljust(40, "x"), status="running",
+                      active_turn_id="turn-1"),
+        CodingProject(id="cp-idle", workspace_id="default", owner_principal="user:u1",
+                      name="q", session_id="s-idle".ljust(40, "x"), status="idle"),
     )
     return {
         "job-deploy": RESUMES, "job-boot": RESUMES, "job-uninst": RESUMES,
@@ -169,7 +175,7 @@ def _seed_every_kind() -> dict[str, str]:
         "sl-eval": FAILS_INTERRUPTED, "pc-run": RECONCILES, "pc-pend": RECONCILES,
         "pipe-run": FAILS_ON_READ, "rec-provider": FAILS_ON_READ,
         "rec-agentcore": RESTART_SAFE, "conv-turn": FAILS_INTERRUPTED,
-        "conv-prep": CLEARED_RETRY,
+        "conv-prep": CLEARED_RETRY, "cp-run": RESTART_SAFE,
     }
 
 

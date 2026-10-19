@@ -20,6 +20,9 @@ os.environ["LAUNCHPAD_MODEL_PRICES_REFRESH_HOURS"] = "0"
 # server: it would wake after 60 s and query Logs Insights in the middle of a test.
 # tests/test_budget_reconcile.py drives tick() / start() directly.
 os.environ["LAUNCHPAD_BUDGETS_RECONCILE_ENABLED"] = "false"
+# And the coding watcher (on by default): it would invoke the coding runtime every
+# 15 s. tests/test_coding_projects.py drives run_once() / start() directly.
+os.environ["LAUNCHPAD_CODING_WATCHER_ENABLED"] = "false"
 
 # Isolate configuration reads before db/main bind settings or seed the default
 # workspace. Host YAML may select another Region or Docker execution in production.

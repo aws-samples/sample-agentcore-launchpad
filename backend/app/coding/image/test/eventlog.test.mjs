@@ -133,4 +133,13 @@ describe("EventLog", () => {
     log.bump(1000);
     assert.equal(log.append("b").seq, 1002);
   });
+
+  test("advanceTo only moves the counter forward", () => {
+    const log = new EventLog(file("advance")).load();
+    log.append("a");
+    log.advanceTo(500);
+    assert.equal(log.append("b").seq, 501);
+    log.advanceTo(10);
+    assert.equal(log.append("c").seq, 502);
+  });
 });

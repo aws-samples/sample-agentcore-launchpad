@@ -56,6 +56,8 @@ WORKSPACE_SCOPED_TABLES = (
     "alert_rules",
     "spec_snapshots",
     "context_layers",
+    "coding_projects",
+    "coding_turns",
 )
 
 
@@ -105,6 +107,7 @@ def init_db(bind=None) -> None:
     """
     bind = bind if bind is not None else engine
     # register these tables before create_all
+    from app.coding import models as _coding_models  # noqa: F401
     from app.models import budgets as _budgets  # noqa: F401
     from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import video as _video_models  # noqa: F401
@@ -849,6 +852,10 @@ def _migrate_workspace_columns(bind) -> None:
         # born with the column (the COA context layer); listed so the scoped-tables
         # drift test holds and the index is ensured
         "context_layers": "ALTER TABLE context_layers ADD COLUMN workspace_id VARCHAR(32)",
+        # born with the column (the coding agent); listed so the scoped-tables drift
+        # test holds and the index is ensured
+        "coding_projects": "ALTER TABLE coding_projects ADD COLUMN workspace_id VARCHAR(32)",
+        "coding_turns": "ALTER TABLE coding_turns ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

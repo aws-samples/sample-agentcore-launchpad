@@ -1421,6 +1421,48 @@ reported it — not a billing total; no cost is estimated. Legacy results writte
 before usage capture show every side as `missing_rows == rows` with `null`
 counters.
 
+## Console Coding Agent API
+
+The coding console (`/v2/coding`) over the platform coding runtime (see
+[architecture](architecture.md#coding-agent--a-remote-web-ide-over-codex-on-agentcore)).
+A project is **private to its creator in every visibility mode**: a foreign or
+missing id is `404 coding.project_not_found` on every by-id route; administrators
+reach other members' projects only through `GET /projects?all=1` and `DELETE`.
+Every 2xx answers JSON. A route that needs the runtime answers `409
+coding.runtime_not_installed` before any AWS call when the workspace has none.
+
+| Method | Path | Policy | Result |
+|---|---|---|---|
+| `GET` | `/api/coding/runtime` | member | `{installed, status: not_installed\|installing\|ready\|failed\|uninstalling, runtime_arn (admins), image_tag, job: {id, type, status, error, log_tail[] (admins)} \| null, models[], efforts[], default_model, default_effort, repair_recommended}` |
+| `POST` | `/api/coding/runtime/install` | admin | Install or repair → `202 {job_id, status}`; `409 coding.runtime_busy` while an uninstall runs |
+| `DELETE` | `/api/coding/runtime` | admin | Uninstall → `202 {job_id, status}`; `409 coding.runtime_in_use` while any project runs a turn (snapshots are kept) |
+| `GET` | `/api/coding/projects` | member | `{projects: [project]}` — the caller's own; `?all=1` (admins) every project of the workspace, `owned` telling which |
+| `POST` | `/api/coding/projects` | member | Body `{name (≤ 80), description? (≤ 500)}` → `201 project` (no runtime call) |
+| `GET` | `/api/coding/projects/{project_id}` | member (owner) | `project` + `turns[]` (the newest 20, oldest first) + `active_turn` (codex turn id or null) |
+| `PATCH` | `/api/coding/projects/{project_id}` | member (owner) | Body `{name?, description?}` → `project` |
+| `DELETE` | `/api/coding/projects/{project_id}` | member (owner or admin) | Stops the runtime session (best effort), deletes the project's snapshots + exports and rows → `{deleted: true}`; `409 coding.turn_running` while a turn runs; `502 coding.delete_failed` when S3 refused (retryable) |
+| `POST` | `/api/coding/projects/{project_id}/turns` | member (owner), billable | Body `{prompt, model?, effort?}` → `202` turn row (`status: running`); the turn runs on in the microVM. `409 coding.turn_running`, `422 coding.model_invalid` / `coding.effort_invalid`, `413 coding.prompt_too_long` (> 32 KB), `409 coding.runtime_busy` (uninstalling), `402 budget.exceeded` / `budget.model_unpriced`, `502 coding.runtime_error` |
+| `POST` | `/api/coding/projects/{project_id}/interrupt` | member (owner) | `{interrupted: bool}` (false when no turn runs) |
+| `GET` | `/api/coding/projects/{project_id}/events` | member (owner) | SSE, `?after=<seq>` or `Last-Event-ID`: `event: status {project_status, active_turn}` first; each record `id: <seq>` + `event: event` + `data: {seq, ts, method, params}`; `: keep-alive`; `event: reconnect {}` after 25 min; `event: error {code, message}` then the end |
+| `GET` | `/api/coding/projects/{project_id}/tree` | member (owner) | `?path=<dir>&depth=1..4` → `{path, entries: [{path (root-relative), dir, size, symlink?}], truncated}`; a vanished directory lists empty |
+| `GET` | `/api/coding/projects/{project_id}/file` | member (owner) | `?path=&rev=head\|turn` (none = working tree) → `{path, exists, content, sha256, size, binary}`; binary → `content: null`; absent → `exists: false` |
+| `PUT` | `/api/coding/projects/{project_id}/file` | member (owner) | Body `{path, content, expected_sha256?}` (omitted = overwrite; a hash = must still match; null = must not exist) → `{path, sha256, size}`; `409 coding.file_conflict` `detail: {sha256}`, `409 coding.turn_running`, `413 coding.file_too_large` (> 2 MB) |
+| `GET` | `/api/coding/projects/{project_id}/changes` | member (owner) | `?scope=worktree\|turn` → `{scope, changes: [{path, status: A\|M\|D\|R, old_path?}]}` (empty before the first turn) |
+| `GET` | `/api/coding/projects/{project_id}/diff` | member (owner) | `?scope=` → `{scope, diff, truncated}` |
+| `POST` | `/api/coding/projects/{project_id}/deploy` | `perm:agents.deploy` (owner) | Body `{agent_name?, description?, artifact_kind?: code_zip\|container_source, entrypoint?, python_version?}` → `202 {agent_id, job_id, created}`; creates a `byoc` Agent (creator = caller) or re-publishes the project's Agent. `409 coding.turn_running`, `422 coding.deploy_failed` with `detail.reason` = `dockerfile_missing` (no root `Dockerfile` for `container_source`) \| `entrypoint_missing` (+ `entrypoint`, `candidates`) \| `invalid_spec` (+ `errors`), `413 byoc.upload_too_large` (an export over the 250 MiB BYOC zip cap, refused before the download), plus every `POST /api/agents` / redeploy refusal (`agent.name_exists`, `agent.deploy_in_progress`, …) |
+
+`project` = `{id, name, description, status: idle|running, active_turn_id, model,
+effort, agent_id (null once that Agent is deleted), snapshot_at, created_at,
+updated_at, created_by, created_by_name, owned}`; a turn row = `{id, turn_id,
+thread_id, prompt (first 2000 chars), model, effort, status: running|completed|
+interrupted|failed|abandoned, error, usage, started_at, completed_at}` with
+`usage` = `{input, cached_input, cache_write, output, reasoning_output}` (codex
+counts: `input` includes the cached and cache-write tokens, `output` the
+reasoning tokens). Timestamps are naive-UTC ISO strings. Path errors are `422
+coding.path_invalid` (absolute, `..`, NUL, `.git`) and never reach the runtime;
+other runtime failures are `502 coding.runtime_error` (`detail.runtime_code`)
+or `502 coding.restore_failed` when the project's snapshot could not be restored.
+
 ## Console Accounts API
 
 `/api/auth/*` gates the console and `/api/users/*` manages the accounts behind

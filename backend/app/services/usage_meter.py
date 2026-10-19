@@ -267,6 +267,13 @@ class UsageMeter:
         """One Converse(Stream) ``usage`` (``metadata.usage``)."""
         self.on_usage(usage)
 
+    def record_session(self) -> None:
+        """Map the meter's session to its payer now, before any usage settles: a
+        turn that runs for hours (the coding agent) must be known to reconciliation
+        from its start, since a session's first window starts at its first turn.
+        Never raises."""
+        self._upsert_session()
+
     @property
     def seen_usage(self) -> bool:
         with self._lock:

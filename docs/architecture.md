@@ -320,6 +320,11 @@ The `/agents/new` picker shows four cards, in this order:
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
 | 4 | **Bring Your Own Code** | `byoc` | user-written agent code uploaded as a zip (direct-code runtime or Dockerfile → CodeBuild) or referenced as an existing private-ECR image — see [BYOC](#byoc--bring-your-own-code) |
 
+The V2 wizard adds a fifth card, **Coding Agent**, which is not a method of its
+own: it opens the coding console (`/v2/coding`), where a codex agent builds the
+project and the result deploys as `byoc` — see
+[Coding Agent](#coding-agent--a-remote-web-ide-over-codex-on-agentcore).
+
 Discovery of existing runtimes and harnesses is not a deploy method: it has its
 own page at `/agents/import` (see below), reachable from the list header and
 from a button next to NEXT on step 1.
@@ -3839,6 +3844,106 @@ complete breakdown. `scope` is always `reported`: this is observed usage over
 the tasks that reported it — not a billing total, and the console shows no cost
 estimate. The console renders it as a TOKEN USAGE table under the result tiles
 and per task in the expanded row, with a dash for every unknown counter.
+
+## Coding Agent — a remote web IDE over codex on AgentCore
+
+The fifth way to build an agent (parent task `10-19-coding-agent`): a member opens
+a project in the browser IDE (`/v2/coding`, `?view=project&id=`), converses with a
+codex agent that writes, runs and tests code inside an AgentCore microVM, and hands
+the finished project to Launchpad, which deploys it through the existing `byoc`
+pipeline — the result is an ordinary governed Agent.
+
+**Runtime (platform-owned, admin-installed).** One AgentCore Runtime per workspace,
+`launchpad_coding_runtime`, image source in `backend/app/coding/image/` (zero-
+dependency Node 22 server driving `codex app-server` over stdio JSON-RPC; codex
+pinned, the Agent Toolkit for AWS plugins baked in). Models go through codex's
+built-in `amazon-bedrock-runtime` provider (bedrock-runtime `/openai/v1`, SigV4 —
+never Mantle); selectable models `Settings.coding_models`, reasoning effort per
+turn. The execution role grants only ECR pull, its log group and
+`bedrock:InvokeModel*` on the coding models + `project/default`: any shell in the
+microVM can read those credentials, so the role has **no S3**. Session storage is
+mounted at `/mnt/workspace` (1 GB, wiped by a runtime version update and after 14
+idle days); codex's SQLite and dependency dirs live on local disk. Installed,
+repaired and uninstalled only by an administrator (`/api/coding/runtime*`, a
+`Job`), never on startup or on a read; resource keys `coding_runtime_*` (outside
+`REQUIRED_RESOURCE_KEYS`).
+
+**Action protocol.** Every backend call is one short `InvokeAgentRuntime`
+(`app/coding/runtime_client.call`) carrying `{action, …}` and answering
+`{ok, result | error{code}}`: `status`, `start_turn`, `interrupt`, `events`
+(seq-numbered event-log long-poll, `compact` drops deltas of completed items),
+`tree`, `read_file` (`rev: head | turn`), `write_file` (`expected_sha256`),
+`changes`, `diff`, `snapshot` / `export` (to a presigned PUT). Every app-server
+notification lands in `.launchpad/events.jsonl` on session storage, so readers
+fetch by seq and a reload, a reconnect or a backend restart loses nothing.
+
+**Projects (`backend/app/coding/`).** Ledger `coding_projects` + `coding_turns`
+(workspace-scoped). A project is **private to its creator in every visibility
+mode** — deliberately stricter than `resource_visibility`, since a project is a
+live shell plus code: ownership binds to the immutable principal
+(`assistant/principal.principal_of` → `user:<id>` | `config-admin` |
+`local-operator`), and every by-id route resolves through
+`projects.project_in` (foreign or missing → `404 coding.project_not_found`).
+Administrators list every project (`?all=1`) and delete any, but never open an
+IDE, read files, stream events or run a turn in someone else's project. Each
+project owns one stable `runtimeSessionId` (64 chars, minted at create); projects
+never share a session.
+
+**Turns are asynchronous.** `POST …/turns` claims the project (`UPDATE … WHERE
+status='idle'` — one turn per project), starts the turn in the microVM and returns
+the `running` turn row at once; the turn runs under `/ping HealthyBusy` (≤ 8 h),
+so leaving or reloading the page, or restarting the backend, never stops it.
+`POST …/interrupt` interrupts it. A runtime turn the ledger lost (the backend
+died between the runtime's answer and its commit) is adopted on the next start.
+
+**Event stream (SSE).** `GET …/events?after=<seq>` (or `Last-Event-ID`) sends a
+`status` frame, then each event-log record as `id: <seq>` / `event: event`,
+keep-alive comments, `reconnect` after 25 min and `error {code, message}` on a
+failure (`app/coding/stream.py`). **Idle mode:** once the replay is drained and
+the runtime runs no turn, the stream polls the *ledger* every 2 s instead of the
+runtime, so an open IDE tab never keeps an idle microVM (billed memory) alive past
+its 15-minute idle timeout; it switches back to runtime long-polls when a new turn
+is claimed. The route serves the stream as an async body whose blocking steps run
+in worker threads while the idle pauses await on the event loop, so an open idle
+tab holds none of the shared worker pool's threads.
+
+**Settlement, budgets, durability.** The runtime appends `launchpad/turnUsage`
+(or `launchpad/turnAbandoned`) right after a turn ends. Whoever sees it first —
+the SSE proxy or the **watcher** (`app/coding/watcher.py`, one daemon thread,
+every 15 s, `LAUNCHPAD_CODING_WATCHER_ENABLED`) — settles it with `UPDATE
+coding_turns SET settled_at=… WHERE … AND settled_at IS NULL`; only the winner
+charges the payer (`UsageMeter`, source `coding`, ref `coding_turn`) and requests
+a snapshot. codex's `inputTokens` includes cached and cache-write tokens and
+`outputTokens` includes reasoning, so the meter gets them disjoint. Starting a
+turn is `Billable(SOURCE_CODING)` (the existing `402` contract) and maps the
+session in `usage_sessions` at the start, so reconciliation knows the session
+from its first minute (the codex runtime emits no spans, so its runtime compute
+is the ledger-based lower bound: the turns' start and end points plus the idle
+tail). The watcher also abandons a turn the runtime no longer runs (its
+session storage came back from an older snapshot) or one past the 8-hour
+lifetime, releases dead start claims and snapshots saved files (30 s debounce).
+Snapshots go to `s3://<artifacts>/coding/<ws>/<project>/snapshots/<ts>.tgz`
+through backend-minted presigned URLs (newest 3 kept); every action carries the
+newest snapshot's presigned GET as `restore_url`, so a microVM whose session
+storage came back empty restores the project before anything else.
+
+**Files.** The IDE reads the tree, file contents (working tree, `HEAD` or the
+latest turn's baseline), changes and unified diffs, and saves files with an
+optimistic `expected_sha256` (`409 coding.file_conflict` carries the current
+hash); saves are refused while a turn runs. Paths are checked in the backend
+(absolute, `..`, NUL, `.git`) before any call, and authoritatively by the
+runtime's path guard.
+
+**Deploy handoff.** `POST …/deploy` (`perm:agents.deploy`) snapshots the project,
+has the runtime zip its files to a presigned PUT, downloads it and stages it with
+`byoc_uploads.stage_upload` (the same checks as a member upload), then creates a
+`byoc` Agent stamped with the caller (`routers.agents.start_create`, the code
+behind `POST /api/agents`) or re-publishes the project's existing Agent
+(`republish_agent`, the code behind redeploy). The export's size is checked
+against the 250 MiB BYOC zip cap before the download (the microVM runs arbitrary
+code). A root `Dockerfile` selects
+`container_source`, otherwise `code_zip` (`main.py`). The project's `AGENTS.md`
+tells the coding agent the BYOC contract.
 
 ## The SQLite ledger and job/event model
 

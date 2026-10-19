@@ -156,6 +156,7 @@ export class CodingRuntime {
     await ws.linkCodexHome();
     if (!initialized && restoredBytes === null) await ws.initFresh();
     else await ws.ensureDepLinks();
+    if (!initialized) this.eventLog.advanceTo(Date.now() * 1000);
     if (restoredBytes !== null) {
       this.eventLog.bump(RESTORE_SEQ_GAP);
       this.eventLog.append("launchpad/restored", { bootId: this.bootId, bytes: restoredBytes });

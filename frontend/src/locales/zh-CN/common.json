@@ -2476,7 +2476,11 @@
     "coding.effort_invalid": "不支持该推理强度。",
     "coding.prompt_too_long": "提示词过长（最多 32 KB）。",
     "coding.runtime_error": "编码运行时未响应，请重试。",
-    "coding.deploy_failed": "部署项目失败。"
+    "coding.deploy_failed": "部署项目失败。",
+    "coding.restore_failed": "无法恢复项目保存的快照，请重试。",
+    "coding.delete_failed": "无法删除项目保存的文件，请重试。",
+    "coding.runtime_busy": "编码运行时正在安装或卸载，请在完成后重试。",
+    "coding.runtime_in_use": "这个工作区还有正在运行的编码回合。请等它结束或中止后再卸载。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -9795,7 +9799,13 @@
         "openAgent": "打开 Agent",
         "redeployNote": "本项目已部署过一个 Agent，再次部署会为它发布新版本：",
         "noPermission": "你没有部署 Agent 的权限。",
-        "whileRunning": "请等待正在运行的回合结束。"
+        "whileRunning": "请等待正在运行的回合结束。",
+        "failure": {
+          "entrypoint_missing": "项目根目录下没有 {{entrypoint}}。请先创建它，或把入口文件设为 Agent 实际提供服务的文件。",
+          "candidates": "项目根目录下的 Python 文件：{{files}}。",
+          "dockerfile_missing": "按 Dockerfile 上下文部署时，项目根目录下必须有 Dockerfile。",
+          "invalid_spec": "部署设置不是有效的 Agent：{{errors}}"
+        }
       }
     }
   },

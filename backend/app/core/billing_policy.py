@@ -243,6 +243,15 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     # ---- coding agent: installing the runtime is control plane (build + deploy) ----
     ("POST", "/api/coding/runtime/install"): FREE,
     ("DELETE", "/api/coding/runtime"): FREE,
+    # a turn calls the model (tokens settle when it ends); the rest is the member's
+    # own project bookkeeping, file saves and the deploy handoff (control plane)
+    ("POST", "/api/coding/projects"): FREE,
+    ("PATCH", "/api/coding/projects/{project_id}"): FREE,
+    ("DELETE", "/api/coding/projects/{project_id}"): FREE,
+    ("POST", "/api/coding/projects/{project_id}/turns"): Billable(SOURCE_CODING),
+    ("POST", "/api/coding/projects/{project_id}/interrupt"): FREE,
+    ("PUT", "/api/coding/projects/{project_id}/file"): FREE,
+    ("POST", "/api/coding/projects/{project_id}/deploy"): FREE,
     # ---- Skill Lab: a job (and its resume) runs rollouts and judges ----
     ("POST", "/api/skill-lab/task-assets"): FREE,
     ("POST", "/api/skill-lab/tasksets"): FREE,

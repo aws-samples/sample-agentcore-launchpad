@@ -236,6 +236,18 @@ def create_agent(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    return start_create(db, ws, spec, creator=Creator.of_request(request), viewer=viewer)
+
+
+def start_create(
+    db: Session, ws: WorkspaceScope, spec: AgentSpec, *, creator: Creator | None,
+    viewer: Viewer = Viewer.ALL,
+) -> dict[str, Any]:
+    """The create guards + a deploy job for a new agent stamped with ``creator`` —
+    shared by ``POST /api/agents`` and the coding agent's deploy handoff
+    (``app/coding/deploy.py``), so a project deployed from the coding console is an
+    ordinary governed Agent by construction. ``viewer`` decides which KB / memory
+    pins the caller may use and whether a name holder's id is disclosed."""
     if spec.method not in SUPPORTED_METHODS:
         raise AppError(
             "agent.method_not_available",
@@ -270,7 +282,7 @@ def create_agent(
         status="deploying",
         spec=spec.model_dump(),
     )
-    creators.stamp(agent, Creator.of_request(request))
+    creators.stamp(agent, creator)
     db.add(agent)
     db.flush()
     # Atomic reservation shared with the assistant approval path: a concurrent

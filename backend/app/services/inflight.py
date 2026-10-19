@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
+from app.coding.models import CodingProject
 from app.evaluation.agentcore_eval import REC_TERMINAL
 from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
 from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
@@ -65,6 +66,7 @@ EVAL_PIPELINE = "eval_pipeline"
 EVAL_RECOMMENDATION = "eval_recommendation"
 ASSISTANT_TURN = "assistant_turn"
 ASSISTANT_PREPARATION = "assistant_preparation"
+CODING_TURN = "coding_turn"
 
 # Every call in the `if resume_jobs:` block of `create_app`, by the name main.py
 # calls it, with the inventory kinds it settles. Hooks that touch no ledger row map
@@ -95,6 +97,7 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
         "session's rows and its watermark commit together, so an interrupted window is "
         "read again on the next tick, no in-flight row"
     ),
+    "coding_watcher.start": (CODING_TURN,),
 }
 
 # Subsystems that fail an interrupted row only when it is next read — a startup
@@ -314,6 +317,14 @@ def collect_inflight(
         add(ASSISTANT_PREPARATION, r.id, r.workspace_id, "preparing",
             f"architect conversation {r.title} — preparation claim cleared, retry it",
             r.updated_at, CLEARED_RETRY, "clear_stale_turn_claims")
+
+    for r in reader.rows(CodingProject, ["id", "workspace_id", "name", "active_turn_id",
+                                         "updated_at"],
+                         lambda m: m.status == "running"):
+        add(CODING_TURN, r.id, r.workspace_id, f"turn {r.active_turn_id or '(starting)'}",
+            f"coding project {r.name} — the turn runs on in its microVM; the watcher "
+            "settles it after the restart", r.updated_at, RESTART_SAFE,
+            "coding_watcher.start")
 
     if skipped is not None:
         skipped.extend(reader.skipped)

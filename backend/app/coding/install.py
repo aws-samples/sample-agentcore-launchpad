@@ -68,14 +68,14 @@ def live_job(db: Session, workspace_id: str) -> Job | None:
 
 
 def running_projects(db: Session, workspace_id: str) -> int:
-    """Projects with a turn in flight (0 until the projects ledger exists)."""
-    try:
-        from app.coding.models import CodingProject
-    except ImportError:  # the projects table arrives with the backend child
-        return 0
+    """Projects with a turn in flight (or a start being claimed) — the uninstall
+    refusal: removing the runtime would strand those turns."""
+    from app.coding.models import PROJECT_RUNNING, CodingProject
+
     return (
         db.query(CodingProject)
-        .filter(CodingProject.workspace_id == workspace_id, CodingProject.status == "running")
+        .filter(CodingProject.workspace_id == workspace_id,
+                CodingProject.status == PROJECT_RUNNING)
         .count()
     )
 

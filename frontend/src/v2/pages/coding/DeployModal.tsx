@@ -9,9 +9,9 @@ import {
   type CodingDeployRequest,
   type CodingDeployResult,
   type CodingProject,
-  errorMessage,
 } from "../../../lib/api";
 import { Alert, Button, Field, Modal, Select } from "../../ui";
+import { deployFailureText } from "./deployError";
 import { agentNameFrom } from "./prefs";
 
 type KindChoice = "auto" | "code_zip" | "container_source";
@@ -66,7 +66,7 @@ export function DeployModal({
       setResult(res);
       onDeployed(res);
     } catch (err) {
-      setError(errorMessage(err));
+      setError(deployFailureText(err, t));
     } finally {
       setBusy(false);
     }

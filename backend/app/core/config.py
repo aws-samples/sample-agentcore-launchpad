@@ -328,6 +328,12 @@ class Settings(BaseSettings):
     # codex reasoning effort per turn (`turn/start.effort`)
     coding_efforts: list[str] = ["low", "medium", "high", "xhigh"]
     coding_default_effort: str = "medium"
+    # The coding watcher thread (`app.coding.watcher`): settles turns no browser is
+    # streaming and snapshots saved files. On by default — a turn runs in its
+    # microVM whether or not anyone watches it; LAUNCHPAD_CODING_WATCHER_ENABLED=
+    # false is the off switch (the hermetic suite uses it).
+    coding_watcher_enabled: bool = True
+    coding_watcher_interval_s: int = 15
 
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown
