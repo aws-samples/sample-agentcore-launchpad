@@ -465,3 +465,26 @@ def test_harness_chat_stream_receives_prepared_text(monkeypatch):
     result = list(chat_service.chat_stream(row, "read", attachments=files, workspace=ws_ctx()))
     assert "test-token" in received[0]
     assert result[0]["data"]["attachments"][0]["delivery"] == "text"
+
+
+def test_pdf_worker_still_inspects_when_a_platform_refuses_a_limit(monkeypatch, capsys):
+    """macOS refuses RLIMIT_AS ("current limit exceeds maximum limit"); the worker
+    keeps the limits it can set instead of failing every PDF as unreadable."""
+    import resource
+    import sys
+
+    from app.services import attachment_pdf
+
+    applied = []
+
+    def setrlimit(which, value):
+        if which == resource.RLIMIT_AS:
+            raise ValueError("current limit exceeds maximum limit")
+        applied.append(which)
+
+    monkeypatch.setattr(attachment_pdf.resource, "setrlimit", setrlimit)
+    monkeypatch.setattr(sys, "argv", ["attachment_pdf", "--extract"])
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(buffer=io.BytesIO(pdf("nota-123"))))
+    attachment_pdf.main()
+    assert json.loads(capsys.readouterr().out)["text"] == "nota-123"
+    assert applied == [resource.RLIMIT_CPU]
