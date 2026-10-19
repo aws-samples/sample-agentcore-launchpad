@@ -470,6 +470,17 @@ candidates degrade with `custom-source-unverified`, exactly like other
 custom-source runtimes. Samples: [`samples/byoc/`](../samples/byoc/README.md);
 lab walkthrough: [docs/lab/13-byoc.md](lab/13-byoc.md).
 
+**Native attachments (`code_zip`).** A `code_zip` entrypoint can opt into the
+[playground attachment contract](#playground-file-attachments) exactly as
+generated code does: a top-level `LAUNCHPAD_ATTACHMENT_CONTRACT = "v1"` literal.
+The package stage records it from the uploaded entrypoint and the deploy stage
+stamps `Agent.attachment_version` only once the runtime is READY, so Chat then
+sends the original images/PDFs as `attachments: [{name, media_type, data}]`
+(base64) beside the prompt — provided `spec.model_id` is a multimodal model. The
+code must acknowledge them before its answer (`"attachment_contract": "v1"` on a
+JSON reply, or a leading `{"event": "attachments", "contract": "v1"}` SSE event).
+Container kinds never record a contract, so they keep text/text-PDF input.
+
 ### Recommendation trace source
 
 `RECOMMEND` reads either a rolling `RECOMMEND_LOOKBACK_DAYS` (7) CloudWatch window —

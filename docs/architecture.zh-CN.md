@@ -343,6 +343,14 @@ toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线�
 [`samples/byoc/`](../samples/byoc/README.md);实验手册见
 [docs/lab/13-byoc.md](lab/13-byoc.md)。
 
+**原生附件(`code_zip`)。** `code_zip` 的入口文件可以和平台生成的代码一样声明附件约定:
+在顶层写 `LAUNCHPAD_ATTACHMENT_CONTRACT = "v1"` 字面量。package 阶段从上传的入口文件
+记录该约定,deploy 阶段仅在运行时 READY 后写入 `Agent.attachment_version`;此后
+Chat 会把原始图片/PDF 以 `attachments: [{name, media_type, data}]`(base64)随 prompt
+一起发送——前提是 `spec.model_id` 为多模态模型。代码必须在回答前确认收到附件(JSON
+回复带 `"attachment_contract": "v1"`,或 SSE 首个事件 `{"event": "attachments", "contract": "v1"}`)。
+容器类 artifact 从不记录约定,仍只接受文本/文本 PDF 输入。
+
 ### 推荐的 trace 来源
 
 `RECOMMEND` 读取两者之一:默认是滚动的 `RECOMMEND_LOOKBACK_DAYS`（7）天 CloudWatch 窗口，

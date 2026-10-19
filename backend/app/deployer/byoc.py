@@ -31,6 +31,7 @@ from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
+from app.deployer.input_contract import record_input_contract, stamp_input_contract
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
@@ -280,6 +281,8 @@ def _build_code_zip(
     s3_key = PACKAGE_KEY_TMPL.format(name=agent.name)
     ctx.workspace.client("s3").upload_file(str(final_zip), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
+    # the entrypoint opts into native attachments the same way generated code does
+    record_input_contract(ctx, entry.read_text(encoding="utf-8", errors="replace"))
     ctx.log(f"package {secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
     detail = f"code_zip · {size_mb:.1f}MB · s3 ✓"
     if installed:
@@ -460,6 +463,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # reaches this line too, so the snapshot is never skipped.
         inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
+        stamp_input_contract(ctx, db, row)
         db.commit()
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)

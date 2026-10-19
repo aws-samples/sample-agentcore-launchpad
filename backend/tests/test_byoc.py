@@ -1338,3 +1338,33 @@ def test_delete_upload_objects_access_denied_warns_and_never_blocks(caplog):
     assert record.levelno == logging.WARNING
     text = record.getMessage()
     assert f"s3://lp-artifacts/{source}" in text and "AccessDenied" in text
+
+
+@pytest.mark.parametrize("marker, expected", [
+    (b"LAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'\n", "1"),
+    (b"", None),
+])
+def test_code_zip_entrypoint_contract_enables_native_attachments(monkeypatch, marker, expected):
+    """A code_zip entrypoint that declares the contract gets native files once READY."""
+    from app.deployer.pipeline import create_deployment
+
+    s3 = StubS3()
+    stub = StubRuntimeControl()
+    _client_router(monkeypatch, {"s3": s3})
+    monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: stub)
+    _seed_upload(s3, "u1", {"main.py": marker + SDK_MAIN})
+    spec = AgentSpec(**_byoc_spec())
+    with SessionLocal() as db:
+        agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=spec.name, method="byoc",
+                      status="deploying", spec=spec.model_dump())
+        db.add(agent)
+        db.commit()
+        deployment, job = create_deployment(db, agent)
+        ctx = StageContext(agent.id, deployment.id, job.id, workspace=ws_ctx(RESOURCES))
+        agent_id = agent.id
+
+    byoc_dep._stage_package(ctx, _get_agent(agent_id))
+    assert _get_agent(agent_id).attachment_version is None  # not before READY
+    ctx.scratch["execution_role_arn"] = "arn:agent-role"
+    byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
+    assert _get_agent(agent_id).attachment_version == expected
