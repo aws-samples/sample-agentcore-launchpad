@@ -32,15 +32,16 @@ the precondition probes and restart side-effect traps the table below does not.
 | Backend lint + tests (parallel, as the gate runs them) | `cd backend && uv run ruff check . && uv run pytest -q -n auto` |
 | Single backend test (serial — omit `-n`) | `cd backend && uv run pytest tests/test_agents_api.py::test_name -q` |
 | Frontend lint / typecheck / unit tests / build | `cd frontend && npm run lint && npx tsc --noEmit && npm test && npm run build` |
+| Coding runtime server tests (Node, fake app-server, no AWS) | `cd backend/app/coding/image && node --test 'test/*.test.mjs'` |
 | i18n key parity (en ↔ zh-CN) | `python3 scripts/i18n_check.py` |
 | zh-CN full-width punctuation (`--fix` to convert) | `python3 scripts/i18n_zh_punct.py --check` |
 
-`scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, infra
-ruff+pytest, a `start.py`/`stop.sh` lint + syntax check, frontend
-eslint+tsc+vitest+vite-build, i18n parity, and zh-CN full-width punctuation. It must
-pass before any change is considered complete. The gate runs the backend suite in
-parallel via `pytest-xdist` (`-n auto`, ~1 min on 8 cores instead of ~6.4 min);
-`-n` is deliberately **not** in `addopts`, so one named test stays serial.
+`scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, the
+coding runtime's `node --test` suite, infra ruff+pytest, a `start.py`/`stop.sh` lint +
+syntax check, frontend eslint+tsc+vitest+vite-build, i18n parity, and zh-CN full-width
+punctuation. It must pass before any change is considered complete. The gate runs the
+backend suite in parallel via `pytest-xdist` (`-n auto`, ~1 min on 8 cores instead of
+~6.4 min); `-n` is deliberately **not** in `addopts`, so one named test stays serial.
 
 **`backend/tests/` vs `backend/scripts/e2e_*.py`:** `tests/` are hermetic unit tests
 (SQLite is redirected to a temp DB in `conftest.py`; AWS is stubbed) and run in

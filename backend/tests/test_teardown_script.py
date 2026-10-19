@@ -375,3 +375,59 @@ def test_collect_targets_sweeps_only_console_workload_identities(monkeypatch):
 
     teardown.delete_target("console-workload", "launchpad-console-default", "us-west-2")
     assert control.ops("delete_workload_identity") == [{"name": "launchpad-console-default"}]
+
+
+class _RuntimesControl(StubControl):
+    """An account holding the Skill Lab worker, the coding runtime and a member agent."""
+
+    def __init__(self, gets_until_gone: int = 1):
+        super().__init__()
+        self.gets_until_gone = gets_until_gone
+
+    def list_agent_runtimes(self, **kwargs):
+        return {"agentRuntimes": [
+            {"agentRuntimeName": "launchpad_skill_lab_worker", "agentRuntimeId": "sl-1",
+             "agentRuntimeArn": "arn:rt/sl-1"},
+            {"agentRuntimeName": "launchpad_coding_runtime", "agentRuntimeId": "cr-1",
+             "agentRuntimeArn": "arn:rt/cr-1"},
+            {"agentRuntimeName": "member_agent", "agentRuntimeId": "ma-1",
+             "agentRuntimeArn": "arn:rt/ma-1"},
+        ]}
+
+    def delete_agent_runtime(self, **kwargs):
+        return self._record("delete_agent_runtime", **kwargs)
+
+    def get_agent_runtime(self, **kwargs):
+        self._record("get_agent_runtime", **kwargs)
+        self.gets_until_gone -= 1
+        if self.gets_until_gone < 0:
+            from botocore.exceptions import ClientError
+
+            raise ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "GetAgentRuntime")
+        return {"status": "DELETING"}
+
+
+class _RolesIam(StubIam):
+    def get_role(self, RoleName):
+        if RoleName in ("launchpad-skill-lab-worker", "launchpad-coding-runtime"):
+            return {"Role": {"Arn": f"arn:aws:iam::111122223333:role/{RoleName}"}}
+        raise Exception("NoSuchEntity")
+
+
+def test_collect_targets_includes_the_coding_runtime_before_its_role(monkeypatch):
+    control = _RuntimesControl()
+    _wire(monkeypatch, control, _RolesIam())
+    kinds = [(kind, ident) for kind, ident, _ in teardown.collect_targets("us-west-2")]
+    assert ("coding-runtime", "cr-1") in kinds
+    assert ("coding-role", "launchpad-coding-runtime") in kinds
+    assert kinds.index(("coding-runtime", "cr-1")) < kinds.index(
+        ("coding-role", "launchpad-coding-runtime"))
+    assert not [k for k in kinds if k[1] == "ma-1"], "member agents are out of scope"
+
+
+def test_delete_coding_runtime_waits_until_it_is_gone(monkeypatch):
+    control = _RuntimesControl(gets_until_gone=2)
+    _wire(monkeypatch, control, _RolesIam())
+    teardown.delete_target("coding-runtime", "cr-1", "us-west-2")
+    assert control.ops("delete_agent_runtime") == [{"agentRuntimeId": "cr-1"}]
+    assert len(control.ops("get_agent_runtime")) == 3  # DELETING, DELETING, gone

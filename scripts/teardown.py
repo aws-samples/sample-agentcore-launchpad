@@ -19,6 +19,9 @@ Scope (reverse creation order, dependents before the shared substrate):
   5. AgentCore registry (launchpad-registry) — records must be gone first
   6. Skill Lab exec worker (launchpad_skill_lab_worker runtime + its IAM role);
      its image tags and the skill-lab/ S3 prefix live in stack-owned ECR/S3
+  6b. Coding runtime (launchpad_coding_runtime runtime + its IAM role, runtime
+     first); its image tags and the coding/ project snapshots live in
+     stack-owned ECR/S3
   7. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
 
 Out of scope: X-Ray Transaction Search (account-wide, shared observability),
@@ -198,7 +201,8 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
 
     # Paginated: an account past one page of runtimes would otherwise keep the
     # worker (and its role) behind after the stack is gone.
-    for runtime in rt.list_runtimes(control):
+    runtimes = rt.list_runtimes(control)
+    for runtime in runtimes:
         if runtime.get("agentRuntimeName") == WORKER_RUNTIME_NAME:
             targets.append(
                 ("skill-lab-runtime", runtime["agentRuntimeId"], runtime["agentRuntimeArn"])
@@ -207,6 +211,23 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
     try:
         role = iam.get_role(RoleName=role_name)
         targets.append(("skill-lab-role", role_name, role["Role"]["Arn"]))
+    except Exception:
+        pass
+
+    # Coding runtime (runtime before its role: deleting the role under a live
+    # runtime can wedge the runtime's own deletion).
+    from app.coding.infra import RUNTIME_NAME as CODING_RUNTIME_NAME
+    from app.services.workspace_iam import CODING_RUNTIME_ROLE_BASE
+
+    for runtime in runtimes:
+        if runtime.get("agentRuntimeName") == CODING_RUNTIME_NAME:
+            targets.append(
+                ("coding-runtime", runtime["agentRuntimeId"], runtime["agentRuntimeArn"])
+            )
+    coding_role = regional_role_name(CODING_RUNTIME_ROLE_BASE, region)
+    try:
+        role = iam.get_role(RoleName=coding_role)
+        targets.append(("coding-role", coding_role, role["Role"]["Arn"]))
     except Exception:
         pass
 
@@ -223,6 +244,24 @@ def _delete_role(iam, role_name: str) -> None:
     for policy in iam.list_role_policies(RoleName=role_name)["PolicyNames"]:
         iam.delete_role_policy(RoleName=role_name, PolicyName=policy)
     iam.delete_role(RoleName=role_name)
+
+
+def _wait_runtime_gone(control, runtime_id: str, timeout_s: int) -> None:
+    """Runtime deletion is asynchronous; its role must outlive it. Bounded wait."""
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            control.get_agent_runtime(agentRuntimeId=runtime_id)
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+            if code == "ResourceNotFoundException":
+                return
+            raise
+        if time.time() >= deadline:
+            print(f"  warning: runtime {runtime_id} still deleting; continuing")
+            return
+        # Deliberate polling interval; the deadline above bounds the loop.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
 
 
 def _wait_targets_gone(control, gateway_id: str, timeout_s: int) -> None:
@@ -283,6 +322,13 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
 
         rt.delete_runtime(control, identifier)
     elif kind == "skill-lab-role":
+        _delete_role(bs._client("iam", region), identifier)
+    elif kind == "coding-runtime":
+        from app.services.agentcore import runtime as rt
+
+        rt.delete_runtime(control, identifier)
+        _wait_runtime_gone(control, identifier, timeout_s=600)
+    elif kind == "coding-role":
         _delete_role(bs._client("iam", region), identifier)
     elif kind == "cdk-stack":
         subprocess.run(

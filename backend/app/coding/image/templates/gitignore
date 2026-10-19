@@ -1,0 +1,12 @@
+# Dependency dirs are symlinks to local disk (no trailing slash: a symlink is not a
+# directory to git, so `node_modules/` would not match it).
+node_modules
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+.env
+.DS_Store

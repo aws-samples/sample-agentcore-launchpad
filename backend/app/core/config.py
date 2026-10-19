@@ -314,6 +314,21 @@ class Settings(BaseSettings):
     # Same mirror/parity contract for the codex CLI (`ARG CODEX_CLI_VERSION`).
     skill_lab_worker_codex_version: str = "0.155.1"
 
+    # Coding agent (app/coding): the models a coding turn may pick, all invoked by
+    # codex's built-in `amazon-bedrock-runtime` provider (bedrock-runtime
+    # /openai/v1, SigV4 with the coding runtime's role — never Mantle). The
+    # runtime role's model grant is derived from this list at install, so adding a
+    # model needs a repair (re-install) before a turn can use it.
+    coding_models: list[str] = [
+        "global.openai.gpt-6.1-sol",
+        "global.openai.gpt-6-sol",
+        "global.openai.gpt-6-astra",
+    ]
+    coding_default_model: str = "global.openai.gpt-6-sol"
+    # codex reasoning effort per turn (`turn/start.effort`)
+    coding_efforts: list[str] = ["low", "medium", "high", "xhigh"]
+    coding_default_effort: str = "medium"
+
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown
     # models report tokens with a null cost. Overridable in launchpad.yaml,

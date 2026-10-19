@@ -415,6 +415,12 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/online/{config_id}/reports"): MEMBER,
     ("POST", "/api/eval/online/{config_id}/reports"): PERM_EVAL_RUN,
     ("GET", "/api/eval/online/{config_id}/reports/{batch_id}"): MEMBER,
+    # ---- coding agent: the platform-owned coding runtime. Its status is a member
+    # read; install/repair and uninstall create or delete the workspace's runtime +
+    # role on an operator's explicit request (like system presets), so ADMIN ----
+    ("GET", "/api/coding/runtime"): MEMBER,
+    ("POST", "/api/coding/runtime/install"): ADMIN,
+    ("DELETE", "/api/coding/runtime"): ADMIN,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
     ("POST", "/api/skill-lab/task-assets"): MEMBER,

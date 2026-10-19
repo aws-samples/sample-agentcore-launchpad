@@ -40,6 +40,7 @@ GATEWAY_ROLE_BASE = "launchpad-gateway-role"
 KB_ROLE_BASE = "launchpad-kb-role"
 CODEBUILD_ROLE_BASE = "launchpad-codebuild-role"
 SKILL_LAB_ROLE_BASE = "launchpad-skill-lab-worker"
+CODING_RUNTIME_ROLE_BASE = "launchpad-coding-runtime"
 
 
 def regional_role_name(base_name: str, region: str) -> str:
@@ -339,6 +340,92 @@ def skill_lab_worker_role_policy(
                 "Action": ["s3:ListBucket"],
                 "Resource": bucket_arn,
                 "Condition": {"StringLike": {"s3:prefix": f"{s3_prefix}*"}},
+            },
+        ],
+    }
+
+
+def coding_runtime_bedrock_resources(
+    account_id: str, region: str, models: list[str]
+) -> list[str]:
+    """The Bedrock resources the coding runtime may invoke: each allowed model
+    (its inference profile + the foundation model it fronts, the same shapes a
+    per-agent role gets) plus the account's default Bedrock **project** —
+    bedrock-runtime's OpenAI-compatible ``/openai/v1`` endpoint, which codex's
+    ``amazon-bedrock-runtime`` provider calls, authorizes ``bedrock:InvokeModel``
+    against ``project/default`` as well (401 without it; live 2026-10-19)."""
+    # Lazy: this module stays a pure leaf the CDK mirror can read; agent_iam
+    # pulls in the ledger models.
+    from app.services.agent_iam import RoleContext, model_resources
+
+    ctx = RoleContext(account_id=account_id, region=region, artifacts_bucket="",
+                      ecr_repo_arn="")
+    resources: list[str] = []
+    for model in models:
+        if not model:
+            continue  # model_resources("") is "*": never widen on an empty entry
+        for arn in model_resources(model, ctx):
+            if arn not in resources:
+                resources.append(arn)
+    resources.append(f"arn:aws:bedrock:{region}:{account_id}:project/default")
+    return resources
+
+
+def coding_runtime_role_policy(
+    account_id: str, region: str, ecr_repo_arn: str, models: list[str]
+) -> dict[str, Any]:
+    """Execution role of the platform coding runtime (app/coding).
+
+    Deliberately the narrowest role on the platform: every shell the coding
+    agent runs in the microVM can read these credentials through IMDS, so the
+    role holds only what the container itself needs — pull its image, write its
+    own log group, invoke the allowed coding models. **No S3** (snapshots and
+    exports move through presigned URLs the backend mints), no Mantle, no
+    AgentCore data plane, no wildcard model grant.
+    """
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "EcrAuth",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*",  # UNSCOPABLE: the token call takes no resource
+            },
+            {
+                "Sid": "EcrPull",
+                "Effect": "Allow",
+                "Action": [
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchCheckLayerAvailability",
+                ],
+                "Resource": ecr_repo_arn,
+            },
+            {
+                "Sid": "Logs",
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogStreams",
+                ],
+                "Resource": [
+                    f"arn:aws:logs:{region}:{account_id}:log-group:"
+                    "/aws/bedrock-agentcore/runtimes/*",
+                    f"arn:aws:logs:{region}:{account_id}:log-group:"
+                    "/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+                ],
+            },
+            {
+                "Sid": "CodingModels",
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
+                "Resource": coding_runtime_bedrock_resources(account_id, region, models),
             },
         ],
     }

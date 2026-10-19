@@ -1,0 +1,17 @@
+# CODEX_HOME template for the Launchpad coding runtime (copied into every project's
+# CODEX_HOME on each microVM boot). Region-free: the server passes
+#   -c model_providers.amazon-bedrock-runtime.aws.region="$AWS_REGION"
+#   -c sqlite_home="/var/lib/coding-state"
+# when it spawns `codex app-server`. Models go through the built-in
+# amazon-bedrock-runtime provider (bedrock-runtime /openai/v1, SigV4 with the
+# runtime role) — never Mantle. The Dockerfile appends the Agent Toolkit for AWS
+# marketplace + plugin entries below at build time.
+model = "global.openai.gpt-6-sol"
+model_provider = "amazon-bedrock-runtime"
+model_reasoning_effort = "medium"
+model_reasoning_summary = "auto"
+model_context_window = 1000000
+model_auto_compact_token_limit = 750000
+web_search = "disabled"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"

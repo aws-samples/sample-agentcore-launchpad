@@ -122,6 +122,10 @@ def _seed_every_kind() -> dict[str, str]:
         Job(id="job-purge", workspace_id="default", type="purge_assistant_conversation",
             status="queued"),
         Job(id="job-unknown", workspace_id="default", type="delete_agent", status="queued"),
+        Job(id="job-coding", workspace_id="default", type="coding_runtime_install",
+            status="running"),
+        Job(id="job-coding-done", workspace_id="default", type="coding_runtime_uninstall",
+            status="succeeded"),
         Job(id="job-done", workspace_id="default", type="deploy_agent", status="succeeded"),
         Job(id="job-unknown-done", workspace_id="default", type="delete_agent", status="failed"),
         _asset_op("op-run", "running"),
@@ -157,7 +161,8 @@ def _seed_every_kind() -> dict[str, str]:
     )
     return {
         "job-deploy": RESUMES, "job-boot": RESUMES, "job-uninst": RESUMES,
-        "job-purge": RESUMES, "job-unknown": UNHANDLED, "op-run": RESUMES,
+        "job-purge": RESUMES, "job-unknown": UNHANDLED, "job-coding": FAILS_INTERRUPTED,
+        "op-run": RESUMES,
         "run-batch": RECONCILES, "run-nobatch": FAILS_INTERRUPTED,
         "run-invoking": FAILS_INTERRUPTED, "exp-act": CLEARED_RETRY,
         "can-act": CLEARED_RETRY, "sl-train": FAILS_INTERRUPTED,
@@ -187,6 +192,7 @@ def test_every_kind_lists_once_with_its_outcome_and_terminal_rows_are_absent():
     assert got == expected
     by_id = {i.id: i for i in items}
     assert by_id["job-unknown"].handled_by is None
+    assert by_id["job-coding"].handled_by == "sweep_coding_runtime_jobs"
     assert by_id["conv-turn"].age_seconds == pytest.approx(300)
     assert by_id["conv-turn"].status == "turn 3"
     assert "resumable on request" in by_id["sl-train"].label

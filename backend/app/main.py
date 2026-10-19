@@ -12,6 +12,8 @@ import app.deployer.harness  # noqa: F401 — registers the harness deploy metho
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
 from app.assistant.evaluation_assets import resume_operations as resume_evaluation_assets
 from app.assistant.service import clear_stale_turn_claims
+from app.coding.install import sweep_interrupted_jobs as sweep_coding_runtime_jobs
+from app.coding.routers import router as coding_router
 from app.core.config import get_settings
 from app.core.db import SessionLocal, init_db
 from app.core.errors import register_error_handlers
@@ -222,6 +224,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(online_eval_router)
     app.include_router(eval_pipelines_router)  # V2 数据处理: sessions → datasets
     app.include_router(skill_lab_router)
+    app.include_router(coding_router)  # coding agent: platform coding runtime
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
@@ -265,6 +268,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         # skill-lab jobs are child subprocesses — a restart killed them; fail
         # the rows honestly (resume_pending_jobs cannot see this table)
         sweep_skill_lab_jobs()
+        # coding-runtime install/uninstall jobs run on a thread a restart killed;
+        # fail them honestly (each step is idempotent: the admin re-runs it)
+        sweep_coding_runtime_jobs()
         stale_canaries = clear_stale_canary_actions()
         if stale_canaries:
             logging.getLogger("launchpad").info(

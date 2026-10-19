@@ -48,11 +48,12 @@ SOURCE_TOOLS = "tools"
 SOURCE_STUDIO = "studio"
 SOURCE_GOVERNANCE = "governance"
 SOURCE_MODELS_PROBE = "models_probe"
+SOURCE_CODING = "coding"  # coding-agent turns (app/coding)
 SOURCES = (
     SOURCE_CHAT, SOURCE_V1, SOURCE_INVOKE, SOURCE_ARCHITECT, SOURCE_EVAL,
     SOURCE_EXPERIMENT, SOURCE_CANARY, SOURCE_SKILL_LAB, SOURCE_OBSERVABILITY,
     SOURCE_CODEGEN, SOURCE_KNOWLEDGE, SOURCE_TOOLS, SOURCE_STUDIO, SOURCE_GOVERNANCE,
-    SOURCE_MODELS_PROBE,
+    SOURCE_MODELS_PROBE, SOURCE_CODING,
 )
 
 
@@ -239,6 +240,9 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", "/api/eval/online/{config_id}/resume"): Billable(SOURCE_EVAL),
     ("DELETE", "/api/eval/online/{config_id}"): FREE,
     ("POST", "/api/eval/online/{config_id}/reports"): Billable(SOURCE_EVAL),
+    # ---- coding agent: installing the runtime is control plane (build + deploy) ----
+    ("POST", "/api/coding/runtime/install"): FREE,
+    ("DELETE", "/api/coding/runtime"): FREE,
     # ---- Skill Lab: a job (and its resume) runs rollouts and judges ----
     ("POST", "/api/skill-lab/task-assets"): FREE,
     ("POST", "/api/skill-lab/tasksets"): FREE,

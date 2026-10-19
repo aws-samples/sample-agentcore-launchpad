@@ -1185,3 +1185,47 @@ def invoke_a2a_text(
         "text": a2a_result_text(result if isinstance(result, dict) else {}),
         "session_id": session_id,
     }
+
+
+class RuntimeJsonError(RuntimeError):
+    """A JSON invoke got an answer that is not a JSON document."""
+
+
+def invoke_runtime_json(
+    ctx: Any,
+    runtime_arn: str,
+    session_id: str,
+    payload: dict[str, Any],
+    *,
+    read_timeout: float | None = None,
+    client: Any = None,
+) -> Any:
+    """InvokeAgentRuntime with a caller-defined JSON body; returns the decoded JSON.
+
+    For platform-owned runtimes that speak their own action protocol rather than
+    the agent ``{prompt, actor_id}`` contract (the coding runtime: ``{action, …}``
+    in, ``{ok, result | error}`` out). Unlike ``invoke_runtime_text`` nothing is
+    interpreted here — the protocol belongs to the caller. ``ctx`` is the
+    workspace the runtime lives in; ``read_timeout`` overrides the data client's
+    default (``agentcore_read_timeout_s``) for a call known to be short or long;
+    ``client`` is injectable for tests. AWS errors (throttling, a runtime that is
+    not READY, ``RuntimeClientError``) propagate unchanged.
+    """
+    if client is None:
+        from app.services.agentcore.client import data_client
+
+        client = data_client(ctx, read_timeout=read_timeout)
+    response = client.invoke_agent_runtime(
+        agentRuntimeArn=runtime_arn,
+        runtimeSessionId=session_id,
+        contentType="application/json",
+        accept="application/json",
+        # UTF-8, not \u-escaped: a 2 MB file save must not double on the wire
+        payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    )
+    raw = response["response"].read()
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        preview = raw[:200].decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)[:200]
+        raise RuntimeJsonError(f"runtime answered a non-JSON body: {preview!r}") from exc

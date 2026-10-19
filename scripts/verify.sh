@@ -21,6 +21,14 @@ if [ -d "$ROOT/backend" ]; then
   # temp SQLite file before any app import. Kept out of addopts so a single
   # `uv run pytest tests/foo.py::bar` stays serial.
   (cd "$ROOT/backend" && uv run pytest -q -n auto); result $? "pytest"
+
+  if [ -d "$ROOT/backend/app/coding/image/test" ]; then
+    section "coding runtime · node --test"
+    # The zero-dependency Node server of the coding runtime image, driven by a fake
+    # `codex app-server` (no AWS, no codex binary). Node expands the quoted glob.
+    (cd "$ROOT/backend/app/coding/image" && node --test --test-timeout=120000 'test/*.test.mjs' </dev/null)
+    result $? "coding runtime node tests"
+  fi
 fi
 
 if [ -d "$ROOT/infra" ]; then

@@ -80,6 +80,7 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "resume_interrupted_runs": (EVAL_RUN,),
     "clear_stale_running_actions": (EXPERIMENT_ACTION,),
     "sweep_skill_lab_jobs": (SKILL_LAB_JOB,),
+    "sweep_coding_runtime_jobs": (JOB,),
     "clear_stale_canary_actions": (CANARY_ACTION,),
     "reconcile_policy_changes": (POLICY_CHANGE,),
     "local_exec.reap_orphan_containers":
@@ -107,6 +108,14 @@ _JOB_ACTIVE = ("queued", "running")
 _ASSET_OP_ACTIVE = ("queued", "running")  # resume_operations
 _SKILL_LAB_ACTIVE = ("queued", "running")  # sweep_interrupted_jobs
 _POLICY_ACTIVE = ("pending", "running")  # reconcile_policy_changes
+
+
+def failed_at_startup_job_types() -> dict[str, str]:
+    """`Job.type` values a startup hook fails as interrupted (not resumed), with
+    the hook that does it."""
+    from app.coding import install as coding_install
+
+    return {t: "sweep_coding_runtime_jobs" for t in coding_install.JOB_TYPES}
 
 
 def resumable_job_types() -> frozenset[str]:
@@ -212,11 +221,16 @@ def collect_inflight(
                                   handled_by))
 
     resumable = resumable_job_types()
+    failed_at_startup = failed_at_startup_job_types()
     for r in reader.rows(Job, ["id", "workspace_id", "type", "status", "updated_at"],
                          lambda m: m.status.in_(_JOB_ACTIVE)):
         if r.type in resumable:
             add(JOB, r.id, r.workspace_id, r.status, r.type, r.updated_at, RESUMES,
                 "resume_pending_jobs")
+        elif r.type in failed_at_startup:
+            add(JOB, r.id, r.workspace_id, r.status,
+                f"{r.type} — its thread dies; failed, the admin runs it again",
+                r.updated_at, FAILS_INTERRUPTED, failed_at_startup[r.type])
         else:
             add(JOB, r.id, r.workspace_id, r.status,
                 f"{r.type} — no resume starter: the row stays {r.status} forever",

@@ -24,10 +24,12 @@ def control_client(ctx: WorkspaceContext) -> Any:
     return ctx.client("bedrock-agentcore-control")
 
 
-def data_client(ctx: WorkspaceContext) -> Any:
+def data_client(ctx: WorkspaceContext, read_timeout: float | None = None) -> Any:
     # Called on every invoke/chat turn — cache_token keeps it on the factory's
-    # cached path despite the per-settings Config.
-    timeout = get_settings().agentcore_read_timeout_s
+    # cached path despite the per-settings Config. `read_timeout` overrides the
+    # setting for callers with a known-shorter or -longer call (one cached client
+    # per distinct value).
+    timeout = read_timeout or get_settings().agentcore_read_timeout_s
     return ctx.client(
         "bedrock-agentcore",
         cache_token=f"read_timeout={timeout}",
