@@ -44,9 +44,16 @@ from app.services.agentcore import runtime as rt  # noqa: E402
 from app.services.agentcore.client import data_client  # noqa: E402
 from app.services.workspace import WorkspaceContext, default_workspace_context  # noqa: E402
 
+# The command takes ~6 s so its output provably streams while it runs. Agent text
+# deltas are best-effort for a reader: the runtime compacts a finished turn's deltas
+# away (the item/completed record carries the full text), so a short reply can
+# arrive as item/completed only — the smoke checks the command output stream instead.
 PROMPT = (
-    "Create a file hello.py that prints 'hello from the coding runtime', run it with "
-    "python3, then commit it with git. Reply with the program's output only."
+    "Do these steps in order and actually run every command (do not guess output): "
+    "1) run `for i in 1 2 3; do echo tick$i; sleep 2; done` in the shell; "
+    "2) create a file hello.py that prints 'hello from the coding runtime'; "
+    "3) run it with python3; 4) commit it with git. "
+    "Then reply with two sentences describing what you did."
 )
 TURN_TIMEOUT_S = 15 * 60
 
@@ -161,9 +168,10 @@ def main() -> int:
         log(f"turn {started['turn_id']} on thread {started['thread_id']}")
         counts = follow_turn(ws, session, started["seq"], started["turn_id"])
         log(f"event counts: {json.dumps(counts, sort_keys=True)}")
-        check(counts.get("item/agentMessage/delta", 0) > 0, "agent text streamed as deltas")
-        check(counts.get("item/commandExecution/outputDelta", 0) > 0 or
-              counts.get("item/started", 0) > 0, "command activity streamed")
+        check(counts.get("item/commandExecution/outputDelta", 0) > 0,
+              "command output streamed live while the command ran")
+        log(f"agent text deltas seen: {counts.get('item/agentMessage/delta', 0)} "
+            "(best-effort; compaction may fold them into item/completed)")
         check(counts.get("launchpad/turnUsage", 0) == 1, "turn completed with usage")
         hello = act(ws, session, "read_file", path="hello.py")
         check(bool(hello.get("exists")), "the agent wrote hello.py")
