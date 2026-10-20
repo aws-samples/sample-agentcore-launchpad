@@ -17,7 +17,14 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest
-from app.services import agent_access, budgets, memory_ownership, oauth_sessions, policy_identity
+from app.services import (
+    agent_access,
+    budgets,
+    context_layer_gateway,
+    memory_ownership,
+    oauth_sessions,
+    policy_identity,
+)
 from app.services import feedback as feedback_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
@@ -201,12 +208,20 @@ def chat(
     # A COA context layer acts as the signed-in member, so the turn names them — on
     # a Harness too, whose COA token the backend fetches for exactly this username.
     names_user = needs_gateway_identity or context_layer_support.attached(agent.spec)
+    # Gateway mode: the managed COA gateway's consent preflight presents this very JWT
+    # (policy_identity's cache), and a consent completes only with it (F8), so it is
+    # taken with the margin the gate asks for: one token for the preflight and the turn.
+    coa_gateway = context_layer_support.uses_gateway(agent.spec)
     gateway_access_token = (
         policy_identity.gateway_user_token(
             ws.context,
             identity.username,
             identity.role,
             identity.email,
+            **(
+                {"min_valid_s": context_layer_gateway.CONSENT_JWT_MIN_VALID_S}
+                if coa_gateway else {}
+            ),
         )
         if needs_gateway_identity
         else None
@@ -255,6 +270,10 @@ def chat(
             stream_kwargs["attachments"] = prepared
         if names_user:
             stream_kwargs["runtime_user_id"] = identity.username
+        if coa_gateway:
+            # the gate mints the member's pool JWT for the role they signed in with
+            stream_kwargs["user_role"] = identity.role
+            stream_kwargs["user_email"] = identity.email
         if gateway_access_token:
             stream_kwargs["gateway_access_token"] = gateway_access_token
         if bearer_token:

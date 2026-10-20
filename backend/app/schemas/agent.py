@@ -239,6 +239,13 @@ class ContextLayerRef(BaseModel):
         pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
     )
     namespace_name: str = Field(default="", max_length=256)
+    # How the agent reaches COA: "direct" (the default) or "gateway", the workspace's
+    # managed COA gateway with the member's pool JWT (services/context_layer_gateway).
+    # Serialized only when "gateway", so every direct spec stored before or after this
+    # field existed — and everything derived from it — stays byte-identical.
+    via: Literal["direct", "gateway"] = Field(
+        default="direct", exclude_if=lambda v: v == context_layer_support.VIA_DIRECT
+    )
 
 
 class MemoryConfig(BaseModel):

@@ -1831,18 +1831,25 @@ Agent 能看到什么由 COA 的逐用户授权决定。
 - **令牌**（`services/context_layer_tokens.py`）：成员的 COA 令牌只来自令牌库，经由控制台
   工作负载身份获取，只存在于进程内存和发往 COA 的请求中——即
   [identity.md](identity.md) §7.7 记录的托管例外。
-- **Agent**（`AgentSpec.context_layer = {namespace_id, namespace_name}`；纯函数在
-  `templates/context_layer_support.py`）：
+- **Agent**（`AgentSpec.context_layer = {namespace_id, namespace_name, via?}`；纯函数在
+  `templates/context_layer_support.py`）。`via` 为直连（默认值，从不存储）或 `"gateway"`
+  （见下文的托管 COA 网关）：
   - *Harness*：部署时只追加一段提示词（命名空间 id 与工具指引），不部署 COA 工具。每轮控制台
     对话（`services/invoke.harness_turn_overrides`）重新读取已部署的工具，追加一个指向 COA
     MCP 运行时、携带成员 bearer 的 `remote_mcp` 服务 `coa`，并在 `allowedTools` 中加入
     `@coa`。尚未授权时，该轮就是一个 `auth_required` 事件，InvokeHarness 不会执行。
+  - *经 Gateway 的 Harness*：部署时把托管网关挂载为 `launchpad_coa_gw`（与其他信任工作区用户的
+    网关一样使用 M2M 出站认证），选中 `@launchpad_coa_gw`，并在提示词中把工具称为
+    `launchpad_coa_gw_coa___<tool>`。每轮控制台对话先过网关的授权关，再把该挂载替换为携带成员
+    用户池 JWT 的 `remote_mcp` 服务。无法替换的一轮对话直接拒绝
+    （`context_layer.gateway_unavailable`）。COA 工具出现在 `GetHarness` 中，代码视图也会列出。
   - *Strands*（HTTP `zip_runtime`）：每个部署阶段都基于 `context_layer.deploy_spec` 构建，它把
     引用展开为该层 Connection 上的一个 `as_user` MCP 工具并追加提示词——模板、执行角色、
     环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。烘焙进代码的这个工具带
     `gates_turn` 标记：成员尚未授权时，生成的运行时只发出 `auth_required` 授权卡片并结束该轮，
     不调用模型——与 Harness 的结果一致。其他 `as_user` MCP 服务在授权前只是本轮不可用，模型照常
-    作答。已部署的运行时在下次部署后生效。
+    作答。已部署的运行时在下次部署后生效。Strands 尚未接入经 Gateway 模式：其 generate 阶段会拒绝
+    （`context_layer.gateway_unsupported_method`）。
   - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
     的控制台用户。
 - **模块**（`routers/context_layer.py`，页面 `frontend/src/v2/pages/ContextLayer.tsx` 与
@@ -1892,7 +1899,8 @@ Agent 能看到什么由 COA 的逐用户授权决定。
   - 密码只存在于 SSM、后端内存（最多 300 秒，轮换后的密码 5 分钟内生效）、查看接口的响应，以及
     面板打开期间成员的浏览器中。`/<prefix>/launchpad/` 范围限制保证查看接口无法读取其他密钥。
 - **托管 COA 网关**（`services/context_layer_gateway.py`，经 Gateway 接入）：按 Agent 选择启用
-  （`context_layer.via = "gateway"`，由后续工作接入），默认仍为直连。管理员在概览页的网关卡片上为每个
+  （`context_layer.via = "gateway"`，即向导中的“接入方式”，仅在网关启用时可选；目前只支持
+  Harness），默认仍为直连。管理员在概览页的网关卡片上为每个
   工作区启用一个网关 `launchpad-coa-gw`，它与 `launchpad-gw` 相互独立，后者从不被修改。
   - `PUT /api/context-layer/gateway` 幂等且可续做。它先以管理员的控制台 COA 令牌读取 COA 的
     `tools/list`：未授权时返回 409，不创建任何资源。然后确保网关存在（MCP `2025-11-25` +

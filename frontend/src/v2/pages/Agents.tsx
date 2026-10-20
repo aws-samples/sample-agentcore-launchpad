@@ -748,6 +748,14 @@ function AgentDetail({ id }: { id: string }) {
               { label: t("v2.contextLayer.wizard.namespace"), value: contextRef.namespace_name || "—" },
               { label: t("v2.contextLayer.namespaces.colId"), value: <span className="mono">{contextRef.namespace_id}</span> },
               {
+                label: t("v2.contextLayer.wizard.via"),
+                value: (
+                  <span data-testid="v2-agent-context-via">
+                    {t(contextRef.via === "gateway" ? "v2.contextLayer.wizard.viaGateway" : "v2.contextLayer.wizard.viaDirect")}
+                  </span>
+                ),
+              },
+              {
                 label: t("v2.contextLayer.title"),
                 value: <Link to="/v2/context-layer">{t("v2.contextLayer.wizard.module")}</Link>,
               },

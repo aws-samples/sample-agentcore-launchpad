@@ -1024,12 +1024,18 @@ member it was minted for. See [identity.md](identity.md) §7.7.
 Every non-GET route is `FREE` in the billing table, the playground included: COA's
 own spend is in COA's account and is not metered by Launchpad.
 
-`AgentSpec.context_layer` = `{namespace_id (UUID), namespace_name?}` attaches one
+`AgentSpec.context_layer` = `{namespace_id (UUID), namespace_name?, via?}` attaches one
 namespace to a `harness` or HTTP `zip_runtime` agent. Any other method, protocol
 `a2a`, `code`/`code_bundle`, or a tool named `coa` answers `422
 validation.invalid_request` with an error row of type
 `context_layer.unsupported_method`; a create or redeploy while no layer is
-connected answers `409 context_layer.not_connected`. A COA-attached agent on `/v1`
+connected answers `409 context_layer.not_connected`. `via` is `"direct"` (the
+default, never stored or echoed) or `"gateway"`: the agent reaches COA through the
+workspace's managed COA gateway as the asking member. A create or redeploy with
+`via: "gateway"` while the gateway is not enabled answers `409
+context_layer.gateway_unavailable` (the deploy's generate stage checks again). Gateway
+mode deploys on a Harness only for now: a `zip_runtime` agent with it fails its
+generate stage with `context_layer.gateway_unsupported_method`. A COA-attached agent on `/v1`
 answers `409 identity.as_user_requires_console` (an `error` event on the stream).
 `POST /api/agents/{id}/invoke` on a COA-attached agent whose caller has not
 consented yet answers `409 context_layer.authorization_required` (it has no consent
@@ -1044,7 +1050,9 @@ forces consent. Not 401, which would end the console session),
 from the caller), `context_layer.invalid_namespace` (422 — not a UUID),
 `context_layer.referenced`
 (409), `context_layer.unsupported_method` (422 — also an evaluation replay or a
-conversion of a COA-attached agent), `context_layer.not_found` (404 — no SSM
+conversion of a COA-attached agent), `context_layer.gateway_unavailable` (409 — a
+gateway-mode agent with no managed gateway to attach, a deployed configuration
+without it, or a gateway that could not be verified for the turn), `context_layer.not_found` (404 — no SSM
 parameters or stack), `context_layer.agent_oauth_disabled` (409),
 `context_layer.cross_account` (422), `context_layer.runtime_not_ready` (409),
 `context_layer.discovery_failed` (502), `context_layer.connection_mismatch` (422),

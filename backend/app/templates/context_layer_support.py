@@ -14,6 +14,13 @@ The two methods get there differently (``.trellis/spec/launchpad/context-layer.m
   ``as_user`` MCP tool named ``coa`` bound to the layer's Connection, so the
   generated identity client fetches the member's token itself.
 
+Gateway mode (``context_layer.via = "gateway"``, opt-in per agent) reaches COA
+through the workspace's managed COA gateway instead (``services/context_layer_gateway``).
+A Harness is deployed with that gateway attached as ``GATEWAY_ALIAS``; each console
+turn swaps it for a ``remote_mcp`` server carrying the member's pool JWT, whose tools
+the model sees as ``<alias>_coa___<tool>`` (spike F5), so the addendum names them
+with ``GATEWAY_TOOL_PREFIX``.
+
 Nothing here touches AWS or the ledger: the prompt text derives from the spec
 alone, so ``deployer/harness.build_create_params`` stays pure.
 """
@@ -46,6 +53,13 @@ SUPPORTED_METHODS = ("harness", "zip_runtime")
 # backend / runtime fetching the member's COA token; "gateway" is the workspace's
 # managed COA gateway (``services/context_layer_gateway``) with the member's pool JWT.
 VIA_GATEWAY = "gateway"
+VIA_DIRECT = "direct"
+# Gateway mode on a Harness: the managed gateway's tool alias (one constant for the
+# deploy, the per-turn swap and the prompt), its selector, and the names the model sees
+# after the user-JWT swap: ``<alias>_<target>___<tool>`` (the gateway's target is ``coa``).
+GATEWAY_ALIAS = "launchpad_coa_gw"
+GATEWAY_SELECTOR = f"@{GATEWAY_ALIAS}"
+GATEWAY_TOOL_PREFIX = f"{GATEWAY_ALIAS}_{TOOL_NAME}___"
 ADDENDUM_HEADING = "## Context layer (COA)"
 
 
@@ -76,9 +90,24 @@ def attached(spec: Mapping[str, Any] | None) -> bool:
 
 def uses_gateway(spec: Mapping[str, Any] | None) -> bool:
     """Whether the stored spec reaches the layer through the managed COA gateway
-    (``context_layer.via == "gateway"``). Raw-dict read, like ``attached``."""
+    (``context_layer.via == "gateway"``). Raw-dict read, like ``attached``: a direct
+    ref is stored without ``via`` (``schemas.agent.ContextLayerRef``)."""
     ref = namespace_ref(spec)
     return ref is not None and ref.get("via") == VIA_GATEWAY
+
+
+def via_gateway(spec: Mapping[str, Any] | Any) -> bool:
+    """``uses_gateway`` for an ``AgentSpec`` or its stored dict."""
+    if isinstance(spec, Mapping):
+        return uses_gateway(spec)
+    ref = getattr(spec, "context_layer", None)
+    return ref is not None and bool(ref.namespace_id) and ref.via == VIA_GATEWAY
+
+
+def harness_tool_prefix(spec: Mapping[str, Any] | Any) -> str:
+    """How a Harness's model names COA's tools: ``coa_`` (direct, the per-turn
+    ``remote_mcp`` server ``coa``) or ``launchpad_coa_gw_coa___`` (gateway mode)."""
+    return GATEWAY_TOOL_PREFIX if via_gateway(spec) else HARNESS_TOOL_PREFIX
 
 
 def prompt_addendum(namespace_id: str, namespace_name: str = "", *, tool_prefix: str = "") -> str:

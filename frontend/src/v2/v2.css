@@ -367,6 +367,7 @@ button.v2-attention-main:focus-visible { outline: 2px solid var(--v2-primary); o
 .v2-seg { display: inline-flex; background: var(--v2-fill-2); border-radius: 6px; padding: 2px; }
 .v2-seg button { border: 0; background: none; padding: 3px 12px; font-size: 13px; color: var(--v2-ink-2); border-radius: 4px; cursor: pointer; }
 .v2-seg button.on { background: #fff; color: var(--v2-primary); box-shadow: var(--v2-shadow); font-weight: 500; }
+.v2-seg button:disabled { color: var(--v2-ink-3); cursor: not-allowed; }
 
 /* ---------- table ---------- */
 .v2-table-wrap { overflow-x: auto; }

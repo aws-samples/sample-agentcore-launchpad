@@ -3399,6 +3399,9 @@ function contextNsPath(id: string, rest = ""): string {
 export interface ContextLayerRef {
   namespace_id: string;
   namespace_name?: string;
+  /** gateway mode: COA through the workspace's managed COA gateway. Absent ⇒ direct
+   *  (the backend never stores `"direct"`). */
+  via?: "direct" | "gateway";
 }
 
 export interface ConsentPortalInfo {

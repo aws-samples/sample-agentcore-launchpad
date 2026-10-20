@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.errors import AppError
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
@@ -44,6 +45,7 @@ from app.services.requirements_txt import (
 )
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.services.workspace import WorkspaceContext
+from app.templates import context_layer_support
 from app.templates.strands_agent import base_requirements, render_main_py
 
 
@@ -674,7 +676,22 @@ def _deploy_spec(spec: dict[str, Any], workspace: WorkspaceContext) -> AgentSpec
     return context_layer_service.deploy_spec(spec, workspace.id)
 
 
+def _refuse_gateway_mode(spec: dict[str, Any]) -> None:
+    """Gateway mode (``context_layer.via = "gateway"``) is Harness-only for now: the
+    generated Strands runtime cannot attach the managed COA gateway yet, and expanding
+    the ref as a direct ``as_user`` tool would deploy an agent in the wrong mode."""
+    if context_layer_support.uses_gateway(spec):
+        raise AppError(
+            "context_layer.gateway_unsupported_method",
+            "Strands agents cannot reach the COA context layer through the managed gateway "
+            "yet (support follows): switch this agent's access to direct, or use a Harness",
+            {"method": "zip_runtime"},
+            status_code=422,
+        )
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
+    _refuse_gateway_mode(agent.spec)
     spec = _deploy_spec(agent.spec, ctx.workspace)
     code, source = _generate_code(spec)
     ctx.scratch["code"] = code

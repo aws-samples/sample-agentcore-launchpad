@@ -44,6 +44,8 @@ def chat_stream(
     bearer_token: str | None = None,
     console_user: bool = True,
     meter: "UsageMeter | None" = None,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -60,12 +62,16 @@ def chat_stream(
     ``meter`` (services/usage_meter.py) receives the turn's in-band usage and is
     settled exactly once when the stream ends — completed, failed, or closed by the
     client — so the payer is charged for what the turn consumed.
+
+    ``user_role`` / ``user_email`` are the signed-in member's, for a Harness whose
+    context layer runs in gateway mode (``invoke.harness_turn_overrides``).
     """
     session_id = session_id or new_session_id()
+    member = {"user_role": user_role, "user_email": user_email}
     if meter is None:
         yield from _chat_events(
             agent, prompt, session_id, actor_id, runtime_user_id, gateway_access_token,
-            workspace, attachments, bearer_token, console_user, None,
+            workspace, attachments, bearer_token, console_user, None, **member,
         )
         return
     meter.session_id = session_id
@@ -73,7 +79,7 @@ def chat_stream(
     try:
         for event in _chat_events(
             agent, prompt, session_id, actor_id, runtime_user_id, gateway_access_token,
-            workspace, attachments, bearer_token, console_user, meter,
+            workspace, attachments, bearer_token, console_user, meter, **member,
         ):
             if event["event"] == "done":
                 failed[0] = False
@@ -94,6 +100,9 @@ def _chat_events(
     bearer_token: str | None,
     console_user: bool,
     meter: "UsageMeter | None",
+    *,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     workspace = workspace if workspace is not None else context_for_workspace(
         agent.workspace_id
@@ -129,6 +138,8 @@ def _chat_events(
                 gateway_access_token=gateway_access_token,
                 on_usage=meter.on_usage if meter is not None else None,
                 console_user=console_user,
+                user_role=user_role,
+                user_email=user_email,
             )
         else:
             invoke_kwargs: dict[str, Any] = {}
@@ -175,6 +186,8 @@ def _harness_events(
     gateway_access_token: str | None = None,
     on_usage: Any = None,
     console_user: bool = True,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     params: dict[str, Any] = {
         "harnessArn": agent.arn,
@@ -187,9 +200,11 @@ def _harness_events(
     overrides = harness_turn_overrides(
         agent, workspace, gateway_access_token=gateway_access_token,
         runtime_user_id=runtime_user_id, console_user=console_user, session_id=session_id,
+        user_role=user_role, user_email=user_email,
     )
     if "auth_required" in overrides:
-        # COA consent first: the card is the whole turn, InvokeHarness never runs
+        # COA consent first (direct, or the managed gateway's preflight): the card is
+        # the whole turn, InvokeHarness never runs
         yield {"event": "auth_required", "data": overrides["auth_required"]}
         return
     params.update(overrides)

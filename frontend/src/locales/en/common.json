@@ -9586,7 +9586,14 @@
         "remove": "Remove",
         "module": "Open the Context layer page",
         "noteHarness": "Each chat turn carries the asking member's COA token. Without their authorization, Chat shows a consent card first. The public /v1 API cannot call this agent.",
-        "noteStrands": "The agent fetches each member's COA token itself. Each member authorizes it once in Chat. The public /v1 API cannot call this agent."
+        "noteStrands": "The agent fetches each member's COA token itself. Each member authorizes it once in Chat. The public /v1 API cannot call this agent.",
+        "via": "Access",
+        "viaDirect": "Direct",
+        "viaGateway": "Via gateway",
+        "viaHint": "Direct is the default. Via gateway reaches COA through the workspace's managed COA gateway.",
+        "viaGatewayDisabled": "Via gateway needs the managed COA gateway, which an administrator enables on the Context layer page.",
+        "noteGateway": "Each chat turn reaches COA through the managed COA gateway, as the asking member. Without their authorization, Chat shows a consent card first. The COA tools show in the agent's deployed configuration. A consent given through the gateway cannot be revoked on the platform. The public /v1 API cannot call this agent.",
+        "gatewayStrandsPending": "Strands agents cannot use the gateway yet: the deploy is refused until support lands. Choose direct, or use a Harness."
       },
       "openInCoa": "Open in COA",
       "errors": {

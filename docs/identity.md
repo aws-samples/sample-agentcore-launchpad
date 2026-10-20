@@ -666,6 +666,34 @@ it are in task `10-20-context-layer-gateway-spike` (`research/findings.md`, F1�
   - No signed-in console user (`/v1`, evaluation) or the console sign-in off (no pool
     JWT) ⇒ `identity.as_user_requires_console`, as in direct mode. No COA token is
     fetched by the backend for a gateway-mode agent.
+- **Harness wiring** (task `10-20-gw-harness`). The wizard's 接入方式 picks direct or
+  经 Gateway; the second is offered only while the gateway is enabled.
+  - *Spec.* `context_layer.via = "gateway"` is stored only in gateway mode. A direct ref
+    has no `via` key, so every direct spec and deploy request is byte-identical to
+    before. A create or redeploy without an enabled gateway answers `409
+    context_layer.gateway_unavailable`, and so does the deploy's generate stage.
+  - *Deploy.* No per-turn COA tool. The managed gateway is the first gateway
+    attachment, alias `launchpad_coa_gw`, with the outbound auth that
+    `registry_console._gateway_auth` maps for a user-trusting gateway: the workspace
+    M2M provider, `CLIENT_CREDENTIALS`, scope `launchpad-gw/invoke`. `allowedTools`
+    gets `@launchpad_coa_gw`, also under an explicit list. The prompt addendum names
+    the tools as the model sees them after the swap,
+    `launchpad_coa_gw_coa___<tool>`. The per-agent role gets the workload-token
+    grant, as a Registry-attached gateway does. `GetHarness` (the code view) shows the
+    attachment.
+  - *Turn.* `invoke.harness_turn_overrides` runs `gateway_turn_auth` first. The Chat
+    route mints the member's pool JWT with the gate's margin and passes the member's
+    role, so the preflight and the turn carry one cached token. After consent, the
+    turn re-reads `GetHarness` and the gateway (it must still trust the workspace
+    pool), and swaps the attachment for a `remote_mcp` server named
+    `launchpad_coa_gw` that carries `Authorization: Bearer <member JWT>`
+    (`harness_user_overrides`).
+  - *Fail closed.* The turn never goes to the gateway with the M2M identity. A deployed
+    configuration without the attachment, or a gateway that cannot be verified,
+    answers `context_layer.gateway_unavailable`. Canaries skip COA agents in both
+    modes.
+  - Strands (`zip_runtime`) in gateway mode fails its generate stage with
+    `context_layer.gateway_unsupported_method` until its runtime support lands.
 - **Vault slot and revocation.** A member's consent through the gateway is keyed by
   the gateway's workload identity and the member's JWT subject. Its grant row is
   `user_grants.agent_id = "gw:<gateway_id>"` (30 characters: the column is 32). The

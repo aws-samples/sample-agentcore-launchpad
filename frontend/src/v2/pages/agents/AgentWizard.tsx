@@ -16,6 +16,7 @@ import {
   buildAgentSpec,
   byocIssues,
   contextLayerValid,
+  contextLayerVia,
   defaultModelForMethod,
   emptyAgentForm,
   entrypointAfterUpload,
@@ -29,6 +30,7 @@ import {
   type StoredAgentExtras,
   sourceForMethod,
   sourceOnMethodSwitch,
+  withContextVia,
 } from "../../../lib/agent-spec";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage } from "../../../lib/api";
 import { adoptModelDefault, STATIC_MODEL_DEFAULTS, useModelDefaultsArrival } from "../../../lib/model-defaults";
@@ -87,11 +89,12 @@ function initialDraft(params: URLSearchParams): Draft {
 }
 
 /** An existing agent loaded for a re-publish: straight to the configure step. A
- *  `context_ns` prefill (Context Layer "attach") replaces its stored namespace. */
+ *  `context_ns` prefill (Context Layer "attach") replaces its stored namespace and
+ *  keeps its access mode. */
 function editDraft(agent: AgentInfo, params: URLSearchParams): Draft {
   const { form, extras } = formFromStoredSpec(agent.method as AgentMethod, agent.name, agent.spec);
   const context = contextPrefill(params);
-  if (context) form.contextLayer = context;
+  if (context) form.contextLayer = withContextVia(context, contextLayerVia(form.contextLayer));
   return { form, step: 1, extras };
 }
 

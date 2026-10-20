@@ -524,7 +524,8 @@ export function Segmented<T extends string>({
   ariaLabel,
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  /** `disabled` options cannot be picked (`title` says why); `testId` per option. */
+  options: { value: T; label: string; disabled?: boolean; title?: string; testId?: string }[];
   onChange: (value: T) => void;
   ariaLabel?: string;
 }) {
@@ -537,6 +538,9 @@ export function Segmented<T extends string>({
           role="radio"
           aria-checked={o.value === value}
           className={o.value === value ? "on" : ""}
+          disabled={o.disabled}
+          title={o.title}
+          data-testid={o.testId}
           onClick={() => onChange(o.value)}
         >
           {o.label}

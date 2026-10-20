@@ -5,6 +5,7 @@ import {
   byocEnv,
   byocModelList,
   contextLayerSupported,
+  contextLayerVia,
   hasByoMounts,
   pythonLabel,
   resolveKb,
@@ -136,7 +137,14 @@ export function WizardReview({
           label: t("v2.contextLayer.wizard.title"),
           value: (
             <span data-testid="v2-agent-review-context">
-              {form.contextLayer.namespaceName || none} · {mono(form.contextLayer.namespaceId)}
+              {form.contextLayer.namespaceName || none} · {mono(form.contextLayer.namespaceId)} ·{" "}
+              <span data-testid="v2-agent-review-context-via">
+                {t(
+                  contextLayerVia(form.contextLayer) === "gateway"
+                    ? "v2.contextLayer.wizard.viaGateway"
+                    : "v2.contextLayer.wizard.viaDirect",
+                )}
+              </span>
             </span>
           ),
         }]

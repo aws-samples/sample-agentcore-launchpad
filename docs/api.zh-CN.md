@@ -655,11 +655,15 @@ Skill Lab 评估与任务生成作业只在启动前检查。当作业的估算�
 所有非 GET 路由在计费表中都是 `FREE`，Playground 也一样：COA 自身的开销记在 COA 的账号上，
 不由 Launchpad 计量。
 
-`AgentSpec.context_layer` = `{namespace_id（UUID）, namespace_name?}`，为 `harness` 或
+`AgentSpec.context_layer` = `{namespace_id（UUID）, namespace_name?, via?}`，为 `harness` 或
 HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议、`code`/`code_bundle`，或
 名为 `coa` 的工具，都会返回 `422 validation.invalid_request`，错误行类型为
 `context_layer.unsupported_method`；未连接上下文层时创建或重新发布返回
-`409 context_layer.not_connected`。挂载了 COA 的 Agent 在 `/v1` 上返回
+`409 context_layer.not_connected`。`via` 为 `"direct"`（默认值，从不存储或回显）或
+`"gateway"`：Agent 经工作区的托管 COA 网关、以提问成员的身份访问 COA。网关未启用时，以
+`via: "gateway"` 创建或重新发布返回 `409 context_layer.gateway_unavailable`（部署的
+generate 阶段会再检查一次）。目前只有 Harness 支持经 Gateway 部署：`zip_runtime` Agent
+使用它时，generate 阶段以 `context_layer.gateway_unsupported_method` 失败。挂载了 COA 的 Agent 在 `/v1` 上返回
 `409 identity.as_user_requires_console`（流式调用为一个 `error` 事件）。
 调用者尚未授权时，对挂载了 COA 的 Agent 调用 `POST /api/agents/{id}/invoke` 返回
 `409 context_layer.authorization_required`（该接口没有授权卡片）；Chat 则显示
@@ -672,7 +676,8 @@ HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议�
 `context_layer.coa_not_found`（404——COA 中没有该命名空间或条目，或不向调用者开放）、
 `context_layer.invalid_namespace`（422——不是 UUID）、
 `context_layer.referenced`（409）、`context_layer.unsupported_method`（422——也用于对挂载
-COA 的 Agent 做评估回放或转换）、`context_layer.not_found`（404——SSM 参数或栈不存在）、
+COA 的 Agent 做评估回放或转换）、`context_layer.gateway_unavailable`（409——经 Gateway 接入的
+Agent 没有可挂载的托管网关、已部署配置中没有它，或本轮无法校验该网关）、`context_layer.not_found`（404——SSM 参数或栈不存在）、
 `context_layer.agent_oauth_disabled`（409）、`context_layer.cross_account`（422）、
 `context_layer.runtime_not_ready`（409）、`context_layer.discovery_failed`（502）、
 `context_layer.connection_mismatch`（422）、`context_layer.connection_not_found`（404）、

@@ -36,6 +36,7 @@ from app.schemas.agent import (
     byoc_model_target,
 )
 from app.services.workspace import WorkspaceContext
+from app.templates import context_layer_support
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +298,11 @@ def _uses_gateway(spec: AgentSpec) -> bool:
     """
     if spec.knowledge_bases:
         return True  # harness KBs ride the shared KB gateway
+    if spec.method == "harness" and context_layer_support.via_gateway(spec):
+        # the managed COA gateway is deployed as an M2M gateway attachment, as a
+        # Registry-attached user-trusting gateway is (each console turn swaps in the
+        # member's JWT, but the deployed configuration stays one the role can run)
+        return True
     for tool in spec.tools:
         if tool.type == "gateway":
             return True

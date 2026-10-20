@@ -82,6 +82,7 @@ from app.services import (
     identity_providers,
     oauth_sessions,
     policy_identity,
+    registry_console,
     user_gateways,
 )
 from app.services.agentcore import policy as gateway_api
@@ -176,6 +177,63 @@ def not_enabled() -> AppError:
         "the managed COA gateway is not enabled in this workspace",
         status_code=409,
     )
+
+
+def gateway_unavailable(reason: str | None = None) -> AppError:
+    """A gateway-mode agent cannot be deployed (or a turn cannot reach COA) because the
+    managed gateway is not there to attach: refused by name, never deployed without it."""
+    return AppError(
+        "context_layer.gateway_unavailable",
+        reason
+        or "this agent reaches the COA context layer through the managed COA gateway, "
+        "which is not enabled in this workspace: an administrator enables it on the "
+        "Context Layer page, or switch the agent's access to direct",
+        status_code=409,
+    )
+
+
+# ── gateway mode: the Harness attachment ─────────────────────────────────────
+
+def harness_attachment(layer: ContextLayer, resources: dict[str, Any]) -> dict[str, Any] | None:
+    """The managed gateway as a Harness gateway attachment (the keys of
+    ``registry_console._gateway_attachment``), or None when it is not enabled.
+
+    Ledger identifiers + the workspace M2M provider only (no AWS call): the gateway
+    trusts the workspace pool's console and M2M clients, so it is deployed with the M2M
+    identity exactly as ``registry_console._gateway_auth`` maps a user-trusting gateway,
+    and ``services/invoke.harness_user_overrides`` swaps in the member's JWT each turn.
+    Its alias is ``context_layer_support.GATEWAY_ALIAS``, the prefix the prompt names."""
+    ref = context_layer.gateway_ref(layer)
+    provider = resources.get("oauth_provider_arn")
+    if ref is None or not ref.get("gateway_arn") or not provider:
+        return None
+    return {
+        "gateway_id": ref["gateway_id"],
+        "gateway_arn": ref["gateway_arn"],
+        "gateway_name": support.GATEWAY_ALIAS,
+        "attachable": True,
+        "attachability_reason": None,
+        "auth_type": "oauth",
+        "outbound_auth": {
+            "oauth": {
+                "providerArn": provider,
+                "grantType": "CLIENT_CREDENTIALS",
+                "scopes": [registry_console.GATEWAY_SCOPE],
+            }
+        },
+    }
+
+
+def require_harness_attachment(workspace: WorkspaceContext) -> dict[str, Any]:
+    """``harness_attachment`` for the workspace's layer, or 409
+    ``context_layer.gateway_unavailable`` (``context_layer.not_connected`` without a
+    layer)."""
+    attachment = harness_attachment(
+        context_layer.require_connected(workspace.id), workspace.resources
+    )
+    if attachment is None:
+        raise gateway_unavailable()
+    return attachment
 
 
 def _prerequisites(workspace: WorkspaceContext) -> dict[str, str]:

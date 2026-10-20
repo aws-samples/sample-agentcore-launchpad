@@ -259,13 +259,17 @@ def harness_user_overrides(
     Gateways; ``coa_tool`` (``context_layer_support.harness_tool``) adds the COA MCP
     server carrying the member's COA token, and ``@coa`` to the selectors. With a COA
     tool the deployed configuration is always read back, so the override REPLACES
-    nothing it should keep (KB gateway, registry MCP servers, inline functions)."""
+    nothing it should keep (KB gateway, registry MCP servers, inline functions). So it
+    is for a context layer in gateway mode, whose managed COA gateway is a deployed
+    attachment the spec does not name (and its selector is kept under an explicit
+    list)."""
     spec = agent.spec or {}
     explicit = spec.get("allowed_tools")
     configured: list[dict[str, Any]] | None = None
     detail: dict[str, Any] = {}
     has_gateways = any(tool.get("type") == "gateway" for tool in spec.get("tools") or [])
-    if coa_tool is not None or has_gateways or (
+    coa_gateway = context_layer_support.uses_gateway(spec)
+    if coa_tool is not None or coa_gateway or has_gateways or (
         explicit is not None and any(p.startswith("@") or "/" in p for p in explicit)
     ):
         # The spec's Gateway label is not its resolved Harness alias. Read the
@@ -315,6 +319,11 @@ def harness_user_overrides(
         if before.get("type") == "agentcore_gateway" and after.get("type") == "remote_mcp"
     }
     allowed = qualify_remote_selectors(allowed, swapped)
+    selector = context_layer_support.GATEWAY_SELECTOR
+    if coa_gateway and selector not in allowed and any(
+        tool["name"] == context_layer_support.GATEWAY_ALIAS for tool in tools
+    ):
+        allowed = [*allowed, selector]  # as at deploy: an explicit list keeps the layer
     if coa_tool is not None:
         if any(tool["name"] == coa_tool["name"] for tool in tools):
             raise ValueError(
@@ -337,6 +346,8 @@ def harness_turn_overrides(
     runtime_user_id: str | None = None,
     console_user: bool = True,
     session_id: str | None = None,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """The per-turn ``InvokeHarness`` overrides: ``{tools, allowedTools}``, ``{}``
     when the deployed configuration applies unchanged, or ``{"auth_required":
@@ -346,11 +357,19 @@ def harness_turn_overrides(
     layer fetches the member's COA token (``context_layer_tokens``) for
     ``runtime_user_id`` — the signed-in console username — and fails closed with
     ``identity.as_user_requires_console`` when there is none (``/v1``, evaluation).
+    One in gateway mode goes through ``_gateway_turn_overrides`` instead
+    (``user_role`` / ``user_email``: the signed-in member's, for their pool JWT).
     """
     if not context_layer_support.attached(agent.spec):
         if gateway_access_token:
             return harness_user_overrides(agent, workspace, gateway_access_token)
         return {}
+    if context_layer_support.uses_gateway(agent.spec):
+        return _gateway_turn_overrides(
+            agent, workspace, gateway_access_token=gateway_access_token,
+            username=runtime_user_id, role=user_role, email=user_email,
+            console_user=console_user, session_id=session_id or "",
+        )
     from app.services import context_layer_tokens
 
     grant = context_layer_tokens.turn_token(
@@ -363,6 +382,70 @@ def harness_turn_overrides(
         agent, workspace, gateway_access_token,
         coa_tool=context_layer_support.harness_tool(grant.layer.mcp_url, grant.value),
     )
+
+
+def _gateway_turn_overrides(
+    agent: Agent,
+    workspace: WorkspaceContext,
+    *,
+    gateway_access_token: str | None,
+    username: str | None,
+    role: str | None,
+    email: str | None,
+    console_user: bool,
+    session_id: str,
+) -> dict[str, Any]:
+    """A gateway-mode Harness turn (``context_layer.via = "gateway"``).
+
+    1. The consent gate (``context_layer_gateway.gateway_turn_auth``, a blocking
+       preflight through the managed gateway — every caller already runs off the event
+       loop): ``{"auth_required": notice}`` ends the turn before InvokeHarness. No
+       console user (``/v1``, evaluation; also a caller that did not say which role the
+       member signed in with) ⇒ ``identity.as_user_requires_console``.
+    2. The swap: the deployed ``launchpad_coa_gw`` attachment becomes a ``remote_mcp``
+       server carrying the member's pool JWT (``harness_user_overrides``; the gateway
+       is re-read and must still trust the workspace pool). The router's token, or the
+       one the gate just minted (``policy_identity``'s per-process cache).
+    3. Fail closed when the swap did not happen: the deployed configuration lacks the
+       attachment (re-publish), or the gateway could not be verified. The turn never
+       reaches COA's gateway with the workspace M2M identity.
+
+    No COA token is fetched by the backend in this mode.
+    """
+    from app.services import context_layer_gateway, policy_identity
+
+    gate = context_layer_gateway.gateway_turn_auth(
+        agent, workspace, username=username, role=role or "", email=email,
+        session_id=session_id, console_user=console_user and bool(role),
+    )
+    if gate is not None:
+        return gate
+    token = gateway_access_token or policy_identity.gateway_user_token(
+        workspace, str(username), str(role), email,
+        min_valid_s=context_layer_gateway.CONSENT_JWT_MIN_VALID_S,
+    )
+    overrides = harness_user_overrides(agent, workspace, token)
+    alias = context_layer_support.GATEWAY_ALIAS
+    coa = next((tool for tool in overrides["tools"] if tool.get("name") == alias), None)
+    if coa is None:
+        raise context_layer_gateway.gateway_unavailable(
+            "this agent's deployed configuration does not attach the managed COA gateway: "
+            "re-publish it to reach the context layer through the gateway"
+        )
+    remote = (coa.get("config") or {}).get("remoteMcp") or {}
+    if (
+        coa.get("type") != "remote_mcp"
+        or not token
+        or (remote.get("headers") or {}).get("Authorization") != f"Bearer {token}"
+    ):
+        # swapped means: a remote_mcp server carrying exactly this member's JWT — not an
+        # unswapped M2M attachment, nor some other server that happens to bear the alias
+        raise context_layer_gateway.gateway_unavailable(
+            "the managed COA gateway could not be verified for this turn (it is missing, "
+            "or no longer trusts the workspace's users): try again, or ask an "
+            "administrator to repair it on the Context Layer page"
+        )
+    return overrides
 
 
 def _invoke_via_stable_endpoint(
@@ -591,13 +674,17 @@ def invoke_agent_text(
     bearer_token: str | None = None,
     console_user: bool = True,
     on_usage: Any = None,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """One synchronous turn. ``console_user=False`` marks a caller with no
     signed-in console user (public /v1): an as_user consent ask is then refused
     by name instead of recorded (see ``_record_auth_sessions``).
 
     ``on_usage`` is a ``UsageMeter.on_usage`` sink (services/usage_meter.py): the
-    token usage each path reports in-band reaches it; the caller settles the turn."""
+    token usage each path reports in-band reaches it; the caller settles the turn.
+    ``user_role`` / ``user_email``: the signed-in member's, for a context layer in
+    gateway mode (``harness_turn_overrides``)."""
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
@@ -640,6 +727,7 @@ def invoke_agent_text(
         overrides = harness_turn_overrides(
             agent, workspace, gateway_access_token=gateway_access_token,
             runtime_user_id=runtime_user_id, console_user=console_user, session_id=session_id,
+            user_role=user_role, user_email=user_email,
         )
         if "auth_required" in overrides:
             # the consent the member owes COA: nothing is invoked this turn

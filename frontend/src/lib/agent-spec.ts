@@ -487,10 +487,26 @@ export interface AgentForm {
   contextLayer?: ContextLayerChoice | null;
 }
 
-/** The namespace a form attaches; `namespaceName` is display-only. */
+/** How an agent reaches COA: direct (the default) or the workspace's managed COA gateway. */
+export type ContextLayerVia = "direct" | "gateway";
+
+/** The namespace a form attaches; `namespaceName` is display-only. `via` absent is
+ *  direct, so a choice made before access modes existed (or a prefill) stays direct. */
 export interface ContextLayerChoice {
   namespaceId: string;
   namespaceName: string;
+  via?: ContextLayerVia;
+}
+
+/** A choice's access mode (absent ⇒ direct). */
+export const contextLayerVia = (choice: ContextLayerChoice | null | undefined): ContextLayerVia =>
+  choice?.via === "gateway" ? "gateway" : "direct";
+
+/** `choice` reaching COA `via` (direct drops the key); `null` stays `null`. */
+export function withContextVia(choice: ContextLayerChoice | null, via: ContextLayerVia): ContextLayerChoice | null {
+  if (!choice) return null;
+  const { namespaceId, namespaceName } = choice;
+  return via === "gateway" ? { namespaceId, namespaceName, via } : { namespaceId, namespaceName };
 }
 
 /** COA namespace ids are UUIDs (the backend refuses anything else). */
@@ -501,7 +517,8 @@ export const contextLayerSupported = (form: Pick<AgentForm, "method" | "protocol
   form.method === "harness" || (form.method === "zip_runtime" && form.protocol === "http");
 
 /** The spec's `context_layer`: omitted when the form does not own it, `null` when
- *  nothing is attached (or the method cannot carry one), else the ref. */
+ *  nothing is attached (or the method cannot carry one), else the ref. `via` is sent
+ *  only for gateway mode, the shape the backend stores (a direct ref has no `via`). */
 export function contextLayerSpec(form: AgentForm): Pick<AgentSpecInput, "context_layer"> {
   if (form.contextLayer === undefined) return {};
   const choice = form.contextLayer;
@@ -510,6 +527,7 @@ export function contextLayerSpec(form: AgentForm): Pick<AgentSpecInput, "context
     context_layer: {
       namespace_id: choice.namespaceId.trim(),
       ...(choice.namespaceName.trim() ? { namespace_name: choice.namespaceName.trim() } : {}),
+      ...(contextLayerVia(choice) === "gateway" ? { via: "gateway" as const } : {}),
     },
   };
 }
@@ -681,7 +699,11 @@ export function formFromStoredSpec(
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
   form.contextLayer = spec.context_layer?.namespace_id
-    ? { namespaceId: spec.context_layer.namespace_id, namespaceName: spec.context_layer.namespace_name ?? "" }
+    ? {
+        namespaceId: spec.context_layer.namespace_id,
+        namespaceName: spec.context_layer.namespace_name ?? "",
+        ...(spec.context_layer.via === "gateway" ? { via: "gateway" as const } : {}),
+      }
     : null;
   const inbound = choiceFromSpec(spec.inbound_auth);
   form.inbound = inbound.choice;
