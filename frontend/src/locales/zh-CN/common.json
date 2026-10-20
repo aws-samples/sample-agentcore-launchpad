@@ -2245,6 +2245,8 @@
     "agent.invoke_not_supported": "该 Runtime 当前不可调用",
     "agent.redeploy_external": "发现导入的 Runtime 由外部管理，不能重新发布",
     "agent.not_found": "未找到该 Agent",
+    "agent.source_unavailable": "此 Agent 没有可查看的代码",
+    "agent.source_file_not_found": "此 Agent 的代码中没有这个文件",
     "videos.not_found": "视频不存在",
     "videos.conflict": "视频已被其他操作修改，请重新加载后再保存或发布。",
     "chat.session_stop_unsupported": "无法从控制台结束该 Agent 的会话——Harness 没有结束会话的操作",
@@ -5756,6 +5758,59 @@
           "ready": "就绪",
           "missing": "缺失",
           "unbound": "未绑定"
+        }
+      },
+      "source": {
+        "open": "代码",
+        "title": "代码 · {{name}}",
+        "metaTitle": "来源",
+        "origin": "读取自",
+        "origins": {
+          "deployed_package": "部署包",
+          "build_context": "容器构建上下文",
+          "upload": "上传的代码包",
+          "harness": "Harness 配置",
+          "image": "容器镜像"
+        },
+        "originSub": {
+          "deployed_package": "AgentCore Runtime 实际运行的代码包，不列出安装的依赖。",
+          "build_context": "CodeBuild 最近一次构建此 Agent 镜像时使用的构建上下文。",
+          "upload": "成员上传的代码包，不列出部署时安装的依赖。"
+        },
+        "entrypoint": "入口文件",
+        "runtimeVersion": "Runtime 版本",
+        "packagedAt": "打包时间",
+        "uploadFile": "上传文件",
+        "uploadedBy": "上传人",
+        "fileCount": "文件数",
+        "filesCapped": "显示 {{shown}} / {{total}} 个",
+        "filesTitle": "文件",
+        "noFiles": "代码包里没有可显示的文件。",
+        "truncated": "已截断",
+        "binary": "二进制文件，不预览。",
+        "binaryTag": "二进制",
+        "budget": "为控制首次加载的大小，这个文件没有随列表一起返回。",
+        "loadFile": "加载此文件",
+        "copy": "复制",
+        "copied": "已复制",
+        "copyFailed": "复制失败：浏览器禁止访问剪贴板",
+        "stale": "最近一次部署{{status}}，运行中的版本可能还是之前的代码。",
+        "harnessNote": "Harness 是由 AgentCore 托管的 Agent 循环，没有代码。下面是 AWS 返回的配置（GetHarness），不显示执行角色、环境和认证配置，请求头的值已打码。",
+        "harnessTitle": "Harness 配置",
+        "harnessSub": "版本 {{version}}",
+        "imageNote": "此 Agent 使用已有的容器镜像部署，平台没有它的源代码。",
+        "imageTitle": "容器镜像",
+        "imageUri": "镜像",
+        "imageDigest": "Digest",
+        "unavailable": {
+          "method": "平台没有这类 Agent 的代码（例如导入的 Runtime）。",
+          "no_resource": "此 Agent 还没有部署，部署在 AWS 上创建资源后才能查看代码。",
+          "deleted": "此 Agent 已删除。",
+          "gone": "代码包或 AWS 资源已不存在。",
+          "not_code": "此 Runtime 不是从代码包部署的。",
+          "unreadable": "存储的代码包无法作为 zip 读取。",
+          "no_bucket": "此工作区没有制品桶，请先完成初始化。",
+          "other": "此 Agent 没有可查看的代码。"
         }
       },
       "progress": {

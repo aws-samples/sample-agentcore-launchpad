@@ -792,6 +792,16 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 列表以环境变量 `ALLOWED_MODEL_IDS`（逗号分隔，主模型在前）传入运行时——两个变量
 只要 `spec.env` 已自行设置就以用户值优先。
 
+## 控制台 Agent API——代码视图 / Console Agents API
+
+`GET /api/agents/{agent_id}/source` 是 Agent「代码」页（`/v2/agents?view=source&id=`）背后的只读视图。
+它从不重新渲染模板，而是读回 AWS 上这个 Agent 实际持有的内容，所以上次部署之后模板有变化，也不会让视图
+和运行中的代码对不上。成员路由，调用者必须能看到这个 Agent。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/source` | `{agent_id, name, method, kind: code\|harness_config\|image, origin, files[{path, size, content, truncated, omitted: null\|binary\|budget}], files_total, ledger_version, deployment_status, …}`。**`zip_runtime` / `studio`**（`origin: deployed_package`）：由 `GetAgentRuntime` 找到 Runtime 运行的 S3 zip，用范围请求只读取中央目录和平台自己的文件（入口文件、`requirements.txt`、`requirements.lock`、转换导出的 `code_bundle` 文件、`skills/…`），不读安装的依赖；附带 `entrypoint`、`runtime_version`、`package_updated_at`。**`container`**（`build_context`）：`builds/{name}/source.zip`，即 CodeBuild 最近一次构建用的上下文。**`byoc`** 的 `code_zip` / `container_source`（`upload`）：成员上传的原始包（去掉顶层目录），附带 `artifact_kind`、`original_filename`、`uploaded_by`、`uploaded_at`、`sha256`；`container_image` 返回 `kind: image`，带 `image_uri` / `image_digest`，没有文件。**`harness`**（`harness_config`）：`GetHarness` 经白名单投影（不含 `arn`、执行角色、环境、环境制品/变量和认证配置），工具请求头的值、OAuth `customParameters` 的值和 URL 查询串打码；附带 `harness_version`、`config`。内容每个文件最多 512 KiB（`truncated`），每次响应最多 4 MiB（`omitted: budget`）；`?path=<列表中的路径>` 不受响应预算限制，单独读取该文件（路径不存在返回 404 `agent.source_file_not_found`）。`deployment_status` 是最近一次部署的状态，不是 `succeeded` 时，运行中的版本可能还是之前的代码。没有代码时返回 409 `agent.source_unavailable`，`detail.reason` 取 `method`（如导入的 Runtime）、`no_resource`、`deleted`、`gone`（资源或代码包已不存在）、`not_code`、`unreadable`、`no_bucket`。不改变任何状态 |
+
 ## 控制台 Agent API——版本与端点 / Console Agents API
 
 `GET /api/agents/{agent_id}/versions` 是 Agent 详情「版本与端点」面板背后的只读 AWS 视图。它对该 Agent

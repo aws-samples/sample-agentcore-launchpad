@@ -76,3 +76,25 @@
 /* Snapshots card (SnapshotsCard.tsx): pick column. The grouped field-level diff
    (DiffBody, also on the evaluation compare page) is styled in v2.css. */
 .v2 .v2-snap-pick { accent-color: var(--v2-primary); width: 14px; height: 14px; cursor: pointer; }
+
+/* 代码 (?view=source): file list + read-only Monaco viewer */
+.v2 .v2-source-split { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); border-top: 1px solid var(--v2-line); margin-top: 12px; }
+.v2 .v2-source-files { list-style: none; margin: 0; padding: 8px 0; max-height: 72vh; overflow: auto; border-right: 1px solid var(--v2-line); }
+.v2 .v2-source-files button {
+  display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 5px 16px; border: 0; background: none;
+  color: var(--v2-ink-2); font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.v2 .v2-source-files button .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2 .v2-source-files button:hover { background: var(--v2-fill); color: var(--v2-ink); }
+.v2 .v2-source-files button.active { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2 .v2-source-pane { display: flex; flex-direction: column; min-width: 0; }
+.v2 .v2-source-pane-head { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--v2-line); font-size: 13px; }
+.v2 .v2-source-pane-head .end { margin-left: auto; }
+.v2 .v2-source-pane > .v2-alert { margin: 12px 16px; }
+.v2 .v2-source-editor { height: 72vh; min-height: 320px; }
+.v2 .v2-card .v2-source-editor { border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); overflow: hidden; }
+.v2 .v2-source-split .v2-source-editor { border: 0; border-radius: 0; }
+@media (max-width: 760px) {
+  .v2 .v2-source-split { grid-template-columns: minmax(0, 1fr); }
+  .v2 .v2-source-files { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--v2-line); }
+}

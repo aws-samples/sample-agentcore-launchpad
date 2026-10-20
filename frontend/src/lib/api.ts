@@ -502,6 +502,47 @@ export interface AgentVersionsInfo {
   canary_endpoints: string[];
 }
 
+/** One file of `GET /api/agents/{id}/source`. `content` is null when the file was left
+ *  out: `binary`, or `budget` (the response cap; read it alone with `?path=`). */
+export interface AgentSourceFile {
+  path: string;
+  size: number;
+  content: string | null;
+  truncated: boolean;
+  omitted: "binary" | "budget" | null;
+}
+
+/** The read-only CODE view: what AWS runs for the agent (`kind: "code"`), a Harness's
+ *  allow-listed configuration (`harness_config`), or the image a BYOC agent was
+ *  deployed from (`image`, no files). */
+export interface AgentSourceInfo {
+  agent_id: string;
+  name: string;
+  method: string;
+  kind: "code" | "harness_config" | "image";
+  /** deployed_package = the zip the Runtime runs · build_context = 方式A's CodeBuild
+   *  input · upload = the member's BYOC upload · harness / image */
+  origin: "deployed_package" | "build_context" | "upload" | "harness" | "image";
+  files: AgentSourceFile[];
+  /** files in the source; the listing stops at a cap */
+  files_total: number;
+  ledger_version: string | null;
+  /** the latest deployment's status — anything but succeeded may mean older code runs */
+  deployment_status: string | null;
+  entrypoint?: string | null;
+  runtime_version?: string | null;
+  package_updated_at?: string | null;
+  artifact_kind?: string | null;
+  original_filename?: string | null;
+  uploaded_by?: string | null;
+  uploaded_at?: string | null;
+  sha256?: string | null;
+  harness_version?: string | null;
+  config?: Record<string, unknown>;
+  image_uri?: string | null;
+  image_digest?: string | null;
+}
+
 /** deployed = its publish succeeded (it has an AWS version); deploying / failed = its
  *  deployment is still running / failed; not_deployed = neither (e.g. a job lost
  *  before it ran). Only a deployed snapshot is a rollback target. */
@@ -6081,6 +6122,10 @@ export const api = {
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  agentSource: (id: string, path?: string) =>
+    request<AgentSourceInfo>(
+      `/api/agents/${id}/source${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ),
   /** The agent's spec snapshots (one per publish), newest first, without specs. */
   agentSnapshots: (id: string) =>
     request<{ snapshots: SpecSnapshotInfo[] }>(`/api/agents/${encodeURIComponent(id)}/snapshots`),

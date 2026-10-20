@@ -1215,6 +1215,28 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
 会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
 从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
+### 代码视图（只读）
+
+Agent 详情的「代码」按钮打开 `/v2/agents?view=source&id=`，背后是
+`GET /api/agents/{agent_id}/source`（`services/agent_source.py`）。生成的代码从不存进台账，视图也从不重新
+渲染，而是读回 AWS 上实际持有的内容：
+
+- **`zip_runtime` / `studio`**——`GetAgentRuntime` 的 `codeConfiguration` 指向 Runtime 运行的 zip。
+  代码包里大部分是 pip 安装的依赖，所以服务用 S3 范围请求读取（中央目录加上要显示的文件），只列出平台
+  自己的文件：入口文件、`requirements.txt` / `requirements.lock`、转换导出的 `code_bundle` 文件，以及
+  打包进去的 `skills/`。
+- **`container`**（方式A）——CodeBuild 最近一次构建用的上下文 `builds/{name}/source.zip`。
+- **`byoc`**——`code_zip` / `container_source` 显示成员上传的原始包
+  （`byoc/{workspace}/{upload_id}/source.zip`），也就是成员自己的文件，不含打包阶段安装的依赖；
+  `container_image` 没有源代码，页面显示镜像地址和 digest。
+- **`harness`**——托管的 Agent 循环没有代码。页面显示 `GetHarness` 的白名单投影，规则与版本视图相同
+  （不含执行角色、环境、制品位置和认证配置），工具请求头的值、OAuth `customParameters` 的值和 URL 查询串
+  都会打码。
+
+内容按文件和按响应都有上限，因预算省略的文件可以用 `?path=` 单独读取。最近一次部署没有成功时，页面会
+提示运行中的版本可能还是之前的代码。导入的 Runtime 和没有 AWS 资源的行返回 409
+`agent.source_unavailable`，页面按 `detail.reason` 显示对应说明。
+
 ### 配置快照与回滚
 
 `Agent.spec` 每次发布都会被覆盖，所以仅靠账本说不清一个 Agent 两次修改之前是什么样子。

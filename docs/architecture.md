@@ -2157,6 +2157,34 @@ so canary leftovers are noticed. It is strictly read-only: it never re-points
 `DEFAULT` and never creates, updates or deletes an endpoint; the canary owns those
 operations.
 
+### Code view (read-only)
+
+The agent detail's **Code** button opens `/v2/agents?view=source&id=`, backed by
+`GET /api/agents/{agent_id}/source` (`services/agent_source.py`). Generated code is never
+stored in the ledger and the view never re-renders it; it reads back what AWS holds:
+
+- **`zip_runtime` / `studio`** — `GetAgentRuntime`'s `codeConfiguration` names the zip the
+  Runtime runs. The package is mostly pip-installed dependencies, so the service reads it
+  over ranged S3 GETs (the central directory plus the members it shows) and lists only the
+  platform's files: the entrypoint, `requirements.txt` / `requirements.lock`, a
+  conversion's `code_bundle` files and the bundled `skills/`.
+- **`container`** (方式A) — the build context CodeBuild last built from,
+  `builds/{name}/source.zip`.
+- **`byoc`** — `code_zip` / `container_source` show the member's staged upload
+  (`byoc/{workspace}/{upload_id}/source.zip`), i.e. their files without the dependencies
+  the package stage installed; `container_image` has no source, so the page shows the
+  image URI and digest.
+- **`harness`** — a managed loop has no code. The page shows `GetHarness` projected
+  through an allow-list with the same rule as the versions view (no execution role,
+  environment, artifact location or authorizer), with tool header values, OAuth
+  `customParameters` values and URL query strings masked.
+
+Contents are capped per file and per response; a file left out for the budget is
+fetched alone with `?path=`. When the latest deployment did not succeed the page warns
+that the live version may still run the earlier code. Imported runtimes and rows with
+no AWS resource answer 409 `agent.source_unavailable` with a `detail.reason` the page
+translates.
+
 ### Spec snapshots and rollback
 
 `Agent.spec` is overwritten on every publish, so on its own the ledger cannot say what an

@@ -2245,6 +2245,8 @@
     "agent.invoke_not_supported": "This Runtime is not available for invocation",
     "agent.redeploy_external": "Discovered runtimes are externally owned and cannot be re-published",
     "agent.not_found": "Agent not found",
+    "agent.source_unavailable": "No code is available for this agent",
+    "agent.source_file_not_found": "The file is not in this agent's source",
     "videos.not_found": "Video not found",
     "videos.conflict": "This video changed. Reload it before saving or publishing.",
     "chat.session_stop_unsupported": "This agent's sessions cannot be ended from the console — a Harness has no session-stop operation",
@@ -5756,6 +5758,59 @@
           "ready": "Ready",
           "missing": "Missing",
           "unbound": "Unbound"
+        }
+      },
+      "source": {
+        "open": "Code",
+        "title": "Code · {{name}}",
+        "metaTitle": "Source",
+        "origin": "Read from",
+        "origins": {
+          "deployed_package": "Deployed package",
+          "build_context": "Container build context",
+          "upload": "Uploaded package",
+          "harness": "Harness configuration",
+          "image": "Container image"
+        },
+        "originSub": {
+          "deployed_package": "The code package the AgentCore Runtime runs; installed dependencies are not listed.",
+          "build_context": "The build context CodeBuild last built this agent's image from.",
+          "upload": "The package the member uploaded; the dependencies installed at deploy time are not listed."
+        },
+        "entrypoint": "Entrypoint",
+        "runtimeVersion": "Runtime version",
+        "packagedAt": "Packaged at",
+        "uploadFile": "Uploaded file",
+        "uploadedBy": "Uploaded by",
+        "fileCount": "Files",
+        "filesCapped": "Showing {{shown}} of {{total}}",
+        "filesTitle": "Files",
+        "noFiles": "The package contains no files to show.",
+        "truncated": "Truncated",
+        "binary": "Binary file — not previewed.",
+        "binaryTag": "binary",
+        "budget": "Left out of the first response to keep it small.",
+        "loadFile": "Load this file",
+        "copy": "Copy",
+        "copied": "Copied",
+        "copyFailed": "Copy failed — the browser blocked clipboard access",
+        "stale": "The latest deployment is {{status}}, so the running version may still use the previous code.",
+        "harnessNote": "A Harness is an agent loop managed by AgentCore and has no code. Below is its configuration as AWS reports it (GetHarness). Its execution role, environment and authorizer are not shown, and header values are masked.",
+        "harnessTitle": "Harness configuration",
+        "harnessSub": "Version {{version}}",
+        "imageNote": "This agent was deployed from an existing container image, so the platform holds no source code for it.",
+        "imageTitle": "Container image",
+        "imageUri": "Image",
+        "imageDigest": "Digest",
+        "unavailable": {
+          "method": "The platform holds no code for agents of this type (for example, imported runtimes).",
+          "no_resource": "The agent has not been deployed yet. Its code appears once a deploy has created it on AWS.",
+          "deleted": "The agent has been deleted.",
+          "gone": "The code package or AWS resource is no longer available.",
+          "not_code": "This Runtime is not deployed from a code package.",
+          "unreadable": "The stored package could not be read as a zip archive.",
+          "no_bucket": "This workspace has no artifacts bucket. Run its bootstrap first.",
+          "other": "No code is available for this agent."
         }
       },
       "progress": {

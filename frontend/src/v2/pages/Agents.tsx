@@ -19,6 +19,7 @@ import {
 import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
+import { AgentSource } from "./agents/AgentSource";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { IntegrationCard } from "./agents/IntegrationCard";
 import { SnapshotsCard } from "./agents/SnapshotsCard";
@@ -84,6 +85,8 @@ const STAGE_TONE: Record<StageInfo["status"], TagTone> = {
 const editPath = v2EditPath;
 
 const EDITABLE_METHODS: Method[] = ["harness", "zip_runtime", "container", "byoc"];
+/** Methods the CODE view (`?view=source`) has a source for — `services/agent_source`. */
+const SOURCE_METHODS = new Set<string>(["harness", "zip_runtime", "studio", "container", "byoc"]);
 
 /** `?view=edit&id=` — reads the agent fresh, then opens the wizard on its stored spec. */
 function AgentEdit({ id }: { id: string }) {
@@ -625,6 +628,11 @@ function AgentDetail({ id }: { id: string }) {
                 {t("v2.agents.identity.open")}
               </Button>
             )}
+            {SOURCE_METHODS.has(agent.method) && agent.status !== "deleted" && (
+              <Button onClick={() => setParams((prev) => withView(prev, "source", agent.id))} testId="v2-agent-source-open">
+                {t("v2.agents.source.open")}
+              </Button>
+            )}
             {perms.canConvert(agent) && (
               <Button onClick={() => actions.askConvert(agent)}>{t("v2.agents.convert")}</Button>
             )}
@@ -763,8 +771,9 @@ function AgentDetail({ id }: { id: string }) {
   );
 }
 
-/** Agent management (native V2): list, `?view=detail&id=`, `?view=new` (the
- *  creation wizard for Harness / Strands / other SDK / bring-your-own-code, with
+/** Agent management (native V2): list, `?view=detail&id=`, `?view=source&id=` (the
+ *  read-only code view), `?view=new` (the creation wizard for Harness / Strands /
+ *  other SDK / bring-your-own-code, with
  *  the classic `method=` / `gateway=` / `skill=` prefills) and `?view=edit&id=` (the
  *  same wizard as a re-publish editor); importing and the system presets open the
  *  classic flows inside the V2 shell. */
@@ -776,5 +785,6 @@ export function V2Agents() {
   if (view === "new") return <AgentWizard />;
   if (view === "edit" && id) return <AgentEdit key={id} id={id} />;
   if (view === "identity" && id) return <AgentIdentity key={id} id={id} />;
+  if (view === "source" && id) return <AgentSource key={id} id={id} />;
   return <AgentList />;
 }

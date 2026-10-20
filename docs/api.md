@@ -185,6 +185,17 @@ The deployer passes the primary id to the runtime as env `MODEL_ID` and the
 full list as env `ALLOWED_MODEL_IDS` (comma-separated, primary first) — for
 either variable, a value already in `spec.env` wins.
 
+## Console Agents API — code view
+
+`GET /api/agents/{agent_id}/source` is the read-only view behind the agent's **Code**
+page (`/v2/agents?view=source&id=`). It never re-renders a template: it reads back what
+AWS holds for the agent, so a template change after the last deploy cannot make the
+view disagree with what runs. Member route; the agent must be visible to the caller.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/source` | `{agent_id, name, method, kind: code\|harness_config\|image, origin, files[{path, size, content, truncated, omitted: null\|binary\|budget}], files_total, ledger_version, deployment_status, …}`. **`zip_runtime` / `studio`** (`origin: deployed_package`): `GetAgentRuntime` names the S3 zip the Runtime runs; ranged GETs read only its central directory and the platform's files (the entrypoint, `requirements.txt`, `requirements.lock`, a conversion's `code_bundle` files, `skills/…`), never the installed dependencies; adds `entrypoint`, `runtime_version`, `package_updated_at`. **`container`** (`build_context`): `builds/{name}/source.zip`, the context CodeBuild last built from. **`byoc`** `code_zip` / `container_source` (`upload`): the member's staged upload, root prefix stripped, plus `artifact_kind`, `original_filename`, `uploaded_by`, `uploaded_at`, `sha256`; `container_image` → `kind: image` with `image_uri` / `image_digest` and no files. **`harness`** (`harness_config`): `GetHarness` projected through an allow-list (no `arn`, execution role, environment, environment artifact/variables or authorizer), tool header values, OAuth `customParameters` values and URL query strings masked; adds `harness_version`, `config`. Contents are capped at 512 KiB per file (`truncated`) and 4 MiB per response (`omitted: budget`); `?path=<listed path>` reads that one file regardless of the budget (unknown path → 404 `agent.source_file_not_found`). `deployment_status` is the latest deployment's; anything but `succeeded` means the live version may still run earlier code. No source → 409 `agent.source_unavailable` with `detail.reason` ∈ `method` (e.g. imported runtimes), `no_resource`, `deleted`, `gone` (resource or package missing), `not_code`, `unreadable`, `no_bucket`. Never mutates anything |
+
 ## Console Agents API — versions and endpoints
 
 `GET /api/agents/{agent_id}/versions` is the read-only AWS view behind the agent

@@ -41,6 +41,7 @@ from app.services import (
     agent_iam,
     agent_identity,
     agent_names,
+    agent_source,
     budgets,
     byoc_uploads,
     context_layer,
@@ -543,6 +544,33 @@ def get_agent_versions(
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     return list_agent_versions(control_client(ws.context), agent)
+
+
+@router.get("/agents/{agent_id}/source")
+def get_agent_source(
+    agent_id: str,
+    path: str | None = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Read-only CODE view: the code AWS runs (or a Harness's configuration).
+
+    ``path`` reads one listed file the response budget left out. 409
+    ``agent.source_unavailable`` when the platform holds no code for the agent
+    (see ``services/agent_source``)."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    latest = _latest_deployment(db, agent.id)
+    return agent_source.agent_source(
+        control_client(ws.context),
+        ws.context.client("s3"),
+        ws.context,
+        agent,
+        path=path,
+        deployment_status=latest.status if latest else None,
+    )
 
 
 @router.get("/agents/{agent_id}/identity")
