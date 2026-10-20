@@ -2480,7 +2480,10 @@
     "coding.restore_failed": "无法恢复项目保存的快照，请重试。",
     "coding.delete_failed": "无法删除项目保存的文件，请重试。",
     "coding.runtime_busy": "编码运行时正在安装或卸载，请在完成后重试。",
-    "coding.runtime_in_use": "这个工作区还有正在运行的编码回合。请等它结束或中止后再卸载。"
+    "coding.runtime_in_use": "这个工作区还有正在运行的编码回合。请等它结束或中止后再卸载。",
+    "context_layer.demo_param_scope": "体验账号参数必须是所连接 COA 部署的 /<prefix>/launchpad/ 之下的 SSM 参数。",
+    "context_layer.demo_param_invalid": "体验账号参数不存在、不是 SecureString，或不是包含 username 和 password 的 JSON。",
+    "context_layer.demo_unavailable": "此上下文层没有体验账号，需由管理员在上下文层页面配置。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -9417,7 +9420,14 @@
         "submit": "连接",
         "reconnect": "重新连接",
         "busy": "连接中…",
-        "done": "上下文层已连接。"
+        "done": "上下文层已连接。",
+        "demoParam": "体验账号 SSM 参数（可选）",
+        "demoParamHint": "由 samples/coa-demo/demo_account.py ensure 写入的 SecureString，必须位于 /<prefix>/launchpad/ 之下。所有成员都能查看其中的用户名和密码。留空则不提供体验账号。",
+        "demoProblem": {
+          "not_found": "COA 区域中不存在该体验账号参数。",
+          "not_secure_string": "该体验账号参数不是 SecureString。",
+          "bad_shape": "该体验账号参数不是包含非空 username 和 password 的 JSON。"
+        }
       },
       "disconnect": {
         "action": "断开连接",
@@ -9579,6 +9589,37 @@
         "replaces": "此 Agent 当前挂载的是 {{name}}，保存后将替换为此命名空间。",
         "already": "此 Agent 已挂载此命名空间。",
         "openEditor": "打开编辑器"
+      },
+      "demo": {
+        "tag": "体验账号",
+        "useOwn": "用我的 COA 账号授权",
+        "useDemo": "用体验账号授权",
+        "notice": "所有成员共用的只读体验账号，仅能访问 COA 管理员开放给它的命名空间。在体验账号下的提问，其他使用体验账号的人在 COA 中可以看到，请勿输入敏感信息。",
+        "username": "用户名",
+        "password": "密码",
+        "show": "显示",
+        "hide": "隐藏",
+        "copy": "复制",
+        "copied": "已复制。",
+        "copyFailed": "无法复制，请手动选中后复制。",
+        "signInHint": "把以上用户名和密码复制到 COA 登录页。",
+        "chatLink": "没有 COA 账号？使用体验账号",
+        "chatHint": "打开授权页面，用以上用户名和密码登录。",
+        "switchToOwn": "切换为我的账号",
+        "otherSession": "浏览器已登录了另一个 COA 账号？请先退出 COA 登录：",
+        "wrongDemo": "这次授权用的是浏览器中已登录的 COA 账号，而不是体验账号。请按下面的步骤退出 COA 登录，然后重新授权。",
+        "wrongOwn": "浏览器中的 COA 会话仍然登录着体验账号，所以这次授权用的还是体验账号。请按下面的步骤退出 COA 登录，然后重新授权。",
+        "guide": {
+          "titleOwn": "切换为我自己的 COA 账号",
+          "titleDemo": "改用体验账号",
+          "intro": "COA 会沿用浏览器中已登录的账号，所以切换需要三步：",
+          "revoke": "撤销当前授权。",
+          "signOut": "退出 COA 登录。它会在新标签页中打开，完成后停在 COA 控制台。",
+          "signOutAction": "退出 COA 登录",
+          "signOutManual": "在 COA 控制台中退出登录",
+          "authorizeOwn": "重新授权，并用你自己的 COA 账号登录。",
+          "authorizeDemo": "重新授权，并用体验账号登录。"
+        }
       }
     },
     "coding": {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { api, errorMessage } from "../../../lib/api";
+import { api, type ContextLayerIdentity, errorMessage } from "../../../lib/api";
 import { effectiveStatus } from "../../../lib/user-grants";
 import { useV2Toast } from "../../hooks";
 import { pollAuthorized } from "./state";
@@ -14,7 +14,9 @@ import { pollAuthorized } from "./state";
  * polls the console grant (`grants/{connection}/status`, a ledger read — not
  * `GET /api/context-layer`, whose live AWS probes are too heavy to poll) and calls
  * `onAuthorized` once it flips. A blocked tab leaves the URL in `pendingUrl` for a
- * plain link.
+ * plain link. `account` is an explicit choice of COA account (`"demo"` is refused
+ * without a demo account); the consent is the same either way and COA uses whatever
+ * session the browser holds, else asks for credentials.
  */
 export function useAuthorize(onAuthorized: () => void) {
   const toast = useV2Toast();
@@ -41,11 +43,11 @@ export function useAuthorize(onAuthorized: () => void) {
     });
   };
 
-  const authorize = async () => {
+  const authorize = async (account?: ContextLayerIdentity) => {
     const tab = window.open("about:blank", "_blank");
     setBusy(true);
     try {
-      const res = await api.authorizeContextLayer();
+      const res = await api.authorizeContextLayer(account);
       if (res.authorized || !res.authorization_url) {
         tab?.close();
         done.current();

@@ -2480,7 +2480,10 @@
     "coding.restore_failed": "The project's saved snapshot could not be restored. Try again.",
     "coding.delete_failed": "The project's saved files could not be deleted. Try again.",
     "coding.runtime_busy": "The coding runtime is being installed or uninstalled. Try again when it finishes.",
-    "coding.runtime_in_use": "A coding turn is still running in this workspace. Wait for it to finish or interrupt it, then uninstall."
+    "coding.runtime_in_use": "A coding turn is still running in this workspace. Wait for it to finish or interrupt it, then uninstall.",
+    "context_layer.demo_param_scope": "The demo account parameter must be an SSM parameter under /<prefix>/launchpad/ of the connected COA deployment.",
+    "context_layer.demo_param_invalid": "The demo account parameter is missing, is not a SecureString, or is not JSON with a username and password.",
+    "context_layer.demo_unavailable": "This context layer has no demo account. An administrator sets one on the Context Layer page."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -9417,7 +9420,14 @@
         "submit": "Connect",
         "reconnect": "Re-connect",
         "busy": "Connecting…",
-        "done": "Context layer connected."
+        "done": "Context layer connected.",
+        "demoParam": "Demo account SSM parameter (optional)",
+        "demoParamHint": "The SecureString written by samples/coa-demo/demo_account.py ensure, under /<prefix>/launchpad/. Every member can reveal its username and password. Leave empty to offer no demo account.",
+        "demoProblem": {
+          "not_found": "The demo account parameter does not exist in the COA region.",
+          "not_secure_string": "The demo account parameter is not a SecureString.",
+          "bad_shape": "The demo account parameter is not JSON with a non-empty username and password."
+        }
       },
       "disconnect": {
         "action": "Disconnect",
@@ -9579,6 +9589,37 @@
         "replaces": "This agent attaches {{name}} now. Saving replaces it with this namespace.",
         "already": "This agent already attaches this namespace.",
         "openEditor": "Open its editor"
+      },
+      "demo": {
+        "tag": "Demo account",
+        "useOwn": "Authorize with my COA account",
+        "useDemo": "Authorize with the demo account",
+        "notice": "A read-only demo account shared by every member. It reaches only the namespaces a COA administrator opened to it. Anyone else who signs in to COA as the demo account can see the questions asked under it, so don't enter anything sensitive.",
+        "username": "Username",
+        "password": "Password",
+        "show": "Show",
+        "hide": "Hide",
+        "copy": "Copy",
+        "copied": "Copied.",
+        "copyFailed": "Could not copy. Select the text and copy it yourself.",
+        "signInHint": "Copy this username and password into COA's sign-in page.",
+        "chatLink": "No COA account? Use the demo account",
+        "chatHint": "Open the authorization page and sign in with this username and password.",
+        "switchToOwn": "Switch to my account",
+        "otherSession": "Is your browser already signed in to another COA account? Sign out of COA first:",
+        "wrongDemo": "This consent used the COA account your browser was already signed in with, not the demo account. Sign out of COA with the steps below, then authorize again.",
+        "wrongOwn": "This consent still used the demo account, because your browser's COA session was still signed in. Sign out of COA with the steps below, then authorize again.",
+        "guide": {
+          "titleOwn": "Switch to my own COA account",
+          "titleDemo": "Switch to the demo account",
+          "intro": "COA reuses the account your browser is signed in with, so switching takes three steps:",
+          "revoke": "Revoke the current authorization.",
+          "signOut": "Sign out of COA. It opens in a new tab and ends on the COA console.",
+          "signOutAction": "Sign out of COA",
+          "signOutManual": "Sign out in the COA console",
+          "authorizeOwn": "Authorize again and sign in with your own COA account.",
+          "authorizeDemo": "Authorize again and sign in with the demo account."
+        }
       }
     },
     "coding": {

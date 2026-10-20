@@ -6,7 +6,9 @@ everything else is discovered from the deployment itself:
 
 - SSM ``/<prefix>/{mcp/runtime-arn, serve/runtime-arn, userpool-id, issuer,
   agent-oauth-client-id}`` — the last exists only when COA's agent OAuth client
-  (3LO) is enabled, which is the only client a platform can act for a user with;
+  (3LO) is enabled, which is the only client a platform can act for a user with —
+  plus the optional ``/<prefix>/userpool-client-id`` (COA's web client, whose
+  ``/logout`` ends a member's COA browser session);
 - the CloudFormation outputs of ``<prefix>-<env>-{api,web,auth}`` (REST endpoint,
   console URL, Cognito hosted-UI domain);
 - ``GetAgentRuntime`` on both runtimes, which must be READY.
@@ -22,7 +24,9 @@ module and Harness agents fetch members' COA tokens with
 handed straight to the vault: it is never stored, logged or returned.
 
 The ``context_layers`` row stores identifiers only. Runtime status, the callback
-registration and whether agent OAuth is still on are read live by ``status``.
+registration and whether agent OAuth is still on are read live by ``status``. An
+admin may also name the SSM parameter holding the shared COA demo account
+(``context_layer_demo``); the row keeps that name, never the credentials.
 """
 
 import logging
@@ -60,8 +64,12 @@ SSM_KEYS = {
     "user_pool_id": "userpool-id",
     "issuer": "issuer",
     "agent_client_id": "agent-oauth-client-id",
+    "web_client_id": "userpool-client-id",
 }
 AGENT_CLIENT_KEY = "agent_client_id"
+# COA's web client: only for the sign-out link, so a deployment without it connects
+WEB_CLIENT_KEY = "web_client_id"
+_CLIENT_ID_RE = re.compile(r"^[\w+]{1,128}$")
 RUNTIME_KEYS = {"mcp": "mcp_runtime_arn", "serve": "serve_runtime_arn"}
 _RUNTIME_ARN_RE = re.compile(
     r"^arn:aws[\w-]*:bedrock-agentcore:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):"
@@ -302,7 +310,10 @@ def discover(
     _validate_inputs(prefix, env, region)
     ctx = coa_context(workspace, region)
     resources, names = _ssm_values(ctx, prefix)
-    missing = [names[k] for k, v in resources.items() if not v and k != AGENT_CLIENT_KEY]
+    missing = [
+        names[k] for k, v in resources.items()
+        if not v and k not in (AGENT_CLIENT_KEY, WEB_CLIENT_KEY)
+    ]
     if missing:
         raise AppError(
             "context_layer.not_found",
@@ -343,6 +354,8 @@ def discover(
             status_code=502,
         )
     resources["issuer"] = issuer
+    if not _CLIENT_ID_RE.fullmatch(resources[WEB_CLIENT_KEY]):
+        resources.pop(WEB_CLIENT_KEY)  # no sign-out link; nothing else depends on it
     cfn = ctx.client("cloudformation")
     stacks = {suffix: f"{prefix}-{env}-{suffix}" for suffix in ("api", "web", "auth")}
     outputs = {suffix: _stack_outputs(cfn, stack) for suffix, stack in stacks.items()}
@@ -483,10 +496,26 @@ def connect(
     connection: str | None,
     return_url: str,
     creator: Creator | None = None,
+    demo_account_param: str | None = None,
 ) -> ContextLayer:
     """Discover, then create/adopt the Connection, ensure the console workload
-    identity and upsert the row. Re-connecting updates the row in place."""
+    identity and upsert the row. Re-connecting updates the row in place.
+
+    ``demo_account_param`` names the SSM parameter of the shared COA demo account
+    (``context_layer_demo``): it must sit under ``/<prefix>/launchpad/`` and hold a
+    readable account, both checked before anything is written. ``""`` clears it;
+    ``None`` keeps the row's current one (while it is still under the prefix)."""
+    from app.services import context_layer_demo
+
+    _validate_inputs(prefix, env, region)
+    demo_param = (
+        context_layer_demo.check_scope(prefix, demo_account_param)
+        if demo_account_param else demo_account_param
+    )
     resources = discover(workspace, prefix=prefix, env=env, region=region)
+    if demo_param:
+        # read once to refuse a missing or malformed parameter; the value is dropped
+        context_layer_demo.read(coa_context(workspace, region), demo_param)
     client = _agent_client(coa_context(workspace, region), resources)
     control = control_client(workspace)
     name = connection or default_connection_name(prefix)
@@ -507,6 +536,11 @@ def connect(
             status_code=502,
         ) from exc
     row = _row(db, workspace.id)
+    if demo_param is None and row is not None:
+        kept = str((row.resources or {}).get(context_layer_demo.PARAM_KEY) or "")
+        demo_param = kept if context_layer_demo.in_scope(prefix, kept) else ""
+    if demo_param:
+        resources[context_layer_demo.PARAM_KEY] = demo_param
     if row is None:
         row = ContextLayerRow(workspace_id=workspace.id)
         if creator is not None:
@@ -522,6 +556,7 @@ def connect(
 
     context_layer_tokens.forget(workspace.id)  # a new deployment: no cached token carries over
     forget_callback_check(workspace.id)  # (re)connecting is how an admin re-checks it
+    context_layer_demo.forget(workspace.id)  # and how a changed parameter takes effect
     logger.info(
         "workspace %s connected to COA %s-%s (%s) via connection %s",
         workspace.id, prefix, env, region, name,
@@ -565,9 +600,10 @@ def disconnect(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
     }
     db.delete(row)
     db.commit()
-    from app.services import context_layer_tokens
+    from app.services import context_layer_demo, context_layer_tokens
 
     context_layer_tokens.forget(workspace.id)
+    context_layer_demo.forget(workspace.id)
     return out
 
 
@@ -665,6 +701,12 @@ def status(
     callback_registered = (
         _callback_registered(errors, ctx, layer, callback_url) if is_admin else None
     )
+    from app.services import context_layer_demo
+
+    authorization = my_authorization(db, workspace.id, username, layer.connection)
+    demo = context_layer_demo.status_fields(
+        db, workspace, layer, username=username, authorization=authorization, errors=errors
+    )
     out: dict[str, Any] = {
         "connected": True,
         "can_manage": is_admin,
@@ -683,7 +725,8 @@ def status(
         "ready": all(value == "READY" for value in runtimes.values()),
         "agent_oauth_enabled": agent_oauth,
         "callback_registered": callback_registered,
-        "authorization": my_authorization(db, workspace.id, username, layer.connection),
+        "authorization": authorization,
+        **demo,
         "referenced_by": referencing_agents(db, workspace.id),
         "created_by_name": layer.created_by_name,
         "created_at": layer.created_at.isoformat() if layer.created_at else None,
@@ -694,6 +737,7 @@ def status(
         out["callback_url"] = callback_url
         out["agent_client_id"] = layer.resources.get(AGENT_CLIENT_KEY)
         out["user_pool_id"] = layer.resources.get("user_pool_id")
+        out["demo_account_param"] = layer.resources.get(context_layer_demo.PARAM_KEY)
         # the CDK context COA's deploy must carry so the callback stays registered
         out["callback_context_key"] = "agentOauthCallbackUrls"
     return out

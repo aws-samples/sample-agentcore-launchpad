@@ -25,6 +25,7 @@ ENV = "dev"
 POOL = f"{COA_REGION}_PoolAbc12"
 ISSUER = f"https://cognito-idp.{COA_REGION}.amazonaws.com/{POOL}"
 AGENT_CLIENT = "agentclient123"
+WEB_CLIENT = "webclient456"
 CLIENT_SECRET = "s3cr3t-agent-client-value"  # never allowed to leave the fake
 RUNTIME_BASE = f"arn:aws:bedrock-agentcore:{COA_REGION}:{ACCOUNT}:runtime"
 MCP_ARN = f"{RUNTIME_BASE}/coa_w2_dev_mcp_server-1cRyvG5BcK"
@@ -34,6 +35,12 @@ CONSOLE_URL = "https://d3q37s5vts6pte.cloudfront.net"
 HOSTED_UI = f"https://coa-w2-dev-auth-{ACCOUNT}.auth.{COA_REGION}.amazoncognito.com"
 CALLBACK = "https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/abc"
 NAMESPACE = "dc09046b-28af-4c7b-a03a-4fa63cda243b"
+
+# the shared COA demo account (an SSM SecureString under /<prefix>/launchpad/)
+DEMO_PARAM = f"/{PREFIX}/launchpad/demo-account"
+DEMO_USER = "launchpad-demo@coa-demo.example.com"
+DEMO_SUB = "5f0c7a3e-1111-4c2b-9d8e-0a1b2c3d4e5f"
+DEMO_PASSWORD = "Xq7-not-a-real-pass-Zr4!"  # never allowed outside the reveal response
 
 
 def jwt(exp: float, **claims: Any) -> str:
@@ -53,15 +60,34 @@ class Calls:
 
 
 class FakeSSM(Calls):
+    """``params`` are String parameters, ``secure`` SecureString ones (decrypted
+    values; ``WithDecryption=False`` reads ciphertext, as SSM does)."""
+
     def __init__(self, params: dict[str, str]):
         super().__init__()
         self.params = params
+        self.secure: dict[str, str] = {}
 
     def get_parameters(self, Names):
         self.calls.append(("get_parameters", {"Names": Names}))
         return {"Parameters": [
-            {"Name": n, "Value": self.params[n]} for n in Names if n in self.params
+            {"Name": n, "Type": "String", "Value": self.params[n]}
+            for n in Names if n in self.params
         ]}
+
+    def get_parameter(self, Name, WithDecryption=False):
+        self.calls.append(("get_parameter", {"Name": Name, "WithDecryption": WithDecryption}))
+        if Name in self.secure:
+            value = self.secure[Name] if WithDecryption else "AQICAHencrypted=="
+            return {"Parameter": {"Name": Name, "Type": "SecureString", "Value": value}}
+        if Name in self.params:
+            return {"Parameter": {"Name": Name, "Type": "String", "Value": self.params[Name]}}
+        raise client_error("ParameterNotFound", "Parameter not found", "GetParameter")
+
+    def put_demo_account(self, *, name: str = DEMO_PARAM, sub: str = DEMO_SUB) -> None:
+        self.secure[name] = json.dumps(
+            {"username": DEMO_USER, "password": DEMO_PASSWORD, "sub": sub}
+        )
 
 
 class FakeCfn(Calls):
@@ -192,6 +218,7 @@ class Account:
             f"/{PREFIX}/serve/runtime-arn": SERVE_ARN,
             f"/{PREFIX}/userpool-id": POOL,
             f"/{PREFIX}/issuer": ISSUER,
+            f"/{PREFIX}/userpool-client-id": WEB_CLIENT,
         }
         if agent_oauth:
             params[f"/{PREFIX}/agent-oauth-client-id"] = AGENT_CLIENT
@@ -231,13 +258,17 @@ def install(monkeypatch, account: Account | None = None) -> Account:
     with tokens._LOCK:
         tokens._CACHE.clear()
         tokens._FORCE.clear()
-    from app.services import context_layer
+    from app.services import context_layer, context_layer_demo
 
     context_layer._CALLBACK_CACHE.clear()
+    with context_layer_demo._LOCK:
+        context_layer_demo._CACHE.clear()
     return account
 
 
-def connect_default(account: Account, connection: str | None = None) -> None:
+def connect_default(
+    account: Account, connection: str | None = None, demo_account_param: str | None = None
+) -> None:
     """Connect the default workspace to the fake deployment (no HTTP)."""
     from app.core.db import SessionLocal
     from app.services import context_layer
@@ -248,6 +279,7 @@ def connect_default(account: Account, connection: str | None = None) -> None:
         context_layer.connect(
             db, context_for_workspace("default"), prefix=PREFIX, env=ENV, region=COA_REGION,
             connection=connection, return_url="http://localhost:5173/auth/return",
+            demo_account_param=demo_account_param,
         )
     finally:
         db.close()

@@ -1848,6 +1848,24 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     （`schemas/context_layer.py`），从不透传。错误映射：COA 401 → `context_layer.reauthorize`
     （409），403 → `forbidden`，404 → `coa_not_found`，429／5xx／超时 → `upstream`，最多附带
     200 个字符的 COA 原始消息。
+- **体验账号**（`services/context_layer_demo.py`）：多数成员没有 COA 账号（COA 用户只能由管理员
+  创建），因此由运维用 `samples/coa-demo/demo_account.py` 创建一个共享的只读账号（Cognito 用户 +
+  用户组 `launchpad-demo`，COA 授权给用户组，重建用户后仍然有效），并把
+  `{username, password, sub}` 作为 SSM SecureString 存在 COA 区域的 `/<coa prefix>/launchpad/`
+  之下。管理员在连接表单中填写参数名；账本行只存参数名，后端从不创建或修改 COA 用户。
+  - 任何成员都可以在“我的授权”或该层 Connection 的 Chat 授权卡片上查看它
+    （`POST …/demo-account/reveal`，`no-store`，按成员记录日志），然后通过普通授权流程，在 COA
+    自己的登录页输入：Launchpad 从不代任何人登录，也从不悄悄回退到体验账号，每个成员各自保留
+    自己的令牌库绑定。无论选择哪个账号，授权请求都不带 `customParameters`：令牌库按它们区分令牌，
+    带 `login_hint` 完成的授权会落入令牌代理、Harness 覆盖、试用台和所有 Strands 运行时都读不到的
+    令牌库槽位。因此 COA 登录页不会预填任何内容，请用面板上的复制按钮。
+  - 浏览器中仍有 COA 会话时，会以该用户静默完成授权（COA 的经典托管登录页会忽略 `prompt=login`，
+    而 Launchpad 本来也无法发送它）。
+    因此状态会把令牌库中令牌的 `sub` 与体验账号的比较（`authorization.identity: demo | own`），
+    页面引导切换：撤销、退出 COA 登录（`sign_out_url`，即 COA Web 客户端的 `/logout`，会清除该
+    域名下所有客户端的会话）、重新授权。如果授权结果不是所选的账号，会自动打开这份引导。
+  - 密码只存在于 SSM、后端内存（最多 300 秒，轮换后的密码 5 分钟内生效）、查看接口的响应，以及
+    面板打开期间成员的浏览器中。`/<prefix>/launchpad/` 范围限制保证查看接口无法读取其他密钥。
 - **限制**：COA 不允许被内嵌（`X-Frame-Options: DENY`），所以所有编写链接都在新标签页打开。
   COA 的 REST 数据层上限为 29 秒，因此提问走流式 Serve 运行时，而不是
   `POST /namespaces/{id}/query`。挂载 COA 的 Agent 在 `/v1` 上返回 409；金丝雀／A-B、评估回放

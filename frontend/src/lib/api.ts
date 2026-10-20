@@ -3094,6 +3094,28 @@ export interface CompleteOauthSessionResult {
 /** The caller's own console grant for the layer's Connection. */
 export type ContextLayerAuthStatus = "none" | "pending" | "authorized" | "revoked";
 
+/** Whose COA account a consent used: the shared demo account, or the member's own. */
+export type ContextLayerIdentity = "demo" | "own";
+
+/** The layer's shared COA demo account, as any member sees it (never the password). */
+export interface ContextLayerDemoAccount {
+  available: boolean;
+  username: string | null;
+}
+
+/** `GET /api/context-layer/demo-account` — plus the layer's Connection, which a Chat
+ *  consent card matches its ask's provider against. */
+export interface ContextLayerDemoInfo extends ContextLayerDemoAccount {
+  connection: string | null;
+}
+
+/** `POST /api/context-layer/demo-account/reveal` (`Cache-Control: no-store`). Keep it
+ *  in component state only: never storage, never a log. */
+export interface ContextLayerDemoCredentials {
+  username: string;
+  password: string;
+}
+
 /** `GET /api/context-layer`. Everything past `can_manage` is present only when
  *  `connected`; the callback/client fields only for administrators. Live probes
  *  that failed read `null` (unknown), never false. No secret is ever included. */
@@ -3115,7 +3137,12 @@ export interface ContextLayerStatus {
   ready?: boolean;
   agent_oauth_enabled?: boolean | null;
   callback_registered?: boolean | null;
-  authorization?: { status: ContextLayerAuthStatus; authorized_at: string | null };
+  /** `identity` only while authorized: whose COA account the vaulted token is
+   *  (null = unknown, e.g. no demo account to compare with) */
+  authorization?: { status: ContextLayerAuthStatus; authorized_at: string | null; identity?: ContextLayerIdentity | null };
+  demo_account?: ContextLayerDemoAccount;
+  /** COA's web-client `/logout` (ends the COA browser session); null when unknown */
+  sign_out_url?: string | null;
   /** agents attaching the layer; a hidden agent keeps its slot with null id/name */
   referenced_by?: { type: string; id: string | null; name: string | null }[];
   created_by_name?: string | null;
@@ -3127,6 +3154,8 @@ export interface ContextLayerStatus {
   agent_client_id?: string | null;
   user_pool_id?: string | null;
   callback_context_key?: string;
+  /** the demo account's SSM parameter name (never its value) */
+  demo_account_param?: string | null;
 }
 
 export interface ContextLayerConnectInput {
@@ -3135,6 +3164,8 @@ export interface ContextLayerConnectInput {
   region: string;
   /** adopt an existing OAuth2 Connection; omitted ⇒ create (or re-adopt) `coa-<prefix>` */
   connection?: string | null;
+  /** the demo account's SSM parameter, under `/<prefix>/launchpad/`; "" clears it */
+  demo_account_param?: string | null;
 }
 
 export interface ContextLayerAuthorizeResult {
@@ -6163,8 +6194,20 @@ export const api = {
       "/api/context-layer",
       { method: "DELETE" },
     ),
-  authorizeContextLayer: () =>
-    request<ContextLayerAuthorizeResult>("/api/context-layer/authorize", { method: "POST" }),
+  /** `account` is an explicit choice ("demo" needs a demo account on the layer). The
+   *  consent is the same for every choice: COA uses whichever session the browser holds,
+   *  or asks for credentials — nothing is prefilled. */
+  authorizeContextLayer: (account?: ContextLayerIdentity) =>
+    request<ContextLayerAuthorizeResult>("/api/context-layer/authorize", {
+      method: "POST",
+      ...(account ? { body: JSON.stringify({ account }) } : {}),
+    }),
+  getContextLayerDemoAccount: () => request<ContextLayerDemoInfo>("/api/context-layer/demo-account"),
+  revealContextLayerDemoAccount: () =>
+    request<ContextLayerDemoCredentials>("/api/context-layer/demo-account/reveal", {
+      method: "POST",
+      cache: "no-store",
+    }),
   revokeContextLayer: () =>
     request<{ revoked: boolean; provider: string; agents: number }>(
       "/api/context-layer/revoke",

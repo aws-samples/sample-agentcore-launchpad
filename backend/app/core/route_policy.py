@@ -308,6 +308,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/context-layer"): ADMIN,
     ("POST", "/api/context-layer/authorize"): MEMBER,
     ("POST", "/api/context-layer/revoke"): MEMBER,
+    # the shared demo account: any member may reveal it (each reveal is logged)
+    ("GET", "/api/context-layer/demo-account"): MEMBER,
+    ("POST", "/api/context-layer/demo-account/reveal"): MEMBER,
     ("GET", "/api/context-layer/namespaces"): MEMBER,
     ("GET", "/api/context-layer/namespaces/{namespace_id}"): MEMBER,
     ("GET", "/api/context-layer/namespaces/{namespace_id}/sources"): MEMBER,

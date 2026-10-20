@@ -553,6 +553,47 @@ signed-in console user to act as. A Connection the layer uses cannot be deleted
 while the layer is connected, and disconnecting is refused while an agent attaches
 the layer.
 
+**The shared demo account (a deliberate exception to "one person, one COA
+identity").** COA users are admin-created only, so most members have none. An
+operator creates one read-only COA account (`samples/coa-demo/demo_account.py`) and
+stores its credentials as an SSM SecureString under `/<coa prefix>/launchpad/`; an
+admin names that parameter on the connect form (`services/context_layer_demo.py`).
+The rules:
+
+1. **The member chooses it, every time.** Any member may reveal the credentials
+   (`POST /api/context-layer/demo-account/reveal`, `Cache-Control: no-store`, logged
+   with the Launchpad username), then signs in with them at COA's own login page
+   through the ordinary consent above. Launchpad never signs in on anyone's behalf
+   and never falls back to the account. `authorize {account: "demo"}` only checks
+   that an account exists and logs the choice. **No consent ever carries
+   `customParameters`:** the token vault keys a token by them (live, 2026-10-20), so
+   a consent made with `{login_hint}` lands in a vault slot that the broker, the
+   Harness override, the playground and every Strands runtime (all without them)
+   never read. The username is not prefilled; the panel's copy buttons are the way.
+2. **Bindings stay per member.** The vault binding is still (console workload,
+   console username), so revoking one member's demo consent touches nobody else.
+   COA, however, sees one principal for every demo user: its audit log and its
+   playground history are shared, which the console says next to the credentials.
+   Launchpad's reveal and consent logs carry the member.
+3. **Custody.** The password lives in SSM, in backend memory for at most 300 s, in the
+   reveal response and in the member's browser while the panel is open. Never the
+   ledger, a log line, a status payload or an error (`DemoAccount` hides it from
+   `repr`). The `/<prefix>/launchpad/` scope stops the reveal from reading any other
+   secret in the account.
+4. **Which account consented.** A browser that still holds a COA session consents
+   silently as that session's user (COA's classic hosted UI ignores `prompt=login`,
+   which Launchpad cannot send anyway).
+   The status therefore decodes the vaulted token's `sub` (unverified, compare only)
+   against the account's (`authorization.identity`), and the console guides a
+   switch: revoke, COA sign-out (the web client's `/logout`, which clears the session
+   for every client on the Cognito domain; `logout_uri` must match a LogoutURL
+   exactly, trailing slash included), authorize again.
+5. **Accepted residual risk.** Anyone holding the password can change it or delete
+   the account through COA's direct-sign-in clients, which COA's own tooling needs.
+   Recovery is the script's `ensure`; the COA grant is to the group
+   `launchpad-demo`, so it survives a re-created user. `rotate --signout` ends every
+   demo consent (`AdminUserGlobalSignOut` revokes the refresh tokens the vault holds).
+
 ## 8. P3: identity passthrough
 
 P3 lets a caller's own identity reach the agent (inbound JWT, Chat "invoke as me")

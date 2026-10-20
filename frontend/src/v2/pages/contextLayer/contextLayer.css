@@ -34,6 +34,25 @@
 .v2 .v2-cl-citations li { display: flex; flex-direction: column; gap: 2px; }
 .v2 .v2-cl-composer { display: flex; gap: 10px; align-items: flex-end; }
 .v2 .v2-cl-composer .v2-textarea { flex: 1; min-height: 64px; }
+/* the shared demo account: credentials, the account switch guide, the consent card offer */
+.v2 .v2-cl-demo { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-width: 640px; }
+.v2 .v2-cl-demo p { margin: 0; font-size: 12.5px; line-height: 1.5; }
+.v2 .v2-cl-demo-creds { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 6px 8px; align-items: center; font-size: 13px; }
+.v2 .v2-cl-demo-creds .k { color: var(--v2-ink-3); }
+.v2 .v2-cl-demo-creds code {
+  padding: 3px 8px; background: var(--v2-fill); border: 1px solid var(--v2-line-2); border-radius: var(--v2-radius-sm);
+  overflow-wrap: anywhere; user-select: all;
+}
+.v2 .v2-cl-guide {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 12px 14px; max-width: 680px;
+  border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); font-size: 13px;
+}
+.v2 .v2-cl-guide p { margin: 0; }
+.v2 .v2-cl-guide ol { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.v2 .v2-cl-guide li > span:first-child { margin-right: 10px; }
+.v2 .v2-cl-guide li > .v2-btn, .v2 .v2-cl-guide li > .v2-cl-done { vertical-align: middle; }
+.v2 .v2-cl-done { color: var(--v2-success); }
+.v2 .v2-cl-demo-offer { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 @media (max-width: 720px) {
   .v2 .v2-cl-composer { flex-direction: column; align-items: stretch; }
   .v2 .v2-cl-desc, .v2 .v2-cl-expr pre { max-width: 100%; }

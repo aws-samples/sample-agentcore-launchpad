@@ -184,6 +184,7 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("DELETE", "/api/context-layer"): FREE,
     ("POST", "/api/context-layer/authorize"): FREE,
     ("POST", "/api/context-layer/revoke"): FREE,
+    ("POST", "/api/context-layer/demo-account/reveal"): FREE,  # an SSM read
     # the playground asks COA's Serve runtime: COA spend is in COA's account, and
     # Launchpad does not meter it
     ("POST", "/api/context-layer/playground"): FREE,

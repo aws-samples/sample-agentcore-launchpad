@@ -64,6 +64,7 @@ def test_discovery_reads_coa_metadata_in_the_coa_region(account):
         "user_pool_id": fx.POOL,
         "issuer": fx.ISSUER,
         "agent_client_id": fx.AGENT_CLIENT,
+        "web_client_id": fx.WEB_CLIENT,
         "api_endpoint": fx.API_ENDPOINT,
         # a CDK-prefixed output key still resolves
         "console_url": fx.CONSOLE_URL,

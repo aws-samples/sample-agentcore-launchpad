@@ -1,19 +1,22 @@
 """COA context layer (`/api/context-layer`): connect a COA deployment, a member's
 own authorization, the namespaces COA lets that member see (with their sources,
-governed metrics and ontology), COA's health, and the streaming playground.
+governed metrics and ontology), COA's health, the streaming playground, and the
+shared COA demo account.
 
 Thin HTTP shell over `services.context_layer` (connect/status/disconnect),
 `services.context_layer_tokens` (the member's COA token),
-`services.context_layer_api` (COA REST reads, as the member) and
-`services.context_layer_playground` (the Serve runtime proxy). No COA token, client
-secret or authorization session uri ever appears in a response; an authorization
-URL goes only to the member it was minted for.
+`services.context_layer_api` (COA REST reads, as the member),
+`services.context_layer_playground` (the Serve runtime proxy) and
+`services.context_layer_demo` (the demo account). No COA token, client secret or
+authorization session uri ever appears in a response; an authorization URL goes
+only to the member it was minted for. The demo account's password is in exactly
+one response, the reveal, which is `no-store`.
 """
 
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -27,6 +30,7 @@ from app.services import (
     agent_access,
     context_layer,
     context_layer_api,
+    context_layer_demo,
     context_layer_playground,
     oauth_sessions,
 )
@@ -45,6 +49,18 @@ class ConnectRequest(BaseModel):
     region: str = Field(min_length=9, max_length=32, pattern=context_layer.REGION_RE.pattern)
     # adopt an existing OAuth2 Connection; omitted ⇒ create (or re-adopt) coa-<prefix>
     connection: str | None = Field(default=None, pattern=CONNECTION_NAME_RE)
+    # the SSM parameter of the shared COA demo account, under /<prefix>/launchpad/;
+    # "" clears it, omitted keeps the current one
+    demo_account_param: str | None = Field(
+        default=None, max_length=501, pattern=r"^(?:/[A-Za-z0-9_.\-/]{1,500})?$"
+    )
+
+
+class AuthorizeRequest(BaseModel):
+    # an explicit account choice, for the console's wrong-account check: "demo" needs
+    # a demo account. The consent request is the same for every value (the vault keys
+    # tokens by customParameters, so none is ever sent).
+    account: Literal["demo", "own"] | None = None
 
 
 NAMESPACE_PATTERN = context_layer_api.NAMESPACE_ID_RE.pattern
@@ -113,6 +129,7 @@ def connect(
         connection=req.connection,
         return_url=get_settings().resolved_oauth_return_url(),
         creator=Creator.of_request(request),
+        demo_account_param=req.demo_account_param,
     )
     return context_layer.status(db, ws.context, username=identity.username, is_admin=True)
 
@@ -138,12 +155,21 @@ def disconnect(
 @router.post("/authorize")
 def authorize(
     request: Request,
+    req: AuthorizeRequest | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Start (or confirm) the caller's consent: ``{authorized: true}`` when the vault
-    already holds their COA token, else the single-use authorization URL."""
-    grant = tokens.user_token(db, ws.context, _username(request))
+    already holds their COA token, else the single-use authorization URL.
+    ``account: "demo"`` is refused without a demo account (404
+    ``context_layer.demo_unavailable``) and logged; the consent itself is the same
+    for every choice, and the member types the credentials at COA's login page."""
+    username = _username(request)
+    if req is not None and req.account is not None:
+        context_layer_demo.check_choice(
+            ws.context, context_layer.require(db, ws.id), req.account, username=username
+        )
+    grant = tokens.user_token(db, ws.context, username)
     if isinstance(grant, tokens.AuthNeeded):
         return {
             "authorized": False,
@@ -166,6 +192,35 @@ def revoke(
     result = oauth_sessions.revoke(db, ws.id, user_id=username, provider=layer.connection)
     tokens.forget(ws.id, username)
     return result
+
+
+@router.get("/demo-account")
+def demo_account(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Whether the layer offers a demo account, its username and the layer's
+    Connection (the Chat consent card matches an ask's provider against it). The
+    ledger plus the cached parameter only; never the password."""
+    layer = context_layer.get(db, ws.id)
+    if layer is None:
+        return {"available": False, "username": None, "connection": None}
+    account = context_layer_demo.load(ws.context, layer)
+    return {**context_layer_demo.public_view(account), "connection": layer.connection}
+
+
+@router.post("/demo-account/reveal")
+def reveal_demo_account(
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> JSONResponse:
+    """The demo account's username and password, for the member to type at COA's
+    login page. Any member may ask (that is the point of a shared account); each
+    reveal is logged with the Launchpad username. Never cached by a browser or proxy."""
+    layer = context_layer.require(db, ws.id)
+    body = context_layer_demo.reveal(ws.context, layer, username=_username(request))
+    return JSONResponse(body, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @router.get("/namespaces")

@@ -3291,6 +3291,36 @@ per-user grants decide what an agent may see.
     `context_layer.reauthorize` (409), 403 to `forbidden`, 404 to `coa_not_found`,
     and 429 / 5xx / timeout to `upstream`, with at most 200 characters of COA's own
     message.
+- **Demo account** (`services/context_layer_demo.py`). Most members have no COA
+  account (COA users are admin-created only), so an operator creates one shared,
+  read-only account with `samples/coa-demo/demo_account.py` (Cognito user + group
+  `launchpad-demo`, whose COA grant survives re-creating the user) and stores
+  `{username, password, sub}` as an SSM SecureString under
+  `/<coa prefix>/launchpad/` in the COA region. The admin names it on the connect
+  form; the row keeps the name only, and the backend never creates or changes COA
+  users.
+  - Any member may reveal it (`POST …/demo-account/reveal`, `no-store`, logged by
+    member) on 我的授权 or on a Chat consent card for the layer's Connection. The
+    member then types it at COA's own login page through the ordinary consent:
+    Launchpad never signs in for anyone and never falls back to the account, and
+    each member keeps their own vault binding. The consent carries no
+    `customParameters` for any account choice: the token vault keys a token by
+    them, so a consent made with `login_hint` would land in a vault slot that the
+    broker, the Harness override, the playground and every Strands runtime never
+    read. Nothing is prefilled at COA's login page; the panel's copy buttons are
+    the way.
+  - A browser that still holds a COA session consents silently as that user
+    (COA's classic hosted UI ignores `prompt=login`, which Launchpad could not send
+    anyway). So the status compares the vaulted
+    token's `sub` with the account's (`authorization.identity: demo | own`), and the
+    page guides a switch: revoke, sign out of COA (`sign_out_url`, COA's web-client
+    `/logout`, which clears the session for every client on the domain), authorize
+    again. A consent that resolved to the other account than the one chosen opens
+    that guide by itself.
+  - The password lives in SSM, in backend memory for at most 300 s (a rotated
+    password shows within 5 minutes), in the reveal response and in the member's
+    browser while the panel is open. The `/<prefix>/launchpad/` scope keeps the
+    reveal from reading any other secret.
 - **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
   link opens a new tab. COA's REST data layer caps at 29 s, which is why questions
   go to the streaming Serve runtime and not to `POST /namespaces/{id}/query`. `/v1`

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, type ContextLayerConnectInput, type ContextLayerStatus, errorMessage } from "../../../lib/api";
+import { api, ApiError, type ContextLayerConnectInput, type ContextLayerStatus, errorMessage } from "../../../lib/api";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Field } from "../../ui";
 
@@ -19,6 +19,7 @@ export function ConnectForm({ current, onConnected }: { current: ContextLayerSta
     env: current?.env ?? "dev",
     region: current?.region ?? "",
     connection: current?.connection ?? "",
+    demo_account_param: current?.demo_account_param ?? "",
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +31,21 @@ export function ConnectForm({ current, onConnected }: { current: ContextLayerSta
     setBusy(true);
     setError(null);
     try {
-      await api.connectContextLayer({ ...form, connection: connection || null });
+      await api.connectContextLayer({
+        ...form,
+        connection: connection || null,
+        // "" clears the demo account; the form always says which one it wants
+        demo_account_param: (form.demo_account_param ?? "").trim(),
+      });
       toast("success", t("v2.contextLayer.connect.done"));
       onConnected();
     } catch (err) {
-      setError(errorMessage(err));
+      // a parameter that is missing or malformed: name the problem (never the value)
+      const problem =
+        err instanceof ApiError && err.code === "context_layer.demo_param_invalid"
+          ? (err.detail as { problem?: string } | null)?.problem
+          : undefined;
+      setError(problem ? t(`v2.contextLayer.connect.demoProblem.${problem}`, { defaultValue: errorMessage(err) }) : errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -61,6 +72,9 @@ export function ConnectForm({ current, onConnected }: { current: ContextLayerSta
       </Field>
       <Field label={t("v2.contextLayer.connect.connection")} hint={t("v2.contextLayer.connect.connectionHint")}>
         {input("connection", `coa-${form.prefix || "<prefix>"}`)}
+      </Field>
+      <Field label={t("v2.contextLayer.connect.demoParam")} hint={t("v2.contextLayer.connect.demoParamHint")} full>
+        {input("demo_account_param", `/${form.prefix || "<prefix>"}/launchpad/demo-account`)}
       </Field>
       {error && (
         <Field label="" full>

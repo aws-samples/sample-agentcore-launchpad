@@ -18,6 +18,7 @@ import { Alert, Button, Card, Confirm, Descriptions, Lamp, LinkButton, PageHeade
 import { AuthorizationControl } from "./AuthorizationControl";
 import { CoaErrorNotice, ConsoleLink, StatusLamp } from "./common";
 import { ConnectForm } from "./ConnectForm";
+import { MyAuthorization } from "./MyAuthorization";
 import { authStatusOf, healthRows, type HealthRow, namespaceLabel } from "./state";
 import { useCoaLoad } from "./useCoaLoad";
 import { coaConsoleUrl, type ContextView, healthSignal, namespaceSignal, namespacesState } from "./views";
@@ -191,16 +192,6 @@ export function Overview({ status, go }: { status: Loaded<ContextLayerStatus>; g
       setBusy(false);
     }
   };
-  const revoke = async () => {
-    try {
-      await api.revokeContextLayer();
-      toast("success", t("v2.contextLayer.auth.revokedToast"));
-      status.reload();
-    } catch (err) {
-      toast("error", errorMessage(err));
-    }
-  };
-
   return (
     <>
       <PageHeader
@@ -286,20 +277,7 @@ export function Overview({ status, go }: { status: Loaded<ContextLayerStatus>; g
             {refused && <Alert tone="error">{t("v2.contextLayer.disconnect.refused", { agents: refused.join(", ") })}</Alert>}
           </Card>
           <Card title={t("v2.contextLayer.myAuth")} sub={t("v2.contextLayer.myAuthSub")} testId="context-layer-my-auth">
-            <div className="v2-row">
-              <AuthorizationControl status={auth} onChanged={status.reload} />
-              {auth === "authorized" && (
-                <Button size="sm" kind="danger" onClick={() => void revoke()} testId="context-layer-revoke">
-                  {t("v2.contextLayer.auth.revoke")}
-                </Button>
-              )}
-              <Link to="/v2/my-connections" className="v2-link">
-                {t("v2.contextLayer.auth.myConnections")}
-              </Link>
-            </div>
-            {data.authorization?.authorized_at && (
-              <p className="v2-muted">{t("v2.contextLayer.auth.since", { at: fmtTime(data.authorization.authorized_at) })}</p>
-            )}
+            <MyAuthorization status={data} onChanged={status.reload} />
           </Card>
           <Card title={t("v2.contextLayer.namespaces.title")} sub={t("v2.contextLayer.namespaces.sub")} flush testId="context-layer-namespaces-card">
             <Namespaces key={`${auth}:${data.updated_at ?? ""}`} auth={auth} consoleUrl={consoleUrl} onAuthorized={status.reload} go={go} />

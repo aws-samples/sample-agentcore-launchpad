@@ -1,5 +1,11 @@
 import { type AgentForm, contextLayerSupported } from "../../../lib/agent-spec";
-import type { ContextLayerAuthStatus, ContextLayerNamespace, ContextLayerStatus } from "../../../lib/api";
+import type {
+  ContextLayerAuthStatus,
+  ContextLayerDemoInfo,
+  ContextLayerIdentity,
+  ContextLayerNamespace,
+  ContextLayerStatus,
+} from "../../../lib/api";
 import type { Signal } from "../../signals";
 import type { TagTone } from "../../ui";
 
@@ -146,3 +152,91 @@ export function pollAuthorized(opts: {
     clearTimeout(timer);
   };
 }
+
+/* ── the shared COA demo account ─────────────────────────────────────────── */
+
+/**
+ * The account a member explicitly chose for a consent started on this page,
+ * remembered per browser tab (sessionStorage) so that a consent which resolved to
+ * the *other* account is still noticed after a reload: COA's hosted UI consents
+ * silently as whoever its browser session is signed in as.
+ */
+export const ACCOUNT_INTENT_KEY = "launchpad_coa_account_intent";
+
+type IntentStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+const sessionStore = (): IntentStore | null => {
+  try {
+    return typeof window === "undefined" ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+};
+
+export function readAccountIntent(store: IntentStore | null = sessionStore()): ContextLayerIdentity | null {
+  try {
+    const value = store?.getItem(ACCOUNT_INTENT_KEY);
+    return value === "demo" || value === "own" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeAccountIntent(value: ContextLayerIdentity | null, store: IntentStore | null = sessionStore()): void {
+  try {
+    if (value) store?.setItem(ACCOUNT_INTENT_KEY, value);
+    else store?.removeItem(ACCOUNT_INTENT_KEY);
+  } catch {
+    /* storage unavailable: the mismatch warning just does not survive a reload */
+  }
+}
+
+/** The other account. */
+export const otherAccount = (account: ContextLayerIdentity): ContextLayerIdentity => (account === "demo" ? "own" : "demo");
+
+/**
+ * What the 我的授权 card shows about accounts:
+ * - `choose`: not authorized — authorize with my own COA account, or with the demo one;
+ * - `demo` / `own`: authorized as that account (`own` also covers unknown);
+ * - `guide`: the revoke → COA sign-out → authorize again sequence toward `target`.
+ *   It opens on request (`guide`, e.g. 切换为我的账号) or by itself when the consent
+ *   resolved to the other account than the one chosen (`wrong`), and stays open
+ *   through the revoke (`revoked`) until the target account is authorized.
+ */
+export type AccountView =
+  | { kind: "choose" }
+  | { kind: "demo" }
+  | { kind: "own" }
+  | { kind: "guide"; target: ContextLayerIdentity; revoked: boolean; wrong: boolean };
+
+export function accountView(opts: {
+  auth: ContextLayerAuthStatus;
+  identity: ContextLayerIdentity | null | undefined;
+  intent: ContextLayerIdentity | null;
+  guide: ContextLayerIdentity | null;
+}): AccountView {
+  const authorized = opts.auth === "authorized";
+  const identity = authorized ? opts.identity ?? null : null;
+  const wrong = identity !== null && opts.intent !== null && identity !== opts.intent;
+  const target = opts.guide ?? (wrong ? opts.intent : null);
+  // an unknown identity counts as reached: there is nothing to compare with
+  if (target && !(authorized && identity !== otherAccount(target))) {
+    return { kind: "guide", target, revoked: !authorized, wrong };
+  }
+  if (!authorized) return { kind: "choose" };
+  return identity === "demo" ? { kind: "demo" } : { kind: "own" };
+}
+
+/** Whether a remembered choice (intent or guide target) is fulfilled and can go. */
+export function choiceSettled(
+  choice: ContextLayerIdentity | null,
+  auth: ContextLayerAuthStatus,
+  identity: ContextLayerIdentity | null | undefined,
+): boolean {
+  return choice !== null && auth === "authorized" && (identity ?? null) !== otherAccount(choice);
+}
+
+/** Whether a consent card offers the demo account: the layer has one, and the ask is
+ *  for the layer's own Connection (a Harness console consent or a Strands agent's). */
+export const demoOffered = (ask: { provider: string }, info: ContextLayerDemoInfo | null | undefined): boolean =>
+  Boolean(info?.available && info.connection && ask.provider === info.connection);

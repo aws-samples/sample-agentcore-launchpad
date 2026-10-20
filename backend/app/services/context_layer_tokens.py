@@ -22,7 +22,10 @@ can call COA's REST API and so a Harness agent's turn can carry it in an
    Connection.
 5. **Consent.** No token ⇒ ``record_pending(agent_id="", tool="context_layer")``
    and the authorization URL; ``/auth/return`` → ``POST /api/identity/oauth/complete``
-   binds it with ``CompleteResourceTokenAuth(userId)``.
+   binds it with ``CompleteResourceTokenAuth(userId)``. **Never send
+   ``customParameters``**: the vault keys a token by them (live, 2026-10-20), so a
+   consent made with any lands in a slot that this broker, the Harness override, the
+   playground and every Strands runtime (all without them) never read.
 """
 
 import base64
@@ -95,16 +98,22 @@ def invalidate(workspace_id: str, username: str) -> None:
         _FORCE[(workspace_id, username)] = datetime.now(UTC)
 
 
-def _expiry(token: str) -> float | None:
-    """``exp`` of a JWT access token, decoded WITHOUT verification — it only bounds
-    the cache; COA verifies the token on every call."""
+def claims(token: str) -> dict[str, Any]:
+    """A JWT access token's claims, decoded WITHOUT verification ({} when it is not
+    one). Only for bounding the cache and comparing who consented — never for
+    authorization: COA verifies the token on every call."""
     try:
         payload = token.split(".")[1]
-        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        exp = claims.get("exp")
-        return float(exp) if isinstance(exp, int | float) else None
+        out = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     except (IndexError, ValueError, TypeError):
-        return None
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
+def _expiry(token: str) -> float | None:
+    """``exp`` of a JWT access token — it only bounds the cache."""
+    exp = claims(token).get("exp")
+    return float(exp) if isinstance(exp, int | float) and not isinstance(exp, bool) else None
 
 
 def _custom_state(agent_id: str, session_id: str) -> str:
@@ -137,6 +146,7 @@ def user_token(
     force: bool = False,
     agent_id: str = "",
     session_id: str = "",
+    record_consent: bool = True,
     now: Callable[[], float] = time.time,
 ) -> Token | AuthNeeded:
     """The member's COA token, or the consent they owe first.
@@ -145,6 +155,10 @@ def user_token(
     refused before any vault call: such a caller names nobody who could consent
     (``identity.as_user_requires_console``). ``agent_id`` / ``session_id`` only
     shape where ``/auth/return`` sends the member after a Chat-started consent.
+    ``record_consent=False`` is a read that must not start a consent (the status's
+    identity check): an ``AuthNeeded`` comes back, but no grant turns pending, and
+    while a re-consent is owed (revocation, COA 401, ``force``) the vault is not
+    asked at all — that ask would carry ``forceAuthentication``.
     """
     layer = context_layer.require(db, workspace.id)
     if not console_user or not username:
@@ -172,6 +186,8 @@ def user_token(
         and hit.expires_at - EXPIRY_MARGIN_S > now()
     ):
         return hit
+    if not record_consent and (revoked or forced or force):
+        return AuthNeeded(url="", layer=layer)  # a read only: never force a consent
     data = data_client(workspace)
     try:
         workload_token = data.get_workload_access_token_for_user_id(
@@ -214,6 +230,8 @@ def user_token(
         )
     with _LOCK:
         _CACHE.pop(key, None)
+    if not record_consent:
+        return AuthNeeded(url=url, layer=layer)
     oauth_sessions.record_pending(
         db,
         workspace.id,

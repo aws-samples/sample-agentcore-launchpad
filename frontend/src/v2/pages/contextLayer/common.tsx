@@ -6,6 +6,7 @@ import type { ContextLayerStatus } from "../../../lib/api";
 import type { Signal } from "../../signals";
 import { Alert, Card, Lamp, LinkButton, Spin } from "../../ui";
 import { AuthorizationControl } from "./AuthorizationControl";
+import { MyAuthorization } from "./MyAuthorization";
 import { authStatusOf } from "./state";
 import type { CoaError } from "./useCoaLoad";
 import { coaErrorKind, type ModuleGate } from "./views";
@@ -107,7 +108,11 @@ export function GateNotice({
   return (
     <Card title={t("v2.contextLayer.myAuth")} sub={t("v2.contextLayer.myAuthSub")} testId="context-layer-gate-auth">
       <p className="v2-muted">{t("v2.contextLayer.gate.authorizeFirst")}</p>
-      <AuthorizationControl status={authStatusOf(status)} onChanged={onChanged} />
+      {status ? (
+        <MyAuthorization status={status} onChanged={onChanged} />
+      ) : (
+        <AuthorizationControl status={authStatusOf(status)} onChanged={onChanged} />
+      )}
     </Card>
   );
 }
