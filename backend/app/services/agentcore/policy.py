@@ -305,14 +305,11 @@ def delete_policy(client: Any, *, engine_id: str, policy_id: str) -> dict[str, A
     return client.delete_policy(policyEngineId=engine_id, policyId=policy_id)
 
 
-def gateway_update_params(
-    gateway: dict[str, Any],
-    policy_engine_configuration: dict[str, str],
-) -> dict[str, Any]:
-    """Rebuild UpdateGateway from a fresh GetGateway response.
+def gateway_replace_params(gateway: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """UpdateGateway params rebuilt from a fresh GetGateway response, plus ``changes``.
 
-    UpdateGateway uses replace semantics. Every supported mutable field is
-    echoed and only ``policyEngineConfiguration`` is changed.
+    UpdateGateway uses replace semantics, so every supported mutable field
+    (and an attached ``policyEngineConfiguration``) is echoed; ``changes`` win.
     """
     required = ("gatewayId", "name", "roleArn", "authorizerType")
     missing = [key for key in required if not gateway.get(key)]
@@ -323,12 +320,26 @@ def gateway_update_params(
         "name": gateway["name"],
         "roleArn": gateway["roleArn"],
         "authorizerType": gateway["authorizerType"],
-        "policyEngineConfiguration": dict(policy_engine_configuration),
     }
-    for field in _GATEWAY_UPDATE_FIELDS:
+    for field in (*_GATEWAY_UPDATE_FIELDS, "policyEngineConfiguration"):
         if gateway.get(field) is not None:
             params[field] = gateway[field]
+    params.update(changes)
     return params
+
+
+def gateway_update_params(
+    gateway: dict[str, Any],
+    policy_engine_configuration: dict[str, str],
+) -> dict[str, Any]:
+    """Rebuild UpdateGateway from a fresh GetGateway response.
+
+    UpdateGateway uses replace semantics. Every supported mutable field is
+    echoed and only ``policyEngineConfiguration`` is changed.
+    """
+    return gateway_replace_params(
+        gateway, policyEngineConfiguration=dict(policy_engine_configuration)
+    )
 
 
 def update_gateway_policy_configuration(

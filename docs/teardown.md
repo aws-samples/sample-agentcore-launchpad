@@ -36,8 +36,8 @@ dependents go before the shared substrate. It also sweeps the per-agent IAM
 roles, including the orphans a failed agent deletion can leave behind:
 
 ```
-Gateway targets of launchpad-gw / launchpad-kb-gw     # dependents of the gateways
-   → Gateways launchpad-gw, launchpad-kb-gw             # matched by name; waits for targets to drop out
+Gateway targets of launchpad-gw / -kb-gw / -coa-gw   # dependents of the gateways
+   → Gateways launchpad-gw, -kb-gw, -coa-gw             # matched by name; waits for targets to drop out
       → Credential providers                            # launchpad-office-facts-key (API key), launchpad-gw-m2m (OAuth2)
         → Console workload identities                   # launchpad-console-* (the COA context layer)
          → Per-agent IAM roles                          # launchpad-agent-* AND tagged launchpad:agent-id
@@ -69,7 +69,8 @@ Notes:
 - The CDK stack deletion runs `cdk destroy --force`; the S3 artifacts bucket
   auto-empties and the ECR repo force-deletes as part of the stack.
 - Teardown targets are discovered by exact name or name prefix — gateways
-  `launchpad-gw` / `launchpad-kb-gw` (by gateway **name**, never by the ids in
+  `launchpad-gw` / `launchpad-kb-gw` / `launchpad-coa-gw` (the COA context layer's
+  managed gateway) (by gateway **name**, never by the ids in
   `config/launchpad.yaml`, which may be stale), credential providers
   `launchpad-office-facts-key` / `launchpad-gw-m2m`, `launchpad_memory-*`,
   `launchpad-registry`, the Skill Lab worker, stack `launchpad-base` —

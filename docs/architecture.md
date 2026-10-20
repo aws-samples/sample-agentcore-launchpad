@@ -3354,6 +3354,32 @@ per-user grants decide what an agent may see.
     password shows within 5 minutes), in the reveal response and in the member's
     browser while the panel is open. The `/<prefix>/launchpad/` scope keeps the
     reveal from reading any other secret.
+- **Managed COA gateway** (`services/context_layer_gateway.py`, gateway mode). This is
+  an opt-in path per agent (`context_layer.via = "gateway"`, wired by later work);
+  direct stays the default. An admin enables one gateway per workspace,
+  `launchpad-coa-gw`, from the overview's gateway card. It is separate from
+  `launchpad-gw`, which is never modified.
+  - `PUT /api/context-layer/gateway` is idempotent and resumable. It reads COA's
+    `tools/list` with the admin's console COA token: no consent means a 409 and
+    nothing is created. It then ensures the gateway (MCP `2025-11-25` + `2025-03-26`,
+    CUSTOM_JWT on the workspace pool admitting the console + M2M clients, so it
+    passes `user_gateways.trusts_workspace_users`). It adds the console return URL to
+    the gateway's own workload identity, and ensures one target `coa`: COA's MCP
+    runtime with an **inline** tool schema and outbound `OAUTH` `AUTHORIZATION_CODE`
+    on the layer's Connection. A 3LO target without an inline schema waits in
+    `CREATE_PENDING_AUTH`.
+  - The ledger keeps `resources["gateway"] = {gateway_id, gateway_arn, gateway_url,
+    target_id}`, written as soon as the gateway exists. `GET …/gateway` reads state,
+    tools, versions, the return-URL allow-list and drift (`issues`) back from AWS;
+    `GET /api/context-layer` carries only `gateway: {enabled, gateway_id}`.
+  - Refresh re-reads COA's tools into the inline schema. Delete removes the target,
+    then the gateway, and drops the `gateway:<gateway_id>` grant rows. It is refused
+    while an agent uses gateway mode, and disconnecting the layer is refused while
+    the gateway exists. Re-connecting keeps it.
+  - Consents given through the gateway live in the gateway's own vault slot and
+    cannot be revoked on the platform; the card says so ([identity.md](identity.md)
+    §7.7). The gateway role needs `GetWorkloadAccessTokenForJWT` (CDK and the spoke
+    policy). Teardown sweeps the gateway by name.
 - **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
   link opens a new tab. COA's REST data layer caps at 29 s, which is why questions
   go to the streaming Serve runtime and not to `POST /namespaces/{id}/query`. `/v1`

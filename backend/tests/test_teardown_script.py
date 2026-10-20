@@ -349,9 +349,12 @@ def test_delete_agent_role_removes_inline_policies_first(monkeypatch):
 
 
 def test_scope_constants_match_the_services_that_create_the_resources():
-    from app.services import agent_iam, gateway_bootstrap, kb_gateway
+    from app.services import agent_iam, context_layer_gateway, gateway_bootstrap, kb_gateway
 
-    assert teardown.GATEWAY_NAMES == (gateway_bootstrap.GATEWAY_NAME, kb_gateway.KB_GATEWAY_NAME)
+    assert teardown.GATEWAY_NAMES == (
+        gateway_bootstrap.GATEWAY_NAME, kb_gateway.KB_GATEWAY_NAME,
+        context_layer_gateway.GATEWAY_NAME,
+    )
     assert teardown.API_KEY_PROVIDER_NAME == gateway_bootstrap.API_KEY_PROVIDER_NAME
     assert teardown.GATEWAY_M2M_PROVIDER_NAME == gateway_bootstrap.GATEWAY_M2M_PROVIDER_NAME
     assert SHARED_ROLE.startswith(agent_iam._ROLE_PREFIX)  # why the tag is load-bearing

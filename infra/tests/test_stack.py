@@ -336,6 +336,40 @@ def test_gateway_role_can_invoke_harness_canary_targets(template: Template):
     )
 
 
+def test_gateway_role_can_exchange_an_inbound_jwt_for_its_workload_token(template: Template):
+    """A 3LO (AUTHORIZATION_CODE) target behind a CUSTOM_JWT gateway — the managed
+    COA gateway, as_user Gateway targets — makes the gateway call
+    GetWorkloadAccessTokenForJWT with its own role. Measured live 2026-10-20: the
+    tool call fails 403 without it."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Sid": "IdentityVault",
+                                        "Action": [
+                                            "bedrock-agentcore:GetResourceApiKey",
+                                            "bedrock-agentcore:GetResourceOauth2Token",
+                                            "bedrock-agentcore:GetWorkloadAccessToken",
+                                            "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                                        ],
+                                        "Resource": "*",
+                                    }
+                                )
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+
 def test_gateway_role_can_resolve_a_routed_config_bundle(template: Template):
     """A request carrying config-bundle baggage makes the GATEWAY fetch the bundle
     with its own role, not just the agent. Measured live: without this grant the

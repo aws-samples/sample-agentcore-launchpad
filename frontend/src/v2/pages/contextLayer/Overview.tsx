@@ -18,6 +18,7 @@ import { Alert, Button, Card, Confirm, Descriptions, Lamp, LinkButton, PageHeade
 import { AuthorizationControl } from "./AuthorizationControl";
 import { CoaErrorNotice, ConsoleLink, StatusLamp } from "./common";
 import { ConnectForm } from "./ConnectForm";
+import { GatewayCard } from "./GatewayCard";
 import { MyAuthorization } from "./MyAuthorization";
 import { authStatusOf, healthRows, type HealthRow, namespaceLabel } from "./state";
 import { useCoaLoad } from "./useCoaLoad";
@@ -276,6 +277,7 @@ export function Overview({ status, go }: { status: Loaded<ContextLayerStatus>; g
             )}
             {refused && <Alert tone="error">{t("v2.contextLayer.disconnect.refused", { agents: refused.join(", ") })}</Alert>}
           </Card>
+          <GatewayCard layer={data} onChanged={status.reload} />
           <Card title={t("v2.contextLayer.myAuth")} sub={t("v2.contextLayer.myAuthSub")} testId="context-layer-my-auth">
             <MyAuthorization status={data} onChanged={status.reload} />
           </Card>

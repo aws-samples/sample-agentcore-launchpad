@@ -1,9 +1,10 @@
 """COA context layer (`/api/context-layer`): connect a COA deployment, a member's
 own authorization, the namespaces COA lets that member see (with their sources,
-governed metrics and ontology), COA's health, the streaming playground, and the
-shared COA demo account.
+governed metrics and ontology), COA's health, the streaming playground, the
+shared COA demo account, and the managed COA gateway (gateway mode).
 
 Thin HTTP shell over `services.context_layer` (connect/status/disconnect),
+`services.context_layer_gateway` (the managed gateway: enable/refresh/disable),
 `services.context_layer_tokens` (the member's COA token),
 `services.context_layer_api` (COA REST reads, as the member),
 `services.context_layer_playground` (the Serve runtime proxy) and
@@ -31,6 +32,7 @@ from app.services import (
     context_layer,
     context_layer_api,
     context_layer_demo,
+    context_layer_gateway,
     context_layer_playground,
     oauth_sessions,
 )
@@ -94,6 +96,16 @@ def _mask(refs: list[dict[str, Any]], hidden: set[str]) -> list[dict[str, Any]]:
     ]
 
 
+def _masked_gateway(
+    out: dict[str, Any], db: Session, viewer: Viewer, workspace_id: str
+) -> dict[str, Any]:
+    """The gateway status with the agents the caller may not see masked."""
+    if out.get("agents"):
+        hidden = agent_access.hidden_agent_ids(db, viewer, workspace_id)
+        out["agents"] = _mask(out["agents"], hidden)
+    return out
+
+
 @router.get("")
 def get_status(
     request: Request,
@@ -145,6 +157,62 @@ def disconnect(
     except AppError as exc:
         # the guard counts every agent; the 409 names only the visible ones
         if exc.code == "context_layer.referenced" and isinstance(exc.detail, dict):
+            exc.detail["referenced_by"] = _mask(
+                exc.detail.get("referenced_by") or [],
+                agent_access.hidden_agent_ids(db, viewer, ws.id),
+            )
+        raise
+
+
+@router.get("/gateway")
+def gateway_status(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The managed COA gateway, read back from AWS: state, URL, tools, MCP versions,
+    whether the console's return URL is allow-listed, and the agents using it."""
+    return _masked_gateway(context_layer_gateway.status(db, ws.context), db, viewer, ws.id)
+
+
+@router.put("/gateway")
+def enable_gateway(
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Create or repair the managed COA gateway (idempotent). COA's tool schema is
+    read with the caller's console COA token, so their consent comes first (409
+    ``context_layer.authorization_required``, nothing created). Can take minutes."""
+    out = context_layer_gateway.enable(db, ws.context, username=_username(request))
+    return _masked_gateway(out, db, viewer, ws.id)
+
+
+@router.post("/gateway/refresh")
+def refresh_gateway_tools(
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Re-read COA's tools (as the caller) into the gateway target's inline schema."""
+    out = context_layer_gateway.refresh_tools(db, ws.context, username=_username(request))
+    return _masked_gateway(out, db, viewer, ws.id)
+
+
+@router.delete("/gateway")
+def disable_gateway(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Delete the managed COA gateway (target, then gateway) and its consents' grant
+    rows. ``409 context_layer.gateway_referenced`` while an agent uses gateway mode."""
+    try:
+        return context_layer_gateway.disable(db, ws.context)
+    except AppError as exc:
+        if exc.code == "context_layer.gateway_referenced" and isinstance(exc.detail, dict):
             exc.detail["referenced_by"] = _mask(
                 exc.detail.get("referenced_by") or [],
                 agent_access.hidden_agent_ids(db, viewer, ws.id),

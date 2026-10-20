@@ -598,6 +598,46 @@ The rules:
    `launchpad-demo`, so it survives a re-created user. `rotate --signout` ends every
    demo consent (`AdminUserGlobalSignOut` revokes the refresh tokens the vault holds).
 
+#### Managed COA gateway (gateway mode)
+
+An opt-in alternative to the console workload identity above, per agent
+(`context_layer.via = "gateway"`; direct stays the default and is unchanged). An
+admin enables one platform-managed gateway per workspace, `launchpad-coa-gw`, on the
+Context Layer page (`services/context_layer_gateway.py`, `PUT
+/api/context-layer/gateway`). `launchpad-gw` is never touched. The live facts behind
+it are in task `10-20-context-layer-gateway-spike` (`research/findings.md`, F1–F11).
+
+- **Inbound.** CUSTOM_JWT on the workspace user pool, admitting the console and M2M
+  clients, with no audience and no interceptor, so `user_gateways.trusts_workspace_users`
+  holds. A gateway-mode agent's turn reaches it with the asking member's pool JWT.
+  The gateway accepts MCP `2025-11-25` (plus `2025-03-26`). Only `2025-11-25` lets it
+  raise a missing consent as URL elicitation (JSON-RPC `-32042`).
+- **Outbound.** One target `coa`, an MCP server at COA's MCP runtime with outbound
+  `OAUTH` / `AUTHORIZATION_CODE` on the layer's Connection and `defaultReturnUrl` =
+  the console's `/auth/return`. It never carries `customParameters`.
+  - Its tool schema is inline: COA's own `tools/list`, read once with the enabling
+    admin's console COA token, and refreshed from the card. Without an inline schema
+    a 3LO target waits in `CREATE_PENDING_AUTH` for a bootstrap consent.
+  - The console's return URL is added to the gateway's own workload identity (named
+    after the gateway), never removing an entry.
+- **IAM.** The gateway role needs `bedrock-agentcore:GetWorkloadAccessTokenForJWT`:
+  the gateway exchanges the inbound JWT for its workload token (403 without it). CDK
+  `launchpad-base` and the spoke `gateway_role_policy` both carry it. The as_user
+  Gateway targets of §7.6 need the same grant.
+- **Vault slot and revocation.** A member's consent through the gateway is keyed by
+  the gateway's workload identity and the member's JWT subject. Its grant row is
+  `user_grants.agent_id = "gateway:<gateway_id>"`. The platform can neither re-ask it
+  (`GetWorkloadAccessTokenForJWT` on a service-linked identity is refused) nor delete
+  it (no API exists), so **a gateway consent cannot be revoked on the platform**. It
+  lasts until COA's refresh token expires, or until an admin deletes the gateway,
+  which resets everyone. Deleting it (`DELETE /api/context-layer/gateway`) removes the
+  target, then the gateway, clears the ledger key and drops those grant rows. It is
+  refused while an agent uses gateway mode.
+- **Ledger.** `context_layers.resources["gateway"] = {gateway_id, gateway_arn,
+  gateway_url, target_id}` only. Status, tools, versions and the return-URL allow-list
+  are read back from AWS (`GET /api/context-layer/gateway`). Disconnecting the layer
+  is refused while the gateway exists (`context_layer.gateway_enabled`).
+
 ## 8. P3: identity passthrough
 
 P3 lets a caller's own identity reach the agent (inbound JWT, Chat "invoke as me")

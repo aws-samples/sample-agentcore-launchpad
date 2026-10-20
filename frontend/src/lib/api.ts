@@ -3186,6 +3186,8 @@ export interface ContextLayerStatus {
   sign_out_url?: string | null;
   /** agents attaching the layer; a hidden agent keeps its slot with null id/name */
   referenced_by?: { type: string; id: string | null; name: string | null }[];
+  /** the managed COA gateway, from the ledger only (live: `getContextLayerGateway`) */
+  gateway?: ContextLayerGatewaySummary;
   created_by_name?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -3197,6 +3199,43 @@ export interface ContextLayerStatus {
   callback_context_key?: string;
   /** the demo account's SSM parameter name (never its value) */
   demo_account_param?: string | null;
+}
+
+/** `GET /api/context-layer` → `gateway`: whether an admin enabled the managed COA gateway. */
+export interface ContextLayerGatewaySummary {
+  enabled: boolean;
+  gateway_id: string | null;
+}
+
+/** The managed gateway's lifecycle, read back from AWS. `missing`: the ledger names a
+ *  gateway or target AWS no longer has; `unknown`: AWS could not be read. */
+export type ContextLayerGatewayState = "ready" | "creating" | "failed" | "missing" | "disabled" | "unknown";
+
+/** Drift a re-enable repairs. */
+export type ContextLayerGatewayIssue = "protocol" | "authorizer" | "endpoint" | "connection" | "return_url" | "tools";
+
+/** `GET /api/context-layer/gateway` (and the answer of enable / refresh). Allow-listed:
+ *  no secret, no tool schema body. `usable` = `ready` with no `issues`. */
+export interface ContextLayerGatewayStatus {
+  enabled: boolean;
+  state: ContextLayerGatewayState;
+  usable: boolean;
+  gateway_name: string;
+  gateway_id: string | null;
+  gateway_url: string | null;
+  gateway_status: string | null;
+  target_status: string | null;
+  status_reasons: string[];
+  /** COA's tool names in the target's inline schema */
+  tools: string[];
+  protocol_versions: string[];
+  /** whether the console's `/auth/return` is on the gateway workload identity's allow-list */
+  return_url_ok: boolean | null;
+  trusts_workspace_users: boolean | null;
+  issues: ContextLayerGatewayIssue[];
+  /** agents using gateway mode; a hidden agent keeps its slot with null id/name */
+  agents: { id: string | null; name: string | null; method: string }[];
+  probe_errors: { probe: string; code: string }[];
 }
 
 export interface ContextLayerConnectInput {
@@ -6257,6 +6296,19 @@ export const api = {
     request<{ revoked: boolean; provider: string; agents: number }>(
       "/api/context-layer/revoke",
       { method: "POST" },
+    ),
+  getContextLayerGateway: () => request<ContextLayerGatewayStatus>("/api/context-layer/gateway"),
+  /** Create or repair the managed COA gateway (admin; can take minutes). COA's tools are
+   *  read with the caller's own COA consent: 409 `context_layer.authorization_required` first. */
+  enableContextLayerGateway: () =>
+    request<ContextLayerGatewayStatus>("/api/context-layer/gateway", { method: "PUT" }),
+  refreshContextLayerGatewayTools: () =>
+    request<ContextLayerGatewayStatus>("/api/context-layer/gateway/refresh", { method: "POST" }),
+  /** 409 `context_layer.gateway_referenced` (with `detail.referenced_by`) while an agent uses it. */
+  disableContextLayerGateway: () =>
+    request<{ disabled: boolean; gateway_id: string; grants_removed: number }>(
+      "/api/context-layer/gateway",
+      { method: "DELETE" },
     ),
   listContextLayerNamespaces: () =>
     request<{ namespaces: ContextLayerNamespace[] }>("/api/context-layer/namespaces"),

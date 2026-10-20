@@ -33,8 +33,8 @@ English: [teardown.md](teardown.md)
 Agent 删除失败时可能遗留的孤儿角色：
 
 ```
-launchpad-gw / launchpad-kb-gw 的网关 target            # 网关的依赖方
-   → 网关 launchpad-gw、launchpad-kb-gw                  # 按名称匹配；等待 target 从列表消失
+launchpad-gw / -kb-gw / -coa-gw 的网关 target          # 网关的依赖方
+   → 网关 launchpad-gw、-kb-gw、-coa-gw                  # 按名称匹配；等待 target 从列表消失
       → 凭据提供方                                       # launchpad-office-facts-key（API key）、launchpad-gw-m2m（OAuth2）
         → 控制台工作负载身份                              # launchpad-console-*（COA 上下文层）
          → 逐 Agent IAM 角色                             # launchpad-agent-* 且带 launchpad:agent-id 标签
@@ -62,7 +62,8 @@ uv run python ../scripts/teardown.py --yes        # 删除（网关层 → 凭�
   都先于 CDK 栈移除。某个目标失败只打印警告，循环继续。
 - CDK 栈删除执行 `cdk destroy --force`；S3 产物桶自动清空，ECR 仓库作为栈的一部分
   强制删除。
-- teardown 目标按精确名称或名称前缀发现——网关 `launchpad-gw` / `launchpad-kb-gw`
+- teardown 目标按精确名称或名称前缀发现——网关 `launchpad-gw` / `launchpad-kb-gw` /
+  `launchpad-coa-gw`（COA 上下文层的托管网关）
   （按网关**名称**匹配，绝不使用 `config/launchpad.yaml` 里可能过期的 id）、凭据提供方
   `launchpad-office-facts-key` / `launchpad-gw-m2m`、`launchpad_memory-*`、
   `launchpad-registry`、Skill Lab worker、栈 `launchpad-base`——这些名称之外的资源

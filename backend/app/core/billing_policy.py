@@ -188,6 +188,10 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     # the playground asks COA's Serve runtime: COA spend is in COA's account, and
     # Launchpad does not meter it
     ("POST", "/api/context-layer/playground"): FREE,
+    # the managed COA gateway: control-plane writes (+ one COA tools/list read)
+    ("PUT", "/api/context-layer/gateway"): FREE,
+    ("POST", "/api/context-layer/gateway/refresh"): FREE,
+    ("DELETE", "/api/context-layer/gateway"): FREE,
     # ---- governance: policy test calls a Gateway tool; NL policy authoring bills tokens ----
     ("POST", "/api/governance/gateways/{gateway_id}/manage"): FREE,
     ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): FREE,

@@ -71,6 +71,9 @@ AGENT_CLIENT_KEY = "agent_client_id"
 WEB_CLIENT_KEY = "web_client_id"
 _CLIENT_ID_RE = re.compile(r"^[\w+]{1,128}$")
 RUNTIME_KEYS = {"mcp": "mcp_runtime_arn", "serve": "serve_runtime_arn"}
+# resources key of the managed COA gateway's identifiers (``context_layer_gateway``):
+# {gateway_id, gateway_arn, gateway_url, target_id}. Present ⇔ an admin enabled it.
+GATEWAY_KEY = "gateway"
 _RUNTIME_ARN_RE = re.compile(
     r"^arn:aws[\w-]*:bedrock-agentcore:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):"
     r"runtime/(?P<id>[A-Za-z0-9_-]+)$"
@@ -129,6 +132,12 @@ def _layer(row: ContextLayerRow) -> ContextLayer:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def gateway_ref(layer: ContextLayer | None) -> dict[str, str] | None:
+    """The managed COA gateway's ledger identifiers, or None when it is not enabled."""
+    ref = (layer.resources if layer is not None else {}).get(GATEWAY_KEY)
+    return dict(ref) if isinstance(ref, dict) and ref.get("gateway_id") else None
 
 
 def not_connected() -> AppError:
@@ -541,6 +550,10 @@ def connect(
         demo_param = kept if context_layer_demo.in_scope(prefix, kept) else ""
     if demo_param:
         resources[context_layer_demo.PARAM_KEY] = demo_param
+    if row is not None and isinstance((row.resources or {}).get(GATEWAY_KEY), dict):
+        # discovery never sees the managed gateway: re-connecting keeps it (enable or
+        # refresh re-points its target when the MCP runtime or Connection changed)
+        resources[GATEWAY_KEY] = dict(row.resources[GATEWAY_KEY])
     if row is None:
         row = ContextLayerRow(workspace_id=workspace.id)
         if creator is not None:
@@ -580,8 +593,10 @@ def referencing_agents(db: Session, workspace_id: str) -> list[dict[str, str]]:
 
 def disconnect(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
     """Forget the layer; refused (409 ``context_layer.referenced``) while any agent
-    attaches it. The Connection and the console workload identity stay: they are
-    listed under 出站凭证 and swept by teardown."""
+    attaches it, and (409 ``context_layer.gateway_enabled``) while the managed COA
+    gateway exists — it is the layer's AWS resource, deleted first on its own card.
+    The Connection and the console workload identity stay: they are listed under
+    出站凭证 and swept by teardown."""
     row = _row(db, workspace.id)
     if row is None:
         raise not_connected()
@@ -591,6 +606,14 @@ def disconnect(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
             "context_layer.referenced",
             f"{len(refs)} agent(s) attach the context layer; detach it from them first",
             {"referenced_by": refs},
+            status_code=409,
+        )
+    gateway = gateway_ref(_layer(row))
+    if gateway is not None:
+        raise AppError(
+            "context_layer.gateway_enabled",
+            "the managed COA gateway still exists; delete it on the Context Layer page first",
+            {"gateway_id": gateway["gateway_id"]},
             status_code=409,
         )
     out = {
@@ -727,6 +750,11 @@ def status(
         "callback_registered": callback_registered,
         "authorization": authorization,
         **demo,
+        # ledger only: the live state is GET /api/context-layer/gateway
+        "gateway": {
+            "enabled": gateway_ref(layer) is not None,
+            "gateway_id": (gateway_ref(layer) or {}).get("gateway_id"),
+        },
         "referenced_by": referencing_agents(db, workspace.id),
         "created_by_name": layer.created_by_name,
         "created_at": layer.created_at.isoformat() if layer.created_at else None,

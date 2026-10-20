@@ -42,6 +42,10 @@ COA_TOOLS = (
 HARNESS_SELECTOR = f"@{TOOL_NAME}"
 HARNESS_TOOL_PREFIX = f"{TOOL_NAME}_"
 SUPPORTED_METHODS = ("harness", "zip_runtime")
+# ``context_layer.via``: how an agent reaches COA. Direct (the default, omitted) is the
+# backend / runtime fetching the member's COA token; "gateway" is the workspace's
+# managed COA gateway (``services/context_layer_gateway``) with the member's pool JWT.
+VIA_GATEWAY = "gateway"
 ADDENDUM_HEADING = "## Context layer (COA)"
 
 
@@ -68,6 +72,13 @@ def namespace_ref(spec: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
 def attached(spec: Mapping[str, Any] | None) -> bool:
     """Whether the stored spec mounts the workspace's COA context layer."""
     return namespace_ref(spec) is not None
+
+
+def uses_gateway(spec: Mapping[str, Any] | None) -> bool:
+    """Whether the stored spec reaches the layer through the managed COA gateway
+    (``context_layer.via == "gateway"``). Raw-dict read, like ``attached``."""
+    ref = namespace_ref(spec)
+    return ref is not None and ref.get("via") == VIA_GATEWAY
 
 
 def prompt_addendum(namespace_id: str, namespace_name: str = "", *, tool_prefix: str = "") -> str:

@@ -758,6 +758,14 @@ class TestRolePolicyFidelity:
         actions = {a for s in document["Statement"] for a in _actions(s)}
         assert "lambda:InvokeFunction" not in actions
         assert "execute-api:Invoke" not in actions
+        # a 3LO target behind a CUSTOM_JWT gateway (the managed COA gateway)
+        vault = next(s for s in document["Statement"] if s["Sid"] == "IdentityVault")
+        assert _actions(vault) == [
+            "bedrock-agentcore:GetResourceApiKey",
+            "bedrock-agentcore:GetResourceOauth2Token",
+            "bedrock-agentcore:GetWorkloadAccessToken",
+            "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+        ]
 
     def test_the_kb_role_covers_the_buckets_kb_prefix_only(self):
         statements = self._documents()["kb"]["Statement"]

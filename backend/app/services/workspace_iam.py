@@ -444,6 +444,9 @@ def gateway_role_policy(account_id: str, region: str) -> dict[str, Any]:
                     "bedrock-agentcore:GetResourceApiKey",
                     "bedrock-agentcore:GetResourceOauth2Token",
                     "bedrock-agentcore:GetWorkloadAccessToken",
+                    # 3LO targets behind a CUSTOM_JWT gateway (the managed COA
+                    # gateway, as_user targets): the inbound JWT → workload token
+                    "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
                 ],
                 "Resource": "*",
             },

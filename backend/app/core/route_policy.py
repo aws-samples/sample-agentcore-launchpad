@@ -319,6 +319,12 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/context-layer/namespaces/{namespace_id}/ontology"): MEMBER,
     ("GET", "/api/context-layer/health"): MEMBER,
     ("POST", "/api/context-layer/playground"): MEMBER,
+    # the managed COA gateway: an AgentCore Gateway + target + workload identity
+    # change, so ADMIN; its live status is a read
+    ("GET", "/api/context-layer/gateway"): MEMBER,
+    ("PUT", "/api/context-layer/gateway"): ADMIN,
+    ("POST", "/api/context-layer/gateway/refresh"): ADMIN,
+    ("DELETE", "/api/context-layer/gateway"): ADMIN,
     # ---- governance ----
     ("GET", "/api/governance/gateways"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,

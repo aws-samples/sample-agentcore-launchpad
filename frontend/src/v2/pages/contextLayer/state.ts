@@ -2,6 +2,8 @@ import { type AgentForm, contextLayerSupported } from "../../../lib/agent-spec";
 import type {
   ContextLayerAuthStatus,
   ContextLayerDemoInfo,
+  ContextLayerGatewayState,
+  ContextLayerGatewayStatus,
   ContextLayerIdentity,
   ContextLayerNamespace,
   ContextLayerStatus,
@@ -240,3 +242,41 @@ export function choiceSettled(
  *  for the layer's own Connection (a Harness console consent or a Strands agent's). */
 export const demoOffered = (ask: { provider: string }, info: ContextLayerDemoInfo | null | undefined): boolean =>
   Boolean(info?.available && info.connection && ask.provider === info.connection);
+
+/* ── the managed COA gateway (gateway mode) ── */
+
+/** The managed gateway's lifecycle as a signal: ready is good, settling moves on its
+ *  own, failed / missing need an administrator, unknown waits for a re-read. */
+export const GATEWAY_SIGNAL: Record<ContextLayerGatewayState, Signal> = {
+  ready: "ok",
+  creating: "info",
+  failed: "act",
+  missing: "act",
+  unknown: "wait",
+  disabled: "off",
+};
+
+/** The signal of a gateway status: `ready` with drift (`issues`) needs a repair. */
+export function gatewaySignal(gw: Pick<ContextLayerGatewayStatus, "state" | "issues">): Signal {
+  if (gw.state === "ready" && gw.issues.length) return "act";
+  return GATEWAY_SIGNAL[gw.state] ?? "off";
+}
+
+/** Which admin actions the gateway card offers. `enable` creates it; `repair` re-runs
+ *  the same idempotent enable on a broken or drifted gateway; `refresh` re-reads COA's
+ *  tools into a working target; `remove` deletes it. Members get none. */
+export function gatewayActions(
+  gw: Pick<ContextLayerGatewayStatus, "enabled" | "state" | "issues"> | null,
+  isAdmin: boolean,
+): { enable: boolean; repair: boolean; refresh: boolean; remove: boolean } {
+  const none = { enable: false, repair: false, refresh: false, remove: false };
+  if (!isAdmin || !gw) return none;
+  if (!gw.enabled) return { ...none, enable: true };
+  const healthy = gw.state === "ready" && gw.issues.length === 0;
+  return {
+    enable: false,
+    repair: !healthy && gw.state !== "creating",
+    refresh: gw.state === "ready",
+    remove: true,
+  };
+}

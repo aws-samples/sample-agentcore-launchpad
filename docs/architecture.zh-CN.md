@@ -1891,6 +1891,24 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     域名下所有客户端的会话）、重新授权。如果授权结果不是所选的账号，会自动打开这份引导。
   - 密码只存在于 SSM、后端内存（最多 300 秒，轮换后的密码 5 分钟内生效）、查看接口的响应，以及
     面板打开期间成员的浏览器中。`/<prefix>/launchpad/` 范围限制保证查看接口无法读取其他密钥。
+- **托管 COA 网关**（`services/context_layer_gateway.py`，经 Gateway 接入）：按 Agent 选择启用
+  （`context_layer.via = "gateway"`，由后续工作接入），默认仍为直连。管理员在概览页的网关卡片上为每个
+  工作区启用一个网关 `launchpad-coa-gw`，它与 `launchpad-gw` 相互独立，后者从不被修改。
+  - `PUT /api/context-layer/gateway` 幂等且可续做。它先以管理员的控制台 COA 令牌读取 COA 的
+    `tools/list`：未授权时返回 409，不创建任何资源。然后确保网关存在（MCP `2025-11-25` +
+    `2025-03-26`，工作区用户池上的 CUSTOM_JWT，允许控制台与 M2M 客户端，因此满足
+    `user_gateways.trusts_workspace_users`），把控制台返回 URL 加入网关自身的工作负载身份，并确保
+    一个目标 `coa`：指向 COA 的 MCP 运行时，带**内联**工具 schema，出站为基于该层 Connection 的
+    `OAUTH` `AUTHORIZATION_CODE`。没有内联 schema 的 3LO 目标会停在 `CREATE_PENDING_AUTH`。
+  - 账本只存 `resources["gateway"] = {gateway_id, gateway_arn, gateway_url, target_id}`，网关一经
+    创建就写入。`GET …/gateway` 从 AWS 读回状态、工具、MCP 版本、返回 URL 白名单与漂移
+    （`issues`）；`GET /api/context-layer` 只带 `gateway: {enabled, gateway_id}`。
+  - “刷新工具”把 COA 的工具重新写入内联 schema。删除时先删目标、再删网关，并删除以
+    `gateway:<gateway_id>` 为键的授权行；仍有 Agent 使用经 Gateway 接入时拒绝删除，网关存在时
+    也拒绝断开上下文层。重新连接会保留网关。
+  - 经网关完成的授权存放在网关自己的令牌库槽位中，无法在平台上撤销，卡片上会说明这一点
+    （[identity.md](identity.md) §7.7）。网关角色需要 `GetWorkloadAccessTokenForJWT`（CDK 与
+    spoke 工作区的 `gateway_role_policy` 均已包含）。teardown 按名称清理该网关。
 - **限制**：COA 不允许被内嵌（`X-Frame-Options: DENY`），所以所有编写链接都在新标签页打开。
   COA 的 REST 数据层上限为 29 秒，因此提问走流式 Serve 运行时，而不是
   `POST /namespaces/{id}/query`。挂载 COA 的 Agent 在 `/v1` 上返回 409；金丝雀／A-B、评估回放

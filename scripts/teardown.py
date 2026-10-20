@@ -2,9 +2,10 @@
 """Launchpad teardown CLI — best-effort removal of everything bootstrap created.
 
 Scope (reverse creation order, dependents before the shared substrate):
-  1. Gateway targets of launchpad-gw / launchpad-kb-gw, then the two gateways
-     themselves (matched by gateway name; they reference the Cognito pool and
-     the IAM roles that go with the stack)
+  1. Gateway targets of launchpad-gw / launchpad-kb-gw / launchpad-coa-gw (the
+     COA context layer's managed gateway), then the gateways themselves (matched
+     by gateway name; they reference the Cognito pool and the IAM roles that go
+     with the stack)
   2. Credential providers launchpad-office-facts-key (API key) and
      launchpad-gw-m2m (OAuth2), matched by exact name
   2b. Console workload identities launchpad-console-* (the COA context layer's
@@ -46,6 +47,7 @@ from app.services import agent_iam  # noqa: E402
 from app.services import bootstrap as bs  # noqa: E402
 from app.services.agentcore import policy as policy_api  # noqa: E402
 from app.services.context_layer import CONSOLE_WORKLOAD_PREFIX  # noqa: E402
+from app.services.context_layer_gateway import GATEWAY_NAME as COA_GATEWAY_NAME  # noqa: E402
 from app.services.gateway_bootstrap import (  # noqa: E402
     API_KEY_PROVIDER_NAME,
     GATEWAY_M2M_PROVIDER_NAME,
@@ -56,7 +58,7 @@ from app.services.workspace_iam import EXECUTION_ROLE_BASE  # noqa: E402
 
 # Gateways bootstrap creates, in deletion order. Matched by *name* — the ids in
 # config/launchpad.yaml may be stale or absent on the box running teardown.
-GATEWAY_NAMES = (GATEWAY_NAME, KB_GATEWAY_NAME)
+GATEWAY_NAMES = (GATEWAY_NAME, KB_GATEWAY_NAME, COA_GATEWAY_NAME)
 
 # How long a gateway delete waits for its (already-deleted) targets to drop out
 # of the listing before trying anyway, and how many ConflictException retries.

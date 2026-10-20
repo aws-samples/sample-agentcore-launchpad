@@ -479,6 +479,11 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:GetResourceApiKey",
                     "bedrock-agentcore:GetResourceOauth2Token",
                     "bedrock-agentcore:GetWorkloadAccessToken",
+                    # A 3LO (AUTHORIZATION_CODE) target behind a CUSTOM_JWT gateway —
+                    # the managed COA gateway, as_user Gateway targets — has the
+                    # gateway exchange the caller's inbound JWT for its workload
+                    # token (measured live 2026-10-20: 403 without it).
+                    "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
                 ],
                 resources=["*"],
             )
