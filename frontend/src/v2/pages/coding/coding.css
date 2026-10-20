@@ -1,6 +1,6 @@
 /* ============ console V2 — Coding Agent (web IDE) ============
-   Three panes: file tree | editor + diffs | conversation. The grid is viewport-high
-   (like the chat grid) so each pane scrolls inside itself, not the page. */
+   Files · conversation (center) · Workbench (editor tabs + diffs). The grid is
+   viewport-high (like the chat grid) so each pane scrolls inside itself, not the page. */
 
 /* ---------- list page ---------- */
 .v2 .v2-coding-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; }
@@ -11,26 +11,98 @@
 .v2 .v2-coding-runtime-log .v2-pre { max-height: 260px; font-size: 12px; }
 
 /* ---------- IDE frame ---------- */
+/* The IDE is a workspace, not a reading page: lift the shell's 1480px content cap
+   (v2.css .v2-main-inner) only while the IDE is mounted, so wide screens give the
+   extra width to the three panes instead of empty margins. */
+.v2 .v2-main-inner:has(> .v2-coding-ide), .v2 .v2-main-inner:has(.v2-coding-ide) { max-width: none; }
 .v2 .v2-coding-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .v2 .v2-coding-elapsed { font-size: 12.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
+/* The columns come from layout.ts (set inline): files | gutter | conversation (1fr) |
+   gutter | workbench; a gutter holds that side's resize handle. A collapsed panel is a
+   40 px rail; a panel without room inline opens as an overlay over the conversation,
+   next to its rail (52 px = rail + gutter). Children are placed by column, so a panel
+   switching inline / overlay / collapsed keeps its DOM (tree state, Monaco models). */
 .v2 .v2-coding-grid {
+  position: relative;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 420px;
+  grid-template-columns: 240px 12px minmax(0, 1fr) 12px 520px;
   grid-template-rows: minmax(0, 1fr);
-  gap: 12px;
   height: calc(100vh - 150px);
   min-height: 560px;
 }
+.v2 .v2-coding-grid > .v2-coding-pane-files,
+.v2 .v2-coding-grid > .v2-coding-rail-files { grid-column: 1; grid-row: 1; }
+.v2 .v2-coding-grid > .v2-coding-resizer-files { grid-column: 2; grid-row: 1; }
+.v2 .v2-coding-grid > .v2-coding-pane-chat { grid-column: 3; grid-row: 1; }
+.v2 .v2-coding-grid > .v2-coding-resizer-workbench { grid-column: 4; grid-row: 1; }
+.v2 .v2-coding-grid > .v2-coding-pane-workbench,
+.v2 .v2-coding-grid > .v2-coding-rail-workbench { grid-column: 5; grid-row: 1; }
+.v2 .v2-coding-grid > .v2-coding-pane.is-collapsed { display: none; }
+.v2 .v2-coding-grid > .v2-coding-pane.is-overlay {
+  position: absolute; top: 0; bottom: 0; z-index: 10; grid-column: auto; grid-row: auto;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.14);
+}
+.v2 .v2-coding-grid > .v2-coding-pane-files.is-overlay { left: 52px; }
+.v2 .v2-coding-grid > .v2-coding-pane-workbench.is-overlay { right: 52px; }
+/* while a handle is dragged: no text selection, one cursor (Monaco sets its own) */
+.v2 .v2-coding-grid.resizing,
+.v2 .v2-coding-grid.resizing * { cursor: col-resize !important; user-select: none; }
 .v2 .v2-coding-pane {
   display: flex; flex-direction: column; min-height: 0; min-width: 0;
   background: var(--v2-card); border: 1px solid var(--v2-line); border-radius: var(--v2-radius); box-shadow: var(--v2-shadow);
   overflow: hidden;
 }
 .v2 .v2-coding-pane-head {
-  display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--v2-line-2);
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; min-height: 41px; border-bottom: 1px solid var(--v2-line-2);
   font-size: 13px; font-weight: 600; color: var(--v2-ink); flex: none;
 }
 .v2 .v2-coding-pane-head > :last-child:not(:first-child) { margin-left: auto; }
+.v2 .v2-coding-head-actions { display: inline-flex; align-items: center; gap: 6px; }
+.v2 .v2-coding-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; padding: 0;
+  border: 0; border-radius: var(--v2-radius-sm); background: none; color: var(--v2-ink-3); cursor: pointer;
+}
+.v2 .v2-coding-icon-btn:hover { background: var(--v2-fill-2); color: var(--v2-ink); }
+.v2 .v2-coding-icon-btn:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; }
+
+/* ---------- side-panel rails ---------- */
+.v2 .v2-coding-rail { display: flex; min-width: 0; min-height: 0; }
+.v2 .v2-coding-rail-btn {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 0;
+  border: 1px solid var(--v2-line); border-radius: var(--v2-radius); background: var(--v2-card); box-shadow: var(--v2-shadow);
+  font: inherit; color: var(--v2-ink-2); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.v2 .v2-coding-rail-btn:hover { background: var(--v2-fill); color: var(--v2-ink); }
+.v2 .v2-coding-rail-btn[aria-expanded="true"] { background: var(--v2-primary-soft); border-color: var(--v2-primary-line); color: var(--v2-primary); }
+.v2 .v2-coding-rail-btn:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 2px; }
+.v2 .v2-coding-rail-btn svg { flex: none; }
+.v2 .v2-coding-rail-toggle { color: var(--v2-ink-3); }
+.v2 .v2-coding-rail-btn:hover .v2-coding-rail-toggle,
+.v2 .v2-coding-rail-btn[aria-expanded="true"] .v2-coding-rail-toggle { color: inherit; }
+.v2 .v2-coding-rail-label { writing-mode: vertical-rl; text-orientation: sideways; font-size: 12.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+.v2 .v2-coding-rail-label.cjk { writing-mode: horizontal-tb; width: 1em; white-space: normal; word-break: break-all; line-height: 1.25; letter-spacing: 0; text-align: center; }
+.v2 .v2-coding-rail-badge {
+  min-width: 20px; max-width: 34px; height: 18px; padding: 0 4px; border-radius: 9px; overflow: hidden;
+  background: var(--v2-fill-2); color: var(--v2-ink-2); font-size: 11px; line-height: 18px; text-align: center;
+  font-variant-numeric: tabular-nums; white-space: nowrap; text-overflow: clip;
+}
+.v2 .v2-coding-rail-badge.dot { min-width: 0; width: 8px; height: 8px; padding: 0; border-radius: 50%; }
+.v2 .v2-coding-rail-badge.warn { background: var(--v2-warning); }
+
+/* ---------- resize handles (in the gutters) ---------- */
+.v2 .v2-coding-resizer { position: relative; cursor: col-resize; touch-action: none; outline: none; min-width: 0; }
+.v2 .v2-coding-resizer::before {
+  content: ""; position: absolute; top: 50%; left: 50%; width: 4px; height: 32px; margin: -16px 0 0 -2px;
+  border-radius: 2px; background: var(--v2-line); transition: background 0.15s;
+}
+.v2 .v2-coding-resizer::after {
+  content: ""; position: absolute; top: 8px; bottom: 8px; left: 50%; width: 2px; margin-left: -1px;
+  border-radius: 1px; background: transparent; transition: background 0.15s;
+}
+.v2 .v2-coding-resizer:hover::before { background: var(--v2-ink-4); }
+.v2 .v2-coding-resizer:hover::after { background: var(--v2-primary-line); }
+.v2 .v2-coding-resizer.on::before, .v2 .v2-coding-resizer:focus-visible::before { background: var(--v2-primary); }
+.v2 .v2-coding-resizer.on::after, .v2 .v2-coding-resizer:focus-visible::after { background: var(--v2-primary); }
 .v2 .v2-coding-pane .v2-alert { margin: 8px 12px; }
 .v2 .v2-coding-placeholder { margin: auto; padding: 40px 16px; color: var(--v2-ink-3); font-size: 13px; text-align: center; }
 .v2 .v2-coding-spin { animation: v2spin 0.9s linear infinite; flex: none; }
@@ -52,16 +124,38 @@
 .v2 .v2-coding-tree-row svg.dir { color: #d89614; }
 .v2 .v2-coding-tree-row .name { overflow: hidden; text-overflow: ellipsis; }
 .v2 .v2-coding-tree-gap { display: inline-block; width: 12px; flex: none; }
+/* a file row's download button: over the row's right end, shown on hover / keyboard
+   focus (always on touch screens); the name makes room for it while it shows */
+.v2 .v2-coding-tree-item { position: relative; }
+.v2 .v2-coding-tree-dl {
+  position: absolute; top: 0; bottom: 0; right: 4px; margin: auto 0; width: 24px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--v2-radius-sm); background: none; color: var(--v2-ink-3); cursor: pointer; opacity: 0;
+}
+.v2 .v2-coding-tree-dl:hover { background: var(--v2-fill-2); color: var(--v2-ink); }
+.v2 .v2-coding-tree-dl:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; }
+.v2 .v2-coding-tree-dl:disabled { cursor: progress; }
+.v2 .v2-coding-tree-item:hover .v2-coding-tree-dl,
+.v2 .v2-coding-tree-item:focus-within .v2-coding-tree-dl,
+.v2 .v2-coding-tree-dl[aria-busy="true"] { opacity: 1; }
+.v2 .v2-coding-tree-item.has-dl:hover .v2-coding-tree-row,
+.v2 .v2-coding-tree-item.has-dl:focus-within .v2-coding-tree-row,
+.v2 .v2-coding-tree-item.has-dl:has(.v2-coding-tree-dl[aria-busy="true"]) .v2-coding-tree-row { padding-right: 32px; }
+@media (hover: none) {
+  .v2 .v2-coding-tree-dl { opacity: 1; }
+  .v2 .v2-coding-tree-item.has-dl .v2-coding-tree-row { padding-right: 32px; }
+}
+/* a spinner inside a text link (the project list's download action) */
+.v2 .v2-link > .v2-coding-spin { vertical-align: -2px; margin-right: 4px; }
 
 /* ---------- editor pane ---------- */
 .v2 .v2-coding-editor { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.v2 .v2-coding-tabs {
-  display: flex; align-items: stretch; gap: 0; overflow-x: auto; flex: none;
-  border-bottom: 1px solid var(--v2-line); background: var(--v2-fill);
-}
+.v2 .v2-coding-tabbar { display: flex; align-items: stretch; flex: none; border-bottom: 1px solid var(--v2-line); background: var(--v2-fill); }
+.v2 .v2-coding-tabs { display: flex; align-items: stretch; gap: 0; overflow-x: auto; flex: 1; min-width: 0; }
+.v2 .v2-coding-tabbar-end { display: flex; align-items: center; flex: none; padding: 0 8px 0 6px; }
 .v2 .v2-coding-tab {
   display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 220px;
-  padding: 0 4px 0 12px; height: 36px; border: 0; border-right: 1px solid var(--v2-line);
+  padding: 0 4px 0 12px; height: 40px; border: 0; border-right: 1px solid var(--v2-line);
   background: none; font: inherit; font-size: 13px; color: var(--v2-ink-2); cursor: pointer;
 }
 .v2 button.v2-coding-tab { padding-right: 12px; }
@@ -78,7 +172,8 @@
 .v2 .v2-coding-dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--v2-warning); flex: none; }
 .v2 .v2-coding-editor-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .v2 .v2-coding-editor-bar {
-  display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--v2-line-2); flex: none; min-height: 40px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 6px 12px; border-bottom: 1px solid var(--v2-line-2);
+  flex: none; min-height: 40px;
 }
 .v2 .v2-coding-editor-bar .end { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .v2 .v2-coding-editor-bar .v2-link { display: inline-flex; align-items: center; gap: 4px; }
@@ -133,7 +228,14 @@
 }
 @keyframes v2codingblink { 50% { opacity: 0; } }
 .v2 .v2-coding-error .v2-alert { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.v2 .v2-coding-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px 14px 18px; }
+/* the conversation keeps a reading width in its (flexible) column: the padding centers
+   a 900 px measure, so the scrollbar stays at the pane's edge */
+.v2 .v2-coding-pane-chat { --v2-coding-measure: 900px; }
+.v2 .v2-coding-thread {
+  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px;
+  padding: 14px max(14px, calc((100% - var(--v2-coding-measure)) / 2)) 18px;
+}
+.v2 .v2-coding-pane-chat > .v2-alert { margin: 8px max(12px, calc((100% - var(--v2-coding-measure)) / 2)); }
 .v2 .v2-coding-turn { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .v2 .v2-coding-turn-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--v2-ink-3); }
 .v2 .v2-coding-turn-foot .mono { font-size: 11.5px; }
@@ -182,7 +284,9 @@
 .v2 .v2-coding-note .mono { font-size: 11.5px; }
 
 /* ---------- composer ---------- */
-.v2 .v2-coding-composer-wrap { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--v2-line-2); }
+.v2 .v2-coding-composer-wrap {
+  flex: none; padding: 10px max(14px, calc((100% - var(--v2-coding-measure)) / 2)) 12px; border-top: 1px solid var(--v2-line-2);
+}
 .v2 .v2-coding-composer-wrap .v2-alert { margin: 0 0 8px; }
 .v2 .v2-coding-composer { border: 1px solid var(--v2-line); border-radius: 8px; padding: 8px 10px; background: #fff; transition: border-color 0.15s; }
 .v2 .v2-coding-composer:focus-within { border-color: var(--v2-primary); }
@@ -199,12 +303,7 @@
 .v2 .v2-coding-composer-bar .v2-btn { flex: none; }
 .v2 .v2-coding-composer-hint { margin-top: 6px; font-size: 12px; color: var(--v2-ink-3); }
 
-@media (max-width: 1320px) {
-  .v2 .v2-coding-grid { grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(520px, calc(100vh - 150px)) minmax(520px, 70vh); height: auto; }
-  .v2 .v2-coding-pane-chat { grid-column: 1 / -1; }
-}
-@media (max-width: 860px) {
-  .v2 .v2-coding-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: 280px minmax(480px, 70vh) minmax(480px, 70vh); }
-  .v2 .v2-coding-changes-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: 120px minmax(0, 1fr); }
-  .v2 .v2-coding-changes-list { border-right: 0; border-bottom: 1px solid var(--v2-line-2); }
-}
+/* a narrow Workbench (its width is known from the layout, so no container query):
+   the Changes list stacks over the diff */
+.v2 .v2-coding-pane-workbench.compact .v2-coding-changes-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: 120px minmax(0, 1fr); }
+.v2 .v2-coding-pane-workbench.compact .v2-coding-changes-list { border-right: 0; border-bottom: 1px solid var(--v2-line-2); }

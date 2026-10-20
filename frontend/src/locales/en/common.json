@@ -2483,7 +2483,10 @@
     "coding.runtime_in_use": "A coding turn is still running in this workspace. Wait for it to finish or interrupt it, then uninstall.",
     "context_layer.demo_param_scope": "The demo account parameter must be an SSM parameter under /<prefix>/launchpad/ of the connected COA deployment.",
     "context_layer.demo_param_invalid": "The demo account parameter is missing, is not a SecureString, or is not JSON with a username and password.",
-    "context_layer.demo_unavailable": "This context layer has no demo account. An administrator sets one on the Context Layer page."
+    "context_layer.demo_unavailable": "This context layer has no demo account. An administrator sets one on the Context Layer page.",
+    "coding.file_not_found": "The file no longer exists in the project.",
+    "coding.download_too_large": "Too large to download: a file can be 200 MB at most, the project archive 50 MB.",
+    "coding.runtime_outdated": "The coding runtime is older than this console. An administrator can repair it from the coding console."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -9731,6 +9734,18 @@
         "backToList": "Back to projects",
         "openAgent": "Open Agent"
       },
+      "layout": {
+        "workbench": "Editor & changes",
+        "collapseFiles": "Collapse the file panel",
+        "expandFiles": "Expand the file panel",
+        "collapseWorkbench": "Collapse the editor panel",
+        "expandWorkbench": "Expand the editor panel",
+        "resizeFiles": "Resize the file panel",
+        "resizeWorkbench": "Resize the editor panel",
+        "resizeHint": "Drag, or use ←/→ (Shift for bigger steps), to resize. Double-click to reset.",
+        "openTabs": "Open files: {{count}}",
+        "turnChanges": "Changed in the last turn: {{count}}"
+      },
       "editor": {
         "unsaved": "Unsaved",
         "readOnlyRunning": "Read-only while a turn runs",
@@ -9817,6 +9832,16 @@
         "connecting": "Connecting…",
         "retrying": "Reconnecting…",
         "paused": "Paused while the tab is hidden"
+      },
+      "download": {
+        "button": "Download",
+        "file": "Download this file",
+        "fileNamed": "Download {{name}}",
+        "savedVersion": "Downloads the saved version. Save first to include your edits.",
+        "project": "Download project (.zip)",
+        "projectHint": "The project's files as a .zip: tracked and new files, without .git, ignored files or dependency folders.",
+        "preparing": "Preparing the download…",
+        "started": "Downloading {{name}}"
       },
       "deploy": {
         "button": "Deploy as Agent",

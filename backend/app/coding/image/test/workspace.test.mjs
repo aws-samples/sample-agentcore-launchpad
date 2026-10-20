@@ -232,3 +232,61 @@ describe("snapshot, export and restore", () => {
     await assert.rejects(ws.snapshot("http://127.0.0.1:9/nowhere"), (e) => e.code === "upload_failed");
   });
 });
+
+describe("upload_file (browser downloads)", () => {
+  test("uploads the exact bytes of a text or binary file and names it", async () => {
+    await fsp.mkdir(projectPath("out"), { recursive: true });
+    const bytes = Buffer.from([0, 1, 2, 250, 255, 0, 10]);
+    await fsp.writeFile(projectPath("out", "data.bin"), bytes);
+    const out = await ws.uploadFile({ path: "out/data.bin", put_url: blobs.url("dl/data.bin") });
+    assert.deepEqual(out, { bytes: bytes.length, name: "data.bin" });
+    assert.deepEqual(blobs.blobs.get("/dl/data.bin"), bytes);
+    const text = await ws.uploadFile({ path: "./src//app.py", put_url: blobs.url("dl/app.py") });
+    assert.equal(text.name, "app.py");
+    assert.equal(blobs.blobs.get("/dl/app.py").toString("utf8"), fs.readFileSync(projectPath("src", "app.py"), "utf8"));
+    assert.deepEqual(fs.readdirSync(ws.p.scratchDir).filter((n) => n.startsWith("upload-")), [], "scratch copy removed");
+  });
+
+  test("an in-project symlink is followed; one that leaves the project is refused", async () => {
+    await fsp.writeFile(projectPath("target.txt"), "through the link\n");
+    await fsp.symlink("target.txt", projectPath("alias.txt"));
+    const out = await ws.uploadFile({ path: "alias.txt", put_url: blobs.url("dl/alias.txt") });
+    assert.equal(out.name, "alias.txt");
+    assert.equal(blobs.blobs.get("/dl/alias.txt").toString("utf8"), "through the link\n");
+    await fsp.symlink(path.join(outside, "private.txt"), projectPath("escape.txt"));
+    await expectCode(ws.uploadFile({ path: "escape.txt", put_url: blobs.url("dl/escape") }), "path_invalid");
+    assert.equal(blobs.blobs.has("/dl/escape"), false);
+    for (const name of ["alias.txt", "escape.txt", "target.txt"]) await fsp.rm(projectPath(name));
+  });
+
+  test("traversal, .git, directories, missing files and a missing URL are refused", async () => {
+    const put = blobs.url("dl/refused");
+    await expectCode(ws.uploadFile({ path: "../outside.txt", put_url: put }), "path_invalid");
+    await expectCode(ws.uploadFile({ path: "src/../../x", put_url: put }), "path_invalid");
+    await expectCode(ws.uploadFile({ path: ".git/config", put_url: put }), "path_invalid");
+    await expectCode(ws.uploadFile({ path: "/etc/passwd", put_url: put }), "path_invalid");
+    await expectCode(ws.uploadFile({ path: "", put_url: put }), "path_invalid");
+    await expectCode(ws.uploadFile({ path: "src", put_url: put }), "path_invalid");
+    await expectCode(ws.uploadFile({ path: "src/nope.py", put_url: put }), "not_found");
+    await expectCode(ws.uploadFile({ path: "src/app.py" }), "bad_request");
+    assert.equal(blobs.blobs.has("/dl/refused"), false);
+  });
+
+  test("a file over 200 MB is file_too_large before anything is copied or sent", async () => {
+    const big = projectPath("huge.bin");
+    await fsp.writeFile(big, "");
+    await fsp.truncate(big, 200 * 1024 * 1024 + 1); // sparse: no real 200 MB on disk
+    const puts = blobs.counts.put;
+    await assert.rejects(
+      ws.uploadFile({ path: "huge.bin", put_url: blobs.url("dl/huge") }),
+      (e) => e.code === "file_too_large" && e.extra.size === 200 * 1024 * 1024 + 1,
+    );
+    assert.equal(blobs.counts.put, puts, "nothing uploaded");
+    await fsp.rm(big);
+  });
+
+  test("an upload the URL refuses is upload_failed and leaves no scratch copy", async () => {
+    await expectCode(ws.uploadFile({ path: "src/app.py", put_url: "http://127.0.0.1:9/nowhere" }), "upload_failed");
+    assert.deepEqual(fs.readdirSync(ws.p.scratchDir).filter((n) => n.startsWith("upload-")), []);
+  });
+});

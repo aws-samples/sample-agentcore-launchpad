@@ -2483,7 +2483,10 @@
     "coding.runtime_in_use": "这个工作区还有正在运行的编码回合。请等它结束或中止后再卸载。",
     "context_layer.demo_param_scope": "体验账号参数必须是所连接 COA 部署的 /<prefix>/launchpad/ 之下的 SSM 参数。",
     "context_layer.demo_param_invalid": "体验账号参数不存在、不是 SecureString，或不是包含 username 和 password 的 JSON。",
-    "context_layer.demo_unavailable": "此上下文层没有体验账号，需由管理员在上下文层页面配置。"
+    "context_layer.demo_unavailable": "此上下文层没有体验账号，需由管理员在上下文层页面配置。",
+    "coding.file_not_found": "项目中已没有该文件。",
+    "coding.download_too_large": "文件过大，无法下载：单个文件最多 200 MB，项目压缩包最多 50 MB。",
+    "coding.runtime_outdated": "编码运行时的版本早于当前控制台，管理员可以在编码控制台中修复它。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -9731,6 +9734,18 @@
         "backToList": "返回项目列表",
         "openAgent": "打开 Agent"
       },
+      "layout": {
+        "workbench": "编辑器与变更",
+        "collapseFiles": "收起文件面板",
+        "expandFiles": "展开文件面板",
+        "collapseWorkbench": "收起编辑器面板",
+        "expandWorkbench": "展开编辑器面板",
+        "resizeFiles": "调整文件面板宽度",
+        "resizeWorkbench": "调整编辑器面板宽度",
+        "resizeHint": "拖动或按 ←/→ 调整宽度（按住 Shift 步长更大）；双击恢复默认宽度。",
+        "openTabs": "已打开文件：{{count}}",
+        "turnChanges": "上一回合变更：{{count}}"
+      },
       "editor": {
         "unsaved": "未保存",
         "readOnlyRunning": "回合运行期间只读",
@@ -9817,6 +9832,16 @@
         "connecting": "连接中…",
         "retrying": "重新连接中…",
         "paused": "标签页隐藏期间已暂停"
+      },
+      "download": {
+        "button": "下载",
+        "file": "下载该文件",
+        "fileNamed": "下载 {{name}}",
+        "savedVersion": "下载的是已保存的版本。先保存，下载才包含你的修改。",
+        "project": "下载项目（.zip）",
+        "projectHint": "将项目文件打包为 .zip：包含已跟踪和新建的文件，不含 .git、被忽略的文件和依赖目录。",
+        "preparing": "正在准备下载…",
+        "started": "正在下载 {{name}}"
       },
       "deploy": {
         "button": "部署为 Agent",

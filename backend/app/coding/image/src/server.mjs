@@ -459,6 +459,17 @@ export class CodingRuntime {
     }
   }
 
+  // One file to a presigned PUT (a browser download). Allowed during a turn: it only
+  // reads; busy while it runs, so a large upload keeps the microVM alive.
+  async uploadFile({ path, put_url }) {
+    this.setBusy(+1);
+    try {
+      return await this.ws.uploadFile({ path, put_url });
+    } finally {
+      this.setBusy(-1);
+    }
+  }
+
   // ------------------------------------------------------------- dispatch
   async handle(payload) {
     const t0 = Date.now();
@@ -487,7 +498,7 @@ export class CodingRuntime {
   }
 }
 
-// The action protocol (parent design §2.2 + §6).
+// The action protocol (parent design §2.2 + §6; `upload_file`: console iteration 3).
 export const ACTIONS = {
   status: (rt) => rt.status(),
   start_turn: (rt, p) => rt.startTurn(p),
@@ -500,6 +511,7 @@ export const ACTIONS = {
   diff: (rt, p) => rt.diff(p),
   snapshot: (rt, p) => rt.snapshot(p),
   export: (rt, p) => rt.exportProject(p),
+  upload_file: (rt, p) => rt.uploadFile(p),
 };
 
 function readBody(req, limit) {

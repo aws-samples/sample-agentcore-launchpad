@@ -1,6 +1,6 @@
 import Editor, { DiffEditor, type Monaco, type MonacoDiffEditor, type OnMount } from "@monaco-editor/react";
-import { Copy, FileDiff, X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Copy, Download, FileDiff, Loader2, X } from "lucide-react";
+import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { type CodingChange, type CodingChangeScope, codingApi, errorMessage } from "../../../lib/api";
@@ -86,10 +86,10 @@ function disposeLater(monaco: Monaco | null, uri: string, tries = 3): void {
 }
 
 /**
- * The center pane: the Changes tab (diffs of the last turn / the uncommitted tree)
- * and one tab per open file. Files edit in Monaco (one model per file, so undo and
- * cursor survive tab switches); ⌘/Ctrl+S saves; everything is read-only while a turn
- * runs, because the agent may be writing the same files.
+ * The Workbench (the IDE's right panel): the Changes tab (diffs of the last turn /
+ * the uncommitted tree) and one tab per open file. Files edit in Monaco (one model per
+ * file, so undo and cursor survive tab switches); ⌘/Ctrl+S saves; everything is
+ * read-only while a turn runs, because the agent may be writing the same files.
  */
 export function EditorPane({
   projectId,
@@ -103,11 +103,14 @@ export function EditorPane({
   onOverwrite,
   onTogglePreview,
   onOpenFile,
+  onDownload,
+  downloading,
   running,
   version,
   focus,
   reveal,
   onRevealed,
+  headEnd,
 }: {
   projectId: string;
   files: OpenFile[];
@@ -120,6 +123,10 @@ export function EditorPane({
   onOverwrite: (path: string) => void;
   onTogglePreview: (path: string) => void;
   onOpenFile: OpenFileHandler;
+  /** download the file as saved on disk */
+  onDownload?: (path: string) => void;
+  /** that file's download is being prepared */
+  downloading?: (path: string) => boolean;
   running: boolean;
   version: number;
   focus: ChangeFocus | null;
@@ -127,6 +134,8 @@ export function EditorPane({
   /** the reveal `nonce` was applied (the IDE drops the request, so a later visit to the
    *  tab does not jump back to that line) */
   onRevealed: (nonce: number) => void;
+  /** controls at the end of the tab bar, outside its scroll area (the collapse toggle) */
+  headEnd?: ReactNode;
 }) {
   const { t } = useTranslation();
   const monacoRef = useRef<Monaco | null>(null);
@@ -164,43 +173,46 @@ export function EditorPane({
 
   return (
     <div className="v2-coding-editor" onKeyDown={onKeyDown} data-testid="v2-coding-editor">
-      <div className="v2-coding-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={active === CHANGES_TAB}
-          className={active === CHANGES_TAB ? "v2-coding-tab on" : "v2-coding-tab"}
-          onClick={() => onActivate(CHANGES_TAB)}
-          data-testid="v2-coding-tab-changes"
-        >
-          <FileDiff size={13} aria-hidden="true" />
-          {t("v2.coding.changes.tab")}
-        </button>
-        {files.map((f) => (
-          <span key={f.path} className={f.path === active ? "v2-coding-tab on" : "v2-coding-tab"} title={f.path}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={f.path === active}
-              className="v2-coding-tab-open"
-              onClick={() => onActivate(f.path)}
-              onAuxClick={(e) => e.button === 1 && close(f.path)}
-              data-testid={`v2-coding-tab-${f.path}`}
-            >
-              {f.path.slice(f.path.lastIndexOf("/") + 1)}
-              {isDirty(f) && <span className="v2-coding-dirty" aria-label={t("v2.coding.editor.unsaved")} />}
-            </button>
-            <button
-              type="button"
-              className="v2-coding-tab-x"
-              aria-label={t("v2.coding.editor.closeTab", { name: f.path })}
-              title={t("v2.common.close")}
-              onClick={() => close(f.path)}
-            >
-              <X size={12} aria-hidden="true" />
-            </button>
-          </span>
-        ))}
+      <div className="v2-coding-tabbar">
+        <div className="v2-coding-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={active === CHANGES_TAB}
+            className={active === CHANGES_TAB ? "v2-coding-tab on" : "v2-coding-tab"}
+            onClick={() => onActivate(CHANGES_TAB)}
+            data-testid="v2-coding-tab-changes"
+          >
+            <FileDiff size={13} aria-hidden="true" />
+            {t("v2.coding.changes.tab")}
+          </button>
+          {files.map((f) => (
+            <span key={f.path} className={f.path === active ? "v2-coding-tab on" : "v2-coding-tab"} title={f.path}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={f.path === active}
+                className="v2-coding-tab-open"
+                onClick={() => onActivate(f.path)}
+                onAuxClick={(e) => e.button === 1 && close(f.path)}
+                data-testid={`v2-coding-tab-${f.path}`}
+              >
+                {f.path.slice(f.path.lastIndexOf("/") + 1)}
+                {isDirty(f) && <span className="v2-coding-dirty" aria-label={t("v2.coding.editor.unsaved")} />}
+              </button>
+              <button
+                type="button"
+                className="v2-coding-tab-x"
+                aria-label={t("v2.coding.editor.closeTab", { name: f.path })}
+                title={t("v2.common.close")}
+                onClick={() => close(f.path)}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+        </div>
+        {headEnd && <div className="v2-coding-tabbar-end">{headEnd}</div>}
       </div>
       <div className="v2-coding-editor-body">
         {active === CHANGES_TAB || !file ? (
@@ -217,6 +229,8 @@ export function EditorPane({
             onOverwrite={() => onOverwrite(file.path)}
             onTogglePreview={() => onTogglePreview(file.path)}
             onOpenFile={onOpenFile}
+            onDownload={onDownload ? () => onDownload(file.path) : undefined}
+            downloading={!!downloading?.(file.path)}
             reveal={reveal && reveal.path === file.path ? reveal : null}
             onRevealed={onRevealed}
           />
@@ -237,6 +251,8 @@ function FileView({
   onOverwrite,
   onTogglePreview,
   onOpenFile,
+  onDownload,
+  downloading,
   reveal,
   onRevealed,
 }: {
@@ -250,6 +266,8 @@ function FileView({
   onOverwrite: () => void;
   onTogglePreview: () => void;
   onOpenFile: OpenFileHandler;
+  onDownload?: () => void;
+  downloading: boolean;
   /** a line to show in this file, once its editor holds the content */
   reveal: LineReveal | null;
   onRevealed: (nonce: number) => void;
@@ -309,6 +327,21 @@ function FileView({
                 { value: "preview", label: t("v2.coding.editor.preview") },
               ]}
             />
+          )}
+          {onDownload && (
+            <LinkButton
+              onClick={onDownload}
+              disabled={downloading || file.loading}
+              title={dirty ? t("v2.coding.download.savedVersion") : t("v2.coding.download.file")}
+              testId="v2-coding-download-tab"
+            >
+              {downloading ? (
+                <Loader2 size={13} className="v2-coding-spin" aria-hidden="true" />
+              ) : (
+                <Download size={13} aria-hidden="true" />
+              )}
+              {t("v2.coding.download.button")}
+            </LinkButton>
           )}
           <Button
             kind="primary"

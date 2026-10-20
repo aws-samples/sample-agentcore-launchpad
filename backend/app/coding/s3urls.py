@@ -6,14 +6,18 @@ backend mints with the workspace's own credentials, one per transfer and never
 ahead of time — a presigned URL lives no longer than the credentials that signed
 it (an assumed cross-account role lasts ≤ 1 h).
 
-Layout: ``coding/<workspace_id>/<project_id>/{snapshots,exports}/<utc-ts>.<ext>``.
-The newest ``KEEP_SNAPSHOTS`` snapshots are kept; deleting a project deletes its
+Layout: ``coding/<workspace_id>/<project_id>/{snapshots,exports}/<utc-ts>.<ext>``
+and ``…/downloads/<utc-ts>-<rand>/<filename>`` (a browser download: the runtime PUTs
+the file or the project zip, the browser GETs it through a short-lived URL). The
+newest ``KEEP_SNAPSHOTS`` snapshots are kept; downloads older than
+``DOWNLOAD_KEEP_S`` are pruned at the next download; deleting a project deletes its
 whole prefix.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.config import Config
@@ -24,7 +28,13 @@ PREFIX = "coding"
 KEEP_SNAPSHOTS = 3
 # Long enough for a 50 MB transfer from the microVM; short enough to be useless later.
 URL_TTL_S = 900
+# A browser download URL is used at once (the console clicks it as it arrives).
+DOWNLOAD_URL_TTL_S = 300
+# Older download objects are deleted at the next download of the project (well past
+# the URL's TTL, so a URL being used is never pruned).
+DOWNLOAD_KEEP_S = 15 * 60
 _SIGV4 = "coding-s3v4"
+_STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
 
 
 def _s3(ctx: WorkspaceContext) -> Any:
@@ -48,7 +58,7 @@ def project_prefix(workspace_id: str, project_id: str) -> str:
 
 def _stamp(now: datetime | None = None) -> str:
     # microseconds: two snapshots in one second must not share a key
-    return (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%S%fZ")
+    return (now or datetime.now(UTC)).strftime(_STAMP_FORMAT)
 
 
 def snapshot_key(workspace_id: str, project_id: str, now: datetime | None = None) -> str:
@@ -57,6 +67,18 @@ def snapshot_key(workspace_id: str, project_id: str, now: datetime | None = None
 
 def export_key(workspace_id: str, project_id: str, now: datetime | None = None) -> str:
     return f"{project_prefix(workspace_id, project_id)}exports/{_stamp(now)}.zip"
+
+
+def downloads_prefix(workspace_id: str, project_id: str) -> str:
+    return f"{project_prefix(workspace_id, project_id)}downloads/"
+
+
+def download_key(workspace_id: str, project_id: str, filename: str,
+                 now: datetime | None = None) -> str:
+    """``…/downloads/<utc-ts>-<rand>/<filename>``: the stamp dates the object for
+    the prune; the random part keeps two downloads in one instant apart."""
+    return (f"{downloads_prefix(workspace_id, project_id)}"
+            f"{_stamp(now)}-{secrets.token_hex(4)}/{filename}")
 
 
 def presign_put(ctx: WorkspaceContext, key: str, *, ttl: int = URL_TTL_S,
@@ -70,6 +92,24 @@ def presign_get(ctx: WorkspaceContext, key: str, *, ttl: int = URL_TTL_S,
                 client: Any = None) -> str:
     return (client or _s3(ctx)).generate_presigned_url(
         "get_object", Params={"Bucket": bucket_of(ctx), "Key": key}, ExpiresIn=ttl
+    )
+
+
+def presign_download(ctx: WorkspaceContext, key: str, *, disposition: str,
+                     content_type: str, ttl: int = DOWNLOAD_URL_TTL_S,
+                     client: Any = None) -> str:
+    """A presigned GET whose answer carries ``Content-Disposition`` and
+    ``Content-Type`` overrides (S3 ``response-*`` query parameters): the browser
+    saves the object under ``disposition``'s file name instead of rendering it."""
+    return (client or _s3(ctx)).generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": bucket_of(ctx),
+            "Key": key,
+            "ResponseContentDisposition": disposition,
+            "ResponseContentType": content_type,
+        },
+        ExpiresIn=ttl,
     )
 
 
@@ -133,9 +173,39 @@ def prune_snapshots(ctx: WorkspaceContext, workspace_id: str, project_id: str, *
     return doomed
 
 
+def _download_stamp(key: str, prefix: str) -> datetime | None:
+    """When a download object was minted, from its ``<utc-ts>-<rand>/`` segment."""
+    segment = key[len(prefix):].split("/", 1)[0]
+    try:
+        return datetime.strptime(segment.split("-", 1)[0], _STAMP_FORMAT).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def prune_downloads(ctx: WorkspaceContext, workspace_id: str, project_id: str, *,
+                    keep_s: int = DOWNLOAD_KEEP_S, now: datetime | None = None,
+                    client: Any = None) -> list[str]:
+    """Delete the project's download objects minted more than ``keep_s`` seconds
+    ago (an object whose key carries no stamp is not one this module wrote: it
+    goes too). Returns the deleted keys."""
+    s3 = client or _s3(ctx)
+    bucket = bucket_of(ctx)
+    prefix = downloads_prefix(workspace_id, project_id)
+    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=keep_s)
+    doomed = []
+    for key in _list_keys(s3, bucket, prefix):
+        minted = _download_stamp(key, prefix)
+        if minted is None or minted < cutoff:
+            doomed.append(key)
+    if doomed:
+        _delete_keys(s3, bucket, doomed)
+    return doomed
+
+
 def delete_project_prefix(ctx: WorkspaceContext, workspace_id: str, project_id: str, *,
                           client: Any = None) -> int:
-    """Delete every object under the project's prefix (snapshots + exports)."""
+    """Delete every object under the project's prefix (snapshots, exports and
+    downloads)."""
     s3 = client or _s3(ctx)
     bucket = bucket_of(ctx)
     keys = _list_keys(s3, bucket, project_prefix(workspace_id, project_id))

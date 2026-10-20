@@ -828,6 +828,17 @@ export function affectsFiles(record: CodingEventRecord): boolean {
   return false;
 }
 
+/** The project files a turn's file-change items touched (each once, in first-seen
+ *  order; changes outside the project are left out — there is nothing to open). */
+export function turnChangedPaths(turn: TurnView | null | undefined): string[] {
+  const paths = new Set<string>();
+  for (const item of turn?.items ?? []) {
+    if (item.type !== "fileChange") continue;
+    for (const change of item.changes) if (change.openPath) paths.add(change.openPath);
+  }
+  return [...paths];
+}
+
 /** The prompt a turn shows: its user message, else the ledger prompt. */
 export function turnPrompt(turn: TurnView): string | null {
   const message = turn.items.find((item) => item.type === "userMessage");

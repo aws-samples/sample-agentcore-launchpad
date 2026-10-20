@@ -1,6 +1,7 @@
 // The project workspace on AgentCore managed session storage, and everything that
 // touches its files: layout, fresh init / snapshot restore, the path guard, tree /
-// read / write, git-tree baselines for per-turn changes, snapshot and export.
+// read / write, git-tree baselines for per-turn changes, snapshot, export and
+// single-file uploads (browser downloads).
 //
 // Layout (parent design §2.1):
 //   <workspace>/project/      the git repo the agent works in (codex cwd)
@@ -21,6 +22,8 @@ import { CodingError, getFile, putFile, run, runOk, sha256 } from "./util.mjs";
 
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_EXPORT_BYTES = 50 * 1024 * 1024;
+// One file handed to the browser through S3 (the `upload_file` action).
+export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 export const MAX_DIFF_BYTES = 4 * 1024 * 1024;
 export const MAX_TREE_ENTRIES = 5000;
 // Never listed, never snapshotted or exported.
@@ -502,6 +505,32 @@ export class Workspace {
       return { bytes, files: regular.length, skipped_symlinks: skipped, root_files: rootFiles };
     } finally {
       await fsp.rm(zip, { force: true });
+    }
+  }
+
+  // One project file (text or binary) to a presigned PUT, for a browser download.
+  // The path guard applies as for reads: an in-project symlink is followed, one that
+  // leaves the project is refused, and only a regular file uploads. The file is copied
+  // to local scratch first so the upload sends exactly the bytes it announced, even
+  // while the agent rewrites the file.
+  async uploadFile({ path: p, put_url: putUrl } = {}) {
+    const rel = cleanRelPath(p);
+    if (typeof putUrl !== "string" || !putUrl) throw new CodingError("bad_request", "put_url is required");
+    const { full, st: lst } = await this.resolve(rel);
+    if (!lst) throw new CodingError("not_found", `${rel} does not exist`);
+    const st = lst.isSymbolicLink() ? await fsp.stat(full) : lst;
+    if (!st.isFile()) throw new CodingError("path_invalid", `${rel} is not a regular file`);
+    const tooLarge = (size) => new CodingError("file_too_large", `${rel} is larger than 200 MB`, { size });
+    if (st.size > MAX_UPLOAD_BYTES) throw tooLarge(st.size);
+    const tmp = path.join(this.p.scratchDir, `upload-${crypto.randomUUID()}`);
+    try {
+      await fsp.copyFile(full, tmp);
+      const { size } = await fsp.stat(tmp);
+      if (size > MAX_UPLOAD_BYTES) throw tooLarge(size);
+      const { bytes } = await putFile(putUrl, tmp);
+      return { bytes, name: path.posix.basename(rel) };
+    } finally {
+      await fsp.rm(tmp, { force: true });
     }
   }
 

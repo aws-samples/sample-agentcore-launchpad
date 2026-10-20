@@ -1,5 +1,5 @@
-import { Pencil, Rocket } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, Loader2, Pencil, Rocket } from "lucide-react";
+import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -9,7 +9,7 @@ import { budgetRefusalOf } from "../../../lib/budgets";
 import { useLoad, useV2Toast } from "../../hooks";
 import { refreshMyUsageIfLimited } from "../../myUsage";
 import { Alert, Button, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
-import { affectsFiles, type CodingEventRecord, liveTurn, withLedgerTurns } from "./codingEvents";
+import { affectsFiles, type CodingEventRecord, liveTurn, turnChangedPaths, withLedgerTurns } from "./codingEvents";
 import { ProjectStatusTag } from "./common";
 import { Composer, type ComposerError } from "./Composer";
 import { Conversation } from "./Conversation";
@@ -17,11 +17,15 @@ import { DeployModal } from "./DeployModal";
 import { CHANGES_TAB, type ChangeFocus, EditorPane, type LineReveal } from "./EditorPane";
 import { FileTree } from "./FileTree";
 import { fmtClock } from "./format";
+import { PaneRail, PaneResizer, PanelToggle, type RailBadge } from "./IdePanels";
+import { type Panel, WORKBENCH_COMPACT } from "./layout";
 import { loadPrefs, pickOffered, savePrefs } from "./prefs";
 import { ProjectFormModal } from "./ProjectList";
 import { RuntimeCard } from "./RuntimeCard";
+import { useCodingDownload } from "./useCodingDownload";
 import { useCodingStream } from "./useCodingStream";
-import { useOpenFiles } from "./useOpenFiles";
+import { useIdeLayout } from "./useIdeLayout";
+import { isDirty, useOpenFiles } from "./useOpenFiles";
 
 /** Ledger rows by codex turn id: the project detail wins over a just-started row. */
 function mergeRows(detail: CodingTurnRow[], pending: CodingTurnRow[]): CodingTurnRow[] {
@@ -45,10 +49,11 @@ function Elapsed({ since }: { since: number }) {
 }
 
 /**
- * One project's IDE: file tree | editor + diffs | conversation. A turn runs in the
- * coding runtime on its own; this page only watches it (the event stream) and can
- * interrupt it, so leaving or reloading never stops a turn — reopening replays the
- * history and resumes the live tail.
+ * One project's IDE: Files · Conversation (center) · Workbench (editor tabs + diffs).
+ * The side panels collapse to rails and resize (`useIdeLayout`); opening a file from
+ * anywhere brings the Workbench back. A turn runs in the coding runtime on its own; this
+ * page only watches it (the event stream) and can interrupt it, so leaving or reloading
+ * never stops a turn — reopening replays the history and resumes the live tail.
  */
 export function ProjectIde({ id }: { id: string }) {
   const { t } = useTranslation();
@@ -118,6 +123,60 @@ export function ProjectIde({ id }: { id: string }) {
     if (status && ledgerStatus.current && status !== ledgerStatus.current) reloadDetail();
   }, [streamStatus, reloadDetail]);
 
+  /* ---------- layout: side panels ---------- */
+  const ide = useIdeLayout();
+  const { layout, overlay, open: showPanel, close: hidePanel, closeOverlay } = ide;
+  const filesId = useId();
+  const benchId = useId();
+  const [resizing, setResizing] = useState(false);
+  const gridEl = useRef<HTMLDivElement | null>(null);
+  const attachGrid = ide.gridRef;
+  const setGrid = useCallback(
+    (el: HTMLDivElement | null) => {
+      gridEl.current = el;
+      attachGrid(el);
+    },
+    [attachGrid],
+  );
+  // focus follows a toggle (its button disappears with the panel or the rail)
+  const focusNext = useRef<string | null>(null);
+  useEffect(() => {
+    const target = focusNext.current;
+    if (!target) return;
+    focusNext.current = null;
+    gridEl.current?.querySelector<HTMLElement>(`[data-focus="${target}"]`)?.focus();
+  });
+  const collapsePanel = (panel: Panel) => {
+    hidePanel(panel);
+    focusNext.current = `${panel}-rail`;
+  };
+  const railClick = (panel: Panel) => {
+    if (overlay === panel) {
+      hidePanel(panel);
+      return;
+    }
+    showPanel(panel);
+    focusNext.current = `${panel}-toggle`;
+  };
+  const overlayKeyDown = (panel: Panel) => (e: KeyboardEvent<HTMLElement>) => {
+    // Esc closes the overlay — not when the editor or a dropdown used the key
+    if (e.key !== "Escape" || e.defaultPrevented || overlay !== panel) return;
+    if (e.target instanceof Element && e.target.closest(".monaco-editor")) return;
+    e.preventDefault();
+    collapsePanel(panel);
+  };
+  // a click anywhere else in the IDE closes the overlay. Capture phase: a click that
+  // opens a file (tree, message link, file-change card) runs its own handler after
+  // this one in the same batch, so the Workbench overlay stays without a flicker
+  const overlayOutside = (e: MouseEvent<HTMLDivElement>) => {
+    if (overlay === null || !(e.target instanceof Node)) return;
+    const own = [
+      document.getElementById(overlay === "files" ? filesId : benchId),
+      gridEl.current?.querySelector(`[data-focus="${overlay}-rail"]`),
+    ];
+    if (!own.some((el) => el?.contains(e.target as Node))) closeOverlay();
+  };
+
   /* ---------- editor tabs ---------- */
   const openFiles = useOpenFiles(id);
   const [active, setActive] = useState<string>(CHANGES_TAB);
@@ -154,11 +213,15 @@ export function ProjectIde({ id }: { id: string }) {
   // stable, so the memoized conversation rows are not re-rendered by it
   const lastTurnId = useRef<string | null>(null);
   lastTurnId.current = view.turns[view.turns.length - 1]?.turnId ?? null;
-  const openChange = useCallback((path: string, turnId: string) => {
-    // the latest turn's files diff against its start; an older turn's against HEAD
-    setFocus({ path, scope: lastTurnId.current === turnId ? "turn" : "worktree", nonce: Date.now() });
-    setActive(CHANGES_TAB);
-  }, []);
+  const openChange = useCallback(
+    (path: string, turnId: string) => {
+      // the latest turn's files diff against its start; an older turn's against HEAD
+      setFocus({ path, scope: lastTurnId.current === turnId ? "turn" : "worktree", nonce: Date.now() });
+      setActive(CHANGES_TAB);
+      showPanel("workbench");
+    },
+    [showPanel],
+  );
 
   // a Markdown link into the project (agent text, a `.md` preview): open that file,
   // at the linked line when there is one (stable: the conversation rows are memoized)
@@ -168,8 +231,9 @@ export function ProjectIde({ id }: { id: string }) {
       const opened = openTab(path);
       setActive(opened);
       setReveal(line === null ? null : { path: opened, line, column, nonce: ++revealNonce.current });
+      showPanel("workbench");
     },
-    [openTab],
+    [openTab, showPanel],
   );
   const revealed = useCallback((nonce: number) => setReveal((r) => (r?.nonce === nonce ? null : r)), []);
 
@@ -225,6 +289,15 @@ export function ProjectIde({ id }: { id: string }) {
   const [editing, setEditing] = useState(false);
   const back = () => setParams({});
 
+  /* ---------- downloads (a file, or the project as a zip) ---------- */
+  const { download, pending: downloadPending } = useCodingDownload();
+  const downloadFile = useCallback((path: string) => void download(id, path), [download, id]);
+  const fileDownloading = useCallback((path: string) => downloadPending(id, path), [downloadPending, id]);
+  const zipping = downloadPending(id);
+
+  const lastTurn = view.turns[view.turns.length - 1];
+  const changedCount = useMemo(() => turnChangedPaths(lastTurn).length, [lastTurn]);
+
   /* ---------- render ---------- */
   if (!detail.data) {
     return (
@@ -261,6 +334,28 @@ export function ProjectIde({ id }: { id: string }) {
           ? t("v2.coding.stream.connecting")
           : null;
 
+  const filesMode = layout.files.open ? "inline" : overlay === "files" ? "overlay" : "collapsed";
+  const benchMode = layout.workbench.open ? "inline" : overlay === "workbench" ? "overlay" : "collapsed";
+  const benchWidth = benchMode === "overlay" ? ide.overlayWidthOf("workbench") : layout.workbench.width;
+  const benchBadges: RailBadge[] = [];
+  if (openFiles.files.length > 0) {
+    benchBadges.push({
+      key: "tabs",
+      text: String(openFiles.files.length),
+      title: t("v2.coding.layout.openTabs", { count: openFiles.files.length }),
+    });
+  }
+  if (changedCount > 0) {
+    benchBadges.push({
+      key: "changes",
+      text: `±${changedCount}`,
+      title: t("v2.coding.layout.turnChanges", { count: changedCount }),
+    });
+  }
+  if (openFiles.files.some(isDirty)) {
+    benchBadges.push({ key: "dirty", text: null, title: t("v2.coding.editor.unsaved"), tone: "warn" });
+  }
+
   return (
     <div className="v2-coding-ide" data-testid="v2-coding-ide">
       <FlowHeader
@@ -284,6 +379,20 @@ export function ProjectIde({ id }: { id: string }) {
               {t("v2.coding.projects.rename")}
             </Button>
             <Button
+              size="sm"
+              disabled={!ready || zipping}
+              title={!ready ? t("v2.coding.composer.runtimeNotReady") : t("v2.coding.download.projectHint")}
+              onClick={() => void download(id)}
+              testId="v2-coding-download-project"
+            >
+              {zipping ? (
+                <Loader2 size={13} className="v2-coding-spin" aria-hidden="true" />
+              ) : (
+                <Download size={13} aria-hidden="true" />
+              )}
+              {t(zipping ? "v2.coding.download.preparing" : "v2.coding.download.project")}
+            </Button>
+            <Button
               kind="primary"
               size="sm"
               disabled={!ready || running || !canDeploy}
@@ -299,36 +408,48 @@ export function ProjectIde({ id }: { id: string }) {
       />
       {!ready && <RuntimeCard runtime={runtime.data} loading={runtime.loading} error={runtime.error} reload={runtime.reload} />}
       {ready && (
-        <div className="v2-coding-grid">
-          <section className="v2-coding-pane v2-coding-pane-tree">
+        <div
+          ref={setGrid}
+          className={resizing ? "v2-coding-grid resizing" : "v2-coding-grid"}
+          style={{ gridTemplateColumns: layout.columns }}
+          onClickCapture={overlayOutside}
+          data-testid="v2-coding-grid"
+        >
+          {filesMode !== "inline" && (
+            <PaneRail panel="files" controls={filesId} expanded={filesMode === "overlay"} onClick={() => railClick("files")} />
+          )}
+          <section
+            id={filesId}
+            className={`v2-coding-pane v2-coding-pane-files is-${filesMode}`}
+            style={filesMode === "overlay" ? { width: ide.overlayWidthOf("files") } : undefined}
+            aria-label={t("v2.coding.ide.files")}
+            onKeyDown={overlayKeyDown("files")}
+            data-testid="v2-coding-pane-files"
+          >
             <FileTree
               projectId={id}
               version={filesVersion}
               activePath={active === CHANGES_TAB ? null : active}
               onOpen={(path) => openFile(path)}
+              onDownload={downloadFile}
+              downloading={fileDownloading}
+              headEnd={<PanelToggle panel="files" controls={filesId} onClick={() => collapsePanel("files")} />}
             />
           </section>
-          <section className="v2-coding-pane v2-coding-pane-main">
-            <EditorPane
-              projectId={id}
-              files={openFiles.files}
-              active={active}
-              onActivate={setActive}
-              onClose={closeTab}
-              onDraft={openFiles.setDraft}
-              onSave={(path) => void save(path)}
-              onReload={openFiles.reload}
-              onOverwrite={(path) => void save(path, true)}
-              onTogglePreview={openFiles.togglePreview}
-              onOpenFile={openFile}
-              running={running}
-              version={filesVersion}
-              focus={focus}
-              reveal={reveal}
-              onRevealed={revealed}
+          {layout.files.open && (
+            <PaneResizer
+              panel="files"
+              pane={layout.files}
+              controls={filesId}
+              onWidth={(w) => ide.setWidth("files", w)}
+              onResizing={setResizing}
             />
-          </section>
-          <section className="v2-coding-pane v2-coding-pane-chat">
+          )}
+          <section
+            className="v2-coding-pane v2-coding-pane-chat"
+            aria-label={t("v2.coding.conversation.title")}
+            data-testid="v2-coding-pane-chat"
+          >
             <div className="v2-coding-pane-head">
               <span>{t("v2.coding.conversation.title")}</span>
               {phaseNote && (
@@ -365,6 +486,54 @@ export function ProjectIde({ id }: { id: string }) {
               onInterrupt={() => void interrupt()}
             />
           </section>
+          {layout.workbench.open && (
+            <PaneResizer
+              panel="workbench"
+              pane={layout.workbench}
+              controls={benchId}
+              onWidth={(w) => ide.setWidth("workbench", w)}
+              onResizing={setResizing}
+            />
+          )}
+          <section
+            id={benchId}
+            className={`v2-coding-pane v2-coding-pane-workbench is-${benchMode}${benchWidth < WORKBENCH_COMPACT ? " compact" : ""}`}
+            style={benchMode === "overlay" ? { width: benchWidth } : undefined}
+            aria-label={t("v2.coding.layout.workbench")}
+            onKeyDown={overlayKeyDown("workbench")}
+            data-testid="v2-coding-pane-workbench"
+          >
+            <EditorPane
+              projectId={id}
+              files={openFiles.files}
+              active={active}
+              onActivate={setActive}
+              onClose={closeTab}
+              onDraft={openFiles.setDraft}
+              onSave={(path) => void save(path)}
+              onReload={openFiles.reload}
+              onOverwrite={(path) => void save(path, true)}
+              onTogglePreview={openFiles.togglePreview}
+              onOpenFile={openFile}
+              onDownload={downloadFile}
+              downloading={fileDownloading}
+              running={running}
+              version={filesVersion}
+              focus={focus}
+              reveal={reveal}
+              onRevealed={revealed}
+              headEnd={<PanelToggle panel="workbench" controls={benchId} onClick={() => collapsePanel("workbench")} />}
+            />
+          </section>
+          {benchMode !== "inline" && (
+            <PaneRail
+              panel="workbench"
+              controls={benchId}
+              expanded={benchMode === "overlay"}
+              badges={benchBadges}
+              onClick={() => railClick("workbench")}
+            />
+          )}
         </div>
       )}
       {deploying && (

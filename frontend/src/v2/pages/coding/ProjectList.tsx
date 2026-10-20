@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -24,6 +24,7 @@ import {
 } from "../../ui";
 import { RuntimeCard } from "./RuntimeCard";
 import { ProjectStatusTag } from "./common";
+import { useCodingDownload } from "./useCodingDownload";
 
 export const NAME_MAX = 80;
 export const DESCRIPTION_MAX = 500;
@@ -138,6 +139,8 @@ export function ProjectList() {
   const [editing, setEditing] = useState<CodingProject | null>(null);
   const [deleting, setDeleting] = useState<CodingProject | null>(null);
   const [busy, setBusy] = useState(false);
+  const { download, pending: downloadPending } = useCodingDownload();
+  const ready = runtime.data?.status === "ready";
 
   const rows = useMemo(() => {
     const list = projects.data?.projects ?? [];
@@ -211,6 +214,17 @@ export function ProjectList() {
         <div className="v2-actions">
           {owned(p) && <LinkButton onClick={() => open(p)}>{t("v2.coding.projects.open")}</LinkButton>}
           {owned(p) && <LinkButton onClick={() => setEditing(p)}>{t("v2.coding.projects.rename")}</LinkButton>}
+          {owned(p) && (
+            <LinkButton
+              onClick={() => void download(p.id)}
+              disabled={!ready || downloadPending(p.id)}
+              title={!ready ? t("v2.coding.composer.runtimeNotReady") : t("v2.coding.download.projectHint")}
+              testId="v2-coding-download-project-row"
+            >
+              {downloadPending(p.id) && <Loader2 size={12} className="v2-coding-spin" aria-hidden="true" />}
+              {t("v2.coding.download.button")}
+            </LinkButton>
+          )}
           <LinkButton
             danger
             disabled={p.status === "running"}

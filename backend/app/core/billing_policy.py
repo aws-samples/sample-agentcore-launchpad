@@ -252,6 +252,8 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", "/api/coding/projects/{project_id}/turns"): Billable(SOURCE_CODING),
     ("POST", "/api/coding/projects/{project_id}/interrupt"): FREE,
     ("PUT", "/api/coding/projects/{project_id}/file"): FREE,
+    # a download stages the member's own files in S3 for the browser: no model call
+    ("POST", "/api/coding/projects/{project_id}/download"): FREE,
     ("POST", "/api/coding/projects/{project_id}/deploy"): FREE,
     # ---- Skill Lab: a job (and its resume) runs rollouts and judges ----
     ("POST", "/api/skill-lab/task-assets"): FREE,

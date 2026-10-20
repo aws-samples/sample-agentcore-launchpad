@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen, Loader2, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Download, File, Folder, FolderOpen, Loader2, RefreshCw } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { codingApi, errorMessage } from "../../../lib/api";
@@ -10,17 +10,27 @@ import { emptyTree, mergeListing, refreshTargets, ROOT, type TreeState, visibleR
  * The project's directory tree. The root is listed on mount; a directory is listed
  * the first time it is expanded. `version` bumps (an agent turn changed files, a
  * save) re-list the root and every expanded directory, keeping what is expanded.
+ * A file row has a download button, shown on hover / keyboard focus.
  */
 export function FileTree({
   projectId,
   version,
   activePath,
   onOpen,
+  onDownload,
+  downloading,
+  headEnd,
 }: {
   projectId: string;
   version: number;
   activePath: string | null;
   onOpen: (path: string) => void;
+  /** download one file (text or binary) */
+  onDownload?: (path: string) => void;
+  /** that file's download is being prepared */
+  downloading?: (path: string) => boolean;
+  /** extra header controls after the refresh button (the panel's collapse toggle) */
+  headEnd?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [tree, setTree] = useState<TreeState>(emptyTree);
@@ -95,9 +105,12 @@ export function FileTree({
     <div className="v2-coding-tree" data-testid="v2-coding-tree">
       <div className="v2-coding-pane-head">
         <span>{t("v2.coding.ide.files")}</span>
-        <LinkButton onClick={refresh} title={t("v2.common.refresh")} testId="v2-coding-tree-refresh">
-          <RefreshCw size={13} aria-hidden="true" />
-        </LinkButton>
+        <span className="v2-coding-head-actions">
+          <LinkButton onClick={refresh} title={t("v2.common.refresh")} testId="v2-coding-tree-refresh">
+            <RefreshCw size={13} aria-hidden="true" />
+          </LinkButton>
+          {headEnd}
+        </span>
       </div>
       {error && (
         <Alert tone="error" action={<LinkButton onClick={refresh}>{t("v2.common.retry")}</LinkButton>}>
@@ -110,32 +123,57 @@ export function FileTree({
         {rows.map((row) => {
           const Icon = row.dir ? (row.expanded ? FolderOpen : Folder) : File;
           const Chevron = row.expanded ? ChevronDown : ChevronRight;
+          const preparing = !row.dir && !!downloading?.(row.path);
           return (
-            <button
+            <div
               key={row.path}
-              type="button"
-              role="treeitem"
-              aria-level={row.depth + 1}
-              aria-expanded={row.dir ? row.expanded : undefined}
-              aria-selected={row.path === activePath}
-              className={row.path === activePath ? "v2-coding-tree-row on" : "v2-coding-tree-row"}
-              style={{ paddingLeft: 8 + row.depth * 14 }}
-              title={row.path}
-              onClick={() => (row.dir ? toggle(row.path) : onOpen(row.path))}
-              data-testid={`v2-coding-tree-${row.path}`}
+              role="none"
+              className={onDownload && !row.dir ? "v2-coding-tree-item has-dl" : "v2-coding-tree-item"}
             >
-              {row.dir ? (
-                loadingDirs.has(row.path) ? (
-                  <Loader2 size={12} className="v2-coding-spin" aria-hidden="true" />
+              <button
+                type="button"
+                role="treeitem"
+                aria-level={row.depth + 1}
+                aria-expanded={row.dir ? row.expanded : undefined}
+                aria-selected={row.path === activePath}
+                className={row.path === activePath ? "v2-coding-tree-row on" : "v2-coding-tree-row"}
+                style={{ paddingLeft: 8 + row.depth * 14 }}
+                title={row.path}
+                onClick={() => (row.dir ? toggle(row.path) : onOpen(row.path))}
+                data-testid={`v2-coding-tree-${row.path}`}
+              >
+                {row.dir ? (
+                  loadingDirs.has(row.path) ? (
+                    <Loader2 size={12} className="v2-coding-spin" aria-hidden="true" />
+                  ) : (
+                    <Chevron size={12} aria-hidden="true" />
+                  )
                 ) : (
-                  <Chevron size={12} aria-hidden="true" />
-                )
-              ) : (
-                <span className="v2-coding-tree-gap" />
+                  <span className="v2-coding-tree-gap" />
+                )}
+                <Icon size={14} aria-hidden="true" className={row.dir ? "dir" : "file"} />
+                <span className="name">{row.name}</span>
+              </button>
+              {onDownload && !row.dir && (
+                <button
+                  type="button"
+                  className="v2-coding-tree-dl"
+                  aria-label={t("v2.coding.download.fileNamed", { name: row.path })}
+                  title={t("v2.coding.download.file")}
+                  aria-busy={preparing}
+                  disabled={preparing}
+                  onClick={() => onDownload(row.path)}
+                  data-path={row.path}
+                  data-testid="v2-coding-download-file"
+                >
+                  {preparing ? (
+                    <Loader2 size={13} className="v2-coding-spin" aria-hidden="true" />
+                  ) : (
+                    <Download size={13} aria-hidden="true" />
+                  )}
+                </button>
               )}
-              <Icon size={14} aria-hidden="true" className={row.dir ? "dir" : "file"} />
-              <span className="name">{row.name}</span>
-            </button>
+            </div>
           );
         })}
       </div>

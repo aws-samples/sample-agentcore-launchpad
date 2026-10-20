@@ -423,3 +423,45 @@ describe("HTTP contract", () => {
     assert.ok(t0 > 0);
   });
 });
+
+describe("upload_file action", () => {
+  let lay;
+  let rt;
+  let blobs;
+  before(async () => {
+    blobs = await startBlobServer();
+    lay = await makeLayout();
+    rt = makeRuntime(lay);
+  });
+  after(async () => { await cleanup(rt, blobs, lay?.root); });
+
+  test("uploads a file, also while a turn runs, and is busy only while it uploads", async () => {
+    await ok(rt, "write_file", { path: "app/main.py", content: "print('download me')\n" });
+    const started = await ok(rt, "start_turn", { prompt: "slow job", model: "model-a" });
+    const out = await ok(rt, "upload_file", { path: "app/main.py", put_url: blobs.url("main.py") });
+    assert.deepEqual(out, { bytes: 21, name: "main.py" });
+    assert.equal(blobs.blobs.get("/main.py").toString("utf8"), "print('download me')\n");
+    assert.equal(rt.busy, 1, "only the turn keeps the microVM busy afterwards");
+    await waitForEvent(rt, "item/commandExecution/outputDelta", (r) => r.params.turnId === started.turn_id);
+    await ok(rt, "interrupt");
+    await finished(rt, started.turn_id);
+    assert.equal(rt.busy, 0);
+  });
+
+  test("errors come back in the envelope with the stable codes", async () => {
+    const cases = [
+      [{ path: "app/missing.py", put_url: blobs.url("x") }, "not_found"],
+      [{ path: "app", put_url: blobs.url("x") }, "path_invalid"],
+      [{ path: "../etc/passwd", put_url: blobs.url("x") }, "path_invalid"],
+      [{ path: "app/main.py" }, "bad_request"],
+      [{ path: "app/main.py", put_url: "http://127.0.0.1:9/nowhere" }, "upload_failed"],
+    ];
+    for (const [payload, code] of cases) {
+      const answer = await call(rt, "upload_file", payload);
+      assert.equal(answer.ok, false, JSON.stringify(payload));
+      assert.equal(answer.error.code, code, JSON.stringify(payload));
+    }
+    assert.equal(rt.busy, 0, "a failed upload releases busy");
+    assert.equal(blobs.blobs.has("/x"), false);
+  });
+});

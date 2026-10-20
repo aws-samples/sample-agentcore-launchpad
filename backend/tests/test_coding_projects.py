@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.coding import (
     deploy,
+    downloads,
     files,
     infra,
     install,
@@ -201,16 +203,27 @@ class FakeRuntime:
         assert p["put_url"].startswith("https://put/")
         return {"bytes": 456, "files": 2, "root_files": ["main.py"]}
 
+    def do_upload_file(self, s, p):
+        assert p["put_url"].startswith("https://put/")
+        if p["path"] in self.files[s]:
+            return {"bytes": len(self.files[s][p["path"]].encode()),
+                    "name": p["path"].rsplit("/", 1)[-1]}
+        if p["path"] == "src":
+            raise CodingRuntimeError("path_invalid", "src is not a regular file")
+        raise CodingRuntimeError("not_found", f"{p['path']} does not exist")
+
 
 class FakeS3:
     def __init__(self) -> None:
         self.objects: set[str] = set()
         self.downloads: list[str] = []
+        self.presigned: list[tuple[str, dict[str, Any], int]] = []
         self.fail_delete = False
         self.size = 456  # what HeadObject reports for an export
 
     def generate_presigned_url(self, method, Params, ExpiresIn):  # noqa: N803 — boto3 names
         assert Params["Bucket"] == BUCKET and ExpiresIn <= 900
+        self.presigned.append((method, dict(Params), ExpiresIn))
         verb = "put" if method == "put_object" else "get"
         if verb == "put":
             self.objects.add(Params["Key"])
@@ -450,7 +463,8 @@ BY_ID_ROUTES = [
     ("POST", "/turns", {"prompt": "hi", "model": MODEL}), ("POST", "/interrupt", None),
     ("GET", "/events", None), ("GET", "/tree", None), ("GET", "/file?path=main.py", None),
     ("PUT", "/file", {"path": "main.py", "content": "x"}), ("GET", "/changes", None),
-    ("GET", "/diff", None), ("POST", "/deploy", {}),
+    ("GET", "/diff", None), ("POST", "/download", {}),
+    ("POST", "/download", {"path": "main.py"}), ("POST", "/deploy", {}),
 ]
 
 
@@ -577,7 +591,9 @@ def test_delete_stops_the_session_deletes_the_prefix_and_the_rows(ada, fake, s3,
     project = _create(client)
     session = _session_of(project)
     prefix = s3urls.project_prefix(DEFAULT_WORKSPACE_ID, project["id"])
-    s3.objects |= {f"{prefix}snapshots/a.tgz", f"{prefix}exports/b.zip", "coding/other/x.tgz"}
+    s3.objects |= {f"{prefix}snapshots/a.tgz", f"{prefix}exports/b.zip",
+                   f"{prefix}downloads/20261020T000000000000Z-ab12cd34/p.zip",
+                   "coding/other/x.tgz"}
     assert client.delete(f"/api/coding/projects/{project['id']}").json() == {"deleted": True}
     assert stopped == [session]
     assert s3.objects == {"coding/other/x.tgz"}
@@ -1390,6 +1406,202 @@ def test_sse_route_streams_through_the_owner_check(ada, fake, s3, clock):
     response = client.get(f"/api/coding/projects/{project['id']}/events?after=0")
     frames = _frames(response.text)
     assert [f.get("event") for f in frames] == ["status", "error"]
+
+
+# ── downloads ─────────────────────────────────────────────────────────────────
+
+
+def _download(client: TestClient, project_id: str, **body) -> Any:
+    return client.post(f"/api/coding/projects/{project_id}/download", json=body)
+
+
+def _presigned(s3: FakeS3, method: str) -> list[tuple[dict[str, Any], int]]:
+    return [(params, ttl) for m, params, ttl in s3.presigned if m == method]
+
+
+def test_a_file_download_stages_the_file_and_answers_a_short_lived_attachment_url(
+        ada, fake, s3):
+    _, client = ada
+    project = _create(client)
+    session = _session_of(project)
+    fake.files[session]["src/main.py"] = "print(1)"
+    response = _download(client, project["id"], path="./src//main.py")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    [(put, put_ttl)] = _presigned(s3, "put_object")
+    key = put["Key"]
+    prefix = s3urls.downloads_prefix(DEFAULT_WORKSPACE_ID, project["id"])
+    assert key.startswith(prefix) and key.endswith("/main.py")
+    stamp_and_rand = key[len(prefix):].split("/")[0]
+    assert len(stamp_and_rand.split("-")[1]) == 8, "a random part keeps keys apart"
+    assert put_ttl <= s3urls.URL_TTL_S
+    assert fake.actions("upload_file") == [
+        (session, {"path": "src/main.py", "put_url": f"https://put/{key}"})]
+    [(get, get_ttl)] = _presigned(s3, "get_object")
+    assert get == {
+        "Bucket": BUCKET, "Key": key,
+        "ResponseContentDisposition": "attachment; filename=\"main.py\"; "
+                                      "filename*=UTF-8''main.py",
+        "ResponseContentType": "application/octet-stream",
+    }
+    assert get_ttl == 300
+    assert body == {"url": f"https://get/{key}", "filename": "main.py", "size": 8,
+                    "expires_in": 300}
+
+
+def test_the_project_downloads_as_a_zip_of_the_export_file_set(ada, fake, s3):
+    _, client = ada
+    project = _create(client, "Weather Bot!")
+    session = _session_of(project)
+    for body in ({}, {"path": None}):
+        response = _download(client, project["id"], **body)
+        assert response.status_code == 200, response.text
+        assert response.json()["filename"] == "weather-bot.zip"
+        assert response.json()["size"] == 456
+    exports = fake.actions("export")
+    assert len(exports) == 2 and all(s == session and set(p) == {"put_url"}
+                                     for s, p in exports)
+    assert fake.actions("upload_file") == []
+    get, _ = _presigned(s3, "get_object")[-1]
+    assert get["Key"].endswith("/weather-bot.zip")
+    assert get["ResponseContentType"] == "application/zip"
+    assert get["ResponseContentDisposition"] == (
+        "attachment; filename=\"weather-bot.zip\"; filename*=UTF-8''weather-bot.zip")
+
+
+def test_non_ascii_names_get_an_rfc5987_disposition_and_an_ascii_key(ada, fake, s3):
+    _, client = ada
+    project = _create(client, "天气 助手")
+    session = _session_of(project)
+    archive = _download(client, project["id"]).json()
+    assert archive["filename"] == "天气-助手.zip"
+    get, _ = _presigned(s3, "get_object")[-1]
+    assert get["Key"].endswith("/coding.zip") and get["Key"].isascii()
+    assert get["ResponseContentDisposition"] == (
+        "attachment; filename=\"coding.zip\"; "
+        "filename*=UTF-8''%E5%A4%A9%E6%B0%94-%E5%8A%A9%E6%89%8B.zip")
+    fake.files[session]['docs/报告 "v1".md'] = "# hi"
+    one = _download(client, project["id"], path='docs/报告 "v1".md').json()
+    assert one["filename"] == "报告 v1.md", "quotes never reach the header"
+    get, _ = _presigned(s3, "get_object")[-1]
+    assert get["Key"].endswith("/__ v1.md")
+    assert get["ResponseContentDisposition"] == (
+        "attachment; filename=\"__ v1.md\"; filename*=UTF-8''%E6%8A%A5%E5%91%8A%20v1.md")
+
+
+@pytest.mark.parametrize("path", ["../etc/passwd", "a/../../b", "/etc/passwd", ".git/config",
+                                  "C:/x", "a\x00b", "", "."])
+def test_download_paths_are_validated_before_any_runtime_or_s3_call(ada, fake, s3, path):
+    _, client = ada
+    project = _create(client)
+    response = _download(client, project["id"], path=path)
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "coding.path_invalid"
+    assert fake.calls == [] and s3.presigned == []
+
+
+def test_download_runtime_errors_map_to_console_codes(ada, fake, s3):
+    _, client = ada
+    project = _create(client)
+    missing = _download(client, project["id"], path="nope.py")
+    assert missing.status_code == 404 and missing.json()["code"] == "coding.file_not_found"
+    assert missing.json()["detail"] == {"path": "nope.py"}
+    directory = _download(client, project["id"], path="src")
+    assert directory.status_code == 422 and directory.json()["code"] == "coding.path_invalid"
+    fake.errors["upload_file"] = CodingRuntimeError(
+        "file_too_large", "huge.bin is larger than 200 MB", detail={"size": 300 * 2**20})
+    huge = _download(client, project["id"], path="huge.bin")
+    assert huge.status_code == 413 and huge.json()["code"] == "coding.download_too_large"
+    assert huge.json()["detail"] == {"max_bytes": 200 * 2**20, "size": 300 * 2**20}
+    fake.errors["export"] = CodingRuntimeError("file_too_large", "the export is 61 MB")
+    big = _download(client, project["id"])
+    assert big.status_code == 413 and big.json()["detail"] == {"max_bytes": 50 * 2**20}
+    fake.errors["export"] = CodingRuntimeError("upload_failed", "upload answered HTTP 403")
+    failed = _download(client, project["id"])
+    assert failed.status_code == 502 and failed.json()["code"] == "coding.runtime_error"
+    fake.errors["upload_file"] = CodingRuntimeError("bad_request",
+                                                    'unknown action "upload_file"')
+    outdated = _download(client, project["id"], path="main.py")
+    assert outdated.status_code == 409 and outdated.json()["code"] == "coding.runtime_outdated"
+    assert _presigned(s3, "get_object") == [], "no download URL for a failed staging"
+
+
+def test_download_without_the_runtime_is_409_before_any_aws_call(ada, fake, s3):
+    _, client = ada
+    project = _create(client)
+    set_default_resources({"artifacts_bucket": BUCKET})
+    response = _download(client, project["id"])
+    assert response.status_code == 409
+    assert response.json()["code"] == "coding.runtime_not_installed"
+    assert fake.calls == [] and s3.presigned == []
+
+
+def test_downloads_are_allowed_while_a_turn_runs_and_restore_first(ada, fake, s3):
+    _, client = ada
+    project = _create(client)
+    session = _session_of(project)
+    fake.files[session]["main.py"] = "x"
+    _set(project["id"], status="running", active_turn_id="t", snapshot_key="coding/snap.tgz")
+    response = _download(client, project["id"], path="main.py")
+    assert response.status_code == 200, response.text
+    _, payload = fake.actions("upload_file")[-1]
+    assert payload["restore_url"] == "https://get/coding/snap.tgz"
+
+
+def test_old_downloads_are_pruned_at_the_next_download(ada, fake, s3):
+    _, client = ada
+    project = _create(client)
+    prefix = s3urls.downloads_prefix(DEFAULT_WORKSPACE_ID, project["id"])
+    other = s3urls.downloads_prefix(DEFAULT_WORKSPACE_ID, "someone-else")
+    now = datetime.now(UTC)
+    old = f"{prefix}{s3urls._stamp(now - timedelta(minutes=20))}-aaaaaaaa/a.zip"
+    recent = f"{prefix}{s3urls._stamp(now - timedelta(minutes=5))}-bbbbbbbb/b.zip"
+    stray = f"{prefix}not-a-stamp/c.zip"
+    snapshot = f"{s3urls.project_prefix(DEFAULT_WORKSPACE_ID, project['id'])}snapshots/s.tgz"
+    foreign = f"{other}{s3urls._stamp(now - timedelta(hours=2))}-cccccccc/d.zip"
+    s3.objects |= {old, recent, stray, snapshot, foreign}
+    assert _download(client, project["id"]).status_code == 200
+    assert old not in s3.objects and stray not in s3.objects
+    assert {recent, snapshot, foreign} <= s3.objects
+    [(put, _)] = _presigned(s3, "put_object")
+    assert put["Key"] in s3.objects
+    s3.fail_delete = True
+    s3.objects.add(old)
+    assert _download(client, project["id"]).status_code == 200, "a failed prune is not fatal"
+
+
+def test_download_naming_units():
+    assert downloads.archive_names("Weather Bot!") == ("weather-bot.zip", "weather-bot.zip")
+    assert downloads.archive_names("42 things") == ("42-things.zip", "42-things.zip")
+    assert downloads.archive_names("天气") == ("天气.zip", "coding.zip")
+    assert downloads.archive_names("!!!") == ("coding.zip", "coding.zip")
+    assert downloads.clean_filename("..") == "download"
+    assert downloads.clean_filename('a"b\\c\r\nd\x00.txt') == "abcd.txt"
+    header = downloads.content_disposition("x\r\nSet-Cookie: y=1.txt")
+    assert "\r" not in header and "\n" not in header
+    assert header == ("attachment; filename=\"xSet-Cookie_ y_1.txt\"; "
+                      "filename*=UTF-8''xSet-Cookie%3A%20y%3D1.txt")
+    assert downloads.content_disposition("ü.txt").startswith('attachment; filename="_.txt";')
+    key = s3urls.download_key("ws", "p", "f.zip", datetime(2026, 10, 20, 1, 2, 3, tzinfo=UTC))
+    assert key.startswith("coding/ws/p/downloads/20261020T010203000000Z-")
+    assert key.endswith("/f.zip")
+    pruned = s3urls.prune_downloads(
+        SimpleNamespace(resources={"artifacts_bucket": BUCKET}), "ws", "p",
+        now=datetime(2026, 10, 20, 1, 20, tzinfo=UTC),
+        client=_PruneS3([key, "coding/ws/p/downloads/20261020T011000000000Z-ab/g.zip"]))
+    assert pruned == [key]
+
+
+class _PruneS3:
+    def __init__(self, keys: list[str]) -> None:
+        self.keys = keys
+
+    def list_objects_v2(self, Bucket, Prefix, ContinuationToken=None):  # noqa: N803
+        return {"Contents": [{"Key": k} for k in self.keys if k.startswith(Prefix)],
+                "IsTruncated": False}
+
+    def delete_objects(self, Bucket, Delete):  # noqa: N803
+        return {}
 
 
 # ── deploy handoff ────────────────────────────────────────────────────────────

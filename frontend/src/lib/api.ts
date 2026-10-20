@@ -7188,6 +7188,17 @@ export interface CodingDeployRequest {
   python_version?: ByocPythonVersion;
 }
 
+/** `POST …/download` — a short-lived presigned S3 GET that answers with
+ *  `Content-Disposition: attachment` (the browser saves it, the page stays). */
+export interface CodingDownload {
+  url: string;
+  /** the name the browser saves it under (`<project>.zip` for the archive) */
+  filename: string;
+  size: number | null;
+  /** seconds the URL stays valid (use it at once) */
+  expires_in: number;
+}
+
 export interface CodingDeployResult {
   agent_id: string;
   job_id: string;
@@ -7246,6 +7257,14 @@ export const codingApi = {
     request<{ changes: CodingChange[] }>(codingPath(id, `/changes?scope=${scope}`)),
   diff: (id: string, scope: CodingChangeScope) =>
     request<{ diff: string }>(codingPath(id, `/diff?scope=${scope}`)),
+  /** One file (`path`, text or binary, ≤ 200 MB) or, without a path, the whole project
+   *  as a zip (the deploy export's file set, ≤ 50 MB). `404 coding.file_not_found`,
+   *  `413 coding.download_too_large`; allowed while a turn runs. */
+  download: (id: string, path?: string) =>
+    request<CodingDownload>(codingPath(id, "/download"), {
+      method: "POST",
+      body: JSON.stringify(path === undefined ? {} : { path }),
+    }),
   deploy: (id: string, body: CodingDeployRequest) =>
     request<CodingDeployResult>(codingPath(id, "/deploy"), { method: "POST", body: JSON.stringify(body) }),
 };

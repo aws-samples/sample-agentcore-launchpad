@@ -3903,7 +3903,7 @@ repaired and uninstalled only by an administrator (`/api/coding/runtime*`, a
 `{ok, result | error{code}}`: `status`, `start_turn`, `interrupt`, `events`
 (seq-numbered event-log long-poll, `compact` drops deltas of completed items),
 `tree`, `read_file` (`rev: head | turn`), `write_file` (`expected_sha256`),
-`changes`, `diff`, `snapshot` / `export` (to a presigned PUT). Every app-server
+`changes`, `diff`, `snapshot` / `export` / `upload_file` (to a presigned PUT). Every app-server
 notification lands in `.launchpad/events.jsonl` on session storage, so readers
 fetch by seq and a reload, a reconnect or a backend restart loses nothing.
 
@@ -3963,6 +3963,17 @@ optimistic `expected_sha256` (`409 coding.file_conflict` carries the current
 hash); saves are refused while a turn runs. Paths are checked in the backend
 (absolute, `..`, NUL, `.git`) before any call, and authoritatively by the
 runtime's path guard.
+
+**Downloads.** `POST …/download` (owner-only, allowed while a turn runs) hands the
+browser one file (`{path}`, text or binary, ≤ 200 MB) or the whole project as
+`<project>.zip` (no `path`: the deploy export's file set, ≤ 50 MB). The bytes never
+pass through `InvokeAgentRuntime`: the backend mints a presigned PUT under
+`coding/<ws>/<project>/downloads/<ts>-<rand>/`, the runtime uploads the file
+(`upload_file`) or the zip (`export`) to it, and the backend answers a presigned GET
+that lives 5 minutes and carries `Content-Disposition: attachment` (an ASCII
+`filename` plus the RFC 5987 UTF-8 `filename*`), so the browser saves it in place
+(`app/coding/downloads.py`). Download objects older than 15 minutes are pruned at
+the project's next download; deleting the project deletes its whole prefix.
 
 **Deploy handoff.** `POST …/deploy` (`perm:agents.deploy`) snapshots the project,
 has the runtime zip its files to a presigned PUT, downloads it and stages it with

@@ -1030,7 +1030,7 @@ counter_complete{<counter>: bool}}`。
 | `POST` | `/api/coding/projects` | member | 请求体 `{name（≤ 80）, description?（≤ 500）}` → `201 project`（不调用运行时） |
 | `GET` | `/api/coding/projects/{project_id}` | member（所有者） | `project` + `turns[]`（最新 20 个，按时间正序）+ `active_turn` |
 | `PATCH` | `/api/coding/projects/{project_id}` | member（所有者） | 请求体 `{name?, description?}` → `project` |
-| `DELETE` | `/api/coding/projects/{project_id}` | member（所有者或管理员） | 停止运行时会话（尽力而为），删除项目的快照、导出文件和台账行 → `{deleted: true}`；回合运行中返回 `409 coding.turn_running`；S3 拒绝时返回 `502 coding.delete_failed`（可重试） |
+| `DELETE` | `/api/coding/projects/{project_id}` | member（所有者或管理员） | 停止运行时会话（尽力而为），删除项目的快照、导出文件、下载文件和台账行 → `{deleted: true}`；回合运行中返回 `409 coding.turn_running`；S3 拒绝时返回 `502 coding.delete_failed`（可重试） |
 | `POST` | `/api/coding/projects/{project_id}/turns` | member（所有者），计费 | 请求体 `{prompt, model?, effort?}` → `202` 回合行（`status: running`）。`409 coding.turn_running`、`422 coding.model_invalid` / `coding.effort_invalid`、`413 coding.prompt_too_long`（> 32 KB）、`409 coding.runtime_busy`（卸载中）、`402 budget.exceeded` / `budget.model_unpriced`、`502 coding.runtime_error` |
 | `POST` | `/api/coding/projects/{project_id}/interrupt` | member（所有者） | `{interrupted: bool}` |
 | `GET` | `/api/coding/projects/{project_id}/events` | member（所有者） | SSE，`?after=<seq>` 或 `Last-Event-ID`：先发 `event: status {project_status, active_turn}`；每条记录为 `id: <seq>` + `event: event`；`: keep-alive`；25 分钟后 `event: reconnect`；失败时 `event: error {code, message}` 后结束 |
@@ -1039,6 +1039,7 @@ counter_complete{<counter>: bool}}`。
 | `PUT` | `/api/coding/projects/{project_id}/file` | member（所有者） | 请求体 `{path, content, expected_sha256?}` → `{path, sha256, size}`；`409 coding.file_conflict`（`detail: {sha256}`）、`409 coding.turn_running`、`413 coding.file_too_large` |
 | `GET` | `/api/coding/projects/{project_id}/changes` | member（所有者） | `?scope=worktree\|turn` → `{scope, changes: [{path, status, old_path?}]}` |
 | `GET` | `/api/coding/projects/{project_id}/diff` | member（所有者） | `?scope=` → `{scope, diff, truncated}` |
+| `POST` | `/api/coding/projects/{project_id}/download` | member（所有者） | 请求体 `{path?}`：给出路径 = 下载该文件（文本或二进制，≤ 200 MB），不给 = 整个项目打包为 `<project>.zip`（与部署导出相同的文件集合：已跟踪和未被忽略的未跟踪文件，不含 `.git` 和依赖目录；≤ 50 MB）→ `{url, filename, size, expires_in}`——有效期 `expires_in`（300）秒的预签名 S3 GET，应答带 `Content-Disposition: attachment`（RFC 5987 `filename*`）。回合运行期间也可用。`404 coding.file_not_found`、`413 coding.download_too_large`（`detail: {max_bytes, size?}`）、`422 coding.path_invalid`（目录也是）、`409 coding.runtime_outdated`（运行时安装于支持文件下载之前：修复即可） |
 | `POST` | `/api/coding/projects/{project_id}/deploy` | `perm:agents.deploy`（所有者） | 请求体 `{agent_name?, description?, artifact_kind?, entrypoint?, python_version?}` → `202 {agent_id, job_id, created}`；创建 `byoc` Agent（创建者为调用者）或重新发布项目已有的 Agent。`409 coding.turn_running`、`422 coding.deploy_failed`（`detail.reason` = `dockerfile_missing` \| `entrypoint_missing`（附 `entrypoint`、`candidates`） \| `invalid_spec`（附 `errors`））、`413 byoc.upload_too_large`（导出超过 250 MiB 的 BYOC zip 上限，下载前即拒绝），以及 `POST /api/agents` / 重新部署的全部拒绝 |
 
 `usage` = `{input, cached_input, cache_write, output, reasoning_output}`（codex 计数：`input` 包含缓存命中与缓存写入，`output` 包含推理 token）。时间戳是不带时区的 UTC ISO 字符串。路径错误为 `422 coding.path_invalid`，不会到达运行时；其他运行时失败为 `502 coding.runtime_error`，快照恢复失败为 `502 coding.restore_failed`。

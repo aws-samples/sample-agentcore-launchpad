@@ -14,7 +14,7 @@ other members' projects only through ``GET /projects?all=1`` and ``DELETE``.
 Starting a turn is the one billable route (``Billable(SOURCE_CODING)`` — the gate
 checks the payer's spend, the handler the model's price); deploying is
 ``perm:agents.deploy``. Handlers stay thin: the logic lives in ``projects``,
-``turns``, ``files``, ``stream`` and ``deploy``.
+``turns``, ``files``, ``downloads``, ``stream`` and ``deploy``.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from app.schemas.agent import ByocPythonVersion
 from app.services import budgets
 from app.services.visibility import Viewer, require_viewer
 
-from . import deploy, files, install, projects, runtime_client, status, stream, turns
+from . import deploy, downloads, files, install, projects, runtime_client, status, stream, turns
 from .models import DESCRIPTION_MAX, NAME_MAX
 
 router = APIRouter(prefix="/api/coding", tags=["coding"])
@@ -130,6 +130,11 @@ class FileWrite(BaseModel):
     # omitted = overwrite unconditionally; a hash = the file must still have it;
     # null = the file must not exist yet
     expected_sha256: str | None = Field(default=None, max_length=128)
+
+
+class DownloadRequest(BaseModel):
+    # set = that one file; omitted (or null) = the whole project as a zip
+    path: str | None = Field(default=None, max_length=files.MAX_PATH_CHARS)
 
 
 class DeployRequest(BaseModel):
@@ -330,6 +335,20 @@ def coding_diff(
 ) -> dict[str, Any]:
     _identity, row = _owned(request, ws, db, project_id)
     return files.diff(ws.context, row, scope)
+
+
+@router.post("/projects/{project_id}/download")
+def download_coding_files(
+    project_id: str,
+    body: DownloadRequest,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """A short-lived download URL for one file (``path``) or the project zip.
+    Owner-only like every file route; allowed while a turn runs (read-only)."""
+    _identity, row = _owned(request, ws, db, project_id)
+    return downloads.download(ws.context, ws.id, row, body.path)
 
 
 # ── deploy ──────────────────────────────────────────────────────────────────

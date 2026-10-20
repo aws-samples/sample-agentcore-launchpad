@@ -442,6 +442,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("PUT", "/api/coding/projects/{project_id}/file"): MEMBER,
     ("GET", "/api/coding/projects/{project_id}/changes"): MEMBER,
     ("GET", "/api/coding/projects/{project_id}/diff"): MEMBER,
+    ("POST", "/api/coding/projects/{project_id}/download"): MEMBER,
     ("POST", "/api/coding/projects/{project_id}/deploy"): PERM_AGENT_DEPLOY,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,

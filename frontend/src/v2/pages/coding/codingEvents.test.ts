@@ -11,6 +11,7 @@ import {
   liveTurn,
   normalizeUsage,
   OUTPUT_CAP,
+  turnChangedPaths,
   turnPrompt,
   withLedgerTurns,
 } from "./codingEvents";
@@ -412,6 +413,20 @@ describe("helpers", () => {
     expect(normalizeUsage({})).toBeNull();
     expect(normalizeUsage({ input: 3, output: 4 })).toMatchObject({ input: 3, output: 4, total: 7 });
     expect(normalizeUsage({ inputTokens: 3, outputTokens: 4, totalTokens: 9 })).toMatchObject({ total: 9 });
+  });
+
+  it("lists the project files a turn changed, once each", () => {
+    expect(turnChangedPaths(null)).toEqual([]);
+    expect(turnChangedPaths(applyCodingEvents(emptyConversation(), fullTurnLog()).turns[0])).toEqual(["test_app.py"]);
+    const state = applyCodingEvents(
+      emptyConversation(),
+      log(
+        1,
+        ["item/completed", { turnId: T, item: { type: "fileChange", id: "f1", status: "completed", changes: [{ path: "a.py", kind: { type: "add" }, diff: "x\n" }, { path: "/tmp/x", kind: { type: "add" }, diff: "" }] } }],
+        ["item/completed", { turnId: T, item: { type: "fileChange", id: "f2", status: "completed", changes: [{ path: "a.py", kind: { type: "update", move_path: null }, diff: "" }, { path: "c.py", kind: { type: "update", move_path: "d.py" }, diff: "" }] } }],
+      ),
+    );
+    expect(turnChangedPaths(state.turns[0])).toEqual(["a.py", "d.py"]);
   });
 
   it("flags the records that may change files", () => {
