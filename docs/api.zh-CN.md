@@ -1017,9 +1017,9 @@ counter_complete{<counter>: bool}}`。
 恒为 `reported`：这是对上报了用量的任务的观测统计——不是计费总额，也不做任何费用估算。在用量
 采集之前写出的旧结果，每一侧都表现为 `missing_rows == rows` 且计数全为 `null`。
 
-## 控制台编码 Agent API / Console Coding Agent API
+## 控制台 Agent IDE API / Console Agent IDE API
 
-基于平台编码运行时的编码控制台（`/v2/coding`，参见[架构](architecture.zh-CN.md#编码-agent--基于-agentcore-上-codex-的远程-web-ide)）。项目在**任何可见性模式下都只属于创建者**：所有按 id 访问的路由上，他人的或不存在的 id 都是 `404 coding.project_not_found`；管理员只能通过 `GET /projects?all=1` 和 `DELETE` 接触他人的项目。所有 2xx 都返回 JSON。需要运行时的路由在 workspace 未安装运行时时，会在任何 AWS 调用前返回 `409 coding.runtime_not_installed`。
+基于平台 Agent IDE 运行时的 Agent IDE（`/v2/coding`，参见[架构](architecture.zh-CN.md#agent-ide--基于-agentcore-上-codex-的远程-web-ide)）。项目在**任何可见性模式下都只属于创建者**：所有按 id 访问的路由上，他人的或不存在的 id 都是 `404 coding.project_not_found`；管理员只能通过 `GET /projects?all=1` 和 `DELETE` 接触他人的项目。所有 2xx 都返回 JSON。需要运行时的路由在 workspace 未安装运行时时，会在任何 AWS 调用前返回 `409 coding.runtime_not_installed`。
 
 | 方法 | 路径 | 策略 | 结果 |
 |---|---|---|---|

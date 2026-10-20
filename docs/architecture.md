@@ -320,10 +320,10 @@ The `/agents/new` picker shows four cards, in this order:
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
 | 4 | **Bring Your Own Code** | `byoc` | user-written agent code uploaded as a zip (direct-code runtime or Dockerfile → CodeBuild) or referenced as an existing private-ECR image — see [BYOC](#byoc--bring-your-own-code) |
 
-The V2 wizard adds a fifth card, **Coding Agent**, which is not a method of its
+The V2 wizard adds a fifth card, **Agent IDE**, which is not a method of its
 own: it opens the coding console (`/v2/coding`), where a codex agent builds the
 project and the result deploys as `byoc` — see
-[Coding Agent](#coding-agent--a-remote-web-ide-over-codex-on-agentcore).
+[Agent IDE](#agent-ide--a-remote-web-ide-over-codex-on-agentcore).
 
 Discovery of existing runtimes and harnesses is not a deploy method: it has its
 own page at `/agents/import` (see below), reachable from the list header and
@@ -3875,7 +3875,7 @@ the tasks that reported it — not a billing total, and the console shows no cos
 estimate. The console renders it as a TOKEN USAGE table under the result tiles
 and per task in the expanded row, with a dash for every unknown counter.
 
-## Coding Agent — a remote web IDE over codex on AgentCore
+## Agent IDE — a remote web IDE over codex on AgentCore
 
 The fifth way to build an agent (parent task `10-19-coding-agent`): a member opens
 a project in the browser IDE (`/v2/coding`, `?view=project&id=`), converses with a

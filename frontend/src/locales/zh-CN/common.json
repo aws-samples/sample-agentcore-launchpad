@@ -2465,28 +2465,28 @@
     "context_layer.no_result": "COA 没有找到这个问题的答案。",
     "context_layer.coa_rejected": "COA 无法处理这个问题。",
     "context_layer.invalid_namespace": "COA 命名空间 ID 是 UUID。",
-    "coding.project_not_found": "编码项目不存在。",
-    "coding.runtime_not_installed": "本工作区尚未安装编码运行时。",
+    "coding.project_not_found": "项目不存在。",
+    "coding.runtime_not_installed": "本工作区尚未安装 Agent IDE 运行时。",
     "coding.turn_running": "该项目已有回合正在运行。",
     "coding.no_turn": "没有正在运行的回合。",
     "coding.file_conflict": "打开该文件后，它已被修改。",
     "coding.path_invalid": "文件路径无效。",
     "coding.file_too_large": "文件过大（最多 2 MB）。",
-    "coding.model_invalid": "编码运行时不提供该模型。",
+    "coding.model_invalid": "Agent IDE 运行时不提供该模型。",
     "coding.effort_invalid": "不支持该推理强度。",
     "coding.prompt_too_long": "提示词过长（最多 32 KB）。",
-    "coding.runtime_error": "编码运行时未响应，请重试。",
+    "coding.runtime_error": "Agent IDE 运行时未响应，请重试。",
     "coding.deploy_failed": "部署项目失败。",
     "coding.restore_failed": "无法恢复项目保存的快照，请重试。",
     "coding.delete_failed": "无法删除项目保存的文件，请重试。",
-    "coding.runtime_busy": "编码运行时正在安装或卸载，请在完成后重试。",
-    "coding.runtime_in_use": "这个工作区还有正在运行的编码回合。请等它结束或中止后再卸载。",
+    "coding.runtime_busy": "Agent IDE 运行时正在安装或卸载，请在完成后重试。",
+    "coding.runtime_in_use": "这个工作区的 Agent IDE 项目中还有正在运行的回合。请等它结束或中止后再卸载。",
     "context_layer.demo_param_scope": "体验账号参数必须是所连接 COA 部署的 /<prefix>/launchpad/ 之下的 SSM 参数。",
     "context_layer.demo_param_invalid": "体验账号参数不存在、不是 SecureString，或不是包含 username 和 password 的 JSON。",
     "context_layer.demo_unavailable": "此上下文层没有体验账号，需由管理员在上下文层页面配置。",
     "coding.file_not_found": "项目中已没有该文件。",
     "coding.download_too_large": "文件过大，无法下载：单个文件最多 200 MB，项目压缩包最多 50 MB。",
-    "coding.runtime_outdated": "编码运行时的版本早于当前控制台，管理员可以在编码控制台中修复它。"
+    "coding.runtime_outdated": "Agent IDE 运行时的版本早于当前控制台，管理员可以在 Agent IDE 中修复它。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -5386,7 +5386,7 @@
       "online": "在线评估",
       "models": "模型",
       "costs": "成本与告警",
-      "coding": "编码 Agent"
+      "coding": "Agent IDE"
     },
     "notFound": {
       "title": "页面不存在",
@@ -5519,8 +5519,8 @@
           "containerDesc": "使用自带 Agent 循环的 SDK（如 Claude Agent SDK），由 CodeBuild 构建为 ARM64 容器。",
           "byoc": "自带代码",
           "byocDesc": "上传自己的 Agent 代码（zip 或 Dockerfile 上下文），或指定已有 ECR 镜像；平台负责打包、部署与运维。",
-          "coding": "编码 Agent",
-          "codingDesc": "描述你要的 Agent，codex 编码 Agent 在浏览器 IDE 背后的 AgentCore microVM 中编写、运行并测试任意代码；结果按自带代码方式部署。"
+          "coding": "Agent IDE",
+          "codingDesc": "描述你要的 Agent，codex 编码助手在浏览器 IDE 背后的 AgentCore microVM 中编写、运行并测试任意代码；结果按自带代码方式部署。"
         },
         "recommended": "推荐",
         "classicForm": "完整表单",
@@ -9160,7 +9160,7 @@
         "studio": "Studio",
         "governance": "治理",
         "models_probe": "模型探测",
-        "coding": "编码 Agent"
+        "coding": "Agent IDE"
       },
       "jobNotice": "这个任务的预估费用（{{estimate}}）超过了你本月剩余的预算（{{remaining}}）。它仍会运行，预算用完后会在下一个安全节点停止。预算将于 {{date}} 重置。",
       "stop": {
@@ -9626,10 +9626,10 @@
       }
     },
     "coding": {
-      "title": "编码 Agent",
-      "desc": "在浏览器 IDE 中构建 Agent：codex 编码 Agent 在 AgentCore microVM 中编写、运行并测试代码，Launchpad 再把结果部署为普通 Agent。",
+      "title": "Agent IDE",
+      "desc": "在浏览器 IDE 中构建 Agent：codex 编码助手在 AgentCore microVM 中编写、运行并测试代码，Launchpad 再把结果部署为普通 Agent。",
       "runtime": {
-        "title": "编码运行时",
+        "title": "Agent IDE 运行时",
         "status": {
           "not_installed": "未安装",
           "installing": "安装中",
@@ -9643,14 +9643,14 @@
         "uninstall": "卸载",
         "installStarted": "已开始安装，需要几分钟。",
         "uninstallStarted": "已开始卸载。",
-        "uninstallTitle": "卸载编码运行时？",
-        "uninstallBody": "将删除本工作区的编码运行时及其角色；在重新安装之前，成员无法打开或运行自己的项目。项目快照会保留，重新安装后项目即可恢复。",
-        "adminNotInstalled": "本工作区尚未安装编码运行时。只需安装一次：构建运行时镜像，并创建一个由平台托管、供所有成员项目共用的 AgentCore Runtime。",
-        "memberNotInstalled": "本工作区尚未安装编码运行时，请联系管理员安装。",
+        "uninstallTitle": "卸载 Agent IDE 运行时？",
+        "uninstallBody": "将删除本工作区的 Agent IDE 运行时及其角色；在重新安装之前，成员无法打开或运行自己的项目。项目快照会保留，重新安装后项目即可恢复。",
+        "adminNotInstalled": "本工作区尚未安装 Agent IDE 运行时。只需安装一次：构建运行时镜像，并创建一个由平台托管、供所有成员项目共用的 AgentCore Runtime。",
+        "memberNotInstalled": "本工作区尚未安装 Agent IDE 运行时，请联系管理员安装。",
         "failedAdmin": "上次安装失败。请查看任务日志后重试。",
-        "failedMember": "编码运行时不可用，请联系管理员修复。",
+        "failedMember": "Agent IDE 运行时不可用，请联系管理员修复。",
         "installingNote": "安装中：正在构建镜像并创建运行时，本页会自动刷新。",
-        "uninstallingNote": "正在卸载编码运行时…",
+        "uninstallingNote": "正在卸载 Agent IDE 运行时…",
         "models": "模型",
         "image": "镜像",
         "arn": "运行时 ARN",
@@ -9670,8 +9670,8 @@
         "colUpdated": "更新时间",
         "open": "打开",
         "rename": "编辑",
-        "empty": "还没有编码项目",
-        "emptyBody": "新建一个项目，描述你想要的 Agent，编码 Agent 会把它构建出来。",
+        "empty": "还没有项目",
+        "emptyBody": "新建一个项目，描述你想要的 Agent，编码助手会把它构建出来。",
         "noMatch": "没有匹配的项目。",
         "created": "已创建项目 {{name}}",
         "saved": "项目已保存",
@@ -9681,7 +9681,7 @@
         "runningNoDelete": "有回合正在运行，请先中断再删除项目。"
       },
       "form": {
-        "createTitle": "新建编码项目",
+        "createTitle": "新建项目",
         "editTitle": "编辑项目",
         "name": "名称",
         "namePlaceholder": "例如 weather-assistant",
@@ -9755,13 +9755,13 @@
         "saving": "保存中…",
         "saveHint": "保存（⌘/Ctrl+S）",
         "saved": "已保存 {{path}}",
-        "conflict": "打开该文件后，编码 Agent 修改了它。重新加载会丢弃你的修改；覆盖则用你的版本替换较新的版本。",
+        "conflict": "打开该文件后，编码助手修改了它。重新加载会丢弃你的修改；覆盖则用你的版本替换较新的版本。",
         "changedOnDisk": "你有未保存的修改时，该文件在磁盘上被修改了。",
         "reload": "重新加载",
         "overwrite": "覆盖",
         "binary": "二进制文件，不予显示。",
         "closeTab": "关闭 {{name}}",
-        "missing": "项目中已没有该文件（编码 Agent 可能删除或移动了它）。"
+        "missing": "项目中已没有该文件（编码助手可能删除或移动了它）。"
       },
       "changes": {
         "tab": "变更",
@@ -9783,7 +9783,7 @@
       },
       "conversation": {
         "title": "对话",
-        "empty": "描述你想构建的 Agent。编码 Agent 会在本项目的 microVM 中编写代码、运行并测试。",
+        "empty": "描述你想构建的 Agent。编码助手会在本项目的 microVM 中编写代码、运行并测试。",
         "you": "你",
         "working": "处理中…",
         "reasoning": "推理过程",
@@ -9811,10 +9811,10 @@
         "image": "[图片未加载：{{alt}} {{src}}]"
       },
       "notice": {
-        "appServerExited": "编码 Agent 进程已重启。",
+        "appServerExited": "编码助手进程已重启。",
         "serverRequestDeclined": "已自动拒绝一个审批请求（命令无需审批即可运行）：",
         "restored": "已从最新快照恢复项目。",
-        "threadResumeFailed": "无法恢复之前的对话；编码 Agent 将在新会话中继续，不带之前的上下文。"
+        "threadResumeFailed": "无法恢复之前的对话；编码助手将在新会话中继续，不带之前的上下文。"
       },
       "composer": {
         "placeholder": "描述要构建或修改的内容（Enter 发送，Shift+Enter 换行）",
@@ -9825,7 +9825,7 @@
         "sending": "启动中…",
         "interrupt": "中断",
         "interrupting": "中断中…",
-        "runtimeNotReady": "编码运行时尚未就绪。",
+        "runtimeNotReady": "Agent IDE 运行时尚未就绪。",
         "tooLong": "提示词超过 {{max}} KB。"
       },
       "stream": {

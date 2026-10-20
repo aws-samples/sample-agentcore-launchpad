@@ -2465,28 +2465,28 @@
     "context_layer.no_result": "COA found no answer to this question.",
     "context_layer.coa_rejected": "COA could not take this question.",
     "context_layer.invalid_namespace": "A COA namespace id is a UUID.",
-    "coding.project_not_found": "Coding project not found.",
-    "coding.runtime_not_installed": "The coding runtime is not installed in this workspace.",
+    "coding.project_not_found": "Project not found.",
+    "coding.runtime_not_installed": "The Agent IDE runtime is not installed in this workspace.",
     "coding.turn_running": "A turn is already running in this project.",
     "coding.no_turn": "No turn is running.",
     "coding.file_conflict": "The file changed since you opened it.",
     "coding.path_invalid": "Invalid file path.",
     "coding.file_too_large": "The file is too large (2 MB at most).",
-    "coding.model_invalid": "The coding runtime does not offer this model.",
+    "coding.model_invalid": "The Agent IDE runtime does not offer this model.",
     "coding.effort_invalid": "This reasoning effort is not supported.",
     "coding.prompt_too_long": "The prompt is too long (32 KB at most).",
-    "coding.runtime_error": "The coding runtime did not answer. Try again.",
+    "coding.runtime_error": "The Agent IDE runtime did not answer. Try again.",
     "coding.deploy_failed": "Deploying the project failed.",
     "coding.restore_failed": "The project's saved snapshot could not be restored. Try again.",
     "coding.delete_failed": "The project's saved files could not be deleted. Try again.",
-    "coding.runtime_busy": "The coding runtime is being installed or uninstalled. Try again when it finishes.",
-    "coding.runtime_in_use": "A coding turn is still running in this workspace. Wait for it to finish or interrupt it, then uninstall.",
+    "coding.runtime_busy": "The Agent IDE runtime is being installed or uninstalled. Try again when it finishes.",
+    "coding.runtime_in_use": "A turn is still running in an Agent IDE project in this workspace. Wait for it to finish or interrupt it, then uninstall.",
     "context_layer.demo_param_scope": "The demo account parameter must be an SSM parameter under /<prefix>/launchpad/ of the connected COA deployment.",
     "context_layer.demo_param_invalid": "The demo account parameter is missing, is not a SecureString, or is not JSON with a username and password.",
     "context_layer.demo_unavailable": "This context layer has no demo account. An administrator sets one on the Context Layer page.",
     "coding.file_not_found": "The file no longer exists in the project.",
     "coding.download_too_large": "Too large to download: a file can be 200 MB at most, the project archive 50 MB.",
-    "coding.runtime_outdated": "The coding runtime is older than this console. An administrator can repair it from the coding console."
+    "coding.runtime_outdated": "The Agent IDE runtime is older than this console. An administrator can repair it from Agent IDE."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -5386,7 +5386,7 @@
       "online": "Online evaluation",
       "models": "Models",
       "costs": "Spend & alerts",
-      "coding": "Coding Agent"
+      "coding": "Agent IDE"
     },
     "notFound": {
       "title": "Page not found",
@@ -5519,8 +5519,8 @@
           "containerDesc": "Bring an agent SDK with its own loop (e.g. Claude Agent SDK); built by CodeBuild into an ARM64 container.",
           "byoc": "Bring your own code",
           "byocDesc": "Upload your own agent code (zip or Dockerfile context) or point at an existing ECR image; the platform packages, deploys and operates it.",
-          "coding": "Coding Agent",
-          "codingDesc": "Describe the agent and a codex coding agent writes, runs and tests any code for it in an AgentCore microVM, from a browser IDE; the result deploys as bring-your-own-code."
+          "coding": "Agent IDE",
+          "codingDesc": "Describe the agent and a codex coding assistant writes, runs and tests any code for it in an AgentCore microVM, from a browser IDE; the result deploys as bring-your-own-code."
         },
         "recommended": "Recommended",
         "classicForm": "Full form",
@@ -9160,7 +9160,7 @@
         "studio": "Studio",
         "governance": "Governance",
         "models_probe": "Model probes",
-        "coding": "Coding Agent"
+        "coding": "Agent IDE"
       },
       "jobNotice": "This job's estimated cost ({{estimate}}) is more than what is left of your monthly budget ({{remaining}}). It runs anyway, and stops at its next safe point once the budget is reached. The budget resets on {{date}}.",
       "stop": {
@@ -9626,10 +9626,10 @@
       }
     },
     "coding": {
-      "title": "Coding Agent",
-      "desc": "Build an agent in a browser IDE: a codex coding agent writes, runs and tests the code in an AgentCore microVM, and Launchpad deploys the result as an ordinary Agent.",
+      "title": "Agent IDE",
+      "desc": "Build an agent in a browser IDE: a codex coding assistant writes, runs and tests the code in an AgentCore microVM, and Launchpad deploys the result as an ordinary Agent.",
       "runtime": {
-        "title": "Coding runtime",
+        "title": "Agent IDE runtime",
         "status": {
           "not_installed": "Not installed",
           "installing": "Installing",
@@ -9643,14 +9643,14 @@
         "uninstall": "Uninstall",
         "installStarted": "Install started. It takes a few minutes.",
         "uninstallStarted": "Uninstall started.",
-        "uninstallTitle": "Uninstall the coding runtime?",
+        "uninstallTitle": "Uninstall the Agent IDE runtime?",
         "uninstallBody": "The workspace's coding runtime and its role are deleted, and members cannot open or run their projects until it is installed again. Project snapshots are kept, so projects come back after a reinstall.",
-        "adminNotInstalled": "The coding runtime is not installed in this workspace. Install it once: it builds the runtime image and creates one platform-owned AgentCore Runtime that every member's projects share.",
-        "memberNotInstalled": "The coding runtime is not installed in this workspace yet. Ask an administrator to install it.",
+        "adminNotInstalled": "The Agent IDE runtime is not installed in this workspace. Install it once: it builds the runtime image and creates one platform-owned AgentCore Runtime that every member's projects share.",
+        "memberNotInstalled": "The Agent IDE runtime is not installed in this workspace yet. Ask an administrator to install it.",
         "failedAdmin": "The last install failed. Check the job log, then retry.",
-        "failedMember": "The coding runtime is unavailable. Ask an administrator to repair it.",
+        "failedMember": "The Agent IDE runtime is unavailable. Ask an administrator to repair it.",
         "installingNote": "Installing: building the image and creating the runtime. This page refreshes on its own.",
-        "uninstallingNote": "Uninstalling the coding runtime…",
+        "uninstallingNote": "Uninstalling the Agent IDE runtime…",
         "models": "Models",
         "image": "Image",
         "arn": "Runtime ARN",
@@ -9670,8 +9670,8 @@
         "colUpdated": "Updated",
         "open": "Open",
         "rename": "Edit",
-        "empty": "No coding projects yet",
-        "emptyBody": "Create a project, describe the agent you want, and the coding agent builds it.",
+        "empty": "No projects yet",
+        "emptyBody": "Create a project, describe the agent you want, and the coding assistant builds it.",
         "noMatch": "No projects match the search.",
         "created": "Project {{name}} created",
         "saved": "Project saved",
@@ -9681,7 +9681,7 @@
         "runningNoDelete": "A turn is running. Interrupt it before deleting the project."
       },
       "form": {
-        "createTitle": "New coding project",
+        "createTitle": "New project",
         "editTitle": "Edit project",
         "name": "Name",
         "namePlaceholder": "e.g. weather-assistant",
@@ -9755,13 +9755,13 @@
         "saving": "Saving…",
         "saveHint": "Save (⌘/Ctrl+S)",
         "saved": "Saved {{path}}",
-        "conflict": "The coding agent changed this file since you opened it. Reload it to drop your edits, or overwrite the newer version with yours.",
+        "conflict": "The coding assistant changed this file since you opened it. Reload it to drop your edits, or overwrite the newer version with yours.",
         "changedOnDisk": "This file changed on disk while you had unsaved edits.",
         "reload": "Reload",
         "overwrite": "Overwrite",
         "binary": "Binary file, not shown.",
         "closeTab": "Close {{name}}",
-        "missing": "This file no longer exists in the project (the coding agent may have deleted or moved it)."
+        "missing": "This file no longer exists in the project (the coding assistant may have deleted or moved it)."
       },
       "changes": {
         "tab": "Changes",
@@ -9783,7 +9783,7 @@
       },
       "conversation": {
         "title": "Conversation",
-        "empty": "Describe the agent you want to build. The coding agent writes the code, runs it and tests it in this project's microVM.",
+        "empty": "Describe the agent you want to build. The coding assistant writes the code, runs it and tests it in this project's microVM.",
         "you": "You",
         "working": "Working…",
         "reasoning": "Reasoning",
@@ -9811,10 +9811,10 @@
         "image": "[image not loaded: {{alt}} {{src}}]"
       },
       "notice": {
-        "appServerExited": "The coding agent process restarted.",
+        "appServerExited": "The coding assistant process restarted.",
         "serverRequestDeclined": "An approval request was declined automatically (commands run without approval):",
         "restored": "The project was restored from its latest snapshot.",
-        "threadResumeFailed": "The previous conversation could not be resumed; the coding agent continues in a new thread without its earlier context."
+        "threadResumeFailed": "The previous conversation could not be resumed; the coding assistant continues in a new thread without its earlier context."
       },
       "composer": {
         "placeholder": "Describe what to build or change (Enter to send, Shift+Enter for a new line)",
@@ -9825,7 +9825,7 @@
         "sending": "Starting…",
         "interrupt": "Interrupt",
         "interrupting": "Interrupting…",
-        "runtimeNotReady": "The coding runtime is not ready.",
+        "runtimeNotReady": "The Agent IDE runtime is not ready.",
         "tooLong": "The prompt is over {{max}} KB."
       },
       "stream": {

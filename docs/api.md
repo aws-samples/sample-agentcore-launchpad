@@ -1423,10 +1423,10 @@ reported it — not a billing total; no cost is estimated. Legacy results writte
 before usage capture show every side as `missing_rows == rows` with `null`
 counters.
 
-## Console Coding Agent API
+## Console Agent IDE API
 
 The coding console (`/v2/coding`) over the platform coding runtime (see
-[architecture](architecture.md#coding-agent--a-remote-web-ide-over-codex-on-agentcore)).
+[architecture](architecture.md#agent-ide--a-remote-web-ide-over-codex-on-agentcore)).
 A project is **private to its creator in every visibility mode**: a foreign or
 missing id is `404 coding.project_not_found` on every by-id route; administrators
 reach other members' projects only through `GET /projects?all=1` and `DELETE`.

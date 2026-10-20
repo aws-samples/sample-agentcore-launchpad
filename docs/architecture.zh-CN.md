@@ -2282,7 +2282,7 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 控制台在结果磁贴下方以「TOKEN 用量」表格展示，并在展开的任务行中逐任务展示，未知计数一律显示为
 破折号。
 
-## 编码 Agent —— 基于 AgentCore 上 codex 的远程 Web IDE
+## Agent IDE —— 基于 AgentCore 上 codex 的远程 Web IDE
 
 第五种构建 Agent 的方式（父任务 `10-19-coding-agent`）：成员在浏览器 IDE（`/v2/coding`，`?view=project&id=`）中打开项目，与在 AgentCore microVM 内编写、运行和测试代码的 codex Agent 对话，然后把完成的项目交给 Launchpad，通过现有的 `byoc` 管道部署——结果是一个普通的、受治理的 Agent。
 
