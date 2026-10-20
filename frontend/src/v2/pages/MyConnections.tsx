@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, errorMessage, type UserGrantInfo } from "../../lib/api";
-import { isConsoleGrant, revokeDisabled, runRevoke } from "../../lib/user-grants";
+import { isConsoleGrant, isGatewayGrant, revokeDisabled, runRevoke } from "../../lib/user-grants";
 import { fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Card, Confirm, LinkButton, PageHeader, Table, Tag, type TagTone } from "../ui";
@@ -21,6 +21,9 @@ const STATUS_TONE: Record<UserGrantInfo["status"], TagTone> = {
  * which Connection as them. Revoking forces a fresh consent on that
  * Connection's next call for every agent (AgentCore Identity has no revoke
  * API; the platform sends forceAuthentication until the user re-authorizes).
+ * A COA consent given through the context layer's managed gateway (`gw:` rows)
+ * cannot be revoked that way — it lives in the gateway's own vault slot — so its
+ * row says so instead of offering a revoke.
  */
 export function V2MyConnections() {
   const { t } = useTranslation();
@@ -44,7 +47,8 @@ export function V2MyConnections() {
     });
 
   const rows = grants.data?.grants ?? [];
-  const affected = confirm ? rows.filter((g) => g.connection === confirm).length : 0;
+  // what a revoke touches: every grant on the Connection except the gateway's
+  const affected = confirm ? rows.filter((g) => g.connection === confirm && !isGatewayGrant(g)).length : 0;
 
   return (
     <>
@@ -65,7 +69,12 @@ export function V2MyConnections() {
               key: "agent",
               title: t("v2.myConnections.colAgent"),
               render: (g) =>
-                g.agent_id ? (
+                isGatewayGrant(g) ? (
+                  // the COA context layer through the managed gateway: every gateway-mode agent
+                  <Link to="/v2/context-layer" data-testid="grant-gateway-context-layer">
+                    {t("v2.myConnections.contextLayerGateway")}
+                  </Link>
+                ) : g.agent_id ? (
                   <Link to={`/v2/agents?view=detail&id=${encodeURIComponent(g.agent_id)}`}>
                     {g.agent_name ?? g.agent_id}
                   </Link>
@@ -111,17 +120,26 @@ export function V2MyConnections() {
             {
               key: "actions",
               title: "",
-              render: (g) => (
-                <LinkButton
-                  danger
-                  disabled={revokeDisabled(g, mayRevoke, revoking)}
-                  title={mayRevoke ? undefined : t("v2.myConnections.noPermission")}
-                  onClick={() => setConfirm(g.connection)}
-                  testId={`grant-revoke-${g.connection}-${g.agent_id}`}
-                >
-                  {t("v2.myConnections.revoke")}
-                </LinkButton>
-              ),
+              render: (g) =>
+                isGatewayGrant(g) ? (
+                  <Tag
+                    tone="outline"
+                    title={t("v2.myConnections.notRevocableHint")}
+                    testId={`grant-not-revocable-${g.connection}-${g.agent_id}`}
+                  >
+                    {t("v2.myConnections.notRevocable")}
+                  </Tag>
+                ) : (
+                  <LinkButton
+                    danger
+                    disabled={revokeDisabled(g, mayRevoke, revoking)}
+                    title={mayRevoke ? undefined : t("v2.myConnections.noPermission")}
+                    onClick={() => setConfirm(g.connection)}
+                    testId={`grant-revoke-${g.connection}-${g.agent_id}`}
+                  >
+                    {t("v2.myConnections.revoke")}
+                  </LinkButton>
+                ),
             },
           ]}
         />

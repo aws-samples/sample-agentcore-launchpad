@@ -37,7 +37,24 @@ The ledger keeps identifiers only (``context_layers.resources["gateway"]``); ``s
 reads everything else back from AWS. A consent made through the gateway lives in the
 gateway's own vault slot, which the platform can neither re-ask nor delete (F10):
 only deleting the gateway resets it, and ``disable`` also drops the grant rows keyed
-``gateway:<gateway_id>``.
+``gw:<gateway_id>``.
+
+**Consent (gateway mode).** A gateway-mode turn is gated by ``gateway_turn_auth``
+before the model runs, so the member sees the same auth card as in direct mode and
+the agent's MCP client never meets URL elicitation:
+
+1. ``preflight`` calls ``coa___list_metrics`` (read-only, no LLM, F11) through the
+   gateway with the member's workspace-pool JWT, negotiating MCP ``2025-11-25`` and
+   declaring ``elicitation.url``. A missing consent answers JSON-RPC ``-32042`` with
+   the authorization URL (F2); its ``request_uri`` is the session the browser comes
+   back with. The ask is recorded as a ``user_jwt`` pending session on
+   ``gw:<gateway_id>`` and the turn ends at the card.
+2. ``/auth/return`` → ``POST /api/identity/oauth/complete`` completes it with
+   ``policy_identity.gateway_user_token``, the very JWT the gateway saw (F8: a fresh
+   token of the same subject is refused).
+3. Any other answer (data, or COA's own ``isError`` refusal) means the consent
+   exists: remembered per (gateway, member) for ``CONSENT_TTL_S``. A transport or
+   server failure fails open: the turn runs and the agent's own call reports.
 """
 
 import json
@@ -47,6 +64,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from botocore.exceptions import BotoCoreError, ClientError
@@ -58,7 +76,14 @@ from app.core.errors import AppError, aws_error_code, cleanup_error, is_not_foun
 from app.models.ledger import Agent, OauthPendingSession, UserGrant
 from app.models.ledger import ContextLayer as ContextLayerRow
 from app.schemas.context_layer import text
-from app.services import context_layer, context_layer_api, identity_providers, user_gateways
+from app.services import (
+    context_layer,
+    context_layer_api,
+    identity_providers,
+    oauth_sessions,
+    policy_identity,
+    user_gateways,
+)
 from app.services.agentcore import policy as gateway_api
 from app.services.agentcore.client import control_client
 from app.services.context_layer import GATEWAY_KEY, ContextLayer
@@ -73,7 +98,8 @@ TARGET_NAME = support.TOOL_NAME
 # negotiate it (F2); the older one keeps every other MCP client working.
 MCP_VERSIONS = ("2025-11-25", "2025-03-26")
 # ``user_grants.agent_id`` / ``oauth_pending_sessions.agent_id`` of a gateway consent
-GRANT_PREFIX = "gateway:"
+# (``gw:`` + the gateway id: ``launchpad-coa-gw-<10>`` makes 30 of the columns' 32)
+GRANT_PREFIX = oauth_sessions.GATEWAY_GRANT_PREFIX
 # what the workspace must carry (bootstrap) for the gateway to trust its members
 REQUIRED_RESOURCES = (
     "gateway_role_arn", "user_pool_id", "user_pool_client_id", "m2m_client_id",
@@ -192,10 +218,11 @@ def _upstream(
 
 
 class _Mcp:
-    """A minimal streamable-HTTP MCP client for one ``tools/list`` read: JSON-RPC
-    POSTs carrying the member's bearer, the session id the server hands out and the
-    negotiated protocol version. Redirects are never followed (they would re-send the
-    bearer), and errors name the HTTP status only."""
+    """A minimal streamable-HTTP MCP client for one short exchange (COA's
+    ``tools/list``, the gateway's consent preflight): JSON-RPC POSTs carrying the
+    member's bearer, the session id the server hands out and the protocol version.
+    Redirects are never followed (they would re-send the bearer), and errors name the
+    HTTP status only."""
 
     def __init__(self, client: httpx.Client, url: str, token: str) -> None:
         self.client, self.url, self.token = client, url, token
@@ -234,7 +261,9 @@ class _Mcp:
     def notify(self, method: str) -> None:
         self._post({"jsonrpc": "2.0", "method": method})  # any 2xx/4xx: best effort
 
-    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def answer(self, method: str, params: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        """The JSON-RPC message answering one request (its ``result`` or its
+        ``error``, unread) and the HTTP status it came with."""
         self._ids += 1
         rpc_id = self._ids
         response = self._post({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
@@ -245,17 +274,20 @@ class _Mcp:
                 coa_message=context_layer_api.coa_message(response),
             )
         for message in _messages(response):
-            if not isinstance(message, dict) or message.get("id") != rpc_id:
-                continue
-            error = message.get("error")
-            if isinstance(error, dict):
-                raise _upstream(
-                    f"COA's MCP server refused {method}", response.status_code,
-                    rpc_code=error.get("code"), coa_message=text(error.get("message"), 200),
-                )
-            result = message.get("result")
-            return result if isinstance(result, dict) else {}
+            if isinstance(message, dict) and message.get("id") == rpc_id:
+                return message, response.status_code
         raise _upstream(f"COA's MCP server sent no answer to {method}", response.status_code)
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        message, status = self.answer(method, params)
+        error = message.get("error")
+        if isinstance(error, dict):
+            raise _upstream(
+                f"COA's MCP server refused {method}", status,
+                rpc_code=error.get("code"), coa_message=text(error.get("message"), 200),
+            )
+        result = message.get("result")
+        return result if isinstance(result, dict) else {}
 
 
 def _messages(response: httpx.Response) -> list[Any]:
@@ -824,6 +856,7 @@ def disable(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
             OauthPendingSession.workspace_id == workspace.id, OauthPendingSession.agent_id == key
         ).delete(synchronize_session=False)
         db.commit()
+        forget_consents(gateway_id)  # a re-created gateway starts with an empty vault slot
         logger.info(
             "workspace %s: managed COA gateway %s deleted (%d grants dropped)",
             workspace.id, gateway_id, grants,
@@ -946,3 +979,248 @@ def status(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
         issues.append("connection")
     out["usable"] = out["state"] == "ready" and not issues
     return out
+
+
+# ── consent (gateway mode): the per-turn preflight ───────────────────────────
+
+# The gateway raises a missing consent as URL elicitation only to a client that
+# negotiates this version and declares ``elicitation.url`` (F2).
+PREFLIGHT_PROTOCOL = "2025-11-25"
+# JSON-RPC "URL elicitation required": ``data.elicitations[{mode: "url", url, …}]``
+ELICITATION_REQUIRED = -32042
+# read-only, no LLM, no SQL (F11); the gateway names a target's tools <target>___<tool>
+PREFLIGHT_TOOL = f"{TARGET_NAME}___list_metrics"
+PREFLIGHT_TIMEOUT_S = 20.0
+# how long a member seen consented is not asked again (per gateway, in-process)
+CONSENT_TTL_S = 600
+# The member's JWT must outlive the consent session it asks with: the completion
+# presents the cached token, and only the very one the gateway saw is accepted (F8).
+CONSENT_JWT_MIN_VALID_S = oauth_sessions.SESSION_TTL_S + 60
+
+_CONSENTED: dict[tuple[str, str], float] = {}  # (gateway id, username) → monotonic expiry
+_CONSENTED_LOCK = threading.Lock()
+_clock = time.monotonic  # test seam
+
+
+class _Inconclusive(Exception):
+    """The preflight's answer says nothing about the consent (the reason, no secret)."""
+
+
+def _consented(gateway_id: str, username: str) -> bool:
+    key = (gateway_id, username)
+    with _CONSENTED_LOCK:
+        expires = _CONSENTED.get(key)
+        if expires is not None and expires <= _clock():
+            _CONSENTED.pop(key, None)
+            return False
+        return expires is not None
+
+
+def _remember_consent(gateway_id: str, username: str) -> None:
+    with _CONSENTED_LOCK:
+        _CONSENTED[(gateway_id, username)] = _clock() + CONSENT_TTL_S
+
+
+def forget_consents(gateway_id: str | None = None) -> None:
+    """Drop the remembered consents: one gateway's (``disable``), or every one."""
+    with _CONSENTED_LOCK:
+        for key in [key for key in _CONSENTED if gateway_id in (None, key[0])]:
+            _CONSENTED.pop(key, None)
+
+
+def _gateway_url(ref: dict[str, str] | None) -> str | None:
+    """The ledger's gateway URL, only when https: the member's JWT goes there."""
+    url = str((ref or {}).get("gateway_url") or "")
+    parts = urlsplit(url)
+    return url if parts.scheme == "https" and parts.netloc else None
+
+
+def _list_metrics(url: str, user_jwt: str, namespace_id: str) -> dict[str, Any]:
+    """``initialize`` (2025-11-25, ``elicitation.url``) → ``notifications/initialized``
+    → ``tools/call coa___list_metrics``; the call's JSON-RPC answer, unread."""
+    with httpx.Client(
+        timeout=PREFLIGHT_TIMEOUT_S, follow_redirects=False, transport=_transport()
+    ) as client:
+        mcp = _Mcp(client, url, user_jwt)
+        mcp.version = PREFLIGHT_PROTOCOL  # the header rides initialize too
+        init = mcp.request("initialize", {
+            "protocolVersion": PREFLIGHT_PROTOCOL,
+            "capabilities": {"elicitation": {"url": {}}},
+            "clientInfo": {"name": "agentcore-launchpad", "version": "1"},
+        })
+        negotiated = str(init.get("protocolVersion") or "")
+        if negotiated != PREFLIGHT_PROTOCOL:
+            # an older version answers a missing consent with isError text instead
+            raise _Inconclusive(f"the gateway negotiated MCP {negotiated[:40] or 'no version'}")
+        mcp.notify("notifications/initialized")
+        message, _ = mcp.answer("tools/call", {
+            "name": PREFLIGHT_TOOL, "arguments": {"namespaceId": namespace_id},
+        })
+        return message
+
+
+def _elicitation_url(error: dict[str, Any]) -> str | None:
+    """The first URL elicitation's authorization URL (https only), or None."""
+    data = error.get("data")
+    items = data.get("elicitations") if isinstance(data, dict) else None
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("mode") == "url":
+            url = item.get("url")
+            return url if isinstance(url, str) and urlsplit(url).scheme == "https" else None
+    return None
+
+
+def _session_uri(url: str) -> str:
+    """The URL's ``request_uri``, decoded: the ``session_id`` the browser returns with."""
+    values = parse_qs(urlsplit(url).query).get("request_uri") or []
+    return values[0] if values else ""
+
+
+def _reason(exc: Exception) -> str:
+    """Why a preflight failed open, for the log: a status or an exception class."""
+    if isinstance(exc, context_layer_api.CoaUnauthorized):
+        return "HTTP 401"
+    if isinstance(exc, _Inconclusive):
+        return str(exc)
+    if isinstance(exc.__cause__, httpx.HTTPError):
+        return type(exc.__cause__).__name__
+    status = (getattr(exc, "detail", None) or {}).get("status")
+    return f"HTTP {status}" if status else str(getattr(exc, "code", None) or type(exc).__name__)
+
+
+def _fail_open(gateway_id: str, username: str, reason: str) -> None:
+    logger.warning(
+        "managed COA gateway %s: the consent preflight for %s failed open (%s)",
+        gateway_id, username, reason,
+    )
+
+
+def _record_ask(
+    workspace: WorkspaceContext, layer: ContextLayer, gateway_id: str, username: str,
+    session_uri: str,
+) -> None:
+    """The pending session ``/auth/return`` completes with the member's JWT."""
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        oauth_sessions.record_pending(
+            db,
+            workspace.id,
+            session_uri=session_uri,
+            provider=layer.connection,
+            user_id=username,
+            agent_id=gateway_grant_id(gateway_id),
+            tool=support.GRANT_TOOL,
+            scopes=support.SCOPES,
+            caller_kind=oauth_sessions.CALLER_USER_JWT,
+        )
+    finally:
+        db.close()
+
+
+def preflight(
+    workspace: WorkspaceContext,
+    layer: ContextLayer,
+    *,
+    username: str,
+    user_jwt: str,
+    agent_id: str,
+    namespace_id: str,
+    session_id: str = "",
+) -> dict[str, Any] | None:
+    """Whether ``username`` has consented through the managed gateway: None (go
+    ahead) or the ``auth_required`` notice to end the turn with.
+
+    The notice has the shape of ``context_layer_tokens.auth_notice`` (``provider`` =
+    the layer's Connection, ``agent_id`` = the asking agent), so the Chat auth card,
+    its demo-account offer and ``/auth/return`` work unchanged. ``session_id`` is
+    the direct gate's call shape: the gateway builds the authorization URL itself,
+    so no ``customState`` carries the conversation back. ``user_jwt`` goes to the
+    gateway only and is never logged; neither is the authorization URL.
+    """
+    ref = context_layer.gateway_ref(layer)
+    url = _gateway_url(ref)
+    if ref is None or url is None:
+        raise not_enabled()
+    gateway_id = ref["gateway_id"]
+    if _consented(gateway_id, username):
+        return None
+    try:
+        message = _list_metrics(url, user_jwt, namespace_id)
+    except (AppError, context_layer_api.CoaUnauthorized, _Inconclusive) as exc:
+        _fail_open(gateway_id, username, _reason(exc))
+        return None
+    error = message.get("error")
+    if not isinstance(error, dict):
+        # a result: COA's data, or COA's own refusal (isError, e.g. no grant on the
+        # namespace) — either way the gateway holds the member's consent
+        _remember_consent(gateway_id, username)
+        return None
+    if error.get("code") != ELICITATION_REQUIRED:
+        _fail_open(gateway_id, username, f"JSON-RPC {error.get('code')}")
+        return None
+    auth_url = _elicitation_url(error)
+    session_uri = _session_uri(auth_url) if auth_url else ""
+    if not (auth_url and session_uri):
+        _fail_open(gateway_id, username, "a consent ask without a usable authorization URL")
+        return None
+    _record_ask(workspace, layer, gateway_id, username, session_uri)
+    logger.info("managed COA gateway %s: %s has not consented yet", gateway_id, username)
+    return {
+        "provider": layer.connection,
+        "tool": support.GRANT_TOOL,
+        "url": auth_url,
+        "scopes": list(support.SCOPES),
+        "agent_id": agent_id,
+    }
+
+
+def gateway_turn_auth(
+    agent: Agent,
+    workspace: WorkspaceContext,
+    *,
+    username: str | None,
+    role: str,
+    email: str | None = None,
+    session_id: str = "",
+    console_user: bool = True,
+) -> dict[str, Any] | None:
+    """The consent gate of a gateway-mode turn (Harness and Strands alike), run
+    before the agent is invoked: ``{"auth_required": notice}`` ends the turn at the
+    auth card without calling the model; None lets it run. None as well for an
+    agent that is not in gateway mode (nothing to gate here).
+
+    The member's workspace-pool JWT is minted through
+    ``policy_identity.gateway_user_token``, whose per-process cache hands
+    ``POST /api/identity/oauth/complete`` the same token later (F8); it is taken
+    only while it outlives the consent session (``CONSENT_JWT_MIN_VALID_S``),
+    so the cache cannot roll over between the ask and the consent. No signed-in
+    console user (``console_user=False`` for ``/v1``, no username, or the console
+    sign-in off, so no pool JWT) ⇒ ``identity.as_user_requires_console``, as in
+    direct mode; no managed gateway ⇒ ``context_layer.gateway_not_enabled``.
+    """
+    ref = support.namespace_ref(agent.spec)
+    if ref is None or not support.uses_gateway(agent.spec):
+        return None
+    layer = context_layer.require_connected(workspace.id)
+
+    def no_console_user() -> AppError:
+        return oauth_sessions.as_user_requires_console(
+            provider=layer.connection, tool=support.GRANT_TOOL, agent_id=agent.id
+        )
+
+    if not console_user or not username:
+        raise no_console_user()
+    if context_layer.gateway_ref(layer) is None:
+        raise not_enabled()
+    user_jwt = policy_identity.gateway_user_token(
+        workspace, username, role, email, min_valid_s=CONSENT_JWT_MIN_VALID_S
+    )
+    if not user_jwt:
+        raise no_console_user()
+    notice = preflight(
+        workspace, layer, username=username, user_jwt=user_jwt, agent_id=agent.id,
+        namespace_id=str(ref["namespace_id"]), session_id=session_id,
+    )
+    return {"auth_required": notice} if notice is not None else None

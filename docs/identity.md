@@ -341,6 +341,10 @@ revokes by **forcing re-authentication**:
   generated tool then sends `forceAuthentication=true`, so the IdP asks again.
 - A revocation stops being in force for an agent once that agent's grant is
   re-authorized after it (`authorized_at >= requested_at`).
+- **Gateway grants are left alone.** A grant keyed `gw:<gateway_id>` (a COA
+  consent given through the context layer's managed gateway, §7.7) is never marked
+  `revoked`, its in-flight sessions are kept, and it never reports `force_reauth`:
+  the token lives in the gateway's own vault slot, which a revocation cannot reach.
 
 `effectiveStatus` in the console treats `authorized` with `force_reauth: true` as
 still pending.
@@ -394,7 +398,10 @@ Error codes (all under `apiErrors.<code>` in the console):
 - **My authorizations** / 我的授权 (`/v2/my-connections`): the caller's grants per (Connection,
   agent), with status. Revoke goes through a ConfirmDialog, is busy while the call
   runs, and is disabled while a revocation is in force or without
-  `identity.grant`.
+  `identity.grant`. A `gw:` row (the managed COA gateway, §7.7) reads *Context
+  layer (via gateway)*, links to the Context Layer page and carries a *Not
+  revocable here* tag with the reason instead of the revoke link
+  (`isGatewayGrant`).
   Deleting an agent drops every user's grants on it (its workload identity, and
   every vaulted token keyed by it, goes with the runtime); deleting a Connection
   drops its grants, revocations and in-flight consents. Grants of an agent
@@ -624,15 +631,52 @@ it are in task `10-20-context-layer-gateway-spike` (`research/findings.md`, F1�
   the gateway exchanges the inbound JWT for its workload token (403 without it). CDK
   `launchpad-base` and the spoke `gateway_role_policy` both carry it. The as_user
   Gateway targets of §7.6 need the same grant.
+- **Consent.** A gateway-mode turn is gated before the agent runs
+  (`context_layer_gateway.gateway_turn_auth`), so the member sees the same auth card
+  as in direct mode and the agent's MCP client never meets URL elicitation:
+  1. **Preflight.** The backend mints the member's pool JWT
+     (`policy_identity.gateway_user_token`) and calls `coa___list_metrics` (read-only,
+     no LLM) on the agent's namespace through the gateway: `initialize` with
+     `protocolVersion` `2025-11-25` and capabilities `{elicitation: {url: {}}}`, then
+     `notifications/initialized`, then `tools/call`, carrying `Mcp-Session-Id` and
+     `MCP-Protocol-Version: 2025-11-25`.
+  2. **No consent.** The gateway answers JSON-RPC `-32042` with
+     `data.elicitations[{mode: "url", url}]`. The first URL elicitation's `url` is the
+     authorization URL, and its `request_uri` query value (decoded) is the
+     `session_id` the browser comes back with. It is recorded as a pending session
+     with `caller_kind = user_jwt` and `agent_id = gw:<gateway_id>`. The turn ends
+     with `auth_required {provider: <the layer's Connection>, tool: "context_layer",
+     url, scopes, agent_id: <the agent>}`, the direct-mode shape, before the model is
+     called.
+  3. **Completion.** `/auth/return` → `POST /api/identity/oauth/complete` completes a
+     `user_jwt` row with `{userToken: gateway_user_token(...)}`. That is the very JWT
+     the gateway saw, from the same process's cache; a fresh token of the same subject
+     is refused. The preflight only takes a cached token that outlives the consent
+     session (15 minutes + 60 s, `CONSENT_JWT_MIN_VALID_S`), so the cache cannot roll
+     over in between. After a backend restart between the ask and the consent, the
+     completion fails and the member retries the turn. The AuthCard polls
+     `grants/{connection}/status?agent_id=<agent>`, which maps a gateway-mode agent to
+     `gw:<gateway_id>` (`context_layer.grant_agent_id`).
+  4. **Consented.** Any other answer, data or COA's own refusal (`isError`, e.g. no
+     grant on the namespace), means the gateway holds the consent. The turn runs, and
+     the backend remembers it per (gateway, member) for 10 minutes, in-process. A
+     transport error, an HTTP error, another JSON-RPC error, or a gateway that does not
+     negotiate `2025-11-25` fails open (WARNING, no token or URL logged): the turn runs
+     and the agent's own call reports the problem.
+  - No signed-in console user (`/v1`, evaluation) or the console sign-in off (no pool
+    JWT) ⇒ `identity.as_user_requires_console`, as in direct mode. No COA token is
+    fetched by the backend for a gateway-mode agent.
 - **Vault slot and revocation.** A member's consent through the gateway is keyed by
   the gateway's workload identity and the member's JWT subject. Its grant row is
-  `user_grants.agent_id = "gateway:<gateway_id>"`. The platform can neither re-ask it
-  (`GetWorkloadAccessTokenForJWT` on a service-linked identity is refused) nor delete
-  it (no API exists), so **a gateway consent cannot be revoked on the platform**. It
-  lasts until COA's refresh token expires, or until an admin deletes the gateway,
-  which resets everyone. Deleting it (`DELETE /api/context-layer/gateway`) removes the
-  target, then the gateway, clears the ledger key and drops those grant rows. It is
-  refused while an agent uses gateway mode.
+  `user_grants.agent_id = "gw:<gateway_id>"` (30 characters: the column is 32). The
+  platform can neither re-ask it (`GetWorkloadAccessTokenForJWT` on a service-linked
+  identity is refused) nor delete it (no API exists), so **a gateway consent cannot
+  be revoked on the platform**. Revoke (§7.3) skips these rows, and 我的授权 marks
+  them *Not revocable here*. It lasts until COA's refresh token expires, or until an
+  admin deletes the gateway, which resets everyone. Deleting it (`DELETE
+  /api/context-layer/gateway`) removes the target, then the gateway, clears the
+  ledger key, drops those grant and pending rows and forgets the remembered
+  consents. It is refused while an agent uses gateway mode.
 - **Ledger.** `context_layers.resources["gateway"] = {gateway_id, gateway_arn,
   gateway_url, target_id}` only. Status, tools, versions and the return-URL allow-list
   are read back from AWS (`GET /api/context-layer/gateway`). Disconnecting the layer

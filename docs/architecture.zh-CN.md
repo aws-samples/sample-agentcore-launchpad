@@ -1904,11 +1904,18 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     创建就写入。`GET …/gateway` 从 AWS 读回状态、工具、MCP 版本、返回 URL 白名单与漂移
     （`issues`）；`GET /api/context-layer` 只带 `gateway: {enabled, gateway_id}`。
   - “刷新工具”把 COA 的工具重新写入内联 schema。删除时先删目标、再删网关，并删除以
-    `gateway:<gateway_id>` 为键的授权行；仍有 Agent 使用经 Gateway 接入时拒绝删除，网关存在时
-    也拒绝断开上下文层。重新连接会保留网关。
-  - 经网关完成的授权存放在网关自己的令牌库槽位中，无法在平台上撤销，卡片上会说明这一点
-    （[identity.md](identity.md) §7.7）。网关角色需要 `GetWorkloadAccessTokenForJWT`（CDK 与
-    spoke 工作区的 `gateway_role_policy` 均已包含）。teardown 按名称清理该网关。
+    `gw:<gateway_id>` 为键的授权行与待完成会话；仍有 Agent 使用经 Gateway 接入时拒绝删除，网关
+    存在时也拒绝断开上下文层。重新连接会保留网关。
+  - **授权**（`gateway_turn_auth`，经 Gateway 接入的一轮对话在调用 Agent 之前先过这道关）：以成员的
+    用户池 JWT 经网关预检一次 `coa___list_metrics`（MCP `2025-11-25`，`elicitation.url`）。
+    JSON-RPC `-32042` 表示尚未授权：记录一条 `gw:<gateway_id>` 上的 `user_jwt` 待完成会话，并在调用
+    模型之前返回常规的 `auth_required` 授权卡片。`/auth/return` 用同一个缓存的 JWT
+    （`policy_identity.gateway_user_token`）完成授权。其他任何回答都表示已授权，按成员缓存 10 分钟。
+    预检失败时放行。
+  - 经网关完成的授权存放在网关自己的令牌库槽位中，无法在平台上撤销：撤销会跳过 `gw:` 行，
+    我的授权将其标为“不可在平台撤销”，卡片上也会说明这一点（[identity.md](identity.md) §7.7）。
+    网关角色需要 `GetWorkloadAccessTokenForJWT`（CDK 与 spoke 工作区的 `gateway_role_policy`
+    均已包含）。teardown 按名称清理该网关。
 - **限制**：COA 不允许被内嵌（`X-Frame-Options: DENY`），所以所有编写链接都在新标签页打开。
   COA 的 REST 数据层上限为 29 秒，因此提问走流式 Serve 运行时，而不是
   `POST /namespaces/{id}/query`。挂载 COA 的 Agent 在 `/v1` 上返回 409；金丝雀／A-B、评估回放

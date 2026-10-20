@@ -134,6 +134,16 @@ export function retryPromptFor(messages: { kind: string; text: string }[], index
 export const isConsoleGrant = (grant: Pick<UserGrantInfo, "agent_id" | "tool">) =>
   !grant.agent_id && grant.tool === "context_layer";
 
+/** The grant-key prefix of a consent given through the context layer's managed
+ *  gateway (`gw:<gateway_id>`, backend `oauth_sessions.GATEWAY_GRANT_PREFIX`). */
+export const GATEWAY_GRANT_PREFIX = "gw:";
+
+/** A COA consent given through the managed gateway (gateway mode). It lives in the
+ *  gateway's own token-vault slot, which AWS lets nobody but the gateway use, so the
+ *  platform cannot revoke it: 我的授权 shows it without a revoke action. */
+export const isGatewayGrant = (grant: Pick<UserGrantInfo, "agent_id">): boolean =>
+  grant.agent_id.startsWith(GATEWAY_GRANT_PREFIX);
+
 /** Whether an auth card can poll its grant: an agent's ask (Chat), or the console
  *  grant, which has no agent (the Context Layer playground). Any other agentless
  *  ask has nothing to poll. */

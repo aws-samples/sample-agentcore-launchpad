@@ -8727,7 +8727,10 @@
       "confirmBody_one": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grant listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
       "confirmBody_other": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grants listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
       "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them.",
-      "contextLayerConsole": "Context layer (console)"
+      "contextLayerConsole": "Context layer (console)",
+      "contextLayerGateway": "Context layer (via gateway)",
+      "notRevocable": "Not revocable here",
+      "notRevocableHint": "This COA consent was given through the managed COA gateway. AgentCore keeps it in the gateway's own token vault slot, which Launchpad can neither re-ask nor delete, so it cannot be revoked here. It lasts until COA's refresh token expires, or until an admin deletes the gateway, which resets every gateway consent."
     },
     "runCoverage": {
       "tagTelemetry": "Completed · {{scored}}/{{total}} sessions",

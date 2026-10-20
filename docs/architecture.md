@@ -3373,12 +3373,21 @@ per-user grants decide what an agent may see.
     tools, versions, the return-URL allow-list and drift (`issues`) back from AWS;
     `GET /api/context-layer` carries only `gateway: {enabled, gateway_id}`.
   - Refresh re-reads COA's tools into the inline schema. Delete removes the target,
-    then the gateway, and drops the `gateway:<gateway_id>` grant rows. It is refused
-    while an agent uses gateway mode, and disconnecting the layer is refused while
-    the gateway exists. Re-connecting keeps it.
+    then the gateway, and drops the `gw:<gateway_id>` grant and pending rows. It is
+    refused while an agent uses gateway mode, and disconnecting the layer is refused
+    while the gateway exists. Re-connecting keeps it.
+  - **Consent** (`gateway_turn_auth`, the gate a gateway-mode turn runs before the
+    agent): a `coa___list_metrics` preflight through the gateway with the member's
+    pool JWT (MCP `2025-11-25`, `elicitation.url`). JSON-RPC `-32042` means no
+    consent: a `user_jwt` pending session on `gw:<gateway_id>` and the usual
+    `auth_required` card, before the model runs. `/auth/return` completes it with
+    the same cached JWT (`policy_identity.gateway_user_token`). Any other answer
+    means consented, and is remembered for 10 minutes per member. A failure fails
+    open.
   - Consents given through the gateway live in the gateway's own vault slot and
-    cannot be revoked on the platform; the card says so ([identity.md](identity.md)
-    §7.7). The gateway role needs `GetWorkloadAccessTokenForJWT` (CDK and the spoke
+    cannot be revoked on the platform: revoke skips `gw:` rows, 我的授权 marks them
+    *Not revocable here*, and the card says so ([identity.md](identity.md) §7.7).
+    The gateway role needs `GetWorkloadAccessTokenForJWT` (CDK and the spoke
     policy). Teardown sweeps the gateway by name.
 - **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
   link opens a new tab. COA's REST data layer caps at 29 s, which is why questions

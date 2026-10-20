@@ -8,6 +8,7 @@ import {
   canPollGrant,
   effectiveStatus,
   isConsoleGrant,
+  isGatewayGrant,
   liveAuthAsk,
   pollGrant,
   restoredAuthAsk,
@@ -242,6 +243,18 @@ describe("the COA console grant", () => {
     expect(canPollGrant(liveAuthAsk({ provider: "coa", tool: "context_layer", agent_id: "" }, ""))).toBe(true);
     // any other agentless ask has nothing to poll (unchanged)
     expect(canPollGrant({ agent_id: "", tool: "calendar" })).toBe(false);
+  });
+});
+
+describe("the COA managed-gateway grant", () => {
+  it("is keyed gw:<gateway_id>, and is neither an agent's nor the console's", () => {
+    const gatewayGrant = { agent_id: "gw:launchpad-coa-gw-k3v9q2m7xa", tool: "context_layer" };
+    expect(isGatewayGrant(gatewayGrant)).toBe(true);
+    expect(isConsoleGrant(gatewayGrant)).toBe(false);
+    // the console grant, an agent's grant and an id that merely contains "gw:"
+    expect(isGatewayGrant({ agent_id: "" })).toBe(false);
+    expect(isGatewayGrant({ agent_id: "a1b2c3" })).toBe(false);
+    expect(isGatewayGrant({ agent_id: "agw:x" })).toBe(false);
   });
 });
 

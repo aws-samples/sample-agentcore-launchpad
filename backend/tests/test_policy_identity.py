@@ -157,6 +157,39 @@ def test_new_console_user_creates_marked_shadow_identity(monkeypatch):
     assert password != "console-secret" and len(password) >= 12
 
 
+def test_a_longer_validity_margin_re_mints_a_token_about_to_expire(monkeypatch):
+    """The managed COA gateway's consent is completed with the very JWT it was asked
+    with, so its caller asks for a token that outlives the consent session: a cached
+    token closer to expiry than that is replaced, the default margin keeps it."""
+    fresh = _jwt("clare", ["platform-admin"])
+    cognito = MagicMock()
+    cognito.admin_get_user.return_value = {
+        "Username": "clare",
+        "UserAttributes": [
+            {"Name": "preferred_username", "Value": policy_identity.SHADOW_MARKER}
+        ],
+    }
+    cognito.admin_list_groups_for_user.return_value = {
+        "Groups": [{"GroupName": "platform-admin"}]
+    }
+    cognito.initiate_auth.return_value = {
+        "AuthenticationResult": {"AccessToken": fresh, "ExpiresIn": 3600}
+    }
+    monkeypatch.setattr(policy_identity, "get_settings", _settings)
+    monkeypatch.setattr(policy_identity, "load_yaml_config", lambda: {})
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
+    key = (WS.account_id, WS.region, "clare", "admin")
+    policy_identity._token_cache[key] = {"token": "cached", "expires_at": time.time() + 600}
+
+    assert policy_identity.gateway_user_token(WS, "clare", "admin") == "cached"
+    cognito.initiate_auth.assert_not_called()
+    assert policy_identity.gateway_user_token(WS, "clare", "admin", min_valid_s=960) == fresh
+    cognito.initiate_auth.assert_called_once()
+    # the fresh token is what every later caller gets, the completion included
+    assert policy_identity.gateway_user_token(WS, "clare", "admin") == fresh
+    cognito.initiate_auth.assert_called_once()
+
+
 def test_unmarked_existing_cognito_user_is_not_adopted(monkeypatch):
     cognito = MagicMock()
     cognito.admin_get_user.return_value = {

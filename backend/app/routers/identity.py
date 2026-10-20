@@ -352,9 +352,10 @@ def grant_status(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """What the Chat auth card polls until the consent completes. A Harness agent's
-    COA consent is the console grant (``context_layer.grant_agent_id``); the card
-    still sees the agent id it asked with."""
+    """What the Chat auth card polls until the consent completes. A direct Harness
+    agent's COA consent is the console grant, a gateway-mode agent's the managed
+    gateway's ``gw:<gateway_id>`` (``context_layer.grant_agent_id``); the card still
+    sees the agent id it asked with."""
     grant_agent = context_layer.grant_agent_id(db, ws.id, agent_id, connection)
     state = oauth_sessions.grant_status(
         db, ws.id, user_id=_caller(request), provider=connection, agent_id=grant_agent

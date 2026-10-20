@@ -8727,7 +8727,10 @@
       "confirmBody_one": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
       "confirmBody_other": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
       "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。",
-      "contextLayerConsole": "上下文层（控制台）"
+      "contextLayerConsole": "上下文层（控制台）",
+      "contextLayerGateway": "上下文层（经 Gateway）",
+      "notRevocable": "不可在平台撤销",
+      "notRevocableHint": "这项 COA 授权是经托管 COA 网关完成的。AgentCore 把它存放在网关自己的令牌库槽位中，Launchpad 既不能重新发起授权，也不能删除它，因此无法在此撤销。它会一直有效，直到 COA 的刷新令牌过期，或管理员删除网关（这会重置所有经网关的授权）。"
     },
     "runCoverage": {
       "tagTelemetry": "已完成 · {{scored}}/{{total}} 会话",

@@ -777,19 +777,27 @@ def status(
 def grant_agent_id(db: Session, workspace_id: str, agent_id: str, provider: str) -> str:
     """The ``user_grants.agent_id`` a Chat auth card polls for.
 
-    A Harness agent's COA consent is asked on the console workload identity, so its
-    grant is the console grant (``agent_id=""``), not one per agent; every other
+    A gateway-mode agent's COA consent (``context_layer.via = "gateway"``) is the
+    managed gateway's grant (``gw:<gateway_id>``), shared by every gateway-mode
+    agent. A direct Harness agent's is asked on the console workload identity, so
+    its grant is the console grant (``agent_id=""``), not one per agent. Every other
     pair is what it says."""
     if not agent_id:
         return agent_id
     agent = db.get(Agent, agent_id)
-    if (
-        agent is not None
-        and agent.workspace_id == workspace_id
-        and agent.method == "harness"
-        and support.attached(agent.spec)
-        and connection_for(db, workspace_id) == provider
-    ):
+    if agent is None or agent.workspace_id != workspace_id or not support.attached(agent.spec):
+        return agent_id
+    layer = get(db, workspace_id)
+    if layer is None or layer.connection != provider:
+        return agent_id
+    if support.uses_gateway(agent.spec):
+        gateway = gateway_ref(layer)
+        if gateway is None:
+            return agent_id  # no managed gateway: nothing was asked for it
+        from app.services import context_layer_gateway
+
+        return context_layer_gateway.gateway_grant_id(gateway["gateway_id"])
+    if agent.method == "harness":
         return ""
     return agent_id
 

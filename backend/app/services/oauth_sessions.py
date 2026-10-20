@@ -29,6 +29,12 @@ cancel it.
 **Grants** (``user_grants``) are derived progress only: the vault exposes no
 "is a token bound" read, so the row records what the platform observed on its
 own legs (pending → authorized → revoked).
+
+**Gateway grants** (``agent_id = "gw:<gateway_id>"``) are consents made through
+the COA context layer's managed gateway (``context_layer_gateway``). They live in
+the gateway's own vault slot, which the platform can neither re-ask
+(``forceAuthentication``) nor delete (live spike 2026-10-20, F10), so a revoke
+leaves them alone and never reports them as needing re-auth.
 """
 
 import logging
@@ -65,6 +71,16 @@ CALLER_KINDS = (CALLER_IAM, CALLER_USER_JWT, CALLER_M2M)
 # member's downstream token to all of them. Such an ask is never recorded and
 # such a session is never completed.
 AS_USER_REQUIRES_USER_JWT = "identity.as_user_requires_user_jwt"
+
+# ``user_grants.agent_id`` / ``oauth_pending_sessions.agent_id`` of a consent made
+# through a managed gateway (+ the gateway id; ≤ 32 characters, the column width).
+GATEWAY_GRANT_PREFIX = "gw:"
+
+
+def is_gateway_grant(agent_id: str | None) -> bool:
+    """Whether a grant (or pending session) key is a managed gateway's consent: one
+    the platform cannot revoke (module docstring)."""
+    return bool(agent_id) and str(agent_id).startswith(GATEWAY_GRANT_PREFIX)
 
 
 def as_user_requires_user_jwt(
@@ -404,7 +420,11 @@ def complete(
 
 
 def revoke(db: Session, workspace_id: str, *, user_id: str, provider: str) -> dict[str, Any]:
-    """Force re-auth on the next call for every agent holding this grant."""
+    """Force re-auth on the next call for every agent holding this grant.
+
+    Gateway grants (``gw:<gateway_id>``) and their in-flight consents are left as
+    they are: the token stays usable in the gateway's vault slot whatever the
+    ledger says, so marking it revoked would only misreport it."""
     now = _now()
     revocation = _revocation(db, workspace_id, user_id, provider)
     if revocation is None:
@@ -421,6 +441,7 @@ def revoke(db: Session, workspace_id: str, *, user_id: str, provider: str) -> di
             UserGrant.workspace_id == workspace_id,
             UserGrant.user_id == user_id,
             UserGrant.provider == provider,
+            ~UserGrant.agent_id.startswith(GATEWAY_GRANT_PREFIX),
         )
         .all()
     )
@@ -433,6 +454,7 @@ def revoke(db: Session, workspace_id: str, *, user_id: str, provider: str) -> di
         OauthPendingSession.workspace_id == workspace_id,
         OauthPendingSession.user_id == user_id,
         OauthPendingSession.provider == provider,
+        ~OauthPendingSession.agent_id.startswith(GATEWAY_GRANT_PREFIX),
     ).delete(synchronize_session=False)
     db.commit()
     return {"revoked": True, "provider": provider, "agents": len(grants)}
@@ -449,7 +471,10 @@ def _grant_view(grant: UserGrant, revocation: UserTokenRevocation | None) -> dic
         "tool": grant.tool,
         "scopes": list(grant.scopes or []),
         "status": grant.status,
-        "force_reauth": _revocation_in_force(revocation, grant),
+        # a revocation never reaches a gateway's vault slot (module docstring)
+        "force_reauth": (
+            not is_gateway_grant(grant.agent_id) and _revocation_in_force(revocation, grant)
+        ),
         "created_at": stamp(grant.created_at),
         "updated_at": stamp(grant.updated_at),
         "authorized_at": stamp(grant.authorized_at),
@@ -523,7 +548,7 @@ def grant_status(
             "connection": provider,
             "agent_id": agent_id,
             "status": "none",
-            "force_reauth": _revocation_in_force(
+            "force_reauth": not is_gateway_grant(agent_id) and _revocation_in_force(
                 _revocation(db, workspace_id, user_id, provider), None
             ),
             "authorized_at": None,
