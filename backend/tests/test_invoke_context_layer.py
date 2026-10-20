@@ -2,11 +2,16 @@
 short-circuit (sync + stream), /v1, the byte-identical path for every other agent,
 the Strands deploy expansion, and the canary / evaluation refusals."""
 
+import asyncio
+import importlib.util
 import json
 import time
+import types
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+import strands
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError
@@ -20,7 +25,11 @@ from app.services import agent_iam, context_layer, invoke, oauth_sessions
 from app.services.chat import chat_stream
 from app.services.workspace import context_for_workspace
 from app.templates import gateway_support
-from app.templates.identity_support import as_user_connections_stored, render_identity_source
+from app.templates.identity_support import (
+    as_user_connections_stored,
+    gates_turn,
+    render_identity_source,
+)
 from app.templates.strands_agent import render_main_py
 
 from . import coa_fakes as fx
@@ -317,6 +326,98 @@ def test_strands_hot_path_names_the_user_and_honours_revocation(account):
     finally:
         db.close()
     assert invoke._pending_force_reauth(agent, "alice") == ["coa-coa-w2"]
+
+
+# ── Strands: a pending COA consent ends the turn at the card ─────────────────
+
+CONSENT_URL = "https://coa-auth.example/authorize?state=z"
+PLAIN_AS_USER_SPEC = {
+    "name": "crm-z", "method": "zip_runtime", "system_prompt": "help",
+    "tools": [{
+        "type": "mcp", "name": "crm", "config": {"url": "https://crm.example/mcp"},
+        "auth": {"connection": "team-idp", "kind": "oauth2", "mode": "as_user",
+                 "scopes": ["openid"]},
+    }],
+}
+
+
+def _rendered_runtime(spec: AgentSpec, tmp_path, monkeypatch, vault: dict):
+    """The generated main.py, imported with a stub strands Agent and an Identity
+    data plane that answers every USER_FEDERATION exchange with ``vault``."""
+    monkeypatch.setattr(strands, "Agent", lambda **kwargs: types.SimpleNamespace(**kwargs))
+    target = tmp_path / f"{spec.name.replace('-', '_')}_main.py"
+    target.write_text(render_main_py(spec), encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location(target.stem, target)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    dp = MagicMock()
+    dp.get_resource_oauth2_token.return_value = vault
+    monkeypatch.setattr(module, "_id_client", lambda: types.SimpleNamespace(dp_client=dp))
+    monkeypatch.setattr(module, "BedrockAgentCoreContext", types.SimpleNamespace(
+        get_workload_access_token=lambda: "workload-token", get_config_bundle=lambda: {}))
+    monkeypatch.setattr(module, "memory_session_manager", lambda _a, _s: None)
+    return module
+
+
+def _turn(module, answered: list) -> list[dict]:
+    def build_agent(actor_id, session_id, extra_tools=None, session_manager=None):
+        async def stream_async(prompt):
+            answered.append(prompt)
+            yield {"data": "an answer"}
+            yield {"result": "an answer"}
+
+        return types.SimpleNamespace(stream_async=stream_async, system_prompt="")
+
+    module.build_agent = build_agent
+
+    async def collect():
+        return [event async for event in module.invoke({"prompt": "q", "session_id": "s1"})]
+
+    return asyncio.run(collect())
+
+
+def test_only_the_layers_coa_tool_gates_the_turn(account):
+    spec = context_layer.deploy_spec(_zip_spec(), "default")
+    coa = next(tool for tool in spec.tools if tool.name == "coa")
+    assert gates_turn(spec, coa) is True
+    assert "'gates_turn': True" in render_identity_source(spec)
+    plain = AgentSpec(**PLAIN_AS_USER_SPEC)
+    assert gates_turn(plain, plain.tools[0]) is False
+    assert "'gates_turn': True" not in render_identity_source(plain)
+
+
+def test_strands_turn_without_coa_consent_ends_at_the_card(account, tmp_path, monkeypatch):
+    spec = context_layer.deploy_spec(_zip_spec(), "default")
+    module = _rendered_runtime(spec, tmp_path, monkeypatch,
+                               {"authorizationUrl": CONSENT_URL, "sessionUri": "urn:s"})
+    monkeypatch.setattr(module, "recall_context", lambda *_a: pytest.fail("memory was read"))
+    answered: list = []
+    events = _turn(module, answered)
+    assert answered == []  # the model never ran
+    assert events == [
+        {"event": "auth_required", "provider": "coa-coa-w2", "tool": "coa", "url": CONSENT_URL,
+         "scopes": ["openid", "email", "profile"], "session_uri": "urn:s"},
+        {"event": "complete", "result": ""},
+    ]
+    # the gate is per turn, like the notices: a turn whose exchange asks nothing resets it
+    assert module.identity_turn_gated() is True
+    failing = MagicMock()
+    failing.get_resource_oauth2_token.return_value = {}
+    monkeypatch.setattr(module, "_id_client", lambda: types.SimpleNamespace(dp_client=failing))
+    module.identity_tools(MagicMock(), "s2")
+    assert module.identity_turn_gated() is False
+
+
+def test_another_as_user_mcp_tool_still_lets_the_model_answer(tmp_path, monkeypatch):
+    module = _rendered_runtime(AgentSpec(**PLAIN_AS_USER_SPEC), tmp_path, monkeypatch,
+                               {"authorizationUrl": CONSENT_URL, "sessionUri": "urn:s"})
+    monkeypatch.setattr(module, "recall_context", lambda *_a: "")
+    answered: list = []
+    events = _turn(module, answered)
+    assert answered == ["q"]
+    assert [e["event"] for e in events] == ["auth_required", "delta", "complete"]
+    assert events[0]["tool"] == "crm" and events[-1]["result"] == "an answer"
+    assert module.identity_turn_gated() is False
 
 
 def test_a_strands_deploy_without_a_layer_fails_by_name(monkeypatch):

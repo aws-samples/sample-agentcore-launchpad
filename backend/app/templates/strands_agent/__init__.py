@@ -71,6 +71,10 @@ def render_main_py(spec: AgentSpec) -> str:
             "__LAUNCHPAD_IDENTITY_NOTICES_FN__",
             "identity_drain_auth_notices" if uses_identity(spec) else "lambda: []",
         )
+        .replace(
+            "__LAUNCHPAD_IDENTITY_GATED_FN__",
+            "identity_turn_gated" if uses_identity(spec) else "lambda: False",
+        )
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(
             "__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__",

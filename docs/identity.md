@@ -518,7 +518,11 @@ reads `callback_registered` live and shows the URL to administrators only.
 | A Strands (`zip_runtime`) agent with `spec.context_layer` | the agent's own runtime identity | console username | `agent_id=<agent>`, per agent (§7.1) |
 
 A Strands agent's deploy expands `context_layer` into one `as_user` MCP tool named
-`coa` on the layer's Connection, so its path is exactly §7.1–§7.3. A Harness has no
+`coa` on the layer's Connection, so its path is exactly §7.1–§7.3, with one
+difference: while that consent is pending the turn ends at the card, and the model
+is not invoked (the tool is baked with `gates_turn`). Without COA the agent has
+no facts to answer from, and an answer written without the tool reads as "you
+have no access". A Harness turn without the consent is never invoked either. A Harness has no
 tool-level auth, so the backend fetches the member's token and adds it to that
 turn's `InvokeHarness.tools` as a `remote_mcp` server (`Authorization: Bearer …`),
 with `@coa` in `allowedTools`.

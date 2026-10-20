@@ -55,7 +55,20 @@ def referenced_connections(spec: AgentSpec) -> dict[str, str]:
     return {tool.auth.connection: tool.auth.kind for tool in spec.tools if tool.auth is not None}
 
 
-def _baked_tool(tool: ToolRef) -> dict[str, Any]:
+def gates_turn(spec: AgentSpec, tool: ToolRef) -> bool:
+    """Whether a pending consent for ``tool`` ends the turn before the model runs:
+    only the context layer's COA tool (the agent's fact source, a reserved name).
+    Any other as_user MCP server just sits the turn out until the user consents."""
+    return (
+        spec.context_layer is not None
+        and tool.name == context_layer_support.TOOL_NAME
+        and tool.type == "mcp"
+        and tool.auth is not None
+        and tool.auth.mode == "as_user"
+    )
+
+
+def _baked_tool(tool: ToolRef, *, gate: bool = False) -> dict[str, Any]:
     """One entry of the IDENTITY_AUTH_TOOLS literal. Flat, JSON-safe, no secrets."""
     config = tool.config or {}
     auth = tool.auth
@@ -74,6 +87,7 @@ def _baked_tool(tool: ToolRef) -> dict[str, Any]:
         "audience": (auth.audience or "") if auth else "",
         "key_in": auth.api_key.in_ if auth and auth.api_key else "header",
         "key_name": auth.api_key.name if auth and auth.api_key else "Authorization",
+        "gates_turn": gate,
     }
 
 
@@ -83,7 +97,8 @@ def render_identity_source(spec: AgentSpec) -> str:
     if not tools:
         return ""
     source = IDENTITY_TEMPLATE.read_text(encoding="utf-8").strip()
-    return source.replace(_MARKER, repr([_baked_tool(tool) for tool in tools]))
+    baked = [_baked_tool(tool, gate=gates_turn(spec, tool)) for tool in tools]
+    return source.replace(_MARKER, repr(baked))
 
 
 def outbound_auth_env(spec: AgentSpec) -> str:

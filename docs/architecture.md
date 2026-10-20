@@ -3253,7 +3253,12 @@ per-user grants decide what an agent may see.
     `context_layer.deploy_spec`, which expands the ref into one `as_user` MCP tool
     on the layer's Connection plus the addendum — the template, the execution
     role, the environment and the return-URL allow-list all read that one
-    expansion, and the stored spec keeps only the ref.
+    expansion, and the stored spec keeps only the ref. The baked tool carries
+    `gates_turn`: when the member has not consented yet, the generated runtime
+    emits the `auth_required` card and ends the turn without invoking the model —
+    the same outcome as a Harness turn. Any other `as_user` MCP server only sits
+    the turn out until its consent (the model still answers). A runtime picks
+    this up on its next deploy.
   - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
     COA-attached agent: none of them has a console user to act as.
 - **Module** (`routers/context_layer.py`, page `frontend/src/v2/pages/ContextLayer.tsx`

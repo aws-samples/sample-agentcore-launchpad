@@ -1817,7 +1817,10 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     `@coa`。尚未授权时，该轮就是一个 `auth_required` 事件，InvokeHarness 不会执行。
   - *Strands*（HTTP `zip_runtime`）：每个部署阶段都基于 `context_layer.deploy_spec` 构建，它把
     引用展开为该层 Connection 上的一个 `as_user` MCP 工具并追加提示词——模板、执行角色、
-    环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。
+    环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。烘焙进代码的这个工具带
+    `gates_turn` 标记：成员尚未授权时，生成的运行时只发出 `auth_required` 授权卡片并结束该轮，
+    不调用模型——与 Harness 的结果一致。其他 `as_user` MCP 服务在授权前只是本轮不可用，模型照常
+    作答。已部署的运行时在下次部署后生效。
   - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
     的控制台用户。
 - **模块**（`routers/context_layer.py`，页面 `frontend/src/v2/pages/ContextLayer.tsx` 与
