@@ -692,8 +692,31 @@ it are in task `10-20-context-layer-gateway-spike` (`research/findings.md`, F1�
     configuration without the attachment, or a gateway that cannot be verified,
     answers `context_layer.gateway_unavailable`. Canaries skip COA agents in both
     modes.
-  - Strands (`zip_runtime`) in gateway mode fails its generate stage with
-    `context_layer.gateway_unsupported_method` until its runtime support lands.
+- **Strands wiring** (task `10-20-gw-strands`). The same 接入方式 choice on an HTTP
+  `zip_runtime` agent.
+  - *Deploy.* `context_layer.deploy_spec` adds no tool in gateway mode. There is no
+    `as_user` tool `coa`, so no `IDENTITY_AUTH_TOOLS` entry or `gates_turn`, and no
+    execution-role grant, environment entry or return URL for COA. The managed
+    gateway's URL (ledger only, https only) is bound to the ref for the deploy and
+    never stored. The template renders a context-gateway block next to the launchpad-gw
+    one, `CONTEXT_GATEWAY = {"url": <gateway URL>, "tools": "coa___*"}` plus its
+    loader. The prompt addendum names the tools `coa___<tool>`. Create, redeploy and
+    every zip stage answer `409 context_layer.gateway_unavailable` while the gateway is
+    not enabled. A direct agent's `main.py` is byte-identical to before.
+  - *Runtime.* Each turn, the loader opens an MCP session to `CONTEXT_GATEWAY.url` with
+    `Authorization: Bearer <the payload's gateway_access_token>` (no redirects) and
+    keeps the tools matching `coa___*`. There is no M2M fallback: without the member's
+    JWT the turn has no COA tools. An agent that also attaches launchpad-gw hands the
+    same token to both clients.
+  - *Turn.* `invoke._runtime_gateway_gate` runs `gateway_turn_auth` first, on the
+    stream and the text paths. Without consent the turn is the `auth_required` card
+    and the runtime is not invoked. Otherwise the payload's `gateway_access_token` is
+    the member's pool JWT: the Chat route's, or the one the gate minted, from the same
+    cache. `/v1` and evaluation stay refused. A revocation on the layer's Connection is
+    not forwarded as `force_reauth_providers`, since the agent has no as_user tool to
+    re-ask.
+  - *Code view.* `main.py`, read back from the deployed package, shows
+    `CONTEXT_GATEWAY`.
 - **Vault slot and revocation.** A member's consent through the gateway is keyed by
   the gateway's workload identity and the member's JWT subject. Its grant row is
   `user_grants.agent_id = "gw:<gateway_id>"` (30 characters: the column is 32). The

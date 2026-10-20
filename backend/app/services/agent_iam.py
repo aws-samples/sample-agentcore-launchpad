@@ -301,7 +301,10 @@ def _uses_gateway(spec: AgentSpec) -> bool:
     if spec.method == "harness" and context_layer_support.via_gateway(spec):
         # the managed COA gateway is deployed as an M2M gateway attachment, as a
         # Registry-attached user-trusting gateway is (each console turn swaps in the
-        # member's JWT, but the deployed configuration stays one the role can run)
+        # member's JWT, but the deployed configuration stays one the role can run).
+        # A Strands runtime in gateway mode needs no grant: it calls the gateway over
+        # plain HTTPS with the member's JWT from the payload, which the gateway's
+        # CUSTOM_JWT authorizer checks (no IAM call, no token exchange).
         return True
     for tool in spec.tools:
         if tool.type == "gateway":

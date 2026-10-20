@@ -1848,8 +1848,12 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。烘焙进代码的这个工具带
     `gates_turn` 标记：成员尚未授权时，生成的运行时只发出 `auth_required` 授权卡片并结束该轮，
     不调用模型——与 Harness 的结果一致。其他 `as_user` MCP 服务在授权前只是本轮不可用，模型照常
-    作答。已部署的运行时在下次部署后生效。Strands 尚未接入经 Gateway 模式：其 generate 阶段会拒绝
-    （`context_layer.gateway_unsupported_method`）。
+    作答。已部署的运行时在下次部署后生效。
+  - *经 Gateway 的 Strands*：展开时不添加任何工具。托管网关的 URL（只来自账本）以
+    `CONTEXT_GATEWAY = {"url": …, "tools": "coa___*"}` 的形式烘焙进 `main.py`，与 launchpad-gw
+    客户端并存；提示词把工具称为 `coa___<tool>`。每轮控制台对话先在后端过网关的授权关
+    （`invoke._runtime_gateway_gate`），再把成员的用户池 JWT 作为载荷的 `gateway_access_token`
+    发送；运行时用它从网关加载 COA 工具，没有 M2M 兜底。代码视图会显示 `CONTEXT_GATEWAY`。
   - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
     的控制台用户。
 - **模块**（`routers/context_layer.py`，页面 `frontend/src/v2/pages/ContextLayer.tsx` 与
@@ -1899,8 +1903,8 @@ Agent 能看到什么由 COA 的逐用户授权决定。
   - 密码只存在于 SSM、后端内存（最多 300 秒，轮换后的密码 5 分钟内生效）、查看接口的响应，以及
     面板打开期间成员的浏览器中。`/<prefix>/launchpad/` 范围限制保证查看接口无法读取其他密钥。
 - **托管 COA 网关**（`services/context_layer_gateway.py`，经 Gateway 接入）：按 Agent 选择启用
-  （`context_layer.via = "gateway"`，即向导中的“接入方式”，仅在网关启用时可选；目前只支持
-  Harness），默认仍为直连。管理员在概览页的网关卡片上为每个
+  （`context_layer.via = "gateway"`，即向导中的“接入方式”，仅在网关启用时可选；支持
+  Harness 与 Strands），默认仍为直连。管理员在概览页的网关卡片上为每个
   工作区启用一个网关 `launchpad-coa-gw`，它与 `launchpad-gw` 相互独立，后者从不被修改。
   - `PUT /api/context-layer/gateway` 幂等且可续做。它先以管理员的控制台 COA 令牌读取 COA 的
     `tools/list`：未授权时返回 409，不创建任何资源。然后确保网关存在（MCP `2025-11-25` +

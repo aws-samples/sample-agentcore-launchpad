@@ -9592,8 +9592,7 @@
         "viaGateway": "经 Gateway",
         "viaHint": "默认直连。经 Gateway 时，通过工作区的托管 COA 网关访问 COA。",
         "viaGatewayDisabled": "经 Gateway 接入需要托管 COA 网关，请管理员先在上下文层页面启用。",
-        "noteGateway": "每轮对话都经托管 COA 网关、以提问成员的身份访问 COA；未授权时，对话中会先出现授权卡片。COA 工具会出现在 Agent 的已部署配置中。经网关完成的授权无法在平台上撤销。公开 /v1 API 无法调用此 Agent。",
-        "gatewayStrandsPending": "Strands Agent 暂不支持经 Gateway 接入：在支持上线前，部署会被拒绝。请选择直连，或改用 Harness。"
+        "noteGateway": "每轮对话都经托管 COA 网关、以提问成员的身份访问 COA；未授权时，对话中会先出现授权卡片。托管网关会显示在 Agent 的代码视图中（Harness 的配置，或 Strands Agent 的 main.py）。经网关完成的授权无法在平台上撤销。公开 /v1 API 无法调用此 Agent。"
       },
       "openInCoa": "在 COA 中打开",
       "errors": {

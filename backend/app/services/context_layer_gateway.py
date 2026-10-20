@@ -236,6 +236,24 @@ def require_harness_attachment(workspace: WorkspaceContext) -> dict[str, Any]:
     return attachment
 
 
+# ── gateway mode: what a Strands runtime is rendered with ────────────────────
+
+def runtime_gateway_url(layer: ContextLayer) -> str | None:
+    """The managed gateway's MCP URL a gateway-mode Strands runtime bakes into
+    ``CONTEXT_GATEWAY``, or None when it is not enabled. Ledger only (no AWS call),
+    https only: the runtime sends the member's JWT there."""
+    return _gateway_url(context_layer.gateway_ref(layer))
+
+
+def require_runtime_gateway_url(layer: ContextLayer) -> str:
+    """``runtime_gateway_url`` or 409 ``context_layer.gateway_unavailable``, so a
+    gateway-mode Strands deploy never builds without the gateway (or in direct mode)."""
+    url = runtime_gateway_url(layer)
+    if url is None:
+        raise gateway_unavailable()
+    return url
+
+
 def _prerequisites(workspace: WorkspaceContext) -> dict[str, str]:
     resources = workspace.resources
     missing = [key for key in REQUIRED_RESOURCES if not resources.get(key)]

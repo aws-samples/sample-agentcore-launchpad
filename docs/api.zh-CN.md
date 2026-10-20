@@ -662,8 +662,8 @@ HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议�
 `409 context_layer.not_connected`。`via` 为 `"direct"`（默认值，从不存储或回显）或
 `"gateway"`：Agent 经工作区的托管 COA 网关、以提问成员的身份访问 COA。网关未启用时，以
 `via: "gateway"` 创建或重新发布返回 `409 context_layer.gateway_unavailable`（部署的
-generate 阶段会再检查一次）。目前只有 Harness 支持经 Gateway 部署：`zip_runtime` Agent
-使用它时，generate 阶段以 `context_layer.gateway_unsupported_method` 失败。挂载了 COA 的 Agent 在 `/v1` 上返回
+generate 阶段会再检查一次）。两种方式都支持经 Gateway：Harness 挂载该网关，`zip_runtime` Agent
+则把网关 URL 烘焙进 `main.py`（`CONTEXT_GATEWAY`）。挂载了 COA 的 Agent 在 `/v1` 上返回
 `409 identity.as_user_requires_console`（流式调用为一个 `error` 事件）。
 调用者尚未授权时，对挂载了 COA 的 Agent 调用 `POST /api/agents/{id}/invoke` 返回
 `409 context_layer.authorization_required`（该接口没有授权卡片）；Chat 则显示

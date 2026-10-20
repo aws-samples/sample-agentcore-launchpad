@@ -806,9 +806,26 @@ def expanded_spec(spec: AgentSpec, layer: ContextLayer) -> AgentSpec:
     """The deploy-time spec of a Strands agent: ``context_layer`` becomes one
     ``as_user`` MCP tool on the layer's Connection plus the prompt addendum. The
     single expansion every deploy consumer (template, IAM, environment, return-URL
-    allow-list) reads. Never stored: the agent row keeps only ``context_layer``."""
+    allow-list) reads. Never stored: the agent row keeps only ``context_layer``.
+
+    Gateway mode (``via = "gateway"``) adds no tool at all, so there is no identity
+    client, execution-role grant, environment entry or return URL for COA. The managed
+    gateway's MCP URL (ledger only) is bound to the ref for the template's
+    ``CONTEXT_GATEWAY`` block, and the addendum names the gateway's ``coa___<tool>``
+    tools. Without an enabled gateway: 409 ``context_layer.gateway_unavailable``, so no
+    stage builds the agent in the wrong mode."""
     if spec.context_layer is None:
         return spec
+    if support.via_gateway(spec):
+        from app.services import context_layer_gateway
+
+        url = context_layer_gateway.require_runtime_gateway_url(layer)
+        return spec.model_copy(update={
+            "context_layer": support.bind_gateway_url(spec.context_layer, url),
+            "system_prompt": spec.system_prompt + support.addendum_for(
+                spec, tool_prefix=support.strands_tool_prefix(spec)
+            ),
+        })
     tool = ToolRef(**support.strands_tool_ref(layer.mcp_url, layer.connection))
     return spec.model_copy(update={
         "tools": [*spec.tools, tool],
@@ -818,7 +835,8 @@ def expanded_spec(spec: AgentSpec, layer: ContextLayer) -> AgentSpec:
 
 def deploy_spec(spec_dict: dict[str, Any], workspace_id: str) -> AgentSpec:
     """``AgentSpec(**stored)``, expanded when it attaches the context layer (zip
-    deploy stages). A layer gone since save fails the stage by name."""
+    deploy stages). A layer gone since save fails the stage by name, and so does a
+    gateway-mode agent's managed gateway (``context_layer.gateway_unavailable``)."""
     spec = AgentSpec(**spec_dict)
     if spec.context_layer is None:
         return spec

@@ -1,0 +1,95 @@
+# <launchpad-context-gateway-mcp:v1>
+# The COA context layer through the workspace's managed COA gateway
+# (context_layer.via = "gateway"). Rendered next to, and independent of, the
+# launchpad-gw block: an agent may carry both.
+#
+# Baked identifiers only: the managed gateway's MCP URL and the tool names its COA
+# target exposes. The bearer is the asking member's workspace-pool JWT, which the
+# platform puts on each console turn's payload (`gateway_access_token`) after its
+# consent gate has passed. There is NO machine-identity fallback: a turn without a
+# member token loads no COA tools, so COA is only ever reached as the member (the
+# gateway exchanges that JWT for the member's own COA token).
+#
+# Fail-soft by construction, like the launchpad-gw block: nothing at module scope can
+# raise (one literal, function definitions, function-local imports), and every
+# failure leaves the turn without COA tools rather than failing the invoke. The
+# token is never logged.
+
+CONTEXT_GATEWAY = __LAUNCHPAD_CONTEXT_GATEWAY__
+
+
+def _ctx_gw_log(message: str) -> None:
+    """Diagnostics land in the runtime log group; flush so a crash keeps them."""
+    print(f"[launchpad-context-gateway] {message}", flush=True)
+
+
+def _ctx_gw_http_client(headers=None, timeout=None, auth=None):
+    """The MCP transport's HTTP client: no redirects, so the member's JWT only ever
+    goes to the managed gateway's own URL. The read timeout covers COA's 170 s budget."""
+    import httpx
+
+    return httpx.AsyncClient(
+        follow_redirects=False,
+        headers=headers,
+        timeout=timeout if timeout is not None else httpx.Timeout(30, read=300),
+        auth=auth,
+    )
+
+
+def _ctx_gw_stop(client) -> None:
+    """Tear the MCP session down without ever raising (the launchpad-gw block's
+    teardown rule: MCPClient re-raises its task group's errors from ``stop``)."""
+    try:
+        client.stop(None, None, None)
+    except Exception as exc:
+        _ctx_gw_log(f"session teardown failed (ignored): {type(exc).__name__}: {exc}")
+
+
+def context_gateway_tools(stack, user_token: str | None = None) -> list:
+    """COA's tools from the managed gateway for this turn, as the member.
+
+    The session stays open for the whole turn (teardown is registered on the caller's
+    ``stack``). Only ``CONTEXT_GATEWAY["tools"]`` are loaded. Returns [] on any
+    failure and without a member token, and cannot raise.
+    """
+    if not user_token:
+        _ctx_gw_log("no member token on this turn: the COA tools are not loaded")
+        return []
+    url = CONTEXT_GATEWAY["url"]
+    try:
+        from mcp.client.streamable_http import streamablehttp_client
+        from strands.tools.mcp import MCPClient
+
+        client = MCPClient(
+            lambda: streamablehttp_client(
+                url,
+                headers={"Authorization": f"Bearer {user_token}"},
+                httpx_client_factory=_ctx_gw_http_client,
+            )
+        )
+    except Exception as exc:
+        _ctx_gw_log(f"MCP client construction failed: {type(exc).__name__}: {exc}")
+        return []
+    try:
+        client.start()
+    except Exception as exc:
+        _ctx_gw_log(f"session start failed: {type(exc).__name__}: {exc}")
+        _ctx_gw_stop(client)  # start() can fail partway through initialization
+        return []
+    stack.callback(_ctx_gw_stop, client)
+    try:
+        tools = list(client.list_tools_sync())
+    except Exception as exc:
+        _ctx_gw_log(f"tools/list failed: {type(exc).__name__}: {exc}")
+        return []
+    from fnmatch import fnmatchcase
+
+    tools = [
+        t for t in tools
+        if fnmatchcase(str(getattr(t, "tool_name", "")), CONTEXT_GATEWAY["tools"])
+    ]
+    _ctx_gw_log(f"COA tools loaded: {[getattr(t, 'tool_name', '?') for t in tools]}")
+    return tools
+
+
+# </launchpad-context-gateway-mcp:v1>

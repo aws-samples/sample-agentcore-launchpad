@@ -448,6 +448,56 @@ def _gateway_turn_overrides(
     return overrides
 
 
+def _runtime_gateway_mode(agent: Agent) -> bool:
+    """A Strands (``zip_runtime``) agent reaching its context layer through the managed
+    COA gateway (``context_layer.via = "gateway"``): its turns go through
+    ``_runtime_gateway_gate`` before the runtime is invoked."""
+    return agent.method == "zip_runtime" and context_layer_support.uses_gateway(agent.spec)
+
+
+def _runtime_gateway_gate(
+    agent: Agent,
+    workspace: WorkspaceContext,
+    *,
+    gateway_access_token: str | None,
+    username: str | None,
+    role: str | None,
+    email: str | None,
+    console_user: bool,
+    session_id: str,
+) -> tuple[dict[str, Any] | None, str]:
+    """A gateway-mode Strands turn: ``(notice, "")`` ends it at the auth card before
+    the runtime is invoked; ``(None, jwt)`` runs it with the member's pool JWT as the
+    payload's ``gateway_access_token``, the bearer the generated runtime presents to the
+    managed gateway (``CONTEXT_GATEWAY``).
+
+    The same gate as a Harness turn (``_gateway_turn_overrides``): a blocking preflight
+    (every caller runs off the event loop), ``identity.as_user_requires_console`` for
+    ``/v1``, evaluation and a caller that did not say the member's role. The JWT is the
+    router's, or the one the gate just minted (``policy_identity``'s per-process cache,
+    with the consent margin), so the preflight and the turn carry one token. The runtime
+    has no machine-identity fallback toward COA's gateway, and neither does this: no
+    token, no turn. No COA token is fetched by the backend in this mode.
+    """
+    from app.services import context_layer_gateway, policy_identity
+
+    gate = context_layer_gateway.gateway_turn_auth(
+        agent, workspace, username=username, role=role or "", email=email,
+        session_id=session_id, console_user=console_user and bool(role),
+    )
+    if gate is not None:
+        return gate["auth_required"], ""
+    token = gateway_access_token or policy_identity.gateway_user_token(
+        workspace, str(username), str(role), email,
+        min_valid_s=context_layer_gateway.CONSENT_JWT_MIN_VALID_S,
+    )
+    if not token:
+        raise context_layer_gateway.gateway_unavailable(
+            "the managed COA gateway could not be reached as you this turn: try again"
+        )
+    return None, token
+
+
 def _invoke_via_stable_endpoint(
     route: dict[str, Any],
     prompt: str,
@@ -684,10 +734,20 @@ def invoke_agent_text(
     ``on_usage`` is a ``UsageMeter.on_usage`` sink (services/usage_meter.py): the
     token usage each path reports in-band reaches it; the caller settles the turn.
     ``user_role`` / ``user_email``: the signed-in member's, for a context layer in
-    gateway mode (``harness_turn_overrides``)."""
+    gateway mode (``harness_turn_overrides``, ``_runtime_gateway_gate``)."""
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
+    if _runtime_gateway_mode(agent):
+        notice, gateway_access_token = _runtime_gateway_gate(
+            agent, workspace, gateway_access_token=gateway_access_token,
+            username=runtime_user_id, role=user_role, email=user_email,
+            console_user=console_user, session_id=session_id or "",
+        )
+        if notice is not None:
+            # the consent the member owes COA: the runtime is not invoked this turn
+            return {"text": "", "session_id": session_id or hc.new_session_id(),
+                    "auth_required": [notice]}
     if attachments:
         prompt = attachments.prompt(prompt)
     # A JWT-mode runtime accepts Bearer only — SigV4 InvokeAgentRuntime 403s.
@@ -865,6 +925,8 @@ def invoke_agent_events(
     bearer_token: str | None = None,
     console_user: bool = True,
     on_usage: Any = None,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -873,11 +935,22 @@ def invoke_agent_events(
     parsed incrementally. A zip runtime deployed before its template streamed
     still answers a JSON ``{"result": ...}`` body, which the same parser turns
     into one delta — so the switch is safe for existing agents.
-    ``console_user`` and ``on_usage`` as on ``invoke_agent_text``.
+    ``console_user``, ``on_usage``, ``user_role`` and ``user_email`` as on
+    ``invoke_agent_text``: a gateway-mode Strands turn without the member's consent
+    is one ``auth_required`` event, and the runtime is not invoked.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
+    if _runtime_gateway_mode(agent):
+        notice, gateway_access_token = _runtime_gateway_gate(
+            agent, workspace, gateway_access_token=gateway_access_token,
+            username=runtime_user_id, role=user_role, email=user_email,
+            console_user=console_user, session_id=session_id or "",
+        )
+        if notice is not None:
+            yield {"event": "auth_required", "data": notice}
+            return
     if inbound_auth_service.is_jwt_mode(agent):
         # Streaming parity with SigV4: the HTTPS response feeds the same body
         # parser, so tool/delta/auth_required arrive exactly as they do over
@@ -948,6 +1021,10 @@ def invoke_agent_events(
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
     if not console_user:
         extra["console_user"] = False
+    if user_role:
+        # a gateway-mode agent's text path gates again: a cache hit after the gate above
+        extra["user_role"] = user_role
+        extra["user_email"] = user_email
     extra.update(_usage_kw(on_usage))
     result = invoke_agent_text(
         agent,

@@ -3294,8 +3294,14 @@ per-user grants decide what an agent may see.
     emits the `auth_required` card and ends the turn without invoking the model —
     the same outcome as a Harness turn. Any other `as_user` MCP server only sits
     the turn out until its consent (the model still answers). A runtime picks
-    this up on its next deploy. Gateway mode on Strands is not wired yet: its
-    generate stage refuses it (`context_layer.gateway_unsupported_method`).
+    this up on its next deploy.
+  - *Strands via the gateway*: the expansion adds no tool. The managed gateway's URL
+    (ledger only) is baked into `main.py` as `CONTEXT_GATEWAY = {"url": …, "tools":
+    "coa___*"}` beside the launchpad-gw client, and the addendum names the tools
+    `coa___<tool>`. Each console turn runs the gateway's consent gate in the backend
+    first (`invoke._runtime_gateway_gate`), then sends the member's pool JWT as the
+    payload's `gateway_access_token`; the runtime loads COA's tools from the gateway
+    with it, with no M2M fallback. The code view shows `CONTEXT_GATEWAY`.
   - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
     COA-attached agent: none of them has a console user to act as.
 - **Module** (`routers/context_layer.py`, page `frontend/src/v2/pages/ContextLayer.tsx`
@@ -3365,7 +3371,7 @@ per-user grants decide what an agent may see.
     reveal from reading any other secret.
 - **Managed COA gateway** (`services/context_layer_gateway.py`, gateway mode). This is
   an opt-in path per agent (`context_layer.via = "gateway"`, the wizard's 接入方式,
-  offered while the gateway is enabled; Harness for now); direct stays the default. An admin enables one gateway per workspace,
+  offered while the gateway is enabled; Harness and Strands); direct stays the default. An admin enables one gateway per workspace,
   `launchpad-coa-gw`, from the overview's gateway card. It is separate from
   `launchpad-gw`, which is never modified.
   - `PUT /api/context-layer/gateway` is idempotent and resumable. It reads COA's

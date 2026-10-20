@@ -2,12 +2,19 @@
 
 Placeholders use ``__LAUNCHPAD_*__`` markers instead of str.format so the
 template stays brace-safe Python. Rendered output must always compile.
+
+A *feature line* (``_feature_line``) is a template line that exists only for specs
+with the feature: without it the whole line is dropped, so every other spec renders
+byte-identically to the template before the line was added. The COA context layer's
+gateway mode (``context_layer_support.render_context_gateway_source``) uses two.
 """
 
+import re
 from pathlib import Path
 
 from app.schemas.agent import AgentSpec
 from app.templates.attachment_support import render_attachment_source
+from app.templates.context_layer_support import render_context_gateway_source
 from app.templates.gateway_support import render_gateway_source, uses_gateway
 from app.templates.identity_support import render_identity_source, uses_identity
 from app.templates.kb_support import (
@@ -26,10 +33,30 @@ from app.templates.toolkits import (
 )
 
 TEMPLATE_DIR = Path(__file__).parent
+# The COA context layer through the managed gateway (gateway mode): its client block,
+# and the term adding its tools to the turn's tool list (``_turn_events``).
+CONTEXT_GATEWAY_SOURCE = "__LAUNCHPAD_CONTEXT_GATEWAY_SOURCE__"
+CONTEXT_GATEWAY_TOOLS_FN = "__LAUNCHPAD_CONTEXT_GATEWAY_TOOLS_FN__"
+
+
+def _feature_line(source: str, marker: str, value: str) -> str:
+    """The template line carrying ``marker``: the marker becomes ``value``, or, when
+    ``value`` is empty (the spec lacks the feature), the whole line is removed."""
+    if value:
+        return source.replace(marker, value)
+    return re.sub(rf"^[^\n]*{re.escape(marker)}[^\n]*\n", "", source, flags=re.M)
 
 
 def render_main_py(spec: AgentSpec) -> str:
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
+    # Feature lines first, before any spec text (the system prompt) is in the source.
+    context_gateway = render_context_gateway_source(spec)
+    source = _feature_line(
+        source, CONTEXT_GATEWAY_SOURCE, context_gateway and context_gateway + "\n\n"
+    )
+    source = _feature_line(
+        source, CONTEXT_GATEWAY_TOOLS_FN, "context_gateway_tools" if context_gateway else ""
+    )
     kbs = mounted_kbs(spec)
     # Both KB tools land in DEFAULT_TOOL_DESCRIPTIONS so the config-bundle A/B
     # contract can tune each one; spec overrides still win (they merge after).

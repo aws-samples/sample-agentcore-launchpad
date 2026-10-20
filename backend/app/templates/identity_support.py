@@ -144,14 +144,17 @@ def as_user_connections_stored(
     current schema; the revocation lookup must still see it). Reads both the
     v2 ``{connection, mode}`` and the earlier fork's ``{provider, flow}`` shape.
 
-    A runtime that attaches the COA context layer deploys one as_user tool on the
-    layer's Connection without naming it in the stored spec; the caller passes that
-    Connection (``context_layer_connection``) so its revocation is honoured too."""
+    A runtime that attaches the COA context layer directly deploys one as_user tool
+    on the layer's Connection without naming it in the stored spec; the caller passes
+    that Connection (``context_layer_connection``) so its revocation is honoured too.
+    One in gateway mode deploys no such tool (its consent lives in the managed
+    gateway's vault slot, not revocable here), so its ref does not count."""
     names: set[str] = set()
     if (
         context_layer_connection
         and (spec_dict or {}).get("method") != "harness"
         and context_layer_support.attached(spec_dict)
+        and not context_layer_support.uses_gateway(spec_dict)
     ):
         names.add(context_layer_connection)
     for tool in (spec_dict or {}).get("tools") or []:

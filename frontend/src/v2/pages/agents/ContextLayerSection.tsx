@@ -149,9 +149,6 @@ export function ContextLayerSection({
             </Link>
           </div>
           <Alert>{t(note)}</Alert>
-          {via === "gateway" && form.method !== "harness" && (
-            <Alert tone="warn">{t("v2.contextLayer.wizard.gatewayStrandsPending")}</Alert>
-          )}
         </div>
       )}
     </Card>

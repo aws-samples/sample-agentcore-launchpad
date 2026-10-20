@@ -1033,9 +1033,9 @@ connected answers `409 context_layer.not_connected`. `via` is `"direct"` (the
 default, never stored or echoed) or `"gateway"`: the agent reaches COA through the
 workspace's managed COA gateway as the asking member. A create or redeploy with
 `via: "gateway"` while the gateway is not enabled answers `409
-context_layer.gateway_unavailable` (the deploy's generate stage checks again). Gateway
-mode deploys on a Harness only for now: a `zip_runtime` agent with it fails its
-generate stage with `context_layer.gateway_unsupported_method`. A COA-attached agent on `/v1`
+context_layer.gateway_unavailable` (the deploy's generate stage checks again). Both
+methods support it: a Harness attaches the gateway, and a `zip_runtime` agent bakes its
+URL into `main.py` (`CONTEXT_GATEWAY`). A COA-attached agent on `/v1`
 answers `409 identity.as_user_requires_console` (an `error` event on the stream).
 `POST /api/agents/{id}/invoke` on a COA-attached agent whose caller has not
 consented yet answers `409 context_layer.authorization_required` (it has no consent

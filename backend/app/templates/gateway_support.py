@@ -95,7 +95,9 @@ def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -
     backend's console workload instead, so its spec does not count; one in gateway
     mode (``context_layer.via = "gateway"``) does, because its turn reaches the managed
     COA gateway with the member's workspace-pool JWT, which the Chat route mints for
-    exactly the user this names.
+    exactly the user this names. So does a Strands runtime in gateway mode (no as_user
+    tool): the route mints that JWT because this names the member, and it rides the
+    payload as ``gateway_access_token`` to the runtime's ``CONTEXT_GATEWAY`` client.
     """
     tools = (spec or {}).get("tools") or []
     needs_token = (

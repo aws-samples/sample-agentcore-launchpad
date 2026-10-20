@@ -20,7 +20,6 @@ from pydantic import ValidationError
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.deployer import harness as harness_deployer
-from app.deployer import zip_runtime
 from app.deployer.pipeline import StageContext
 from app.models.ledger import Agent, ChatMessage, OauthPendingSession
 from app.routers import agents as agents_router
@@ -355,15 +354,6 @@ def test_a_gateway_mode_harness_generates_with_the_gateway(account):
     ctx = _stage_ctx(agent)
     harness_deployer._stage_generate(ctx, agent)
     assert ctx.scratch["create_params"]["tools"] == [DEPLOYED_ATTACHMENT]
-
-
-def test_a_strands_agent_in_gateway_mode_is_refused_at_generate(account):
-    agent = _agent(method="zip_runtime", name="hr-gw-z")
-    with pytest.raises(AppError) as exc:
-        zip_runtime._stage_generate(_stage_ctx(agent), agent)
-    assert exc.value.code == "context_layer.gateway_unsupported_method"
-    assert exc.value.status_code == 422
-    assert "support follows" in exc.value.message
 
 
 def test_the_execution_role_can_run_the_deployed_attachment():

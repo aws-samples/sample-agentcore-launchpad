@@ -177,6 +177,7 @@ __LAUNCHPAD_TOOLKIT_SOURCE__
 __LAUNCHPAD_GATEWAY_SOURCE__
 
 
+__LAUNCHPAD_CONTEXT_GATEWAY_SOURCE__
 __LAUNCHPAD_IDENTITY_SOURCE__
 
 # Per-request Gateway MCP tool loader. Rendered as the real loader only when this
@@ -391,6 +392,7 @@ async def _turn_events(
             actor_id,
             session_id,
             GATEWAY_TOOLS(stack, gateway_access_token)
+            + __LAUNCHPAD_CONTEXT_GATEWAY_TOOLS_FN__(stack, gateway_access_token)
             + IDENTITY_TOOLS(stack, session_id, force_reauth),
             session_manager=session_manager,
         )

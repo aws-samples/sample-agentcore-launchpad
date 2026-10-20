@@ -63,8 +63,9 @@ def chat_stream(
     settled exactly once when the stream ends — completed, failed, or closed by the
     client — so the payer is charged for what the turn consumed.
 
-    ``user_role`` / ``user_email`` are the signed-in member's, for a Harness whose
-    context layer runs in gateway mode (``invoke.harness_turn_overrides``).
+    ``user_role`` / ``user_email`` are the signed-in member's, for an agent whose
+    context layer runs in gateway mode (a Harness: ``invoke.harness_turn_overrides``; a
+    Strands runtime: ``invoke._runtime_gateway_gate``).
     """
     session_id = session_id or new_session_id()
     member = {"user_role": user_role, "user_email": user_email}
@@ -155,6 +156,10 @@ def _chat_events(
                 invoke_kwargs["bearer_token"] = bearer_token
             if not console_user:
                 invoke_kwargs["console_user"] = False
+            if user_role:
+                # a gateway-mode Strands agent's consent gate mints for this member
+                invoke_kwargs["user_role"] = user_role
+                invoke_kwargs["user_email"] = user_email
             yield from invoke_agent_events(
                 agent,
                 prompt,
