@@ -258,7 +258,9 @@ def _wait_runtime_gone(control, runtime_id: str, timeout_s: int) -> None:
                 return
             raise
         if time.time() >= deadline:
-            print(f"  warning: runtime {runtime_id} still deleting; continuing")
+            # no identifier in the message: teardown targets share one list with
+            # credential-provider names, so CodeQL treats every identifier as sensitive
+            print("  warning: the coding runtime is still deleting; continuing")
             return
         # Deliberate polling interval; the deadline above bounds the loop.
         time.sleep(5)  # nosemgrep: arbitrary-sleep

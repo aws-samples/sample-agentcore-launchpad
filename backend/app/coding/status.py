@@ -30,6 +30,8 @@ logger = logging.getLogger("launchpad.coding")
 
 STATUS_TTL_S = 10.0
 LOG_TAIL_LINES = 30
+# admin-only `status_error` when GetAgentRuntime cannot be read (detail in the log)
+STATUS_UNAVAILABLE = "aws_status_unavailable"
 # AgentCore runtime status → console state
 _AWS_STATE = {
     "READY": "ready",
@@ -125,9 +127,11 @@ def runtime_status(
         try:
             aws = _aws_status(ctx, workspace_id, runtime_id or "")
         except Exception as exc:  # noqa: BLE001 — a read must not fail the page
+            # The detail stays in the backend log; the response carries only a stable
+            # code (exception text must not reach an HTTP client).
             logger.warning("coding runtime status read failed: %s", exc)
             aws = ""
-            status_error = str(exc)[:300]
+            status_error = STATUS_UNAVAILABLE
         if aws is None:
             installed = False  # deleted out of band: show it as not installed
             state = "not_installed"

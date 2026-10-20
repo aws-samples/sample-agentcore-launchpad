@@ -1,6 +1,7 @@
 """Coding runtime install job (app/coding/install.py) and the `/api/coding/runtime`
 routes: single-flight, recorded keys, failure + startup sweep, and member vs admin."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -299,7 +300,10 @@ def test_status_degrades_when_aws_cannot_be_read(admin, aws):
     set_default_resources(INSTALLED)
     aws.status_value = "BOOM"
     body = admin.get("/api/coding/runtime").json()
-    assert body["status"] == "ready" and "AccessDenied" in body["status_error"]
+    assert body["status"] == "ready"
+    # a stable code only — exception text never reaches the client
+    assert body["status_error"] == "aws_status_unavailable"
+    assert "AccessDenied" not in json.dumps(body)
 
 
 def test_status_shows_live_and_failed_jobs(admin, member, aws):
