@@ -44,6 +44,17 @@
   implying instantaneous cloud work. Use ASS/libass with a verified Chinese font
   for overlays/subtitles; the previous `drawtext` + TTC font attempt failed. Export
   an H.264/AAC MP4 with `+faststart` and a WebM fallback for browsers lacking H.264.
+- **Design cover and summary cards in the V2 console's light style.** Use the
+  `.v2` tokens in `frontend/src/v2/v2.css`:
+  - the `#f4f6fa` page and white cards with an 8px-scale radius and a soft shadow;
+  - ink `#1d2129` / `#4e5969` / `#86909c`;
+  - the `#1664ff` primary for accents and tags;
+  - the V2 top bar with the `V2Logo` mark.
+
+  Do not use a dark terminal-style frame. Keep a cover short: the title, one or two
+  lines on what the episode shows, and, when the feature builds on an external
+  project, its name and link as on-screen text only. Keep everything above the
+  subtitle band at the bottom of the frame.
 - **Start from a console that won't interrupt.** The V2 console has two kinds of
   interruptions that a scripted run must account for:
   - **The guided tour.** It starts by itself on a browser's first visit to `/v2`,
