@@ -11,6 +11,7 @@ import {
   DEFAULT_SESSION_MOUNT,
   filesystemIssues,
   hasByoMounts,
+  managedGatewayAttached,
   MAX_MOUNTS_PER_KIND,
   type MountRow,
   promptWithToolkit,
@@ -78,6 +79,30 @@ export function BasicCard(props: Omit<SectionProps, "cat">) {
   );
 }
 
+/** The workspace's managed COA gateway, attached by the context layer's 经 Gateway
+ *  mode rather than picked here: shown checked and locked, with a way back to the
+ *  card that owns the choice. */
+function ManagedGatewayRow() {
+  const { t } = useTranslation();
+  const toContextCard = () =>
+    document.querySelector('[data-testid="v2-agent-context-layer"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+  return (
+    <div className="v2-checks v2-agents-managed-gw" data-testid="v2-agent-gateway-managed">
+      <label className="v2-check disabled" title={t("v2.agents.wizard.managedGatewayHint")}>
+        <input type="checkbox" checked disabled readOnly />
+        {t("v2.agents.wizard.managedGateway")}
+        <Tag tone="blue">{t("v2.agents.wizard.managedGatewayTag")}</Tag>
+      </label>
+      <span className="v2-muted">
+        {t("v2.agents.wizard.managedGatewayHint")}{" "}
+        <LinkButton onClick={toContextCard} testId="v2-agent-gateway-managed-go">
+          {t("v2.agents.wizard.managedGatewayGo")}
+        </LinkButton>
+      </span>
+    </div>
+  );
+}
+
 /** The gateway-target picker shared by the harness and the HTTP Strands runtime. */
 function GatewayField({ form, set, cat, err }: SectionProps) {
   const { t } = useTranslation();
@@ -90,6 +115,7 @@ function GatewayField({ form, set, cat, err }: SectionProps) {
       error={err("gateway")}
       hint={cat.gatewayTargets.length > 0 ? t("create.configure.gatewayWholeNote") : undefined}
     >
+      {managedGatewayAttached(form) && <ManagedGatewayRow />}
       {cat.loading ? (
         <Spin />
       ) : (

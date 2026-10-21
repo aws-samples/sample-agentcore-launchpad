@@ -8,6 +8,7 @@ import {
   type ConnectionRef,
   contextLayerSpec,
   contextLayerVia,
+  managedGatewayAttached,
   emptyAgentForm,
   formFromStoredSpec,
   republishSpec,
@@ -205,5 +206,23 @@ describe("context layer access mode (via)", () => {
     expect(withContextVia({ ...choice, via: "gateway" }, "direct")).toEqual(choice);
     expect(withContextVia(null, "gateway")).toBeNull();
     expect(contextLayerVia(null)).toBe("direct");
+  });
+});
+
+describe("managed COA gateway shown in the Gateway picker", () => {
+  const NS = "dc09046b-28af-4c7b-a03a-4fa63cda243b";
+  const form = (method: "harness" | "zip_runtime", via?: "direct" | "gateway", namespaceId = NS) => ({
+    ...emptyAgentForm(method),
+    contextLayer: { namespaceId, namespaceName: "AnyCompany HR", ...(via ? { via } : {}) },
+  });
+
+  it("is attached only for gateway mode with a namespace on a method that carries a layer", () => {
+    expect(managedGatewayAttached(form("harness", "gateway"))).toBe(true);
+    expect(managedGatewayAttached(form("zip_runtime", "gateway"))).toBe(true);
+    expect(managedGatewayAttached(form("harness", "direct"))).toBe(false);
+    expect(managedGatewayAttached(form("harness"))).toBe(false);
+    expect(managedGatewayAttached(form("harness", "gateway", "  "))).toBe(false);
+    expect(managedGatewayAttached({ ...form("zip_runtime", "gateway"), protocol: "a2a" })).toBe(false);
+    expect(managedGatewayAttached({ ...emptyAgentForm("harness"), contextLayer: null })).toBe(false);
   });
 });

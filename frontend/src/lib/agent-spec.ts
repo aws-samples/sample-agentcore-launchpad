@@ -539,6 +539,16 @@ export const contextLayerValid = (form: AgentForm) =>
   !form.contextLayer.namespaceId.trim() ||
   NAMESPACE_ID_RE.test(form.contextLayer.namespaceId.trim());
 
+/** Whether the form reaches COA through the workspace's managed COA gateway — the
+ *  deploy then attaches that gateway itself, so the Gateway picker and the review list
+ *  show it as a locked entry rather than a Registry choice. */
+export const managedGatewayAttached = (
+  form: Pick<AgentForm, "method" | "protocol" | "contextLayer">,
+): boolean =>
+  contextLayerSupported(form) &&
+  !!form.contextLayer?.namespaceId.trim() &&
+  contextLayerVia(form.contextLayer) === "gateway";
+
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
 export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   method,
