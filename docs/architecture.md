@@ -2249,8 +2249,9 @@ evaluated, what it was measured on, and how two runs line up case by case.
     早于版本记录 and compares it as older than every numbered version, so an accepted
     recommendation from before the snapshots reads as a version change, not a re-run.
 - **Benchmarks.** A local dataset (revision = the fingerprint), a cloud dataset (revision =
-  the pinned version or the draft's fingerprint) or the agent's live traffic, which groups
-  every window, chosen-session and log-stream run. Trends only connect runs of one
+  the pinned version or the draft's fingerprint) or the agent's past sessions (console label
+  历史会话 / Past sessions — one-off runs over existing traffic, not online evaluation), which
+  groups every window, chosen-session and log-stream run. Trends only connect runs of one
   benchmark; the composite and regression math stays in the console, which owns evaluator
   polarity.
 - **Compare.** Two replays of one benchmark pair sessions by scenario id. A legacy run
