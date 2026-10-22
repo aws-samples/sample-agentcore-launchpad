@@ -68,8 +68,61 @@ export function configName(row: OnlineEvalConfigRow): string {
   return row.name ?? row.config_id;
 }
 
+/** The owning agent: the ledger row's, else the external match (≈), else the agent of
+ *  the experiment / canary that owns the config. */
 export function agentLabel(row: OnlineEvalConfigRow): string {
-  return row.agent_name ?? (row.matched_agent ? `≈ ${row.matched_agent.name}` : "—");
+  return row.agent_name ?? (row.matched_agent ? `≈ ${row.matched_agent.name}` : (row.parent?.agent_name ?? "—"));
+}
+
+/** The owner tag: an experiment-owned config names its kind (A/B 实验 / 金丝雀) — the
+ *  generic "A/B 实验 / 金丝雀" only when the backend sent no `parent`. */
+export function ownerLabel(t: TFunction, row: OnlineEvalConfigRow): string {
+  if (row.owner === "experiment" && row.parent) return t(`v2.online.ownerKind.${row.parent.kind}`);
+  return t(`v2.online.owner.${row.owner}`);
+}
+
+/** Where an experiment-owned config's owner lives: the experiment / canary detail, or
+ *  its list tab when the record is gone (null for the other owners). */
+export function parentLink(row: OnlineEvalConfigRow): string | null {
+  if (row.owner !== "experiment") return null;
+  const parent = row.parent;
+  if (parent?.kind === "canary") {
+    return parent.id ? `/v2/eval/experiments?${new URLSearchParams({ mode: "canary", canary: parent.id })}` : "/v2/eval/experiments?mode=canary";
+  }
+  return parent?.id ? `/v2/eval/experiments?${new URLSearchParams({ view: "detail", id: parent.id })}` : "/v2/eval/experiments?mode=configuration";
+}
+
+/** An experiment-owned config whose owner was cleaned up or is gone: the cleanup that
+ *  should have deleted it left it behind. */
+export function isLeftover(row: OnlineEvalConfigRow): boolean {
+  if (row.owner !== "experiment") return false;
+  const parent = row.parent;
+  return !parent || !parent.id || parent.status === "cleaned";
+}
+
+/** The read-only alert of an experiment-owned config, as i18n keys: who created it and
+ *  which traffic it scores (`text`, with `name` when the record still exists), the link
+ *  label (`open`, to the record or to its list tab) and the leftover line, if any. */
+export interface ParentNote {
+  text: string;
+  name: string | null;
+  open: string;
+  leftover: string | null;
+}
+
+export function parentNote(row: OnlineEvalConfigRow): ParentNote | null {
+  if (row.owner !== "experiment") return null;
+  const parent = row.parent;
+  const kind = parent?.kind ?? "experiment";
+  const known = Boolean(parent?.id);
+  // a canary config scores one arm; an experiment's `_oe1` both (a pre-split `_oe2` the challenger)
+  const scope = `.${parent?.arm ?? "both"}`;
+  return {
+    text: `v2.online.parent.${kind}${known ? "" : "Gone"}${scope}`,
+    name: known ? parent?.name || parent?.id || null : null,
+    open: `v2.online.parent.${known ? "open" : "openList"}.${kind}`,
+    leftover: isLeftover(row) ? `v2.online.parent.leftover.${kind}` : null,
+  };
 }
 
 export function insightLabel(t: TFunction, id: string): string {

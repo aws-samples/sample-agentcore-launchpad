@@ -1330,13 +1330,14 @@ their display names.
 sampled scoring of live sessions. AWS is the source of truth; the ledger keeps
 identifiers only. Every config in the workspace account is listed and classified
 by `owner`: `agent` (created here for an agent), `experiment` (`exp_*`/`can_*`
-arms owned by experiments — read-only), `external` (anything else).
+configs owned by A/B experiments and canaries — read-only, see `parent`), `external`
+(anything else).
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/api/eval/online` | `{configs, total}` — all configs, newest first, with `owner`, both statuses, `failure_reason`, evaluators, sampling, timeout, `matched_agent` (external rows whose log group matches a workspace agent), `duplicate_enabled` (two ENABLED agent configs on one agent), `results_log_group` |
+| `GET` | `/api/eval/online` | `{configs, total}` — all configs, newest first, with `owner`, both statuses, `failure_reason`, evaluators, sampling, timeout, `matched_agent` (external rows whose log group matches a workspace agent), `parent` (below), `duplicate_enabled` (two ENABLED agent configs on one agent), `results_log_group` |
 | `POST` | `/api/eval/online` | Create for an active agent: `{agent_id, mode: scores\|insights (scores), evaluators[1..10] (scores mode), insights[1..3] ⊆ Builtin.Insight.FailureAnalysis\|UserIntent\|ExecutionSummary + clustering_frequencies[0..3] ⊆ DAILY\|WEEKLY\|MONTHLY (insights mode), sampling_percentage 0.01–100 (omit → 10 scores / 100 insights), session_timeout_minutes 1–1440 (15), filters[0..5], description?, enable_on_create (true)}` → 201 row (`status` starts `CREATING`). Mixing kinds → 422 `online_eval.mode_conflict`; rows carry `mode` (derived: `insights` non-empty) |
-| `GET` | `/api/eval/online/{config_id}` | Full detail incl. `filters`, `data_source`, `execution_role_arn` |
+| `GET` | `/api/eval/online/{config_id}` | Full detail incl. `filters`, `data_source`, `execution_role_arn`, `parent` |
 | `PATCH` | `/api/eval/online/{config_id}` | `owner=agent` only: any of `description, sampling_percentage, session_timeout_minutes, filters` plus the mode's own analysis field — `evaluators` (scores) or `insights` / `clustering_frequencies` (insights; complete lists, `[]` frequencies clears clustering); the other kind → 422 `online_eval.mode_conflict`, mode is immutable. The backend re-sends the complete `rule` (AWS replaces it as a unit) |
 | `POST` | `/api/eval/online/{config_id}/pause` · `/resume` | Flip `executionStatus` (`agent` + `external`) |
 | `DELETE` | `/api/eval/online/{config_id}` | Delete on AWS + drop the ledger row (`agent` + `external`); the results log group is left in place and named in the response |
@@ -1348,6 +1349,17 @@ arms owned by experiments — read-only), `external` (anything else).
 Filter shape: `{key: "[a-zA-Z0-9._-]+", operator: Equals|NotEquals|GreaterThan|LessThan|
 GreaterThanOrEqual|LessThanOrEqual|Contains|NotContains, value: {stringValue|doubleValue|booleanValue}}`
 (exactly one typed value).
+
+`parent` names the record behind an `owner=experiment` config (`null` on every other
+owner): `{kind: experiment|canary, id, name, status, agent_name, arm: control|treatment|null}`.
+It is resolved from the ledger by the 8-char id prefix in the name: `exp_<id8>_…` is a
+configuration A/B experiment (`_oe1` scores both arms, so `arm` is `null`; a legacy
+pre-split `_oe2` scored the experiment's built-in canary challenger, so `arm` is
+`treatment`), and `can_<id8>_oec` / `_oet` is a runtime canary's control / treatment
+arm. `agent_name` is the experiment's agent or the canary's champion. When the record is
+gone, `id` / `name` / `status` / `agent_name` are `null` (`kind` and `arm` come from the
+name). The list loads the owning records in one query per model; when several share the
+prefix, the newest one the viewer can see wins.
 
 Error codes: `online_eval.no_telemetry` (400, the agent has no telemetry log group
 yet — run one session first), `online_eval.evaluator_unsupported` (400, trajectory

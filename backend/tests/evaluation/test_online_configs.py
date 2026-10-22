@@ -16,6 +16,7 @@ from app.core.errors import AppError
 from app.evaluation import online
 from app.evaluation.models import OnlineEvalConfig
 from app.models.ledger import Agent
+from app.optimization.models import Experiment, RuntimeCanary
 from tests.conftest import set_default_resources
 
 ROLE = "arn:aws:iam::111122223333:role/launchpad-agent-execution-role"
@@ -367,6 +368,143 @@ def test_list_classifies_enriches_and_flags(client, monkeypatch):
     )
 
 
+def test_parent_ref_naming_rule():
+    assert online.parent_ref("exp_1234abcd_oe1") == ("experiment", "1234abcd", None)
+    assert online.parent_ref("exp_1234abcd_oe2") == ("experiment", "1234abcd", "treatment")
+    assert online.parent_ref("can_1234abcd_oec") == ("canary", "1234abcd", "control")
+    assert online.parent_ref("can_1234abcd_oet") == ("canary", "1234abcd", "treatment")
+    assert online.parent_ref("can_1234abcd_target") == ("canary", "1234abcd", None)
+    assert online.parent_ref("exp_") == ("experiment", "", None)
+    assert online.parent_ref("quick_start") is None
+    assert online.parent_ref("") is None
+
+
+def _experiment(db, id_, *, name="exp", status="running", agent_name="hr-agent",
+                created_at=T0, artifacts=None):
+    db.add(Experiment(id=id_, workspace_id=DEFAULT_WORKSPACE_ID, name=name, agent_id="a1",
+                      agent_name=agent_name, status=status, created_at=created_at,
+                      artifacts=artifacts or {}))
+    db.commit()
+
+
+def _canary(db, id_, *, name="can", status="running", champion="store-agent"):
+    db.add(RuntimeCanary(
+        id=id_, workspace_id=DEFAULT_WORKSPACE_ID, name=name, status=status,
+        champion_agent_id="a1", champion_agent_name=champion,
+        challenger_agent_id="a2", challenger_agent_name=f"{champion}-v2",
+    ))
+    db.commit()
+
+
+def test_list_names_each_experiment_owned_configs_parent(client, monkeypatch):
+    """`parent` = the owning experiment / canary + the arm, resolved from the ledger
+    by the name's 8-char id prefix with one query per model for the whole list."""
+    from sqlalchemy import event as sa_event
+
+    from app.core.db import engine
+
+    db = SessionLocal()
+    agent = make_agent(db)
+    # two experiments share a prefix: the newest one names the config
+    _experiment(db, "abcdef12aaaa", name="old", created_at=datetime(2026, 9, 1, tzinfo=UTC))
+    _experiment(db, "abcdef12bbbb", name="prompt v2", status="cleaned")
+    _canary(db, "cafe0001cccc", name="store canary")
+    details = {
+        "oe_a-1": aws_detail("oe_a-1", "oe_eval_agent_aaaaaa"),
+        "exp_1-1": aws_detail("exp_1-1", "exp_abcdef12_oe1"),
+        "can_1-1": aws_detail("can_1-1", "can_cafe0001_oec"),
+        "can_1-2": aws_detail("can_1-2", "can_cafe0001_oet"),
+        "gone-1": aws_detail("gone-1", "can_deadbeef_oet"),
+        "ext-1": aws_detail("ext-1", "quick_start"),
+    }
+    stub_environment(monkeypatch, details)
+    ledger_row(db, agent, "oe_a-1", "oe_eval_agent_aaaaaa")
+
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    sa_event.listen(engine, "before_cursor_execute", record)
+    try:
+        res = client.get("/api/eval/online")
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", record)
+    assert res.status_code == 200, res.text
+    rows = {c["config_id"]: c for c in res.json()["configs"]}
+    assert sum("FROM experiments" in s for s in statements) == 1
+    assert sum("FROM runtime_canaries" in s for s in statements) == 1
+
+    assert rows["exp_1-1"]["parent"] == {
+        "kind": "experiment", "id": "abcdef12bbbb", "name": "prompt v2",
+        "status": "cleaned", "agent_name": "hr-agent", "arm": None,
+    }
+    assert rows["can_1-1"]["parent"] == {
+        "kind": "canary", "id": "cafe0001cccc", "name": "store canary",
+        "status": "running", "agent_name": "store-agent", "arm": "control",
+    }
+    assert rows["can_1-2"]["parent"]["arm"] == "treatment"
+    # the owning record is gone: kind + arm stay (read off the name), the rest is None
+    assert rows["gone-1"]["parent"] == {
+        "kind": "canary", "id": None, "name": None, "status": None,
+        "agent_name": None, "arm": "treatment",
+    }
+    assert rows["oe_a-1"]["parent"] is None and rows["ext-1"]["parent"] is None
+
+
+def test_list_without_experiment_configs_never_reads_parents(client, monkeypatch):
+    from sqlalchemy import event as sa_event
+
+    from app.core.db import engine
+
+    stub_environment(monkeypatch, {"ext-1": aws_detail("ext-1", "quick_start")})
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    sa_event.listen(engine, "before_cursor_execute", record)
+    try:
+        assert client.get("/api/eval/online").status_code == 200
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", record)
+    assert not any("FROM experiments" in s or "FROM runtime_canaries" in s for s in statements)
+
+
+def test_get_detail_carries_parent(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db)
+    _experiment(db, "abcdef12bbbb", name="prompt v2")
+    _canary(db, "cafe0001cccc", name="store canary", status="cleaned")
+    details = {
+        "oe_a-1": aws_detail("oe_a-1", "exp_abcdef12_oe1"),  # a ledger row wins → agent
+        "exp_1-1": aws_detail("exp_1-1", "exp_abcdef12_oe2"),
+        "can_1-2": aws_detail("can_1-2", "can_cafe0001_oet"),
+        "gone-1": aws_detail("gone-1", "exp_deadbeef_oe1"),
+        "ext-1": aws_detail("ext-1", "quick_start"),
+    }
+    stub_environment(monkeypatch, details)
+    ledger_row(db, agent, "oe_a-1", "exp_abcdef12_oe1")
+
+    body = client.get("/api/eval/online/exp_1-1").json()
+    assert body["owner"] == "experiment"
+    assert body["parent"] == {
+        "kind": "experiment", "id": "abcdef12bbbb", "name": "prompt v2",
+        # the challenger's agent is unknown without the legacy canary artifact
+        "status": "running", "agent_name": None, "arm": "treatment",
+    }
+    body = client.get("/api/eval/online/can_1-2").json()
+    assert body["parent"]["id"] == "cafe0001cccc" and body["parent"]["status"] == "cleaned"
+    assert body["parent"]["arm"] == "treatment"
+    assert body["parent"]["agent_name"] == "store-agent"
+    gone = client.get("/api/eval/online/gone-1").json()["parent"]
+    assert gone == {"kind": "experiment", "id": None, "name": None, "status": None,
+                    "agent_name": None, "arm": None}
+    agent_row = client.get("/api/eval/online/oe_a-1").json()
+    assert agent_row["owner"] == "agent" and agent_row["parent"] is None
+    assert client.get("/api/eval/online/ext-1").json()["parent"] is None
+
+
 def test_list_degrades_a_failing_get_to_its_summary(client, monkeypatch):
     details = {"ext-1": aws_detail("ext-1", "quick_start")}
     control, _ = stub_environment(monkeypatch, details)
@@ -576,3 +714,23 @@ def test_results_empty_when_log_group_missing(client, monkeypatch):
     assert body["evaluators"] == [] and body["series"] == {} and body["recent"] == []
     assert body["errors"] == {"count": 0, "first_message": None}
     assert client.get("/api/eval/online/oe_a-1/results?range=1y").status_code == 422
+
+
+def test_parent_status_is_the_one_the_ab_test_page_shows(client, monkeypatch):
+    """A cleaned row with an unfinished legacy promotion reads `ready` on the A/B test
+    page (it can still be completed), so its configs are not called leftovers."""
+    db = SessionLocal()
+    _experiment(db, "abcdef12bbbb", status="cleaned",
+                artifacts={"promote": {"after_weights": {"v1": 90, "v2": 10}},
+                           "canary": {"challenger_agent": "front-desk"}})
+    _experiment(db, "feed0001aaaa", status="cleaned")
+    stub_environment(monkeypatch, {
+        "exp_1-1": aws_detail("exp_1-1", "exp_abcdef12_oe2"),
+        "exp_2-1": aws_detail("exp_2-1", "exp_feed0001_oe1"),
+    })
+    legacy = client.get("/api/eval/online/exp_1-1").json()["parent"]
+    assert legacy["status"] == "ready"
+    # the legacy `_oe2` scored the built-in canary's challenger: that agent, not the champion
+    assert legacy["agent_name"] == "front-desk" and legacy["arm"] == "treatment"
+    both = client.get("/api/eval/online/exp_2-1").json()["parent"]
+    assert both["status"] == "cleaned" and both["agent_name"] == "hr-agent"

@@ -6953,7 +6953,7 @@
       "colExec": "Execution",
       "owner": {
         "agent": "Agent",
-        "experiment": "Experiment",
+        "experiment": "A/B test / canary",
         "external": "External"
       },
       "mode": {
@@ -6985,8 +6985,42 @@
         "deleteBody": "Delete {{name}}? The results log group {{logGroup}} is kept.",
         "deleteOk": "Delete"
       },
-      "experimentReadonly": "This config belongs to an experiment arm and is managed by the experiment.",
-      "openExperiments": "Open experiments",
+      "ownerKind": {
+        "experiment": "A/B test",
+        "canary": "Canary"
+      },
+      "parent": {
+        "experiment": {
+          "both": "Created by the A/B test “{{name}}” to score the traffic of both its arms. The test's cleanup deletes it; it is read-only here.",
+          "treatment": "Created by the A/B test “{{name}}” to score the traffic of its candidate version. The test's cleanup deletes it; it is read-only here."
+        },
+        "experimentGone": {
+          "both": "Created by an A/B test that no longer exists, to score the traffic of both its arms. The test's cleanup deletes it; it is read-only here.",
+          "treatment": "Created by an A/B test that no longer exists, to score the traffic of its candidate version. The test's cleanup deletes it; it is read-only here."
+        },
+        "canary": {
+          "control": "Created by the canary “{{name}}” to score the traffic of the control version. The canary's cleanup deletes it; it is read-only here.",
+          "treatment": "Created by the canary “{{name}}” to score the traffic of the candidate version. The canary's cleanup deletes it; it is read-only here.",
+          "both": "Created by the canary “{{name}}” to score the traffic of the control and candidate versions. The canary's cleanup deletes it; it is read-only here."
+        },
+        "canaryGone": {
+          "control": "Created by a canary that no longer exists, to score the traffic of the control version. The canary's cleanup deletes it; it is read-only here.",
+          "treatment": "Created by a canary that no longer exists, to score the traffic of the candidate version. The canary's cleanup deletes it; it is read-only here.",
+          "both": "Created by a canary that no longer exists, to score the traffic of the control and candidate versions. The canary's cleanup deletes it; it is read-only here."
+        },
+        "open": {
+          "experiment": "Open this A/B test",
+          "canary": "Open this canary"
+        },
+        "openList": {
+          "experiment": "Open A/B tests",
+          "canary": "Open canaries"
+        },
+        "leftover": {
+          "experiment": "The A/B test it belongs to has been cleaned up or no longer exists, but this config was not deleted with it: it is a leftover.",
+          "canary": "The canary it belongs to has been cleaned up or no longer exists, but this config was not deleted with it: it is a leftover."
+        }
+      },
       "externalMatched": "Created outside the platform; its traces match the agent {{name}}.",
       "externalReadonly": "Created outside the platform — it can be paused, resumed or deleted here, not edited.",
       "insightTypes": "Insight types",

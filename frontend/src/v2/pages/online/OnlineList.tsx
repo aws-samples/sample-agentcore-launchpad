@@ -15,6 +15,7 @@ import {
   isEditable,
   isTransient,
   modeOf,
+  ownerLabel,
   OWNER_TONE,
   POLL_MS,
   statusTone,
@@ -42,7 +43,7 @@ import { onlineAttention } from "./attention";
 type Pending = { row: OnlineEvalConfigRow; action: "pause" | "resume" | "delete" };
 
 /** 持续评估 (`/v2/eval/tasks?tab=online`): every online evaluation config of the workspace
- *  (agent-owned, experiment arms, external), scores and insights modes. Opens on the
+ *  (agent-owned, experiment / canary-owned, external), scores and insights modes. Opens on the
  *  agent-owned ones; the owner filter shows the rest. The page header and the tabs belong
  *  to `V2Tasks`; this renders the attention panel and the table under them. */
 export function OnlineList() {
@@ -101,7 +102,7 @@ export function OnlineList() {
       live: entry.kind === "settling",
       title: configName(row),
       hint,
-      meta: [row.agent_name || row.matched_agent ? agentLabel(row) : null, t(`v2.online.attention.why.${entry.kind}`)]
+      meta: [row.agent_name || row.matched_agent || row.parent?.agent_name ? agentLabel(row) : null, t(`v2.online.attention.why.${entry.kind}`)]
         .filter(Boolean)
         .join(" · "),
       onOpen: () => open(row),
@@ -139,7 +140,7 @@ export function OnlineList() {
                 {configName(row)}
               </span>
             </LinkButton>
-            <Tag tone={OWNER_TONE[row.owner]}>{t(`v2.online.owner.${row.owner}`)}</Tag>
+            <Tag tone={OWNER_TONE[row.owner]}>{ownerLabel(t, row)}</Tag>
             {row.duplicate_enabled && (
               <Tag tone="orange" title={t("v2.online.duplicateWarn")}>
                 {t("v2.online.duplicate")}

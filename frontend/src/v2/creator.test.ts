@@ -39,6 +39,7 @@ function online(over: Partial<OnlineEvalConfigRow> = {}): OnlineEvalConfigRow {
     agent_id: "a1",
     agent_name: "hr-bot",
     matched_agent: null,
+    parent: null,
     detailed: true,
     mode: "scores",
     evaluators: [],

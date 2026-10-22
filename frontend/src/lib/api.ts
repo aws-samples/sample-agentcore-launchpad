@@ -3614,6 +3614,21 @@ export interface JudgeModelFallback {
 
 export type OnlineEvalOwner = "agent" | "experiment" | "external";
 
+/** The record behind an `owner: "experiment"` config, resolved from the ledger by the
+ *  8-char id prefix in its name: `exp_<id8>_…` = a configuration A/B experiment (its
+ *  `_oe1` scores both arms → `arm: null`), `can_<id8>_oec` / `_oet` = a runtime canary's
+ *  control / treatment arm. `agent_name` = the experiment's agent / the canary's
+ *  champion. A record gone from the ledger keeps `kind` + `arm` (read off the name)
+ *  with `id` / `name` / `status` / `agent_name` null. */
+export interface OnlineEvalParent {
+  kind: "experiment" | "canary";
+  id: string | null;
+  name: string | null;
+  status: string | null;
+  agent_name: string | null;
+  arm: "control" | "treatment" | null;
+}
+
 /** `scores` = evaluators judge each sampled session; `insights` = sampled
  *  sessions are clustered into recurring failure / intent / summary reports.
  *  Derived server-side (`insights` non-empty → insights); immutable after create. */
@@ -3655,6 +3670,8 @@ export interface OnlineEvalConfigRow {
   agent_id: string | null;
   agent_name: string | null;
   matched_agent: { id: string; name: string } | null;
+  /** Set on `owner: "experiment"` rows only, null on every other owner. */
+  parent: OnlineEvalParent | null;
   detailed: boolean;
   mode: OnlineEvalMode;
   evaluators: string[];

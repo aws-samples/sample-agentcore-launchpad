@@ -2786,7 +2786,12 @@ through the same backend routes and permission checks as the classic pages.
 - **Online evaluation and experiments (native).** Online evaluation configs are 评估任务's
   持续评估 tab (`/v2/eval/tasks?tab=online`, `v2/pages/online/`, shared rules in
   `v2/online.ts`; there is no separate 在线评估 menu). The tab manages every config —
-  agent-owned, experiment arms (read-only) and external ones, scores and insights modes:
+  agent-owned, experiment-owned (read-only) and external ones, scores and insights modes.
+  An experiment-owned row says whose it is from the API's `parent`: the tag reads A/B 实验
+  or 金丝雀, the Agent column falls back to that record's agent, and the detail names the
+  record and the traffic it scores (both arms of an A/B test, a canary's control or
+  candidate), links straight to it (`parentLink`; its list tab once it is gone) and adds
+  a leftover note when that record was cleaned or no longer exists. The tab has
   a list with mode/owner/execution filters that opens on the agent-owned configs (polled
   while CREATING/UPDATING/DELETING); a detail (`?view=detail&kind=online&id=`) with the
   server's per-evaluator aggregates and trend plus the judged records (scores), or the
@@ -2921,7 +2926,8 @@ through the same backend routes and permission checks as the classic pages.
 - **Evaluation tasks cover two resources, by how they run.** A batch evaluation run is
   a one-off task (time window, hand-picked sessions or a dataset replay, evaluated
   once; `name`/`description` stored on the run row) and is listed on the 一次性评估 tab
-  (`TaskList`, runs only); an online evaluation config is a continuous task (sampling
+  (`TaskList`, runs only — an online config's on-demand insights report, a run with
+  `dataset_name` `online:<configId>`, is left to that config's 报告 panel); an online evaluation config is a continuous task (sampling
   rate, session timeout) and is listed on the 持续评估 tab (above). There is one 新建
   entry: a strategy switch (`pages/tasks/StrategySwitch.tsx`) over the run wizard
   (`TaskWizard`) and the online config form (`OnlineEditor`), carrying the chosen agent

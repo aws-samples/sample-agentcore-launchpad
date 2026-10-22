@@ -16,6 +16,7 @@ function cfg(id: string, over: Partial<OnlineEvalConfigRow> = {}): OnlineEvalCon
     agent_id: "a1",
     agent_name: "agent-1",
     matched_agent: null,
+    parent: null,
     detailed: true,
     mode: "scores",
     evaluators: ["Builtin.Helpfulness"],

@@ -6953,7 +6953,7 @@
       "colExec": "执行状态",
       "owner": {
         "agent": "Agent",
-        "experiment": "实验",
+        "experiment": "A/B 实验 / 金丝雀",
         "external": "外部"
       },
       "mode": {
@@ -6985,8 +6985,42 @@
         "deleteBody": "删除 {{name}}？结果日志组 {{logGroup}} 会保留。",
         "deleteOk": "删除"
       },
-      "experimentReadonly": "该配置属于某个实验的对照组，由实验统一管理。",
-      "openExperiments": "打开实验",
+      "ownerKind": {
+        "experiment": "A/B 实验",
+        "canary": "金丝雀"
+      },
+      "parent": {
+        "experiment": {
+          "both": "由 A/B 实验「{{name}}」自动创建，给实验两组流量打分；实验清理时会一并删除，这里只读。",
+          "treatment": "由 A/B 实验「{{name}}」自动创建，给实验候选版本的流量打分；实验清理时会一并删除，这里只读。"
+        },
+        "experimentGone": {
+          "both": "由一个已删除的 A/B 实验自动创建，给实验两组流量打分；实验清理时会一并删除，这里只读。",
+          "treatment": "由一个已删除的 A/B 实验自动创建，给实验候选版本的流量打分；实验清理时会一并删除，这里只读。"
+        },
+        "canary": {
+          "control": "由金丝雀「{{name}}」自动创建，给对照版本的流量打分；金丝雀清理时会一并删除，这里只读。",
+          "treatment": "由金丝雀「{{name}}」自动创建，给候选版本的流量打分；金丝雀清理时会一并删除，这里只读。",
+          "both": "由金丝雀「{{name}}」自动创建，给对照和候选版本的流量打分；金丝雀清理时会一并删除，这里只读。"
+        },
+        "canaryGone": {
+          "control": "由一个已删除的金丝雀自动创建，给对照版本的流量打分；金丝雀清理时会一并删除，这里只读。",
+          "treatment": "由一个已删除的金丝雀自动创建，给候选版本的流量打分；金丝雀清理时会一并删除，这里只读。",
+          "both": "由一个已删除的金丝雀自动创建，给对照和候选版本的流量打分；金丝雀清理时会一并删除，这里只读。"
+        },
+        "open": {
+          "experiment": "打开该 A/B 实验",
+          "canary": "打开该金丝雀"
+        },
+        "openList": {
+          "experiment": "打开 A/B 实验列表",
+          "canary": "打开金丝雀列表"
+        },
+        "leftover": {
+          "experiment": "所属的 A/B 实验已清理或已不存在，但这条配置当时没有被删掉，是遗留下来的。",
+          "canary": "所属的金丝雀已清理或已不存在，但这条配置当时没有被删掉，是遗留下来的。"
+        }
+      },
       "externalMatched": "在平台外创建；其链路匹配到 Agent {{name}}。",
       "externalReadonly": "在平台外创建：这里可以暂停、恢复或删除，但不能编辑。",
       "insightTypes": "洞察类型",

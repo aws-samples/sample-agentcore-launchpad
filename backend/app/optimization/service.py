@@ -143,6 +143,12 @@ def legacy_promotion(artifacts: dict[str, Any]) -> bool:
     return bool(promote.get("after_weights") and not promotion_complete(artifacts))
 
 
+def experiment_status(exp: Experiment) -> str:
+    """The status the console shows: an unfinished legacy promotion reads ``ready``
+    (it can still be completed) even after the row was marked cleaned."""
+    return "ready" if legacy_promotion(exp.artifacts) else exp.status
+
+
 def run_action(
     exp_id: str, action: str, fn: Callable[[Progress], Any],
     caller: creators.Creator | None = None,

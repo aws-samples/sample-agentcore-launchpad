@@ -674,6 +674,37 @@ def test_isolated_online_configs(online_world, admin, ada, bob):
     assert ada_client.get(f"/api/eval/online/{online_world['exp']}").status_code == 200
 
 
+def test_isolated_online_parent_names_only_a_visible_record(monkeypatch, admin, ada, bob):
+    """Two canaries share the 8-char prefix of one `can_` config: each viewer's
+    `parent` is the newest record *they* see, so a hidden record's name never leaks."""
+    from app.optimization.models import RuntimeCanary
+    from tests.evaluation.test_online_configs import aws_detail, stub_environment
+
+    ada_id, ada_client = ada
+    bob_id, bob_client = bob
+    now = datetime.now(UTC)
+    for id_, name, by, at in (
+        ("feed0001bbbb", "bob canary", bob_id, now - timedelta(days=1)),
+        ("feed0001aaaa", "ada canary", ada_id, now),
+    ):
+        _add(RuntimeCanary(
+            id=id_, name=name, champion_agent_id="a1", champion_agent_name="agent",
+            challenger_agent_id="a1", challenger_agent_name="agent", created_by=by,
+            created_at=at,
+        ))
+    cid = "can_feed0001_oet-5555555555"
+    stub_environment(monkeypatch, {cid: aws_detail(cid, "can_feed0001_oet")})
+    _isolate()
+    for client, name in (
+        (admin, "ada canary"), (ada_client, "ada canary"), (bob_client, "bob canary"),
+    ):
+        listed = client.get("/api/eval/online").json()["configs"]
+        assert [(c["parent"]["name"], c["parent"]["arm"]) for c in listed] == [
+            (name, "treatment")
+        ]
+        assert client.get(f"/api/eval/online/{cid}").json()["parent"]["name"] == name
+
+
 def test_online_reports_drop_hidden_console_runs(online_world, ada, bob, monkeypatch):
     from app.evaluation import online
 

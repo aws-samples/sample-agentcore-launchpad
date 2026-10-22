@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/experiments", tags=["experiments"])
 
 
 def _out(exp: Experiment) -> dict[str, Any]:
-    status = "ready" if service.legacy_promotion(exp.artifacts) else exp.status
+    status = service.experiment_status(exp)
     return {
         "id": exp.id,
         "name": exp.name,

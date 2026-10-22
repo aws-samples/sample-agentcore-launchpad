@@ -6,8 +6,9 @@ is read back from the control plane. The list surface shows **every** config in
 the workspace account, classified by owner:
 
 - ``agent`` — created here for an agent (ledger row): full control.
-- ``experiment`` — ``exp_*`` / ``can_*`` arms owned by the experiment and canary
-  flows (their cleanup deletes them): read-only.
+- ``experiment`` — ``exp_*`` / ``can_*`` configs owned by the experiment and canary
+  flows (their cleanup deletes them): read-only; ``parent`` names the owning record
+  (resolved from the ledger by the name's id prefix) and the arm it scores.
 - ``external`` — anything else (AWS console, CLI, quick start): status and results
   visible, pause/resume/delete allowed, no edit (the owning agent is unknown).
 
@@ -31,7 +32,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
@@ -45,6 +46,7 @@ from app.evaluation.online_evaluators import (
 from app.evaluation.service import EVAL_SUPPORTED_METHODS, resolve_telemetry
 from app.models.ledger import Agent
 from app.optimization.models import Experiment, RuntimeCanary
+from app.optimization.service import experiment_status
 from app.routers.workspaces import WorkspaceScope
 from app.services import creators, visibility
 from app.services.agentcore.client import control_client, data_client
@@ -53,7 +55,19 @@ from app.services.observability import BIN_BY_RANGE, RANGE_HOURS, run_insights_q
 from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
 
-EXPERIMENT_PREFIXES = ("exp_", "can_")
+# The naming rule of experiment-owned configs — the only place it is parsed here.
+# `exp_<id8>_…` belongs to a configuration A/B experiment, `can_<id8>_…` to a runtime
+# canary, id8 = the first 8 chars of the owning record's 12-char id. A canary scores
+# each arm with its own config (`_oec` control, `_oet` treatment); an experiment's
+# `_oe1` scores both arms through the shared gateway (legacy rows also have `_oe2`).
+PARENT_KINDS = {"exp_": ("experiment", Experiment), "can_": ("canary", RuntimeCanary)}
+# the arm a config scores, by its name suffix; unlisted (an experiment's `_oe1`) = both.
+# `exp_<id8>_oe2` is pre-split (ff7756c9): it judged the experiment's built-in canary challenger
+PARENT_ARMS = {
+    "canary": {"oec": "control", "oet": "treatment"},
+    "experiment": {"oe2": "treatment"},
+}
+EXPERIMENT_PREFIXES = tuple(PARENT_KINDS)
 NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
 FILTER_KEY_RE = re.compile(r"^[a-zA-Z0-9._-]{1,256}$")
 FILTER_OPERATORS = (
@@ -100,37 +114,101 @@ def owner_of(name: str, config_id: str, ledger_ids: set[str]) -> Owner:
     return "external"
 
 
-def _parent_creators(db: Session, ws: WorkspaceScope, name: str) -> list[str | None]:
-    """Creators of the experiment / canary an `exp_<id8>_…` / `can_<id8>_…` config
-    belongs to (its name embeds the first 8 chars of the owner's 12-char id)."""
-    model = (
-        Experiment if name.startswith("exp_")
-        else RuntimeCanary if name.startswith("can_")
-        else None
-    )
-    id8 = name[4:].split("_", 1)[0] if model is not None else ""
-    if model is None or not id8:
-        return []
-    return list(db.scalars(
-        select(model.created_by).where(
-            model.workspace_id == ws.id, model.id.startswith(id8, autoescape=True)
+ParentRecord = Experiment | RuntimeCanary
+ParentIndex = dict[tuple[str, str], list[ParentRecord]]  # (kind, id8) → newest first
+
+
+def parent_ref(name: str) -> tuple[str, str, str | None] | None:
+    """``(kind, id8, arm)`` of an experiment/canary-owned config name, else None."""
+    name = str(name or "")
+    for prefix, (kind, _model) in PARENT_KINDS.items():
+        if name.startswith(prefix):
+            id8, _, suffix = name[len(prefix):].partition("_")
+            return kind, id8, PARENT_ARMS[kind].get(suffix)
+    return None
+
+
+def parent_index(db: Session, ws: WorkspaceScope, names: Sequence[str]) -> ParentIndex:
+    """The experiment / canary records behind ``names`` — one query per model at
+    most, none when no name has a parent, so a list never queries per row."""
+    wanted: dict[str, set[str]] = {}
+    for name in names:
+        ref = parent_ref(name)
+        if ref is not None and ref[1]:
+            wanted.setdefault(ref[0], set()).add(ref[1])
+    models = dict(PARENT_KINDS.values())
+    index: ParentIndex = {}
+    for kind, id8s in wanted.items():
+        model = models[kind]
+        records = db.scalars(
+            select(model)
+            .where(model.workspace_id == ws.id, func.substr(model.id, 1, 8).in_(sorted(id8s)))
+            .order_by(model.created_at.desc())
         )
-    ))
+        for record in records:
+            index.setdefault((kind, record.id[:8]), []).append(record)
+    return index
+
+
+def _parent_records(index: ParentIndex, name: str) -> list[ParentRecord]:
+    ref = parent_ref(name)
+    return index.get((ref[0], ref[1]), []) if ref is not None else []
+
+
+def parent_of(
+    db: Session, viewer: Viewer, index: ParentIndex, name: str
+) -> dict[str, Any] | None:
+    """The ``parent`` field of an experiment-owned config: the owning record (the
+    newest one ``viewer`` sees when an 8-char prefix is shared) and the arm it
+    scores. A record gone from the ledger keeps ``kind`` + ``arm`` (both read off the
+    name); ``id`` / ``name`` / ``status`` / ``agent_name`` are then None."""
+    ref = parent_ref(name)
+    if ref is None:
+        return None
+    kind, _id8, arm = ref
+    seen = [r for r in _parent_records(index, name) if visibility.sees(viewer, db, r.created_by)]
+    record = seen[0] if seen else None
+    if record is None:
+        agent_name = None
+    elif isinstance(record, Experiment):
+        # a pre-split `_oe2` judged the built-in canary's challenger, another agent
+        agent_name = (
+            ((record.artifacts or {}).get("canary") or {}).get("challenger_agent")
+            if arm == "treatment" else record.agent_name
+        )
+    else:
+        # a canary's two arms are versions of one agent
+        agent_name = record.champion_agent_name
+    return {
+        "kind": kind,
+        "id": record.id if record else None,
+        "name": record.name if record else None,
+        # the status the A/B test page shows (an unfinished legacy promotion is `ready`)
+        "status": (
+            None if record is None
+            else experiment_status(record) if isinstance(record, Experiment)
+            else record.status
+        ),
+        "agent_name": agent_name,
+        "arm": arm,
+    }
 
 
 def config_visible(
     db: Session, ws: WorkspaceScope, viewer: Viewer, *, name: str,
-    row: OnlineEvalConfig | None,
+    row: OnlineEvalConfig | None, parents: ParentIndex | None = None,
 ) -> bool:
     """Workspace isolation for one config: a ledger row → its creator; an
     experiment/canary-owned config follows its owning record (shared when that
-    record is gone); an external config has no known creator → shared."""
+    record is gone); an external config has no known creator → shared.
+    ``parents`` is a preloaded :func:`parent_index` (the list path)."""
     if not viewer.filters:
         return True
     if row is not None:
         return visibility.sees(viewer, db, row.created_by)
-    parents = _parent_creators(db, ws, str(name or ""))
-    return not parents or any(visibility.sees(viewer, db, c) for c in parents)
+    index = parents if parents is not None else parent_index(db, ws, [str(name or "")])
+    records = _parent_records(index, str(name or ""))
+    return not records or any(visibility.sees(viewer, db, r.created_by) for r in records)
 
 
 def _not_found(config_id: str) -> NotFoundError:
@@ -259,8 +337,10 @@ def _match_agent(
 def _normalize(
     aws: dict[str, Any], *, owner: Owner, row: OnlineEvalConfig | None,
     matched_agent: dict[str, str] | None = None, detailed: bool,
+    parent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One row shape for list summaries and Get details (``detailed`` marks which)."""
+    """One row shape for list summaries and Get details (``detailed`` marks which).
+    ``parent`` (:func:`parent_of`) is set on experiment-owned rows only."""
     config_id = aws["onlineEvaluationConfigId"]
     rule = aws.get("rule") or {}
     ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
@@ -278,6 +358,7 @@ def _normalize(
         "agent_id": row.agent_id if row else None,
         "agent_name": row.agent_name if row else None,
         "matched_agent": matched_agent,
+        "parent": parent,
         "detailed": detailed,
         "evaluators": [e.get("evaluatorId") for e in aws.get("evaluators") or []],
         "sampling_percentage": (rule.get("samplingConfig") or {}).get("samplingPercentage"),
@@ -336,17 +417,24 @@ def list_configs(
     ``Get`` each (experiment rows stay summary-only — their page is elsewhere).
     A failing ``Get`` degrades that row to its summary rather than failing the list.
     Configs hidden from ``viewer`` (workspace isolation) are skipped before any Get.
+    The owning experiments / canaries of every listed config load in one query
+    per model (:func:`parent_index`), shared by the visibility check and ``parent``.
     """
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
+    summaries = ac.list_online_eval_configs(control)
+    parents = parent_index(db, ws, [
+        s.get("onlineEvaluationConfigName", "") for s in summaries
+        if s["onlineEvaluationConfigId"] not in ledger
+    ])
     matchers: list[tuple[Agent, str, bool]] | None = None
     out: list[dict[str, Any]] = []
-    for summary in ac.list_online_eval_configs(control):
+    for summary in summaries:
         config_id = summary["onlineEvaluationConfigId"]
         name = summary.get("onlineEvaluationConfigName", "")
         owner = owner_of(name, config_id, set(ledger))
         row = ledger.get(config_id)
-        if not config_visible(db, ws, viewer, name=name, row=row):
+        if not config_visible(db, ws, viewer, name=name, row=row, parents=parents):
             continue
         aws, detailed = summary, False
         if owner != "experiment":
@@ -360,8 +448,9 @@ def list_configs(
                 matchers = _agent_log_group_matchers(db, ws, viewer)
             ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
             matched = _match_agent(ds.get("logGroupNames") or [], matchers)
+        parent = parent_of(db, viewer, parents, name) if owner == "experiment" else None
         out.append(_normalize(aws, owner=owner, row=row, matched_agent=matched,
-                              detailed=detailed))
+                              detailed=detailed, parent=parent))
     enabled_by_agent: dict[str, int] = {}
     for c in out:
         if c["owner"] == "agent" and c["execution_status"] == "ENABLED":
@@ -394,7 +483,9 @@ def get_config(
             raise _not_found(config_id) from exc
         raise
     name = aws.get("onlineEvaluationConfigName", "")
-    if row is None and not config_visible(db, ws, viewer, name=name, row=None):
+    parents = parent_index(db, ws, [name]) if row is None else {}
+    if row is None and not config_visible(db, ws, viewer, name=name, row=None,
+                                          parents=parents):
         raise _not_found(config_id)
     owner = owner_of(name, config_id, set(ledger))
     matched = None
@@ -403,8 +494,9 @@ def get_config(
         matched = _match_agent(
             ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws, viewer)
         )
+    parent = parent_of(db, viewer, parents, name) if owner == "experiment" else None
     return _normalize(aws, owner=owner, row=ledger.get(config_id), matched_agent=matched,
-                      detailed=True)
+                      detailed=True, parent=parent)
 
 
 # ─── write side ─────────────────────────────────────────────────────────────
