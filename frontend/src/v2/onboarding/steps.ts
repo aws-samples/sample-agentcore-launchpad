@@ -71,7 +71,7 @@ export function launchSteps(input: {
     {
       key: "online",
       done: tasks.some((task) => task.kind === "online"),
-      href: "/v2/eval/online?view=new",
+      href: "/v2/eval/tasks?view=new&strategy=continuous",
       hintKey: "v2.onboard.launch.onlineHint",
     },
   ];

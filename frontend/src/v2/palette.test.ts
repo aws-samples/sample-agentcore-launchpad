@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import en from "../locales/en/common.json";
 import zh from "../locales/zh-CN/common.json";
 import { GLOSSARY_TERMS } from "./glossaryTerms";
-import { navGroupsFor } from "./nav";
+import { navGroupsFor, V2_PALETTE_ALIASES } from "./nav";
 import {
   buildEntries,
   closePalette,
@@ -120,13 +120,33 @@ describe("buildEntries", () => {
     expect(routes(false)).toContain("/v2/eval/experiments");
   });
   it("offers every allowed page whatever the nav mode", () => {
+    const aliases = V2_PALETTE_ALIASES.map((a) => a.to);
     for (const isAdmin of [true, false]) {
       const expert = navGroupsFor("expert", isAdmin).flatMap((g) => g.items.map((i) => i.to));
       const business = navGroupsFor("business", isAdmin).flatMap((g) => g.items.map((i) => i.to));
-      expect(palettePages(isAdmin).map((p) => p.to)).toEqual(expert);
+      // the sidebar's pages, then the aliases (none is admin-only)
+      expect(palettePages(isAdmin).map((p) => p.to)).toEqual([...expert, ...aliases]);
       // pages the essentials sidebar hides stay in the palette
       expect(business.length).toBeLessThan(expert.length);
       expect(palettePages(isAdmin).map((p) => p.to)).toEqual(expect.arrayContaining(business));
+    }
+  });
+  it("finds 持续评估 by its former name 在线评估 (zh) and by online (en)", () => {
+    const tab = "/v2/eval/tasks?tab=online";
+    // the only page that answers, listed next to the glossary's "what is online evaluation"
+    const pageHits = (list: PaletteEntry[]) => list.filter((e) => e.group === "page");
+    const zhHits = rank(entries({ zhUi: true }), "在线评估");
+    expect(pageHits(zhHits).map(routeOf)).toEqual([tab]);
+    expect(pageHits(zhHits)[0].label).toBe(zh.v2.nav.onlineAlias);
+    expect(zhHits.map((e) => e.id)).toEqual(["term:onlineEvaluation", `page:${tab}`]);
+    const enHits = rank(entries(), "online");
+    expect(pageHits(enHits).map(routeOf)).toEqual([tab]);
+    expect(pageHits(enHits)[0].label).toBe(en.v2.nav.onlineAlias);
+    // the English name still answers under zh-CN, and so does the new one
+    expect(pageHits(rank(entries({ zhUi: true }), "online")).map(routeOf)).toEqual([tab]);
+    expect(routeOf(rank(entries({ zhUi: true }), zh.v2.scorecard.tabs.online)[0])).toBe(tab);
+    for (const isAdmin of [true, false]) {
+      expect(entries({ isAdmin }).filter((e) => routeOf(e) === tab)).toHaveLength(1);
     }
   });
   it("gives each agent an open and a chat action", () => {

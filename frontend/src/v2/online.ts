@@ -177,6 +177,17 @@ export function draftFromRow(row: OnlineEvalConfigRow): OnlineDraft {
   };
 }
 
+/** Longest description AWS accepts on a config. */
+export const MAX_DESCRIPTION = 200;
+
+/** The create form's start for a copy of `row` (`?view=new&from=online:<id>`): its agent,
+ *  mode, evaluators / insights, frequencies, sampling, timeout and filters, and its
+ *  description (else its name) with the copy suffix, cut to `MAX_DESCRIPTION`. */
+export function copyDraft(row: OnlineEvalConfigRow, copySuffix: string): { agentId: string; draft: OnlineDraft } {
+  const description = `${row.description?.trim() || configName(row)}${copySuffix}`.slice(0, MAX_DESCRIPTION);
+  return { agentId: row.agent_id ?? "", draft: { ...draftFromRow(row), description } };
+}
+
 /** First problem of the draft (null ⇒ valid). */
 export function validateDraft(t: TFunction, d: OnlineDraft): string | null {
   const sampling = Number(d.sampling);
@@ -194,7 +205,7 @@ export function validateDraft(t: TFunction, d: OnlineDraft): string | null {
     if (f.kind === "string" && !f.value) return t("v2.online.err.filterValue");
     if (f.kind === "number" && (f.value.trim() === "" || !Number.isFinite(Number(f.value)))) return t("v2.online.err.filterValue");
   }
-  if (d.description.length > 200) return t("v2.online.err.description");
+  if (d.description.length > MAX_DESCRIPTION) return t("v2.online.err.description");
   return null;
 }
 

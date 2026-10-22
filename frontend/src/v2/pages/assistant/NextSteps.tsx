@@ -415,7 +415,7 @@ export function NextStepsCard({
           n={++n}
           testId="v2-assistant-next-online"
           title={t("assistantNext.online.title")}
-          actions={<Link className="v2-btn sm" to="/v2/eval/online">{t("assistantNext.online.open")}</Link>}
+          actions={<Link className="v2-btn sm" to="/v2/eval/tasks?tab=online">{t("assistantNext.online.open")}</Link>}
         >
           {t("assistantNext.online.body")}
         </Step>

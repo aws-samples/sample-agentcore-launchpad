@@ -3,42 +3,41 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { api, errorMessage, type V2Range } from "../../../lib/api";
+import { api, errorMessage } from "../../../lib/api";
 import { isBudgetStop } from "../../../lib/budgets";
 import { coverageInfo, hasInsightTrees, runCoverage } from "../../../lib/evaluation";
 import { BudgetNoticeAlert, BudgetStopAlert } from "../../BudgetBanner";
 import { previousComparable } from "../../compare";
-import { fmtTime, RANGES, rangeLabel } from "../../format";
+import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../../ResultsView";
-import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
+import { rowsFromRun, summarize } from "../../results";
 import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
-import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
-import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
+import { sourceLabel, STATUS_TONE, statusLabel, taskFromRun, taskItemLabel, type V2Task } from "../../tasks";
+import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Spin, Tag } from "../../ui";
 import { backState, backTarget, returnPath } from "./back";
 import { RunRecommendations } from "./RunRecommendations";
 
 const POLL_MS = 8000;
 
-function useTask(kind: TaskKind, id: string) {
+function useTask(id: string) {
   const [tick, setTick] = useState(0);
-  const task = useLoad<V2Task>(
-    () => (kind === "run" ? api.getEvaluationRun(id).then(taskFromRun) : api.v2OnlineConfig(id).then(taskFromOnline)),
-    `task:${kind}:${id}:${tick}`,
-  );
-  const active = task.data?.status === "running" || task.data?.status === "queued" || task.data?.status === "pending";
+  const task = useLoad<V2Task>(() => api.getEvaluationRun(id).then(taskFromRun), `task:run:${id}:${tick}`);
+  const active = task.data?.status === "running" || task.data?.status === "queued";
   // a batch run moves through queued → evaluating → completed: keep it fresh
   useEffect(() => {
-    if (kind !== "run" || !active) return;
+    if (!active) return;
     const timer = window.setInterval(() => setTick((n) => n + 1), POLL_MS);
     return () => window.clearInterval(timer);
-  }, [kind, active]);
+  }, [active]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
   return { ...task, reload };
 }
 
-export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
+/** One batch evaluation run (`?view=detail&kind=run&id=`); an online config's detail is
+ *  `OnlineDetail`. */
+export function TaskDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -46,40 +45,31 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const initialOutcome = params.get("outcome") === "error" ? "error" : "";
   const toast = useV2Toast();
   const { can } = useAuth();
-  const task = useTask(kind, id);
-  const [range, setRange] = useState<V2Range>("24h");
-  const [confirm, setConfirm] = useState<"stop" | "pause" | "resume" | null>(null);
+  const task = useTask(id);
+  const [confirm, setConfirm] = useState<"stop" | null>(null);
   const [busy, setBusy] = useState(false);
   const data = task.data;
-  const terminal = data?.kind === "run" && ["completed", "failed", "stopped"].includes(data.status);
-  const insightsRun = data?.kind === "run" && data.mode === "insights";
+  const terminal = !!data && ["completed", "failed", "stopped"].includes(data.status);
+  const insightsRun = data?.mode === "insights";
 
   const results = useLoad(
     async () => {
       // an insights run carries its clusters on the run row — no judged records to read
       if (!data || insightsRun) return { rows: [], note: null as string | null, available: false };
-      if (data.kind === "run") {
-        if (!terminal) return { rows: [], note: t("v2.taskDetail.waitResults"), available: false };
-        const res = await api.evaluationRunResults(data.id);
-        return {
-          rows: rowsFromRun(data, res),
-          note: res.available ? (res.truncated ? t("v2.taskDetail.truncated") : null) : t(`v2.taskDetail.reason.${res.reason ?? "unreadable"}`),
-          available: res.available,
-        };
-      }
-      const res = await api.v2OnlineResults(data.id, range);
+      if (!terminal) return { rows: [], note: t("v2.taskDetail.waitResults"), available: false };
+      const res = await api.evaluationRunResults(data.id);
       return {
-        rows: rowsFromOnline(data, res.recent),
-        note: res.errors.count ? t("v2.taskDetail.onlineErrors", { count: res.errors.count }) : null,
-        available: true,
+        rows: rowsFromRun(data, res),
+        note: res.available ? (res.truncated ? t("v2.taskDetail.truncated") : null) : t(`v2.taskDetail.reason.${res.reason ?? "unreadable"}`),
+        available: res.available,
       };
     },
-    `task-results:${kind}:${id}:${data ? `${data.status}` : "none"}:${range}`,
+    `task-results:run:${id}:${data ? `${data.status}` : "none"}`,
   );
   const rows = useMemo(() => results.data?.rows ?? [], [results.data]);
   // reading a pre-summary partial run's results backfills why its sessions were not
   // scored (server side): re-read the row once so the reason replaces the bare count
-  const legacyPartial = !!(data?.kind === "run" && data.run && runCoverage(data.run)?.legacy);
+  const legacyPartial = !!(data?.run && runCoverage(data.run)?.legacy);
   const resultsRead = !!results.data?.available;
   const reloadTask = task.reload;
   useEffect(() => {
@@ -90,8 +80,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   // "compare with the previous run": the newest earlier completed, scored run of the same
   // agent on the same benchmark, read from the ledger-only scorecard. A log-source run
   // has no agent id, so it reads the whole scorecard and matches on its `agent_key`.
-  const comparable =
-    data?.kind === "run" && data.mode === "evaluators" && data.run?.status === "completed" && data.run.scores.length > 0;
+  const comparable = data?.mode === "evaluators" && data.run?.status === "completed" && data.run.scores.length > 0;
   const previous = useLoad(
     async () => {
       const run = data?.run;
@@ -99,15 +88,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       const card = await api.evaluationScorecard(run.agent_id ? { agent_id: run.agent_id } : {});
       return previousComparable(card.runs, run.id);
     },
-    `task-previous:${kind}:${id}:${comparable ? "on" : "off"}`,
+    `task-previous:run:${id}:${comparable ? "on" : "off"}`,
   );
 
   const act = async () => {
     if (!confirm || !data) return;
     setBusy(true);
     try {
-      if (confirm === "stop") await api.stopEvaluationRun(data.id);
-      else await api.v2OnlineAction(data.id, confirm);
+      await api.stopEvaluationRun(data.id);
       toast("success", t(`v2.tasks.done.${confirm}`));
       setConfirm(null);
       task.reload();
@@ -124,9 +112,8 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
 
   const mayRun = can("eval.run");
   const previousRun = previous.data;
-  const coverage = data.kind === "run" && data.run ? runCoverage(data.run) : null;
+  const coverage = data.run ? runCoverage(data.run) : null;
   const recheck = async () => {
-    if (data.kind !== "run") return;
     setBusy(true);
     try {
       const run = await api.recheckEvaluationRun(data.id);
@@ -140,20 +127,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   };
   const actions = (
     <>
-      {data.kind === "run" && (data.status === "running" || data.status === "queued") && (
+      {(data.status === "running" || data.status === "queued") && (
         <Button kind="danger" disabled={!mayRun} onClick={() => setConfirm("stop")}>
           {t("v2.tasks.stop")}
         </Button>
       )}
-      {data.kind === "run" && data.status === "failed" && data.run?.batch_eval_id && (
+      {data.status === "failed" && data.run?.batch_eval_id && (
         <Button disabled={!mayRun || busy} title={t("v2.tasks.recheckHint")} onClick={() => void recheck()} testId="v2-task-recheck">
           {t("v2.tasks.recheck")}
-        </Button>
-      )}
-      {data.kind === "online" && data.status === "running" && <Button onClick={() => setConfirm("pause")}>{t("v2.tasks.pause")}</Button>}
-      {data.kind === "online" && data.status === "paused" && (
-        <Button disabled={!mayRun} onClick={() => setConfirm("resume")}>
-          {t("v2.tasks.resume")}
         </Button>
       )}
       {comparable && previousRun && (
@@ -165,7 +146,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           {t("v2.compare.prev")}
         </Button>
       )}
-      <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `${data.kind}:${data.id}` }, { state: backState(location.search) })}>
+      <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `run:${data.id}` }, { state: backState(location.search) })}>
         {t("v2.tasks.copy")}
       </Button>
       <Button kind="primary" onClick={() => task.reload()}>
@@ -219,7 +200,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           </Alert>
         </div>
       )}
-      {data.online?.failure_reason && <Alert tone="error">{data.online.failure_reason}</Alert>}
       <Card title={t("v2.taskDetail.overview")}>
         <Descriptions
           items={[
@@ -244,10 +224,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                 ]
               : [{ label: t("v2.tasks.colAgent"), value: data.agentName }]),
             { label: t("v2.tasks.colSource"), value: sourceLabel(t, data) },
-            {
-              label: t("v2.tasks.colStrategy"),
-              value: data.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory"),
-            },
             ...(insightsRun ? [{ label: t("v2.tasks.mode"), value: t("v2.tasks.modeInsights") }] : []),
             {
               label: insightsRun ? t("evalPage.newRun.insightTypes") : t("v2.tasks.colEvaluators"),
@@ -264,18 +240,11 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             { label: t("v2.tasks.colCreated"), value: fmtTime(data.createdAt) },
             { label: t("v2.tasks.colUpdated"), value: fmtTime(data.updatedAt) },
             { label: t("v2.common.creator"), value: data.createdByName || "—" },
-            ...(data.kind === "run"
-              ? [
-                  { label: t("v2.taskDetail.sessions"), value: data.run?.session_ids.length ?? 0 },
-                  {
-                    label: t("v2.taskDetail.queue"),
-                    value: data.run?.queue_position ? t("v2.taskDetail.queuePos", { n: data.run.queue_position }) : "—",
-                  },
-                ]
-              : [
-                  { label: t("v2.tasks.samplingRate"), value: data.sourceDetail || "—" },
-                  { label: t("v2.tasks.sessionTimeout"), value: data.online?.session_timeout_minutes ? t("v2.taskDetail.minutes", { count: data.online.session_timeout_minutes }) : "—" },
-                ]),
+            { label: t("v2.taskDetail.sessions"), value: data.run?.session_ids.length ?? 0 },
+            {
+              label: t("v2.taskDetail.queue"),
+              value: data.run?.queue_position ? t("v2.taskDetail.queuePos", { n: data.run.queue_position }) : "—",
+            },
             { label: t("v2.tasks.description"), value: data.description || "—" },
           ]}
         />
@@ -294,26 +263,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           <SummaryKpis summary={summary} />
           <EvaluatorBreakdown summary={summary} />
 
-          <Card
-            title={t("v2.taskDetail.results")}
-            end={
-              data.kind === "online" ? (
-                <FilterSelect
-                  label={t("v2.common.timeRange")}
-                  value={range}
-                  onChange={(v) => setRange(v as V2Range)}
-                  options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))}
-                />
-              ) : undefined
-            }
-          >
+          <Card title={t("v2.taskDetail.results")}>
             {results.data?.note && <Alert tone="warn">{results.data.note}</Alert>}
             <ResultsTable
               rows={rows}
               loading={results.loading}
               error={results.error}
               onRetry={results.reload}
-              range={data.kind === "online" ? range : "7d"}
+              range="7d"
               showTask={false}
               filterable
               initialOutcome={initialOutcome}
@@ -324,14 +281,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       )}
 
       {/* keyed on status: the inputs' eligibility flips when the run completes */}
-      {data.kind === "run" && data.run && <RunRecommendations key={data.status} run={data.run} />}
+      {data.run && <RunRecommendations key={data.status} run={data.run} />}
 
       <Confirm
         open={confirm !== null}
         title={confirm ? t(`v2.tasks.confirm.${confirm}Title`) : ""}
         body={confirm ? t(`v2.tasks.confirm.${confirm}Body`, { name: data.name }) : null}
         confirmLabel={confirm ? t(`v2.tasks.confirm.${confirm}Ok`) : ""}
-        danger={confirm === "stop"}
+        danger
         busy={busy}
         onConfirm={() => void act()}
         onClose={() => setConfirm(null)}

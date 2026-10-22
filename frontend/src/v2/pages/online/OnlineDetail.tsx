@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import {
@@ -51,6 +51,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { backState, backTarget, returnPath } from "../tasks/back";
 
 function Sparkline({ points, evaluatorId }: { points: OnlineEvalResultsPoint[]; evaluatorId: string }) {
   const values = points.map((p) => p.mean).filter((v): v is number => v != null);
@@ -350,9 +351,12 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
   );
 }
 
+/** One online evaluation config (`/v2/eval/tasks?view=detail&kind=online&id=`). */
 export function OnlineDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const toast = useV2Toast();
   const { can } = useAuth();
   const mayRun = can("eval.run");
@@ -376,7 +380,7 @@ export function OnlineDetail({ id }: { id: string }) {
       if (confirm === "delete") {
         await api.v2DeleteOnlineConfig(row.config_id);
         toast("success", t("v2.online.deleted", { logGroup: row.results_log_group }));
-        setParams({});
+        setParams({ tab: "online" });
         return;
       }
       await api.v2OnlineAction(row.config_id, confirm);
@@ -390,11 +394,18 @@ export function OnlineDetail({ id }: { id: string }) {
     }
   };
 
+  // Back returns to the opener (a list tab, an outside page), else the 持续评估 tab
+  const back = () => {
+    const outside = returnPath(location.state);
+    if (outside) navigate(outside);
+    else setParams(backTarget(location.state, "tab=online"));
+  };
+
   if (config.loading && !row) return <Spin />;
   if (config.error && !row) {
     return (
       <>
-        <FlowHeader title={id} onBack={() => setParams({})} />
+        <FlowHeader title={id} onBack={back} />
         <Alert tone="error">{config.error}</Alert>
       </>
     );
@@ -414,7 +425,7 @@ export function OnlineDetail({ id }: { id: string }) {
             </Tag>
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={back}
         end={
           <>
             <Button onClick={() => setTick((n) => n + 1)}>{t("v2.common.refresh")}</Button>
@@ -435,9 +446,19 @@ export function OnlineDetail({ id }: { id: string }) {
             )}
             {isEditable(row) && (
               <Button
+                disabled={!mayRun}
+                onClick={() => setParams({ view: "new", from: `online:${row.config_id}` }, { state: backState(location.search) })}
+                testId="v2-online-copy"
+              >
+                {t("v2.tasks.copy")}
+              </Button>
+            )}
+            {/* the editor hands this page's history state back to it on save / Back */}
+            {isEditable(row) && (
+              <Button
                 kind="primary"
                 disabled={busy || transient || !mayRun}
-                onClick={() => setParams({ view: "edit", id: row.config_id })}
+                onClick={() => setParams({ view: "edit", kind: "online", id: row.config_id }, { state: location.state })}
                 testId="v2-online-edit"
               >
                 {t("v2.common.edit")}

@@ -22,6 +22,7 @@ import { classicChatToV2 } from "./v2/pages/chat/classicUrl";
 import { classicObservabilityToV2 } from "./v2/pages/observability/classicUrl";
 import { classicMemoryToV2 } from "./v2/pages/memory/classicUrl";
 import { classicGovernanceToV2 } from "./v2/pages/governance/classicUrl";
+import { classicOnlineToTasksUrl, onlineToTasksUrl } from "./v2/pages/tasks/urls";
 
 // Every module but the index route and the catch-all is fetched on navigation.
 // The pages carry the console's weight (the Studio canvas alone pulls
@@ -99,7 +100,6 @@ const V2Evaluators = lazy(() =>
   import("./v2/pages/Evaluators").then((m) => ({ default: m.V2Evaluators })),
 );
 const V2Agents = lazy(() => import("./v2/pages/Agents").then((m) => ({ default: m.V2Agents })));
-const V2Online = lazy(() => import("./v2/pages/Online").then((m) => ({ default: m.V2Online })));
 const V2Experiments = lazy(() =>
   import("./v2/pages/Experiments").then((m) => ({ default: m.V2Experiments })),
 );
@@ -205,16 +205,8 @@ function v2EvaluationTarget(search: string): string | null {
   const params = new URLSearchParams(search);
   const view = params.get("view");
   const next = new URLSearchParams();
-  if (view === "online") {
-    const oe = params.get("oe");
-    if (oe === "new") next.set("view", "new");
-    else if (oe) {
-      next.set("view", "detail");
-      next.set("id", oe);
-    }
-    const q = next.toString();
-    return `/v2/eval/online${q ? `?${q}` : ""}`;
-  }
+  // online configs are 评估任务's 持续评估 tab: straight there, not via `/v2/eval/online`
+  if (view === "online") return classicOnlineToTasksUrl(search);
   // the new-run form: hand-offs prefill agent / dataset / evaluators. A run
   // started for an experiment baseline (`return=experiment`) stays classic,
   // since only the classic form returns to the experiment afterwards.
@@ -252,6 +244,13 @@ function v2EvaluationTarget(search: string): string | null {
     return `/v2/eval/experiments${q ? `?${q}` : ""}`;
   }
   return null;
+}
+
+/** The former 在线评估 page (`/v2/eval/online`) is 评估任务's 持续评估 tab now: its
+ *  links and bookmarks land on the matching tab or sub-page. */
+function V2OnlineRoute() {
+  const { search } = useLocation();
+  return <Navigate to={onlineToTasksUrl(search)} replace />;
 }
 
 function EvaluationRoute() {
@@ -303,7 +302,7 @@ export default function App() {
               <Route path="eval/tasks" element={<V2Tasks />} />
               <Route path="eval/insights" element={<V2Insights />} />
               <Route path="eval/evaluators" element={<V2Evaluators />} />
-              <Route path="eval/online" element={<V2Online />} />
+              <Route path="eval/online" element={<V2OnlineRoute />} />
               <Route path="eval/experiments" element={<V2Experiments />} />
               <Route path="assistant" element={<V2Assistant />} />
               <Route path="registry" element={<V2Registry />} />

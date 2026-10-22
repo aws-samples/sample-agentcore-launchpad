@@ -72,7 +72,9 @@ directly from the browser's CDN URL, independent of workspace and AgentCore.
 Every V2 module page also offers its own recordings: each published collection
 carries its module's sidebar `path`, and the V2 shell adds a **Demo videos**
 button to the page header of any module with V2 recordings, playing them in a
-drawer.
+drawer. A module that became a tab of another entry keeps its section: the 在线评估
+recordings (`/v2/eval/online`) play on 评估任务's 持续评估 tab and the online config
+sub-pages, which the entry maps onto that path (`videoPath` in `v2/nav.ts`).
 The separate `launchpad-videos` CDK stack retains its private S3 origin and
 OAC-restricted CloudFront distribution. See [Video library](video-library.md)
 for management and immutable media publication.
@@ -2278,7 +2280,8 @@ evaluated, what it was measured on, and how two runs line up case by case.
   scored run's detail offers 与上一次对比: the newest earlier completed run of the same agent
   and benchmark, read from the scorecard.
 - **按 Agent tab.** `/v2/eval/tasks` now opens on 按 Agent (`AgentScoreList`); the run list
-  moved to `?tab=all`. Each agent row shows its main benchmark (the one with the most
+  moved to `?tab=runs` (一次性评估; the earlier `?tab=all` still opens it), next to the
+  持续评估 tab of online configs (below). Each agent row shows its main benchmark (the one with the most
   completed runs), the latest composite, and the change against the previous *version's*
   latest run on that benchmark, or the reason there is none.
   - The composite is over the evaluators every completed run of that benchmark includes.
@@ -2779,14 +2782,19 @@ through the same backend routes and permission checks as the classic pages.
   stay classic. In V2 the classic `/agents` and `/agents/:id` URLs redirect to the
   native pages (`AgentsRoute` in `App.tsx`), so cross-module links and the classic
   wizard's post-deploy hand-over land there.
-- **Online evaluation and experiments (native).** `/v2/eval/online` (`v2/pages/Online.tsx`,
-  shared rules in `v2/online.ts`) manages every online evaluation config — agent-owned,
-  experiment arms (read-only) and external ones, scores and insights modes: list with
-  mode/owner/execution filters (polled while CREATING/UPDATING/DELETING), detail with
-  the server's per-evaluator aggregates and trend plus the judged records (scores) or
-  the scheduled / on-demand insight reports with a report drawer (insights), and a
-  create/edit form with filters whose save sends only the changed fields
-  (`api.v2UpdateOnlineConfig`, PATCH). `/v2/eval/experiments` (`v2/pages/Experiments.tsx`)
+- **Online evaluation and experiments (native).** Online evaluation configs are 评估任务's
+  持续评估 tab (`/v2/eval/tasks?tab=online`, `v2/pages/online/`, shared rules in
+  `v2/online.ts`; there is no separate 在线评估 menu). The tab manages every config —
+  agent-owned, experiment arms (read-only) and external ones, scores and insights modes:
+  a list with mode/owner/execution filters that opens on the agent-owned configs (polled
+  while CREATING/UPDATING/DELETING); a detail (`?view=detail&kind=online&id=`) with the
+  server's per-evaluator aggregates and trend plus the judged records (scores), or the
+  scheduled / on-demand insight reports with a report drawer (insights); and a
+  create/edit form with filters (`?view=new&strategy=continuous`, a copy via
+  `from=online:<id>`, `?view=edit&kind=online&id=`) whose save sends only the changed
+  fields (`api.v2UpdateOnlineConfig`, PATCH). The old `/v2/eval/online` URLs redirect to
+  the matching tab or sub-page (`onlineToTasksUrl` in `v2/pages/tasks/urls.ts`), and the
+  ⌘K palette still finds the tab as 在线评估. `/v2/eval/experiments` (`v2/pages/Experiments.tsx`)
   rebuilds the configuration-bundle experiment — list, `?view=new` (agent, trace
   readiness, baseline run) and `?view=detail&id=` with one stage card per step
   (recommend → bundles → gateway/A-B → traffic → verdict/promote → cleanup) posting the
@@ -2896,34 +2904,40 @@ through the same backend routes and permission checks as the classic pages.
   included, listed underneath; accepting one opens the prompt for review/editing and
   re-publishes the Harness as a new version with the reviewed text) and step 4's 金丝雀实验 (`HarnessCanary.tsx`). In V2 the classic
   `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
-  in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
-  its section nav are no longer reached from the V2 sidebar.
+  in `App.tsx`: `oe=<id>` becomes the 持续评估 tab's `view=detail&kind=online&id=` and
+  `oe=new` its continuous form, `exp=` becomes `view=detail&id=`); the classic evaluation
+  page and its section nav are no longer reached from the V2 sidebar.
 - **What is native V2.** The workbench (`/v2`), Agent management (above) and the Agent evaluation module:
   数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
   trace/session detail, datasets with a record editor and 复制所选到新数据集 — the picked
   records copied as stored, assertions / every turn / expected trajectory included, with
   `metadata.copied_from` — data-processing pipelines),
-  评估任务 `/v2/eval/tasks`, 评估总览 `/v2/eval/insights` and 评估器
-  `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
+  评估任务 `/v2/eval/tasks` (one-off runs and, on its 持续评估 tab, online evaluation
+  configs), 评估总览 `/v2/eval/insights` and 评估器 `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
   of one route (`view=new|detail|edit|trace|dataset|pipeline…`). Every other
   sidebar entry (agent development, runtime, experiments, administration) is a
   classic module rendered inside the V2 shell until it is rebuilt natively.
-- **Evaluation tasks unify two resources** (`v2/tasks.ts`): a batch evaluation run
-  is a *history* task (time window, hand-picked sessions or a dataset replay,
-  evaluated once; `name`/`description` stored on the run row), an agent-owned
-  scores-mode online evaluation config is a *continuous* task (sampling rate,
-  session timeout; its description is the task name). Status maps both onto
-  queued / running / completed / failed / stopped / paused. A history task picks
+- **Evaluation tasks cover two resources, by how they run.** A batch evaluation run is
+  a one-off task (time window, hand-picked sessions or a dataset replay, evaluated
+  once; `name`/`description` stored on the run row) and is listed on the 一次性评估 tab
+  (`TaskList`, runs only); an online evaluation config is a continuous task (sampling
+  rate, session timeout) and is listed on the 持续评估 tab (above). There is one 新建
+  entry: a strategy switch (`pages/tasks/StrategySwitch.tsx`) over the run wizard
+  (`TaskWizard`) and the online config form (`OnlineEditor`), carrying the chosen agent
+  across. 首页 (and its launch checklist) and 评估总览 still read both as one `V2Task`
+  list (`v2/tasks.ts`: runs plus agent-owned configs — 评估总览 only the scores-mode
+  ones — whose description is the task name), with status mapped onto queued /
+  running / completed / failed / stopped / paused, and open each in its own detail
+  page. A one-off task picks
   an evaluation type: evaluator scoring, or insights (failure analysis / user
   intent / execution summary — the classic run form's insights mode,
   `mode: "insights"` on `POST /api/eval/runs`). An insights task's detail shows
   the run's clusters instead of scores; clustering needs at least 3 sessions, so
   hand-picked sessions require 3 and a smaller window/dataset warns. Continuous
-  insights stay on the online-evaluation page (they carry a report schedule).
-  The task list shows the evaluation type as its own column (and filter); to stay
-  within eight columns the run strategy rides under the data source and the
-  update time under the creation time, and the operations column is pinned to
-  the right edge.
+  insights are created on the continuous form (they carry a report schedule).
+  The run list shows the evaluation type under the evaluators (and as a filter); to
+  stay within eight columns the update time rides under the creation time, and the
+  operations column is pinned to the right edge.
 - **数据处理 · 运行日志 source** (`v2/pages/data/LogSource.tsx`, backend
   `app/evaluation/pipeline_logs.py`): a pipeline can read 1–10 CloudWatch log groups
   instead of observed traces, which brings in agents that emit no OTel spans (or only

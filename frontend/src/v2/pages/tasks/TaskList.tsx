@@ -11,7 +11,7 @@ import { Score } from "../../ResultsView";
 import { runMean } from "../../scorecard";
 import {
   evaluatorSummary,
-  loadTasks,
+  loadRunTasks,
   sourceLabel,
   STATUS_TONE,
   statusLabel,
@@ -40,17 +40,20 @@ import { failedTasks, TASK_ATTENTION_CAP } from "./attention";
 import { backState } from "./back";
 import { versionHint, versionShort } from "./scorecardText";
 
-type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
+type Pending = { task: V2Task; action: "stop" | "delete" };
 
-/** 全部任务 (`?tab=all`): every evaluation task. The page header and the tabs belong to
- *  `V2Tasks`; this renders the attention panel and the table under them. */
+/** Run sources: live traffic is the 持续评估 tab's (online configs), never a run's. */
+const RUN_SOURCES = TASK_SOURCES.filter((s) => s !== "live");
+
+/** 一次性评估 (`?tab=runs`): every batch evaluation run. The page header and the tabs
+ *  belong to `V2Tasks`; this renders the attention panel and the table under them. */
 export function TaskList() {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
   const location = useLocation();
   const toast = useV2Toast();
   const { can } = useAuth();
-  const { data, loading, error, reload } = useLoad(loadTasks, "tasks");
+  const { data, loading, error, reload } = useLoad(loadRunTasks, "run-tasks");
   const [status, setStatus] = useState("");
   const [source, setSource] = useState("");
   const [mode, setMode] = useState("");
@@ -77,8 +80,8 @@ export function TaskList() {
   const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
   // the detail / wizard's Back returns to this tab (`back.ts`)
   const back = { state: backState(location.search) };
-  const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id }, back);
-  const copy = (task: V2Task) => setParams({ view: "new", from: `${task.kind}:${task.id}` }, back);
+  const open = (task: V2Task) => setParams({ view: "detail", kind: "run", id: task.id }, back);
+  const copy = (task: V2Task) => setParams({ view: "new", from: `run:${task.id}` }, back);
 
   const attention: AttentionItem[] = failedTasks(tasks).map((entry) => ({
     key: entry.key,
@@ -96,14 +99,8 @@ export function TaskList() {
     const { task, action } = pending;
     setBusy(true);
     try {
-      if (task.kind === "run") {
-        if (action === "stop") await api.stopEvaluationRun(task.id);
-        else if (action === "delete") await api.deleteEvaluationRun(task.id);
-      } else if (action === "delete") {
-        await api.v2DeleteOnlineConfig(task.id);
-      } else if (action === "pause" || action === "resume") {
-        await api.v2OnlineAction(task.id, action);
-      }
+      if (action === "stop") await api.stopEvaluationRun(task.id);
+      else await api.deleteEvaluationRun(task.id);
       toast("success", t(`v2.tasks.done.${action}`));
       setPending(null);
       reload();
@@ -169,24 +166,20 @@ export function TaskList() {
       ),
     },
     {
-      // the run strategy rides under the source — the table stays within 8 columns
       key: "source",
-      title: t("v2.tasks.colSourceStrategy"),
+      title: t("v2.tasks.colSource"),
       render: (task) => (
-        <>
-          <span className="v2-fluid">
-            <span className="ellipsis" style={{ maxWidth: 180 }} title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>
-          </span>
-          <span className="sub">{task.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")}</span>
-        </>
+        <span className="v2-fluid">
+          <span className="ellipsis" style={{ maxWidth: 180 }} title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>
+        </span>
       ),
     },
     {
-      // the run's own mean of its normalized evaluator means; none for insights / online
+      // the run's own mean of its normalized evaluator means; none for insights
       key: "avg",
       title: t("v2.scorecard.col.avg"),
       className: "nowrap",
-      render: (task) => <Score value={task.kind === "run" && task.mode === "evaluators" && task.run ? runMean(task.run) : null} />,
+      render: (task) => <Score value={task.mode === "evaluators" && task.run ? runMean(task.run) : null} />,
     },
     {
       key: "status",
@@ -214,23 +207,15 @@ export function TaskList() {
         return (
           <div className="v2-actions">
             <LinkButton onClick={() => open(task)}>{t("v2.common.view")}</LinkButton>
-            {task.kind === "run" && active && (
+            {active && (
               <LinkButton disabled={!mayRun} onClick={() => setPending({ task, action: "stop" })}>
                 {t("v2.tasks.stop")}
-              </LinkButton>
-            )}
-            {task.kind === "online" && task.status === "running" && (
-              <LinkButton onClick={() => setPending({ task, action: "pause" })}>{t("v2.tasks.pause")}</LinkButton>
-            )}
-            {task.kind === "online" && task.status === "paused" && (
-              <LinkButton disabled={!mayRun} onClick={() => setPending({ task, action: "resume" })}>
-                {t("v2.tasks.resume")}
               </LinkButton>
             )}
             <LinkButton disabled={!mayRun} onClick={() => copy(task)}>
               {t("v2.tasks.copy")}
             </LinkButton>
-            <LinkButton danger disabled={(task.kind === "run" && (!mayRun || active))} onClick={() => setPending({ task, action: "delete" })}>
+            <LinkButton danger disabled={!mayRun || active} onClick={() => setPending({ task, action: "delete" })}>
               {t("v2.common.delete")}
             </LinkButton>
           </div>
@@ -239,7 +224,7 @@ export function TaskList() {
     },
   ];
 
-  const statuses: TaskStatus[] = ["queued", "running", "completed", "failed", "stopped", "paused"];
+  const statuses: TaskStatus[] = ["queued", "running", "completed", "failed", "stopped"];
 
   return (
     <>
@@ -282,7 +267,7 @@ export function TaskList() {
             value={source}
             allLabel={t("v2.common.all")}
             onChange={setSource}
-            options={TASK_SOURCES.map((s) => ({
+            options={RUN_SOURCES.map((s) => ({
               value: s,
               label: t(`v2.taskSource.${s}Short`),
             }))}
@@ -309,7 +294,7 @@ export function TaskList() {
         <Table
           columns={columns}
           rows={paged.slice}
-          rowKey={(task) => `${task.kind}:${task.id}`}
+          rowKey={(task) => task.id}
           loading={loading}
           error={error}
           onRetry={reload}

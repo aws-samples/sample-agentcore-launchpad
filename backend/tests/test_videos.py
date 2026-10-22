@@ -201,7 +201,10 @@ def test_invalid_fields_do_not_create_a_draft(client, patch):
 def test_taxonomy_paths_match_v2_navigation():
     root = Path(__file__).resolve().parents[2]
     nav = (root / "frontend" / "src" / "v2" / "nav.ts").read_text(encoding="utf-8")
-    nav_paths = set(re.findall(r'to: "(/v2[^"]*)"', nav))
+    # a module is its path: a palette alias of a tab (`?tab=`) is not a module of its own
+    nav_paths = {path.split("?")[0] for path in re.findall(r'to: "(/v2[^"]*)"', nav)}
+    # a former module's recordings play on the entry that took it over (`videoPath`)
+    nav_paths |= set(re.findall(r'_VIDEO_PATH = "(/v2[^"]*)"', nav))
     sections = videos.taxonomy()["sections"]
     assert {section["path"] for section in sections} == nav_paths
 

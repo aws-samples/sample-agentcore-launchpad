@@ -5390,7 +5390,7 @@
       "insights": "Evaluation overview",
       "evaluators": "Evaluators",
       "experiments": "A/B experiments",
-      "online": "Online evaluation",
+      "onlineAlias": "Continuous evaluation (online)",
       "models": "Models",
       "costs": "Spend & alerts",
       "coding": "Agent IDE"
@@ -6252,19 +6252,16 @@
     },
     "tasks": {
       "title": "Evaluation tasks",
-      "desc": "Evaluate history once, or keep scoring new traffic.",
+      "desc": "Replay a dataset, or evaluate a time window, chosen sessions or logs, once.",
       "colName": "Task name",
       "colNameId": "Task name / ID",
       "colEvaluators": "Evaluators",
       "colAgent": "Agent",
       "colSource": "Data source",
-      "colStrategy": "Strategy",
       "colStatus": "Status",
       "colCreated": "Created",
       "colUpdated": "Updated",
       "evaluatorsMore": "{{first}} and {{count}} in total",
-      "strategyHistory": "Evaluate historical data",
-      "strategyContinuous": "Continuously evaluate new data",
       "stop": "Stop",
       "pause": "Pause",
       "resume": "Start",
@@ -6284,18 +6281,11 @@
         "stopTitle": "Stop task",
         "stopBody": "Stop “{{name}}”? Results already judged are kept.",
         "stopOk": "Stop",
-        "pauseTitle": "Pause task",
-        "pauseBody": "Pause “{{name}}”? New sessions are no longer scored.",
-        "pauseOk": "Pause",
-        "resumeTitle": "Start task",
-        "resumeBody": "Start “{{name}}”? Sampled sessions are scored again (billed judge calls).",
-        "resumeOk": "Start",
         "deleteTitle": "Delete task",
         "deleteBody": "Delete “{{name}}”? This cannot be undone.",
         "deleteOk": "Delete"
       },
       "copySuffix": " copy",
-      "createdOnline": "Continuous evaluation task created",
       "createdRun": "Evaluation task started",
       "errName": "Enter a task name",
       "errAgent": "Select the agent to evaluate",
@@ -6306,7 +6296,6 @@
       "newTitle": "Create evaluation task",
       "stepData": "Data configuration",
       "stepEvaluators": "Select evaluators",
-      "submitOnline": "Create and start",
       "submitRun": "Create and run",
       "basic": "Basic configuration",
       "noAgents": "No active agent in this workspace",
@@ -6325,14 +6314,11 @@
       },
       "strategy": "Run strategy",
       "strategyHistoryDesc": "Evaluate the chosen data once",
-      "strategyReplayDesc": "Invoke the agent with each case, then evaluate",
       "strategyContinuousDesc": "Sample new sessions and score them as they arrive",
-      "sampling": "Sampling configuration",
       "scope": "Data scope",
       "samplingRate": "Sampling rate (%)",
       "samplingHint": "Share of new sessions that are scored",
       "sessionTimeout": "Session idle timeout (min)",
-      "sessionTimeoutHint": "A session is scored after it is idle this long",
       "lookback": "Time window",
       "lookbackHint": "Sessions of the agent inside this window are evaluated",
       "hours": "Last {{count}} hours",
@@ -6364,7 +6350,6 @@
       "previewSub": "From the selected data source",
       "previewPickAgent": "Select an agent to preview its data",
       "previewPickDataset": "Select a dataset to preview its cases",
-      "previewContinuous": "New sessions of this agent will be sampled at {{rate}}% and scored continuously.",
       "previewWindow": "{{count}} session(s) of this agent in the last {{hours}} hours were observed.",
       "previewNoSessions": "No sessions of this agent observed in the last 7 days",
       "pickEvaluators": "Select evaluators",
@@ -6383,7 +6368,6 @@
       "pickInsights": "Select analysis types",
       "errInsights": "Select at least one analysis type",
       "errInsightSessions": "Insight clustering needs at least {{min}} sessions",
-      "insightsNoContinuous": "Continuous insights are created on the Online evaluation page.",
       "insightsFewSessions": "Fewer than {{min}} sessions in the selected data — clustering may return no results.",
       "errLogs": "Select at least one log stream",
       "logs": {
@@ -6416,7 +6400,6 @@
         "showShared": "Show non-session streams ({{count}})",
         "slice": "Session slice"
       },
-      "colSourceStrategy": "Source / strategy",
       "colCreatedUpdated": "Created / updated",
       "cw": {
         "target": "Evaluation target",
@@ -6462,7 +6445,7 @@
       "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached.",
       "attention": {
         "title": "Failed — needs a look",
-        "sub": "Runs that failed in the last 7 days, until a later run of the same agent and dataset succeeds; and failed online evaluations",
+        "sub": "Runs that failed in the last 7 days, until a later run of the same agent and dataset succeeds",
         "empty": "No evaluation task has failed."
       }
     },
@@ -6499,7 +6482,6 @@
       "results": "Evaluation results",
       "waitResults": "Results appear once the task has finished.",
       "truncated": "Only the first part of the results is shown.",
-      "onlineErrors": "{{count}} judge call(s) failed in this range.",
       "reason": {
         "insights_run": "This is an insights task; it produces reports instead of scores.",
         "no_batch": "No evaluation batch was started for this task.",
@@ -6614,7 +6596,8 @@
     "scorecard": {
       "tabs": {
         "agents": "By agent",
-        "all": "All tasks"
+        "runs": "One-off evaluation",
+        "online": "Continuous evaluation"
       },
       "desc": "How each agent's scores moved across its evaluations. Runs on the same dataset form one trend line.",
       "listHint": "One row per agent: the latest score is taken from the benchmark it completed the most runs on",
@@ -6958,9 +6941,7 @@
       "customUnavailable": "Custom evaluators could not be loaded: {{msg}}. The list shows built-in evaluators only."
     },
     "online": {
-      "title": "Online evaluation",
       "desc": "Continuously judge or cluster the live sessions of an agent — scores mode rates sampled sessions with evaluators, insights mode groups them into recurring failure / intent / summary reports.",
-      "new": "New online evaluation",
       "create": "Create",
       "editTitle": "Edit online evaluation",
       "search": "Search name / ID / description",

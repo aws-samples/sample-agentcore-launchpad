@@ -1,7 +1,7 @@
 import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type OnlineEvalConfigRow } from "../../../lib/api";
@@ -30,25 +30,31 @@ import {
   FilterSelect,
   Lamp,
   LinkButton,
-  PageHeader,
   Pager,
   SearchInput,
   Table,
   Tag,
 } from "../../ui";
+import { backState } from "../tasks/back";
+import { newTaskParams } from "../tasks/urls";
 import { onlineAttention } from "./attention";
 
 type Pending = { row: OnlineEvalConfigRow; action: "pause" | "resume" | "delete" };
 
+/** 持续评估 (`/v2/eval/tasks?tab=online`): every online evaluation config of the workspace
+ *  (agent-owned, experiment arms, external), scores and insights modes. Opens on the
+ *  agent-owned ones; the owner filter shows the rest. The page header and the tabs belong
+ *  to `V2Tasks`; this renders the attention panel and the table under them. */
 export function OnlineList() {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
+  const location = useLocation();
   const toast = useV2Toast();
   const { can } = useAuth();
   const mayRun = can("eval.run");
   const { data, loading, error, reload } = useLoad(() => api.v2OnlineConfigs(), "online-configs");
   const [mode, setMode] = useState("");
-  const [owner, setOwner] = useState("");
+  const [owner, setOwner] = useState<string>("agent");
   const [exec, setExec] = useState("");
   const [agent, setAgent] = useState("");
   const [q, setQ] = useState("");
@@ -77,7 +83,9 @@ export function OnlineList() {
     return () => window.clearInterval(timer);
   }, [transient, reload]);
 
-  const open = (row: OnlineEvalConfigRow) => setParams({ view: "detail", id: row.config_id });
+  // the detail / form's Back returns to this tab (`back.ts`)
+  const back = { state: backState(location.search) };
+  const open = (row: OnlineEvalConfigRow) => setParams({ view: "detail", kind: "online", id: row.config_id }, back);
 
   const attention: AttentionItem[] = onlineAttention(configs).map((entry) => {
     const { row } = entry;
@@ -200,7 +208,7 @@ export function OnlineList() {
           <div className="v2-actions">
             <LinkButton onClick={() => open(row)}>{t("v2.common.view")}</LinkButton>
             {isEditable(row) && (
-              <LinkButton disabled={locked || !mayRun} onClick={() => setParams({ view: "edit", id: row.config_id })}>
+              <LinkButton disabled={locked || !mayRun} onClick={() => setParams({ view: "edit", kind: "online", id: row.config_id }, back)}>
                 {t("v2.common.edit")}
               </LinkButton>
             )}
@@ -227,7 +235,6 @@ export function OnlineList() {
 
   return (
     <>
-      <PageHeader title={t("v2.online.title")} desc={t("v2.online.desc")} />
       {data && (
         <AttentionPanel
           title={t("v2.online.attention.title")}
@@ -249,11 +256,11 @@ export function OnlineList() {
             kind="primary"
             disabled={!mayRun}
             title={mayRun ? undefined : t("v2.tasks.noPermission")}
-            onClick={() => setParams({ view: "new" })}
+            onClick={() => setParams(newTaskParams("continuous"), back)}
             testId="v2-online-new"
           >
             <Plus size={14} aria-hidden="true" />
-            {t("v2.online.new")}
+            {t("v2.tasks.new")}
           </Button>
           <FilterSelect
             label={t("v2.online.colMode")}

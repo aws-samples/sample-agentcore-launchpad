@@ -134,10 +134,11 @@ the same backend, both routed in `src/App.tsx`:
 
 - **V2 (the default)** — `/v2/*` under `src/v2/` (`V2Shell.tsx`, its own component kit
   in `v2/ui.tsx`, styles scoped under `.v2` / `body.v2-body` in `v2/v2.css`): Home,
-  Agents, Eval (data / tasks / insights / evaluators / online / experiments), Assistant
-  (the architect), Registry, Knowledge Bases, Context Layer (COA), Skill Lab, Chat,
-  Observability, Memory, Governance, Users, Workspaces, Connections, Announcements,
-  Videos. New UI work lands here.
+  Agents, Eval (data / tasks / insights / evaluators / experiments; tasks has one-off and
+  continuous tabs, the latter being online evaluation), Assistant (the architect),
+  Registry, Knowledge Bases, Context Layer (COA), Skill Lab, Chat, Observability, Memory,
+  Governance, Users, Workspaces, Connections, Announcements, Videos. New UI work lands
+  here.
 - **Classic** — the original routes (`/agents`, `/create/studio`, `/registry`, `/chat`,
   `/evaluation`, …). Once V2 is chosen (`lib/ui-version.ts` / `useUiVersion()`), they
   render inside `<V2Shell classic />`, and classic URLs that have a native V2 page

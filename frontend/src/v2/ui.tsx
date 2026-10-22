@@ -584,7 +584,8 @@ export function SubTabs<T extends string>({
   onChange,
 }: {
   value: T;
-  tabs: { value: T; label: string }[];
+  /** `title`: a native tooltip (e.g. the glossary sentence of the tab's concept) */
+  tabs: { value: T; label: string; title?: string }[];
   onChange: (value: T) => void;
 }) {
   return (
@@ -596,6 +597,7 @@ export function SubTabs<T extends string>({
           role="tab"
           aria-selected={tab.value === value}
           className={tab.value === value ? "on" : ""}
+          title={tab.title}
           onClick={() => onChange(tab.value)}
           data-testid={`v2-tab-${tab.value}`}
         >

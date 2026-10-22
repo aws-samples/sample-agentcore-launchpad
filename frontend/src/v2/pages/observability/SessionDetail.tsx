@@ -113,7 +113,7 @@ function OnlineScores({ scores }: { scores: OnlineSessionScores }) {
                 <span style={{ marginLeft: "auto" }}>
                   <LinkButton
                     onClick={() =>
-                      navigate(`/v2/eval/online?view=detail&id=${encodeURIComponent(cfg.config_id)}`)
+                      navigate(`/v2/eval/tasks?view=detail&kind=online&id=${encodeURIComponent(cfg.config_id)}`)
                     }
                   >
                     {t("v2.observability.online.openConfig")}

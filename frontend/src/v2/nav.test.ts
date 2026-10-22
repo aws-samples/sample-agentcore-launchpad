@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { navGroupsFor, V2_NAV } from "./nav";
+import { activeNavItem, navGroupsFor, V2_NAV, V2_PALETTE_ALIASES } from "./nav";
 
 const BUSINESS = [
   "/v2",
@@ -79,5 +79,42 @@ describe("navGroupsFor", () => {
     expect(item?.business).toBeUndefined();
     expect(paths(navGroupsFor("expert", false))).toContain("/v2/coding");
     expect(paths(navGroupsFor("business", false))).not.toContain("/v2/coding");
+  });
+});
+
+describe("评估任务 took over 在线评估", () => {
+  const items = V2_NAV.flatMap((g) => g.items);
+  const tasks = items.find((entry) => entry.to === "/v2/eval/tasks");
+  const videoOf = (search: string) => {
+    const item = activeNavItem("/v2/eval/tasks", search);
+    return item?.videoPath?.(new URLSearchParams(search)) ?? item?.to;
+  };
+
+  it("has no 在线评估 sidebar entry; 评估任务 stays in the eval group", () => {
+    expect(items.some((entry) => entry.to.startsWith("/v2/eval/online"))).toBe(false);
+    expect(items.some((entry) => entry.labelKey === "v2.nav.online")).toBe(false);
+    expect(V2_NAV.find((g) => g.key === "eval")?.items.map((i) => i.to)).toContain("/v2/eval/tasks");
+  });
+
+  it("plays the 在线评估 videos on the 持续评估 tab and the online sub-pages", () => {
+    expect(videoOf("?tab=online")).toBe("/v2/eval/online");
+    expect(videoOf("?view=detail&kind=online&id=c1")).toBe("/v2/eval/online");
+    expect(videoOf("?view=edit&kind=online&id=c1")).toBe("/v2/eval/online");
+    expect(videoOf("?view=new&strategy=continuous")).toBe("/v2/eval/online");
+    expect(videoOf("?view=new&from=online:c1")).toBe("/v2/eval/online");
+  });
+
+  it("plays the 评估任务 videos everywhere else", () => {
+    for (const search of ["", "?tab=runs", "?tab=all", "?view=new", "?view=new&from=run:r1", "?view=detail&kind=run&id=r1"]) {
+      expect(videoOf(search)).toBe("/v2/eval/tasks");
+    }
+    expect(tasks?.videoPath?.(new URLSearchParams("view=agent&key=a1"))).toBeNull();
+  });
+
+  it("keeps the palette aliases out of the sidebar", () => {
+    expect(V2_PALETTE_ALIASES.map((a) => a.to)).toEqual(["/v2/eval/tasks?tab=online"]);
+    for (const alias of V2_PALETTE_ALIASES) expect(items).not.toContain(alias);
+    // the alias's location belongs to the 评估任务 entry
+    expect(activeNavItem("/v2/eval/tasks", "?tab=online")).toBe(tasks);
   });
 });

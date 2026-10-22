@@ -52,7 +52,7 @@ function ModuleDemoButton() {
   const item = activeNavItem(pathname, search);
   // the library itself is where every video already is
   const collection = catalog && item && item.to !== LIBRARY_PATH
-    ? moduleVideoCollection(catalog, item.to)
+    ? moduleVideoCollection(catalog, item.videoPath?.(new URLSearchParams(search)) ?? item.to)
     : null;
   if (!collection) return null;
   const count = collection.videos.length;

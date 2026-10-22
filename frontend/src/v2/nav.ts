@@ -53,12 +53,30 @@ export interface V2NavItem {
   /** glossary sentence shown as the entry's native tooltip, keeping the sidebar
    *  itself uncluttered */
   hintKey?: string;
+  /** the module path whose demo videos a location of this entry plays, when it is
+   *  not `to` (a tab that took over a former module); null → `to` */
+  videoPath?: (params: URLSearchParams) => string | null;
 }
 
 export interface V2NavGroup {
   key: string;
   labelKey: string;
   items: V2NavItem[];
+}
+
+/** The video-library section path of the former 在线评估 module (`video_sections.json`;
+ *  `backend/tests/test_videos.py` reads the `*_VIDEO_PATH` constants as module paths). */
+const ONLINE_VIDEO_PATH = "/v2/eval/online";
+
+/** 评估任务 locations that show online evaluation configs: the 持续评估 tab, a config's
+ *  detail / edit, the continuous create form and a copy of a config. */
+function isOnlineTasksView(params: URLSearchParams): boolean {
+  return (
+    params.get("tab") === "online" ||
+    params.get("kind") === "online" ||
+    params.get("strategy") === "continuous" ||
+    (params.get("from") ?? "").startsWith("online:")
+  );
 }
 
 export const V2_NAV: V2NavGroup[] = [
@@ -133,13 +151,13 @@ export const V2_NAV: V2NavGroup[] = [
     items: [
       { to: "/v2/eval/insights", labelKey: "v2.nav.insights", icon: ChartColumn, v2: true },
       { to: "/v2/eval/data", labelKey: "v2.nav.dataCenter", icon: Database, v2: true, hintKey: "glossary.dataset" },
-      { to: "/v2/eval/tasks", labelKey: "v2.nav.tasks", icon: ListChecks, v2: true },
       {
-        to: "/v2/eval/online",
-        labelKey: "v2.nav.online",
-        icon: Radar,
+        to: "/v2/eval/tasks",
+        labelKey: "v2.nav.tasks",
+        icon: ListChecks,
         v2: true,
-        hintKey: "glossary.onlineEvaluation",
+        // its 持续评估 tab and the online config sub-pages were the 在线评估 module
+        videoPath: (params) => (isOnlineTasksView(params) ? ONLINE_VIDEO_PATH : null),
       },
       {
         to: "/v2/eval/evaluators",
@@ -186,6 +204,15 @@ export const V2_NAV: V2NavGroup[] = [
       { to: "/v2/video-management", labelKey: "videoManage.title", icon: Settings, v2: true, admin: true },
     ],
   },
+];
+
+/**
+ * Pages the ⌘K palette also offers under another name. Never part of `V2_NAV`, so the
+ * sidebar and `activeNavItem` do not see them.
+ */
+export const V2_PALETTE_ALIASES: V2NavItem[] = [
+  // 在线评估 became 评估任务's 持续评估 tab: its old name still finds it
+  { to: "/v2/eval/tasks?tab=online", labelKey: "v2.nav.onlineAlias", icon: Radar, v2: true },
 ];
 
 /**

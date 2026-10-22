@@ -81,7 +81,7 @@ describe("launchSteps", () => {
     expect(step(steps, "agent").href).toBe("/v2/agents?view=new");
     expect(step(steps, "chat").href).toBe("/v2/chat?agent=a%2F1");
     expect(step(steps, "evaluate").href).toBe("/v2/eval/tasks?view=new&agent=a%2F1");
-    expect(step(steps, "online").href).toBe("/v2/eval/online?view=new");
+    expect(step(steps, "online").href).toBe("/v2/eval/tasks?view=new&strategy=continuous");
     const none = launchSteps({ ...base, agents: [] });
     expect(step(none, "chat").href).toBe("/v2/chat");
     expect(step(none, "evaluate").href).toBe("/v2/eval/tasks?view=new");

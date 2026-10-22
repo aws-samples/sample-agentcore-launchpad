@@ -5390,7 +5390,7 @@
       "insights": "评估总览",
       "evaluators": "评估器",
       "experiments": "A/B实验",
-      "online": "在线评估",
+      "onlineAlias": "持续评估（在线评估）",
       "models": "模型",
       "costs": "成本与告警",
       "coding": "Agent IDE"
@@ -6252,19 +6252,16 @@
     },
     "tasks": {
       "title": "评估任务",
-      "desc": "对历史数据一次性评估，或对新数据持续评估。",
+      "desc": "数据集回放、时间窗、指定会话或日志，执行一次评估。",
       "colName": "任务名称",
       "colNameId": "任务名称 / ID",
       "colEvaluators": "评估器",
       "colAgent": "评测 Agent",
       "colSource": "数据来源",
-      "colStrategy": "运行策略",
       "colStatus": "状态",
       "colCreated": "创建时间",
       "colUpdated": "更新时间",
       "evaluatorsMore": "{{first}} 等 {{count}} 个",
-      "strategyHistory": "基于历史数据评估",
-      "strategyContinuous": "基于新数据持续评估",
       "stop": "停止",
       "pause": "暂停",
       "resume": "启动",
@@ -6284,18 +6281,11 @@
         "stopTitle": "停止任务",
         "stopBody": "确定停止「{{name}}」？已完成评估的结果会保留。",
         "stopOk": "停止",
-        "pauseTitle": "暂停任务",
-        "pauseBody": "确定暂停「{{name}}」？暂停后新会话不再评估。",
-        "pauseOk": "暂停",
-        "resumeTitle": "启动任务",
-        "resumeBody": "确定启动「{{name}}」？将继续对抽样会话评估（产生评估费用）。",
-        "resumeOk": "启动",
         "deleteTitle": "删除任务",
         "deleteBody": "确定删除「{{name}}」？删除后不可恢复。",
         "deleteOk": "删除"
       },
       "copySuffix": " 副本",
-      "createdOnline": "持续评估任务已创建",
       "createdRun": "评估任务已启动",
       "errName": "请输入任务名称",
       "errAgent": "请选择评测 Agent",
@@ -6306,7 +6296,6 @@
       "newTitle": "创建评估任务",
       "stepData": "数据配置",
       "stepEvaluators": "选择评估器",
-      "submitOnline": "创建并启动",
       "submitRun": "创建并运行",
       "basic": "基础配置",
       "noAgents": "当前工作区没有运行中的 Agent",
@@ -6325,14 +6314,11 @@
       },
       "strategy": "运行策略",
       "strategyHistoryDesc": "对选定数据执行一次评估",
-      "strategyReplayDesc": "逐条调用 Agent 后评估",
       "strategyContinuousDesc": "对新会话持续抽样评估",
-      "sampling": "采样配置",
       "scope": "数据范围",
       "samplingRate": "采样比例（%）",
       "samplingHint": "参与评估的新会话比例",
       "sessionTimeout": "会话空闲超时（分钟）",
-      "sessionTimeoutHint": "会话空闲达到该时长后开始评估",
       "lookback": "时间窗口",
       "lookbackHint": "评估该窗口内的 Agent 会话",
       "hours": "近 {{count}} 小时",
@@ -6364,7 +6350,6 @@
       "previewSub": "来自所选数据源",
       "previewPickAgent": "选择评测 Agent 后可预览数据",
       "previewPickDataset": "选择数据集后可预览用例",
-      "previewContinuous": "将按 {{rate}}% 的比例对该 Agent 的新会话持续抽样评估。",
       "previewWindow": "近 {{hours}} 小时内观测到该 Agent 的 {{count}} 个会话。",
       "previewNoSessions": "近 7 天内未观测到该 Agent 的会话",
       "pickEvaluators": "选择评估器",
@@ -6383,7 +6368,6 @@
       "pickInsights": "选择分析类型",
       "errInsights": "请至少选择一种分析类型",
       "errInsightSessions": "洞察聚类至少需要 {{min}} 个会话",
-      "insightsNoContinuous": "持续洞察请在「在线评估」页面创建。",
       "insightsFewSessions": "所选数据不足 {{min}} 个会话，聚类可能没有结果。",
       "errLogs": "请至少选择一个日志流",
       "logs": {
@@ -6416,7 +6400,6 @@
         "showShared": "显示非会话日志流（{{count}}）",
         "slice": "会话切片"
       },
-      "colSourceStrategy": "数据来源 / 运行策略",
       "colCreatedUpdated": "创建 / 更新时间",
       "cw": {
         "target": "评估对象",
@@ -6462,7 +6445,7 @@
       "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。",
       "attention": {
         "title": "失败——需要查看",
-        "sub": "近 7 天失败的运行，同一 Agent 和数据集之后有运行成功即不再列出；以及失败的在线评估",
+        "sub": "近 7 天失败的运行，同一 Agent 和数据集之后有运行成功即不再列出",
         "empty": "没有失败的评估任务。"
       }
     },
@@ -6499,7 +6482,6 @@
       "results": "评估结果",
       "waitResults": "任务完成后展示评估结果。",
       "truncated": "结果较多，仅展示前一部分。",
-      "onlineErrors": "该时间范围内有 {{count}} 次评估调用失败。",
       "reason": {
         "insights_run": "这是洞察类任务，产出报告而非分数。",
         "no_batch": "该任务未发起评估批次。",
@@ -6614,7 +6596,8 @@
     "scorecard": {
       "tabs": {
         "agents": "按 Agent",
-        "all": "全部任务"
+        "runs": "一次性评估",
+        "online": "持续评估"
       },
       "desc": "看每个 Agent 经过多次评估后的得分变化。同一数据集的运行连成趋势线。",
       "listHint": "每个 Agent 一行：最新得分取它完成运行最多的基准",
@@ -6958,9 +6941,7 @@
       "customUnavailable": "自定义评估器加载失败：{{msg}}。列表仅显示内置评估器。"
     },
     "online": {
-      "title": "在线评估",
       "desc": "持续评判或聚类 Agent 的线上会话：评分模式用评估器为抽样会话打分，洞察模式把会话归纳为失败、意图与执行摘要报告。",
-      "new": "新建在线评估",
       "create": "创建",
       "editTitle": "编辑在线评估",
       "search": "搜索名称 / ID / 描述",

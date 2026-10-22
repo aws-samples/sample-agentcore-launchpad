@@ -600,6 +600,14 @@ describe("back target", () => {
     expect(backTarget({ other: 1 }).toString()).toBe("");
   });
 
+  it("falls back to the given tab without an opener (an online config's pages)", () => {
+    expect(backTarget(null, "tab=online").toString()).toBe("tab=online");
+    expect(backTarget({ other: 1 }, "tab=online").get("tab")).toBe("online");
+    // an opener always wins, even the bare default tab
+    expect(backTarget(backState("?tab=runs"), "tab=online").toString()).toBe("tab=runs");
+    expect(backTarget(backState(""), "tab=online").toString()).toBe("");
+  });
+
   it("returns to an outside opener's in-app path only", () => {
     expect(returnPath(returnState("/v2/assistant?view=detail&id=c1"))).toBe("/v2/assistant?view=detail&id=c1");
     expect(returnPath(backState("?tab=all"))).toBeNull();

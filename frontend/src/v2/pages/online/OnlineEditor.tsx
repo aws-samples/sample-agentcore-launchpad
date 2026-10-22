@@ -1,13 +1,14 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type EvaluatorRow, type OnlineEvalConfigRow, type OnlineEvalMode } from "../../../lib/api";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
+  copyDraft,
   createBody,
   draftFromRow,
   eligibleAgent,
@@ -19,6 +20,7 @@ import {
   insightLabel,
   isEditable,
   isTransient,
+  MAX_DESCRIPTION,
   MAX_EVALUATORS,
   MAX_FILTERS,
   modeOf,
@@ -30,6 +32,8 @@ import {
   withMode,
 } from "../../online";
 import { Alert, Button, Card, Field, FlowHeader, OptionCard, Select, Spin } from "../../ui";
+import { backTarget } from "../tasks/back";
+import { StrategySwitch } from "../tasks/StrategySwitch";
 
 function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (next: FilterDraft[]) => void }) {
   const { t } = useTranslation();
@@ -104,18 +108,31 @@ function toggleOrdered<T extends string>(all: readonly T[], picked: T[], value: 
   return all.filter((x) => (x === value ? !picked.includes(x) : picked.includes(x)));
 }
 
-/** Create (`id` null) or edit an agent-owned online evaluation config. */
-export function OnlineEditor({ id }: { id: string | null }) {
+/**
+ * 评估任务's continuous form: create an online evaluation config (`id` null:
+ * `?view=new&strategy=continuous`, `agent=` preselects the agent, `seedFrom` copies a
+ * config) or edit an agent-owned one (`?view=edit&kind=online&id=`).
+ */
+export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedFrom?: string | null }) {
   const { t } = useTranslation();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const toast = useV2Toast();
   const { can } = useAuth();
   const editing = id !== null;
   const existing = useLoad<OnlineEvalConfigRow | null>(() => (id ? api.v2OnlineConfig(id) : Promise.resolve(null)), `online-edit:${id}`);
+  // a copy starts from its source; a source that cannot be read leaves the defaults
+  const seed = useLoad(
+    () =>
+      !editing && seedFrom
+        ? api.v2OnlineConfig(seedFrom).then((source) => copyDraft(source, t("v2.tasks.copySuffix")))
+        : Promise.resolve(null),
+    `online-seed:${editing ? "" : seedFrom}`,
+  );
   const agents = useLoad(() => api.listAgents(), "agents");
   const evaluators = useLoad(() => api.v2Evaluators(), "evaluators");
   const [draft, setDraft] = useState<OnlineDraft>(newDraft);
-  const [agentId, setAgentId] = useState("");
+  const [agentId, setAgentId] = useState(() => (editing ? "" : (params.get("agent") ?? "")));
   const [enable, setEnable] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -125,8 +142,16 @@ export function OnlineEditor({ id }: { id: string | null }) {
   useEffect(() => {
     if (row) setDraft(draftFromRow(row));
   }, [row]);
+  const copied = seed.data;
+  useEffect(() => {
+    if (!copied) return;
+    setDraft(copied.draft);
+    setAgentId(copied.agentId);
+  }, [copied]);
 
   const eligible = useMemo(() => (agents.data?.agents ?? []).filter(eligibleAgent), [agents.data]);
+  // a hand-off or copied agent the form cannot watch (inactive, imported) is not picked
+  const pickedAgent = eligible.some((a) => a.id === agentId) ? agentId : "";
   const mode: OnlineEvalMode = row ? modeOf(row) : draft.mode;
   const patch = row ? patchBody(row, draft) : null;
   const dirty = patch ? Object.keys(patch).length > 0 : true;
@@ -137,19 +162,20 @@ export function OnlineEditor({ id }: { id: string | null }) {
 
   const submit = async () => {
     setError(null);
-    if (!editing && !agentId) return setError(t("v2.online.err.agent"));
+    if (!editing && !pickedAgent) return setError(t("v2.online.err.agent"));
     const problem = validateDraft(t, draft);
     if (problem) return setError(problem);
     setBusy(true);
     try {
+      // the detail's Back returns to where the form (or the edited detail) was opened from
       if (row && patch) {
         await api.v2UpdateOnlineConfig(row.config_id, patch);
         toast("success", t("v2.online.saved"));
-        setParams({ view: "detail", id: row.config_id });
+        setParams({ view: "detail", kind: "online", id: row.config_id }, { state: location.state });
       } else {
-        const created = await api.v2CreateOnlineConfig(createBody(agentId, draft, enable));
+        const created = await api.v2CreateOnlineConfig(createBody(pickedAgent, draft, enable));
         toast("success", t("v2.online.created"));
-        setParams({ view: "detail", id: created.config_id });
+        setParams({ view: "detail", kind: "online", id: created.config_id }, { state: location.state });
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -158,12 +184,19 @@ export function OnlineEditor({ id }: { id: string | null }) {
     }
   };
 
+  // edit returns to the detail it was opened from, create to the form's opener
+  const back = () =>
+    id
+      ? setParams({ view: "detail", kind: "online", id }, { state: location.state })
+      : setParams(backTarget(location.state, "tab=online"));
+
   if (editing && existing.loading && !row) return <Spin />;
   if (editing && existing.error && !row) return <Alert tone="error">{existing.error}</Alert>;
+  if (!editing && seedFrom && seed.loading && !copied) return <Spin />;
   if (row && !isEditable(row)) {
     return (
       <>
-        <FlowHeader title={t("v2.online.editTitle")} onBack={() => setParams({ view: "detail", id: row.config_id })} />
+        <FlowHeader title={t("v2.online.editTitle")} onBack={back} />
         <Alert tone="warn">{t("v2.online.notEditable")}</Alert>
       </>
     );
@@ -172,8 +205,8 @@ export function OnlineEditor({ id }: { id: string | null }) {
   return (
     <>
       <FlowHeader
-        title={editing ? t("v2.online.editTitle") : t("v2.online.new")}
-        onBack={() => setParams(row ? { view: "detail", id: row.config_id } : {})}
+        title={editing ? t("v2.online.editTitle") : t("v2.tasks.newTitle")}
+        onBack={back}
         end={
           <Button
             kind="primary"
@@ -185,6 +218,9 @@ export function OnlineEditor({ id }: { id: string | null }) {
           </Button>
         }
       />
+      {/* until the agents load, the hand-off is carried as it came */}
+      {!editing && <StrategySwitch value="continuous" agentId={agents.data ? pickedAgent : agentId} />}
+      {!editing && seed.error && <Alert tone="error">{seed.error}</Alert>}
       {error && <Alert tone="error">{error}</Alert>}
       <Card title={t("v2.tasks.basic")}>
         <div className="v2-form cols-2">
@@ -193,7 +229,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
               <input className="v2-input" value={row?.agent_name ?? row?.agent_id ?? "—"} readOnly />
             ) : (
               <Select
-                value={agentId}
+                value={pickedAgent}
                 placeholder={t("v2.common.choose")}
                 options={eligible.map((a) => ({ value: a.id, label: `${a.name} · ${a.method}` }))}
                 onChange={setAgentId}
@@ -202,7 +238,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
             )}
           </Field>
           <Field label={t("v2.tasks.description")} hint={t("v2.online.descHint")}>
-            <input className="v2-input" maxLength={200} value={draft.description} onChange={(e) => set({ description: e.target.value })} data-testid="v2-online-desc" />
+            <input className="v2-input" maxLength={MAX_DESCRIPTION} value={draft.description} onChange={(e) => set({ description: e.target.value })} data-testid="v2-online-desc" />
           </Field>
           <Field label={t("v2.online.colMode")} full hint={editing ? t("v2.online.modeFixed") : undefined}>
             <div className="v2-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
