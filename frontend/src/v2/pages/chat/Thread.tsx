@@ -2,7 +2,7 @@ import { Database, MessagesSquare, ThumbsDown, ThumbsUp, Wrench } from "lucide-r
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { MessageAttachments } from "../../../components/chat/AttachmentViews";
+import { MessageAttachments, ReplyAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
 import type { FeedbackVerdict } from "../../../lib/api";
 import { BudgetRefusalLink } from "../../BudgetBanner";
@@ -19,6 +19,7 @@ export function Thread({
   messages,
   userLabel,
   agentLabel,
+  agentId,
   restoring,
   onRate,
   onRetry,
@@ -27,6 +28,8 @@ export function Thread({
   messages: ChatMessage[];
   userLabel: string;
   agentLabel: string;
+  /** the agent the thread talks to: reply images are read back through it */
+  agentId?: string;
   restoring: boolean;
   /** thumbs on persisted answers; omitted ⇒ no controls. `null` withdraws. */
   onRate?: (messageId: number, verdict: FeedbackVerdict | null) => void;
@@ -69,7 +72,8 @@ export function Thread({
               )}
             </div>
             <div className="v2-chat-bub">
-              <Markdown text={msg.text} />
+              {msg.text && <Markdown text={msg.text} />}
+              <ReplyAttachments agentId={agentId} files={msg.replyAttachments} />
               {msg.streaming && <span className="v2-chat-caret" />}
             </div>
             {onRate && msg.id != null && !msg.streaming && (

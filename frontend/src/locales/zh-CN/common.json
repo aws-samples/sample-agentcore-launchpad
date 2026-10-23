@@ -2579,6 +2579,21 @@
         "custom": "此自定义或导入智能体的原生附件契约尚不明确。目前可使用文本文件和 PDF 文本提取；图片及扫描件需要已确认支持原生附件的智能体。",
         "model": "此智能体的当前模型尚未启用原生文件支持，可使用文本文件和 PDF 文本提取。如需原生文件，请选择支持的模型、重新发布，再新建会话。",
         "not_active": "此智能体尚未处于活动状态，请完成部署后再发送附件。"
+      },
+      "reply": {
+        "label": "Agent 回复的图片",
+        "loading": "正在加载 {{name}}…",
+        "unavailable": "“{{name}}”已不可用。",
+        "open": "在新标签页中打开 {{name}} 原图",
+        "dropped": "Agent 回复的图片（“{{name}}”）未显示：{{reason}}",
+        "unnamed": "未命名",
+        "reasons": {
+          "too_many": "本轮回复的图片数量超过上限。",
+          "too_large": "图片超过大小上限。",
+          "invalid": "内容不是与声明类型一致的有效 PNG、JPEG、WebP 或 GIF 图片。",
+          "unsupported_type": "仅显示 PNG、JPEG、WebP 和 GIF 图片。",
+          "storage_unavailable": "平台未能保存该图片，请稍后重试。"
+        }
       }
     }
   },
@@ -5686,6 +5701,12 @@
         "byocModelList": "模型列表",
         "byocModelsMax": "第一个为主模型，最多 {{max}} 个。",
         "byocEnvSub": "注入到运行时的环境变量；与平台注入的同名变量冲突时以这里的值为准。",
+        "byocBuiltinsTitle": "AgentCore 内置工具",
+        "byocBuiltinsSub": "为你代码中用到的 AgentCore 内置工具，给执行角色授予会话权限。",
+        "byocBuiltinsNote": "只授予执行角色对应的会话权限，平台不会把工具接入你的代码，需在代码里自己调用（如 bedrock_agentcore browser_session / code_session）。",
+        "byocBuiltinBrowser": "AgentCore Browser",
+        "byocBuiltinCodeInterpreter": "AgentCore Code Interpreter",
+        "byocBuiltinsReview": "内置工具权限",
         "envEmpty": "未设置环境变量",
         "contractShow": "查看运行时契约",
         "contractHide": "收起运行时契约",

@@ -203,6 +203,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # ---- chat: the member-facing invoke surface ----
     ("POST", "/api/chat/{agent_id}"): MEMBER,
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
+    # an image an agent answered with (agent visibility + PrivateSessions in the handler)
+    ("GET", "/api/chat/{agent_id}/attachments/{attachment_id}"): MEMBER,
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
     ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): MEMBER,

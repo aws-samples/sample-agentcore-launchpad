@@ -162,6 +162,7 @@ def test_hidden_agent_answers_each_routes_missing_error(world):
         ("GET", f"/api/chat/{hidden}/sessions"),
         ("POST", f"/api/chat/{hidden}/sessions/sess-12345678/stop"),
         ("GET", f"/api/chat/{hidden}/history?session_id=sess-12345678"),
+        ("GET", f"/api/chat/{hidden}/attachments/{'a' * 32}"),
         ("GET", f"/api/chat/{hidden}/memory?session_id=sess-12345678"),
     )
     _refused(

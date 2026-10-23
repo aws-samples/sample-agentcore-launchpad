@@ -15,7 +15,13 @@ import {
   useToast,
   ViewHead,
 } from "../components";
-import { AttachmentHint, MessageAttachments, PendingAttachments } from "../components/chat/AttachmentViews";
+import {
+  AttachmentHint,
+  MessageAttachments,
+  PendingAttachments,
+  ReplyAttachments,
+} from "../components/chat/AttachmentViews";
+import { appendReplyAttachment, replyAttachmentOf } from "../components/chat/replyAttachments";
 import type { PendingAttachment } from "../components/chat/attachments";
 import {
   attachmentMediaType,
@@ -28,6 +34,7 @@ import type {
   AuthRequiredEvent,
   ChatAttachmentMetadata,
   ChatHistoryMessage,
+  ChatReplyAttachment,
   ChatRequest,
   ChatSessionInfo,
 } from "../lib/api";
@@ -41,6 +48,8 @@ interface Message {
   name?: string;
   streaming?: boolean;
   attachments?: ChatAttachmentMetadata[];
+  /** kind "agent": the images the agent answered with */
+  replyAttachments?: ChatReplyAttachment[];
   /** kind "auth": the as_user consent ask (url is https-only, else null) */
   auth?: AuthAsk;
 }
@@ -248,9 +257,13 @@ export function Chat() {
       setMessages(
         rows.map((r): Message =>
           r.role === "user"
-            ? { kind: "user", text: r.text, attachments: r.attachments }
+            ? { kind: "user", text: r.text, attachments: r.attachments as ChatAttachmentMetadata[] | undefined }
             : r.role === "agent"
-              ? { kind: "agent", text: r.text }
+              ? {
+                  kind: "agent",
+                  text: r.text,
+                  replyAttachments: r.attachments?.length ? (r.attachments as ChatReplyAttachment[]) : undefined,
+                }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
                 : r.role === "auth"
@@ -368,6 +381,14 @@ export function Chat() {
             return next;
           });
           agentIdxSet = true;
+        } else if (event === "attachment") {
+          // a reply image joins the open answer bubble, as the backend persists it
+          const attachment = replyAttachmentOf(payload);
+          if (attachment) {
+            const open = agentIdxSet;
+            setMessages((m) => appendReplyAttachment(m, attachment, open));
+            agentIdxSet = true;
+          }
         } else if (event === "error") {
           failed = true;
           const message = localizedMessage(payload.code ?? "", payload.message ?? t("chatPage.sendFailed"));
@@ -631,7 +652,8 @@ export function Chat() {
                     {msg.streaming ? " · STREAMING" : ""}
                   </div>
                   <div className="bub">
-                    <Markdown text={msg.text} />
+                    {msg.text && <Markdown text={msg.text} />}
+                    <ReplyAttachments agentId={agentId || undefined} files={msg.replyAttachments} />
                     {msg.streaming && <span className="caret" />}
                   </div>
                 </div>

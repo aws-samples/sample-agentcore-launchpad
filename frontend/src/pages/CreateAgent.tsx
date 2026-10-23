@@ -54,7 +54,11 @@ import {
   authToolsCarried,
   BUILTIN_TOOLS,
   buildAgentSpec,
+  BYOC_BUILTINS,
   BYOC_MODELS_MAX,
+  type ByocBuiltin,
+  byocBuiltinLabelKey,
+  byocBuiltinsFromStored,
   DEFAULT_AGENT_SDK,
   DEFAULT_SESSION_MOUNT,
   defaultModelForMethod,
@@ -918,6 +922,8 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   };
   const [byocContractOpen, setByocContractOpen] = useState(false);
   const [byocDescription, setByocDescription] = useState("");
+  // byoc builtin IAM declarations (browser / code-interpreter) — byoc-only state
+  const [byocBuiltins, setByocBuiltins] = useState<ByocBuiltin[]>([]);
   const byocFileRef = useRef<HTMLInputElement>(null);
   // the staged zip, kept so a Python-version change can re-run the
   // requirements pre-resolve (re-staging the same bytes under the new target)
@@ -1156,6 +1162,7 @@ const deployLock = !canDeploy
     setByocEnvRows([]);
     setByocContractOpen(false);
     setByocDescription("");
+    setByocBuiltins([]);
     setDetailByoc(null);
     setDetailByocModels([]);
     setSubmitError(null);
@@ -1251,6 +1258,7 @@ const deployLock = !canDeploy
     byocModels,
     byocEnvRows,
     byocDescription,
+    byocBuiltins,
     authTools,
   });
   const specCatalogs: AgentFormCatalogs = { gatewayTargets, remoteMcp, storedGatewayConfig, kbInfo };
@@ -1573,6 +1581,7 @@ const deployLock = !canDeploy
       setByocModelDraft("");
       setByocDescription(spec.system_prompt ?? "");
       setByocEnvRows(Object.entries(spec.env ?? {}).map(([key, value]) => ({ key, value })));
+      setByocBuiltins(byocBuiltinsFromStored(spec.tools ?? []));
       // a re-publish reuses the stored upload unless a new zip is staged
       if (spec.byoc.upload_id) {
         void api
@@ -2338,6 +2347,33 @@ const deployLock = !canDeploy
                   >
                     + {t("create.configure.byocEnvAdd")}
                   </Btn>
+                </div>
+                <div className="field" data-testid="byoc-builtins">
+                  <label>{t("v2.agents.wizard.byocBuiltinsTitle")}</label>
+                  <div className="selchips">
+                    {BYOC_BUILTINS.map((name) => {
+                      const on = byocBuiltins.includes(name);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          className={`selchip${on ? " on" : ""}`}
+                          style={{ cursor: "pointer" }}
+                          aria-pressed={on}
+                          onClick={() =>
+                            setByocBuiltins((prev) => (on ? prev.filter((x) => x !== name) : [...prev, name]))
+                          }
+                        >
+                          {t(byocBuiltinLabelKey(name))} 
+                          {on ? "✓" : "+"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="note" style={{ marginTop: 8 }}>
+                    <span className="i">[i]</span>
+                    <span>{t("v2.agents.wizard.byocBuiltinsNote")}</span>
+                  </div>
                 </div>
                 <ClassicIdentitySection
                   form={agentForm()}

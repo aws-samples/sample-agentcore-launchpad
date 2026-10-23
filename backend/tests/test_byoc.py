@@ -212,7 +212,7 @@ def test_byoc_refuses_a2a_and_attachments():
     with pytest.raises(ValidationError, match="HTTP"):
         AgentSpec(**_byoc_spec(protocol="a2a"))
     for field, value in (
-        ("tools", [{"type": "builtin", "name": "browser"}]),
+        ("tools", [{"type": "mcp", "name": "open-mcp", "config": {"url": "https://x"}}]),
         ("toolkits", ["hr_assistant"]),
         ("skills", ["s3://b/skills/x/"]),
         ("knowledge_bases", [{"kb_id": "KB123"}]),
@@ -1411,3 +1411,102 @@ def test_code_zip_with_the_adot_launcher_deploys_instrumented(monkeypatch, ships
     byoc_dep._stage_deploy(resumed, _get_agent(ids[0]))
     cfg = stub.created_with["agentRuntimeArtifact"]["codeConfiguration"]
     assert cfg["entryPoint"] == entry
+
+
+def test_byoc_accepts_builtin_tools_as_iam_declarations():
+    from app.services import agent_iam
+    spec = AgentSpec(**_byoc_spec(tools=[{"type": "builtin", "name": "browser"},
+                                         {"type": "builtin", "name": "code-interpreter"}]))
+    assert agent_iam._builtin_names(spec) == {"browser", "code-interpreter"}
+    with pytest.raises(ValidationError, match="not supported"):
+        AgentSpec(**_byoc_spec(tools=[{"type": "builtin", "name": "web-search"}]))
+    with pytest.raises(ValidationError, match="config is not used"):
+        AgentSpec(**_byoc_spec(tools=[{"type": "builtin", "name": "browser",
+                                       "config": {"x": 1}}]))
+
+
+def _byoc_gateway_tool(**config) -> dict:
+    return {"type": "gateway", "name": "hr_lookup",
+            "config": {"gateway_id": "launchpad-gw-abcde12345", **config}}
+
+
+def test_byoc_accepts_gateway_tools_as_iam_and_env_declarations():
+    spec = AgentSpec(**_byoc_spec(tools=[_byoc_gateway_tool(tools=["hr_lookup___find"])]))
+    assert spec.tools[0].config["tools"] == ["hr_lookup___find"]
+    # the shared ToolRef checks still apply to a byoc gateway ref
+    with pytest.raises(ValidationError, match="config.tools"):
+        AgentSpec(**_byoc_spec(tools=[_byoc_gateway_tool(tools=[])]))
+    # gateway tools never carry auth, byoc or not
+    with pytest.raises(ValidationError, match="auth applies to rest and mcp"):
+        AgentSpec(**_byoc_spec(tools=[{
+            **_byoc_gateway_tool(),
+            "auth": {"connection": "c1", "kind": "oauth2"},
+        }]))
+
+
+def test_byoc_gateway_tool_grants_workload_identity_and_gateway_invoke():
+    from app.services import agent_iam
+    from app.services.agent_iam import RoleContext
+
+    ctx = RoleContext(
+        account_id="123456789012", region="us-west-2",
+        artifacts_bucket="launchpad-artifacts-123456789012-us-west-2",
+        ecr_repo_arn="arn:aws:ecr:us-west-2:123456789012:repository/launchpad-agents",
+        memory_id="launchpad_memory-abc123",
+    )
+    spec = AgentSpec(**_byoc_spec(tools=[_byoc_gateway_tool()]))
+    statements = {s["Sid"]: s for s in agent_iam.policy_document(spec, ctx)["Statement"]}
+    assert {"AgentCoreWorkloadIdentity", "IdentityVaultSecrets",
+            "AgentCoreGatewayInvoke"} <= set(statements)
+    assert statements["AgentCoreGatewayInvoke"]["Resource"] == [
+        "arn:aws:bedrock-agentcore:*:123456789012:gateway/launchpad-gw-abcde12345"
+    ]
+    # no gateway_id → the workload-token grant only, no InvokeGateway
+    bare = AgentSpec(**_byoc_spec(tools=[{"type": "gateway", "name": "hr_lookup"}]))
+    sids = {s["Sid"] for s in agent_iam.policy_document(bare, ctx)["Statement"]}
+    assert "AgentCoreWorkloadIdentity" in sids
+    assert "AgentCoreGatewayInvoke" not in sids
+
+
+def test_byoc_gateway_tool_gets_the_gateway_runtime_environment():
+    from app.deployer.environment import runtime_environment
+    from app.services.gateway_bootstrap import GATEWAY_SCOPE
+    from app.templates.gateway_support import (
+        ENV_PROVIDER,
+        ENV_SCOPE,
+        ENV_TOOLS,
+        ENV_URL,
+        ENV_WORKLOAD,
+    )
+
+    spec = AgentSpec(**_byoc_spec(tools=[
+        _byoc_gateway_tool(tools=["hr_lookup___find"]),
+        {"type": "gateway", "name": "payroll"},
+    ]))
+    resources = {
+        "gateway_url": "https://gw.example/mcp",
+        "oauth_provider_arn": "arn:aws:bedrock-agentcore:us-west-2:123456789012:"
+                              "token-vault/default/oauth2credentialprovider/launchpad-gw-m2m",
+    }
+    env = runtime_environment(spec, resources)
+    assert env[ENV_URL] == "https://gw.example/mcp"
+    assert env[ENV_PROVIDER] == "launchpad-gw-m2m"
+    assert env[ENV_SCOPE] == GATEWAY_SCOPE
+    assert env[ENV_TOOLS] == "hr_lookup___find,payroll___*"
+    # the byoc deployer supplies no workload name (see docs/architecture.md BYOC)
+    assert ENV_WORKLOAD not in env
+    assert runtime_environment(spec, resources, workload_name="wl-1")[ENV_WORKLOAD] == "wl-1"
+
+
+def test_byoc_still_refuses_unwired_attachments_alongside_gateway_tools():
+    gateway = [_byoc_gateway_tool()]
+    for field, value in (
+        ("toolkits", ["hr_assistant"]),
+        ("skills", ["s3://b/skills/x/"]),
+        ("knowledge_bases", [{"kb_id": "KB123"}]),
+    ):
+        with pytest.raises(ValidationError, match="not supported by the byoc"):
+            AgentSpec(**_byoc_spec(tools=gateway, **{field: value}))
+    with pytest.raises(ValidationError, match="not supported by the byoc"):
+        AgentSpec(**_byoc_spec(tools=[*gateway, {"type": "mcp", "name": "open-mcp",
+                                                 "config": {"url": "https://x"}}]))

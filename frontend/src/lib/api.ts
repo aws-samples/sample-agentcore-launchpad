@@ -155,6 +155,19 @@ export interface ChatAttachmentMetadata {
   delivery: "native" | "text" | "pdf_text";
 }
 
+/** An image the agent answered with (`attachment` SSE event, agent history rows).
+ *  Metadata only: a stored image's bytes are read through `chatApi.replyAttachment`. */
+export interface ChatReplyAttachment {
+  name: string;
+  status: "stored" | "dropped";
+  id?: string;
+  media_type?: string;
+  size_bytes?: number;
+  sha256?: string;
+  /** dropped: too_many | too_large | invalid | unsupported_type | storage_unavailable */
+  reason_code?: string;
+}
+
 export interface ChatRequest {
   prompt: string;
   session_id: string | null;
@@ -188,6 +201,13 @@ export interface ChatStreamPayload {
   gateway_id?: string | null;
   /** `saved` (console `/api/chat` only): ledger id of the answer just persisted */
   message_id?: number;
+  /** `attachment`: one reply image's metadata (see ChatReplyAttachment; also `name`) */
+  id?: string;
+  media_type?: string;
+  size_bytes?: number;
+  sha256?: string;
+  status?: "stored" | "dropped";
+  reason_code?: string;
 }
 
 export interface ChatHistoryMessage {
@@ -196,7 +216,8 @@ export interface ChatHistoryMessage {
   role: string;
   text: string;
   name: string | null;
-  attachments?: ChatAttachmentMetadata[];
+  /** user rows: the files sent; agent rows: the images answered with */
+  attachments?: ChatAttachmentMetadata[] | ChatReplyAttachment[];
   /** agent answers: the caller's thumbs verdict, null when unrated */
   verdict?: FeedbackVerdict | null;
 }
@@ -7132,6 +7153,16 @@ export const feedbackApi = {
 };
 
 export const chatApi = {
+  /**
+   * A reply image's bytes. Fetched (not linked): an `<img src>` skips the
+   * `window.fetch` wrapper that stamps `X-Workspace` (see skillLabJobArtifactRaw).
+   */
+  replyAttachment: async (agentId: string, attachmentId: string) => {
+    const url = `/api/chat/${encodeURIComponent(agentId)}/attachments/${encodeURIComponent(attachmentId)}`;
+    const res = await fetch(url);
+    if (!res.ok) return parseResponse<never>(url, res);
+    return res.blob();
+  },
   history: (agentId: string, sessionId: string) =>
     request<{ messages: ChatHistoryMessage[] }>(
       `/api/chat/${encodeURIComponent(agentId)}/history?session_id=${encodeURIComponent(sessionId)}`,

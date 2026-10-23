@@ -142,27 +142,34 @@ def _inspect_pdf(data: bytes, *, extract: bool, name: str) -> dict:
     return info
 
 
-def _validate_image(data: bytes, extension: str, name: str) -> None:
+def image_is_valid(data: bytes, media_type: str) -> bool:
+    """True when ``data`` decodes as an image of exactly ``media_type`` within the
+    dimension/pixel limits. Shared by inbound files and reply attachments."""
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(data)) as image:
-                media_type = Image.MIME.get(image.format or "")
-                if media_type != IMAGE_TYPES[extension]:
-                    raise ValueError("image does not match its extension")
+                if Image.MIME.get(image.format or "") != media_type:
+                    return False
                 if (
                     max(image.size) > MAX_IMAGE_DIMENSION
                     or image.width * image.height > MAX_IMAGE_PIXELS
                 ):
-                    raise ValueError("image dimensions exceed limits")
+                    return False
                 image.verify()
             # verify() checks container structure only for some formats (JPEG
             # is a no-op). Decode too so broken pixels fail before invocation.
             with Image.open(BytesIO(data)) as image:
                 image.load()
     except (ValueError, OSError, SyntaxError, UnidentifiedImageError,
-            Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise _error("invalid", "Invalid image format or dimensions.", name=name) from exc
+            Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return False
+    return True
+
+
+def _validate_image(data: bytes, extension: str, name: str) -> None:
+    if not image_is_valid(data, IMAGE_TYPES[extension]):
+        raise _error("invalid", "Invalid image format or dimensions.", name=name)
 
 
 def prepare_attachments(

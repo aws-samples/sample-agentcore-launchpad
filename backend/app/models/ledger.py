@@ -429,6 +429,27 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ChatOutputAttachment(Base):
+    """One image an agent answered with, stored by the platform in the workspace's
+    artifacts bucket (services/outbound_attachments.py). Identifiers and metadata
+    only — the bytes live in S3 under ``storage_key``, never in the ledger."""
+
+    __tablename__ = "chat_output_attachments"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(256), index=True)
+    # which entrance may read it back: "console", or "apikey:<api_keys.id>" (/v1)
+    owner: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(32))
+    size_bytes: Mapped[int] = mapped_column(default=0)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_key: Mapped[str] = mapped_column(String(1024))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class ChatFeedback(Base):
     """One person's thumbs verdict on one agent answer of the console chat.
 

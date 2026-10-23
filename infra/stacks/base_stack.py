@@ -67,6 +67,17 @@ class LaunchpadBaseStack(Stack):
             enforce_ssl=True,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
+            # Images agents answered with in Chat (backend services/
+            # outbound_attachments.py): kept 30 days; the bucket is versioned, so
+            # the expired current version's noncurrent copy goes a day later.
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="ExpireChatReplyAttachments",
+                    prefix="chat-attachments/",
+                    expiration=Duration.days(30),
+                    noncurrent_version_expiration=Duration.days(1),
+                )
+            ],
         )
 
         # ---- ECR repo for Claude-SDK container images ----

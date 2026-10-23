@@ -37,8 +37,23 @@ curl -s -X POST localhost:8000/api/apikeys -H 'Content-Type: application/json' \
 curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
   -H "X-Api-Key: $LP_KEY" -H 'Content-Type: application/json' \
   -d '{"prompt": "What is 2+2?", "session_id": null}'
-# → {"agent":"…","text":"4","session_id":"…","latency_ms":1234}
+# → {"agent":"…","text":"4","session_id":"…","attachments":[],"latency_ms":1234}
 ```
+
+**回复附件。** 自带代码的运行时用图片作答时（见
+[架构文档](architecture.md#agent-reply-attachments-outbound-images)），`attachments`
+列出这些图片——只有元数据，从不含 base64：已保存的图片为
+`{id, name, media_type, size_bytes, sha256, status: "stored", url}`，被平台拒绝的为
+`{name, status: "dropped", reason_code}`（`too_many`、`too_large`、`invalid`、
+`unsupported_type`、`storage_unavailable`）。从 `url` 下载原图：
+
+```bash
+curl -s localhost:8000/v1/agents/<AGENT_ID>/attachments/<ATTACHMENT_ID> \
+  -H "X-Api-Key: $LP_KEY" -o shot.png
+```
+
+只有产生该轮对话的 API key 可以读取（其他 key、其他 agent 或已过期的图片 →
+`404 chat.attachment_not_found`）。图片随存储桶的生命周期规则过期（hub 桶为 30 天）。
 
 ## 流式调用(SSE) / Streaming invoke
 
@@ -60,6 +75,9 @@ AgentCore Memory 随之而来)。
 `tool` 为目录名 `<target>___<tool>`,`gateway_id` 为工作区网关;否则为 Harness 工具名与
 `null`;仅当原因中指明判定策略时才有 `policy_id`)。智能体自己的回答仍会继续输出;
 客户端可忽略这两类事件。
+
+`attachment` 事件携带一张回复图片的元数据，形状与同步回复的 `attachments` 条目相同
+（含 `url`），紧随其所属的文本之后。
 
 ## Python
 
@@ -749,7 +767,8 @@ Agent 没有可挂载的托管网关、已部署配置中没有它，或本轮�
 | `POST` | `/api/identity/consent-portal` | **管理员**——`202 {gateway_id, portal}`。请求体 `{name, description?, connection, scopes[]（默认 [openid]）, audience?, execution_role_arn}`：为 as_user 网关目标创建门户（`connection` 为入站 IdP，与网关 JWT 授权器同一 issuer；执行角色由运维提供）。不可授予成员：`identity.manage` 不覆盖此接口。`409 identity.gateway_missing`／`identity.consent_portal_exists`，`422 identity.invalid_portal_name`／`identity.invalid_role_arn`／`identity.role_account_mismatch`／`identity.portal_scopes`；见 [identity.md §7.6](identity.md#76-consent-portal-as_user-gateway-targets) |
 | `DELETE` | `/api/identity/consent-portal` | **管理员**——`{deleted: true}`；`404 identity.consent_portal_not_found` |
 | `GET` | `/api/chat/{agent_id}/sessions` | 该 agent 可回放的会话：`{session_id, actor_id, turns, last_at, ended_at, preview}`——`ended_at` 在控制台显式结束 runtime 会话后写入，仍存活或只是空闲时为 `null` |
-| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序；每条带台账 `id` 和调用者自己的 `verdict`（`up`/`down`/`null`） |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序；每条带台账 `id` 和调用者自己的 `verdict`（`up`/`down`/`null`）。agent 行的 `attachments` 是其回复图片（`{id, name, media_type, size_bytes, sha256, status}`，或被丢弃的 `{name, status, reason_code}`） |
+| `GET` | `/api/chat/{agent_id}/attachments/{attachment_id}` | 一张回复图片的字节（流式返回，`Content-Type` 为校验过的媒体类型，带 `nosniff`、`Content-Security-Policy: default-src 'none'`、`Cache-Control: private`）。调用者必须能看到该 agent，图片必须来自本 workspace 的控制台 Chat，且其会话不能是其他主体的私有会话；否则——以及图片过期后——返回 `404 chat.attachment_not_found`。控制台流中的 `attachment` 事件并入当前打开的回答气泡（或新开一个），并保存在该回答的历史行上 |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **结束会话**——数据面 `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`。AWS 回 `ResourceNotFoundException`（会话早已结束或因空闲过期）时 `already_ended: true`，视为成功而非错误。台账行保留（历史仍可回放）并打上 `ended_at`；之后若在同一 id 下再发一轮，会开启新的 runtime 会话并清掉该标记。只有 runtime 支撑的 agent 才可结束（`zip_runtime`、`studio`、`container`、已发现的 runtime）；托管 Harness——无论自建还是导入——没有结束会话的操作，返回 409 `chat.session_stop_unsupported`，`detail.reason_code` 为 `harness`。其他 agent 或其他 workspace 的会话返回 404 `chat.session_not_found`。撑过 botocore 重试仍然出现的 `RetryableConflictException` 映射为 409 `aws.conflict` |
 
 结束是显式动作：控制台的「新会话」只在本地忘掉 id，留下的 runtime 会话会自行空闲过期。

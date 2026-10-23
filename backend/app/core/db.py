@@ -26,6 +26,7 @@ WORKSPACE_SCOPED_TABLES = (
     "deployments",
     "chat_sessions",
     "chat_messages",
+    "chat_output_attachments",
     "api_keys",
     "policy_decisions",
     "policy_changes",
@@ -843,6 +844,11 @@ def _migrate_workspace_columns(bind) -> None:
         # born with the column (and so is a console-v3-era table); listed so the
         # scoped-tables drift test holds and the index is ensured
         "chat_feedback": "ALTER TABLE chat_feedback ADD COLUMN workspace_id VARCHAR(32)",
+        # born with the column (agent reply attachments); listed so the scoped-tables
+        # drift test holds and the index is ensured
+        "chat_output_attachments": (
+            "ALTER TABLE chat_output_attachments ADD COLUMN workspace_id VARCHAR(32)"
+        ),
         # born with the column (a console-v3-era table too); listed so the
         # scoped-tables drift test holds and the index is ensured
         "alert_rules": "ALTER TABLE alert_rules ADD COLUMN workspace_id VARCHAR(32)",

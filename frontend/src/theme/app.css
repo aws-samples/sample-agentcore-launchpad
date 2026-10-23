@@ -382,6 +382,11 @@ td.chipcell{min-width:170px}
 .chat-attachment-remove:hover{color:var(--crit)}
 .chat-attachment-remove:disabled{opacity:.4;cursor:default}
 .chat-attachment-error{padding:10px 16px 0;color:var(--crit);font-size:12px;overflow-wrap:anywhere}
+.chat-reply-images{display:flex;flex-direction:column;gap:8px;list-style:none;padding:0;margin:8px 0 0;min-width:0}
+.chat-reply-image{min-width:0;max-width:100%}
+.chat-reply-image a{display:inline-block;max-width:100%;cursor:zoom-in}
+.chat-reply-image-img{display:block;max-width:100%;height:auto;border:1px solid var(--line-2);border-radius:4px}
+.chat-reply-image-note{font-size:12px;color:var(--ink-2);overflow-wrap:anywhere}
 .histrow:disabled{cursor:wait;opacity:.65}
 .chatbar .input::placeholder{color:var(--ink-3)}
 
@@ -407,6 +412,8 @@ td.chipcell{min-width:170px}
 .md th,.md td{border:1px solid var(--line);padding:5px 10px;text-align:left}
 .md th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--ink-3);background:var(--panel-2);font-weight:500;text-transform:uppercase}
 .md input[type=checkbox]{accent-color:var(--amber);margin-right:6px}
+/* agent-emitted images (e.g. a browser screenshot URL): fit the bubble, keep aspect */
+.md img{display:block;max-width:100%;height:auto;margin:8px 0;border:1px solid var(--line);border-radius:4px}
 /* hljs tokens → launchpad palette (rehype-highlight classes) */
 .md .hljs-comment,.md .hljs-quote{color:var(--ink-3);font-style:italic}
 .md .hljs-keyword,.md .hljs-selector-tag,.md .hljs-literal,.md .hljs-doctag,.md .hljs-meta{color:var(--s5)}

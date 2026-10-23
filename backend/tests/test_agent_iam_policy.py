@@ -408,6 +408,16 @@ class TestBuiltinTools:
         assert "AgentCoreBrowser" in sids
         assert "AgentCoreCodeInterpreter" not in sids
 
+    def test_byoc_builtin_declaration_grants_the_session_actions(self):
+        spec = _spec(method="byoc", system_prompt="",
+                     byoc={"artifact_kind": "code_zip", "upload_id": "u1"},
+                     tools=[{"type": "builtin", "name": "browser"}])
+        sids = _sids(spec)
+        assert "AgentCoreBrowser" in sids
+        assert "AgentCoreCodeInterpreter" not in sids
+        assert "bedrock-agentcore:StartBrowserSession" in (
+            _statement(spec, "AgentCoreBrowser")["Action"])
+
     def test_a_gateway_tool_grants_a_workload_token_not_a_sandbox(self):
         spec = _spec(tools=[{"type": "gateway", "name": "hr_lookup"}])
         sids = _sids(spec)

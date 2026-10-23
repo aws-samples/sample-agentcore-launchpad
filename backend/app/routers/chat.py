@@ -8,7 +8,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
-from app.assistant.sessions import refuse_assistant_session
+from app.assistant.principal import principal_of
+from app.assistant.sessions import PrivateSessions, refuse_assistant_session
 from app.core.billing_policy import SOURCE_CHAT
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError, envelope, mapped_aws_error
@@ -23,6 +24,7 @@ from app.services import (
     context_layer_gateway,
     memory_ownership,
     oauth_sessions,
+    outbound_attachments,
     policy_identity,
 )
 from app.services import feedback as feedback_service
@@ -248,16 +250,20 @@ def chat(
         # chain never see it.
         session_id = req.session_id
         answer_parts: list[str] = []
+        # reply images of the open answer: metadata only (the bytes are in S3)
+        answer_attachments: list[dict[str, Any]] = []
         pending_asks: list[tuple[str, str | None]] = []
 
         def close_bubble() -> str | None:
             """Persist the open answer (+ its deferred asks); the `saved` frame, or
             None when there was no answer to persist."""
             message_id = None
-            if answer_parts and session_id:
+            if (answer_parts or answer_attachments) and session_id:
                 message_id = _save_message(workspace_id, agent.id, session_id, "agent",
-                                           "".join(answer_parts))
+                                           "".join(answer_parts),
+                                           attachments=list(answer_attachments) or None)
             answer_parts.clear()
+            answer_attachments.clear()
             for provider, tool in pending_asks:
                 _save_message(workspace_id, agent.id, session_id, "auth", provider, name=tool)
             pending_asks.clear()
@@ -265,7 +271,9 @@ def chat(
                 return None
             return sse_encode({"event": "saved", "data": {"message_id": message_id}})
 
-        stream_kwargs: dict[str, Any] = {"meter": meter}
+        stream_kwargs: dict[str, Any] = {
+            "meter": meter, "attachment_owner": outbound_attachments.CONSOLE_OWNER,
+        }
         if prepared:
             stream_kwargs["attachments"] = prepared
         if names_user:
@@ -330,6 +338,9 @@ def chat(
                               data.get("reason", ""), name=data.get("tool"))
             elif kind == "delta":
                 answer_parts.append(data.get("text", ""))
+            elif kind == "attachment":
+                # joins the open answer bubble (or opens one), as the console renders it
+                answer_attachments.append({k: v for k, v in data.items() if k != "url"})
             elif kind == "error" and session_id:
                 if saved := close_bubble():  # keep the partial answer the user saw
                     yield saved
@@ -491,6 +502,37 @@ def session_history(
             for r in rows
         ]
     }
+
+
+@router.get("/chat/{agent_id}/attachments/{attachment_id}")
+def reply_attachment(
+    agent_id: str,
+    attachment_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> StreamingResponse:
+    """The bytes of one image an agent answered with in console Chat.
+
+    Streamed through the backend (the console fetches it with its workspace header
+    into a blob URL; an ``<img src>`` could not send that header). Readable only
+    from the workspace and agent that produced it, by a caller who can see the
+    agent, and never for another principal's private session — the same
+    ``PrivateSessions`` rule as the runtime-log view. Every refusal, and an image
+    the bucket's lifecycle rule already expired, is the same 404."""
+    _agent_in(db, ws, agent_id, viewer)
+    row = outbound_attachments.find(
+        db, ws.id, agent_id, attachment_id, outbound_attachments.CONSOLE_OWNER,
+    )
+    private = PrivateSessions(db, ws.id, principal_of(require_identity(request)))
+    body = (
+        outbound_attachments.open_object(ws.context, row)
+        if row is not None and private.visible(row.session_id) else None
+    )
+    if body is None:
+        raise NotFoundError("chat.attachment_not_found", "attachment not found")
+    return outbound_attachments.image_response(row, body)
 
 
 @router.get("/chat/{agent_id}/memory")

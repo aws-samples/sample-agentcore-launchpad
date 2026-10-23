@@ -64,6 +64,38 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
     model_name: 'Claude Sonnet 5 (US)',
   },
   {
+    model_id: 'global.anthropic.claude-opus-5-5',
+    model_name: 'Claude Opus 5.5 (global)',
+  },
+  {
+    model_id: 'us.anthropic.claude-opus-5-5',
+    model_name: 'Claude Opus 5.5 (US)',
+  },
+  {
+    model_id: 'global.anthropic.claude-sonnet-5-5',
+    model_name: 'Claude Sonnet 5.5 (global)',
+  },
+  {
+    model_id: 'us.anthropic.claude-sonnet-5-5',
+    model_name: 'Claude Sonnet 5.5 (US)',
+  },
+  {
+    model_id: 'global.anthropic.claude-haiku-5-5',
+    model_name: 'Claude Haiku 5.5 (global)',
+  },
+  {
+    model_id: 'us.anthropic.claude-haiku-5-5',
+    model_name: 'Claude Haiku 5.5 (US)',
+  },
+  {
+    model_id: 'global.anthropic.claude-opus-5',
+    model_name: 'Claude Opus 5 (global)',
+  },
+  {
+    model_id: 'us.anthropic.claude-opus-5',
+    model_name: 'Claude Opus 5 (US)',
+  },
+  {
     model_id: 'global.anthropic.claude-sonnet-4-6',
     model_name: 'Claude Sonnet 4.6 (global)',
   },

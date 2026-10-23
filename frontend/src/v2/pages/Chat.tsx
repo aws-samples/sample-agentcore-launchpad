@@ -6,6 +6,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/auth-context";
 import { AttachmentHint } from "../../components/chat/AttachmentViews";
 import type { PendingAttachment } from "../../components/chat/attachments";
+import { appendReplyAttachment, replyAttachmentOf } from "../../components/chat/replyAttachments";
 import {
   attachmentMediaType,
   attachmentMetadata,
@@ -36,8 +37,8 @@ import {
   isHarnessAgent,
   sseEvents,
 } from "../../lib/chat";
-import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
-import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
+import { livePolicyDeny } from "../../lib/policy-deny";
+import { liveAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
 import { refreshMyUsageIfLimited } from "../myUsage";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
@@ -45,7 +46,7 @@ import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
-import { appendDelta, setVerdict, stampSaved } from "./chat/messages";
+import { appendDelta, restoredMessage, setVerdict, stampSaved } from "./chat/messages";
 import { type ChatMessage, Thread } from "./chat/Thread";
 
 const MEMORY_TAG = {
@@ -169,27 +170,7 @@ export function V2Chat() {
     try {
       const rows = (await chatApi.history(agentId, sid)).messages;
       if (requestId !== historyRequest.current) return;
-      setMessages(
-        rows.map((r): ChatMessage =>
-          r.role === "user"
-            ? { kind: "user", text: r.text, attachments: r.attachments }
-            : r.role === "agent"
-              ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null }
-              : r.role === "tool"
-                ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
-                : r.role === "auth"
-                  ? // the URL is single-use and never persisted: a restored card retries
-                    {
-                      kind: "auth",
-                      text: r.text,
-                      name: r.name ?? "",
-                      auth: restoredAuthAsk(r, agentId),
-                    }
-                  : r.role === "policy"
-                    ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
-                    : { kind: "error", text: r.text },
-        ),
-      );
+      setMessages(rows.map((r) => restoredMessage(r, agentId)));
       setSessionId(sid);
       setInput("");
       // A successful history selection discards the previous conversation's draft.
@@ -301,6 +282,14 @@ export function V2Chat() {
           const open = agentOpen;
           setMessages((m) => appendDelta(m, payload.text ?? "", open));
           agentOpen = true;
+        } else if (event === "attachment") {
+          // a reply image joins the open answer bubble, as the backend persists it
+          const attachment = replyAttachmentOf(payload);
+          const open = agentOpen;
+          if (attachment) {
+            setMessages((m) => appendReplyAttachment(m, attachment, open));
+            agentOpen = true;
+          }
         } else if (event === "saved") {
           // the open answer was persisted; its closing event (tool / error / done)
           // follows — attach the ledger id so the answer can be rated
@@ -608,6 +597,7 @@ export function V2Chat() {
               messages={messages}
               userLabel={userLabel}
               agentLabel={agent?.name ?? "Agent"}
+              agentId={agentId || undefined}
               restoring={restoring}
               onRate={(messageId, verdict) => void rate(messageId, verdict)}
               onRetry={(prompt) => void send(prompt)}

@@ -175,6 +175,17 @@ export const pythonLabel = (v: ByocPythonVersion) =>
   v.replace("PYTHON_", "Python ").replace("_", ".");
 export const BYOC_DEFAULT_ENTRYPOINT = "main.py";
 
+/**
+ * AgentCore builtins a byoc spec may declare — mirrors `BYOC_BUILTIN_IAM_TOOLS`
+ * (backend `schemas/agent.py`). A pure IAM declaration: the execution role gets the
+ * session actions, the member's own code opens the session.
+ */
+export const BYOC_BUILTINS = ["browser", "code-interpreter"] as const;
+export type ByocBuiltin = (typeof BYOC_BUILTINS)[number];
+/** i18n key of a byoc builtin's label (both wizards + the V2 review step). */
+export const byocBuiltinLabelKey = (name: ByocBuiltin) =>
+  name === "browser" ? "v2.agents.wizard.byocBuiltinBrowser" : "v2.agents.wizard.byocBuiltinCodeInterpreter";
+
 /** After a zip is staged: keep the entrypoint if the scan found it, else take the
  *  first candidate (no candidates ⇒ keep what the member typed). */
 export const entrypointAfterUpload = (candidates: string[], current: string) =>
@@ -469,6 +480,8 @@ export interface AgentForm {
   byocModels: string[];
   byocEnvRows: EnvRow[];
   byocDescription: string;
+  /** byoc-only builtin IAM declarations (never read by another method's builder) */
+  byocBuiltins: ByocBuiltin[];
   /** zip_runtime (HTTP) / byoc: rest + mcp tools with their Connection auth */
   authTools: AuthToolRow[];
   /**
@@ -590,6 +603,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   byocModels: [defaultModelForMethod("byoc", sourceForMethod(method))],
   byocEnvRows: [],
   byocDescription: "",
+  byocBuiltins: [],
   authTools: [],
   inbound: "inherit",
   inboundJwt: { ...EMPTY_JWT_FORM },
@@ -705,6 +719,7 @@ export function formFromStoredSpec(
       byocModels: spec.byoc.allowed_models?.length ? spec.byoc.allowed_models : [storedModel],
       byocDescription: spec.system_prompt ?? "",
       byocEnvRows: Object.entries(spec.env ?? {}).map(([key, value]) => ({ key, value })),
+      byocBuiltins: byocBuiltinsFromStored(tools),
     });
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
@@ -782,6 +797,14 @@ export const byocEnv = (rows: EnvRow[]) =>
     rows.map((row) => [row.key.trim(), row.value] as const).filter(([k]) => k.length > 0),
   );
 
+/** The byoc builtin declarations a stored tool list states (catalog order, no dupes). */
+export const byocBuiltinsFromStored = (tools: { type: string; name: string }[]): ByocBuiltin[] =>
+  BYOC_BUILTINS.filter((name) => tools.some((x) => x.type === "builtin" && x.name === name));
+
+/** The checked byoc builtins as bare ToolRefs (no config, no auth). */
+export const byocBuiltinRefs = (builtins: readonly string[]) =>
+  BYOC_BUILTINS.filter((name) => builtins.includes(name)).map((name) => ({ type: "builtin", name }));
+
 export const byocModelList = (models: string[]) => models.map((m) => m.trim()).filter(Boolean);
 
 export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts">) =>
@@ -807,6 +830,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
   const env = byocEnv(form.byocEnvRows);
   const models = byocModelList(form.byocModels);
   const kind = form.byocKind;
+  const tools = [...byocBuiltinRefs(form.byocBuiltins), ...authToolRefs(form.authTools)];
   return {
     name: form.name,
     method: "byoc",
@@ -819,8 +843,9 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
     system_prompt: form.byocDescription,
     memory: { short_term: true, long_term: false },
     ...(Object.keys(env).length ? { env } : {}),
-    // byoc tools are outbound-auth declarations for the member's own code
-    ...(form.authTools.length ? { tools: authToolRefs(form.authTools) } : {}),
+    // byoc tools are declarations for the member's own code: builtin IAM grants
+    // (browser / code-interpreter) and outbound-auth rows
+    ...(tools.length ? { tools } : {}),
     ...inboundAuthSpec(form),
     byoc: {
       artifact_kind: kind,
@@ -999,6 +1024,28 @@ function carryToolFields(
   });
 }
 
+/**
+ * Tool types a byoc re-publish carries from the stored spec: gateway refs are IAM +
+ * env declarations the byoc forms have no picker for, so a form-built byoc spec never
+ * states them. Builtins are NOT carried — the byoc forms own them (`byocBuiltins`), so
+ * an unchecked box drops the grant.
+ */
+const BYOC_CARRIED_TOOL_TYPES: readonly string[] = ["gateway"];
+
+function carryByocDeclarations(
+  built: AgentSpecInput,
+  stored: Record<string, unknown>,
+): AgentSpecInput["tools"] {
+  if (built.method !== "byoc" || stored.method !== "byoc" || !Array.isArray(stored.tools)) {
+    return built.tools;
+  }
+  const own = new Set((built.tools ?? []).map((tool) => `${tool.type}:${tool.name}`));
+  const declared = (stored.tools as StoredTool[]).filter(
+    (tool) => BYOC_CARRIED_TOOL_TYPES.includes(tool.type) && !own.has(`${tool.type}:${tool.name}`),
+  ) as unknown as NonNullable<AgentSpecInput["tools"]>;
+  return declared.length ? [...(built.tools ?? []), ...declared] : built.tools;
+}
+
 /** A re-publish of `stored`: the form's spec plus the stored fields it does not own. */
 export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpecInput {
   const source = (stored ?? {}) as Record<string, unknown>;
@@ -1010,7 +1057,7 @@ export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpec
   const storedShort = (source.memory as { short_term?: unknown } | undefined)?.short_term;
   const memory =
     built.memory && typeof storedShort === "boolean" ? { ...built.memory, short_term: storedShort } : built.memory;
-  const tools = carryToolFields(built.tools, source.tools);
+  const tools = carryToolFields(carryByocDeclarations(built, source), source.tools);
   return {
     ...carried,
     ...built,

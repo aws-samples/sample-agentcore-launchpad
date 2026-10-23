@@ -226,3 +226,90 @@ describe("managed COA gateway shown in the Gateway picker", () => {
     expect(managedGatewayAttached({ ...emptyAgentForm("harness"), contextLayer: null })).toBe(false);
   });
 });
+
+describe("byoc re-publish", () => {
+  const STORED_BYOC = {
+    name: "byoc-agent",
+    method: "byoc",
+    model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    byoc: { artifact_kind: "code_zip", upload_id: "u1" },
+    tools: [
+      { type: "builtin", name: "browser" },
+      { type: "gateway", name: "hr_lookup", config: { gateway_id: "launchpad-gw-abcde12345", tools: ["hr_lookup___find"] } },
+      CRM,
+    ],
+  };
+  const keys = (tools: { type: string; name: string }[] | undefined) =>
+    (tools ?? []).map((tool) => `${tool.type}:${tool.name}`);
+
+  it("re-states the stored builtins via the form and carries the gateway refs it has no picker for", () => {
+    const form = formFromStoredSpec("byoc", "byoc-agent", STORED_BYOC).form;
+    expect(form.byocBuiltins).toEqual(["browser"]);
+    const spec = republishSpec(buildAgentSpec(form, CATALOGS), STORED_BYOC);
+    const byKey = Object.fromEntries((spec.tools ?? []).map((tool) => [`${tool.type}:${tool.name}`, tool]));
+    expect(Object.keys(byKey).sort()).toEqual(["builtin:browser", "gateway:hr_lookup", "rest:crm"]);
+    expect(byKey["gateway:hr_lookup"].config).toEqual(STORED_BYOC.tools[1].config);
+    expect(byKey["rest:crm"].auth).toMatchObject({ connection: "team-idp", kind: "oauth2" });
+  });
+
+  it("drops a builtin the member unchecked (the form is the only source of truth)", () => {
+    const form = formFromStoredSpec("byoc", "byoc-agent", STORED_BYOC).form;
+    const spec = republishSpec(buildAgentSpec({ ...form, byocBuiltins: [] }, CATALOGS), STORED_BYOC);
+    expect(keys(spec.tools).sort()).toEqual(["gateway:hr_lookup", "rest:crm"]);
+  });
+
+  it("never carries them into a non-byoc spec, nor duplicates a built one", () => {
+    const zip = { name: "byoc-agent", method: "zip_runtime" as const, system_prompt: "p", tools: [] };
+    expect(republishSpec(zip, STORED_BYOC).tools).toEqual([]);
+    const built = { name: "byoc-agent", method: "byoc" as const, system_prompt: "", tools: [{ type: "builtin", name: "browser" }] };
+    expect(keys(republishSpec(built, STORED_BYOC).tools)).toEqual(["builtin:browser", "gateway:hr_lookup"]);
+  });
+});
+
+describe("byoc builtin tool permissions", () => {
+  const byocForm = () => ({ ...emptyAgentForm("byoc"), name: "byoc-agent", byocUploadId: "u1" });
+
+  it("emits a bare builtin ToolRef per checked box (no config, no auth), in catalog order", () => {
+    const spec = buildAgentSpec({ ...byocForm(), byocBuiltins: ["code-interpreter", "browser"] }, CATALOGS);
+    expect(spec.tools).toEqual([
+      { type: "builtin", name: "browser" },
+      { type: "builtin", name: "code-interpreter" },
+    ]);
+  });
+
+  it("puts the builtins ahead of the Identity rows", () => {
+    const form = formFromStoredSpec("byoc", "byoc-agent", {
+      method: "byoc",
+      byoc: { artifact_kind: "code_zip", upload_id: "u1" },
+      tools: [CRM],
+    }).form;
+    const spec = buildAgentSpec({ ...form, byocBuiltins: ["browser"] }, CATALOGS);
+    expect((spec.tools ?? []).map((tool) => `${tool.type}:${tool.name}`)).toEqual(["builtin:browser", "rest:crm"]);
+  });
+
+  it("sends no tools at all when nothing is checked", () => {
+    expect(buildAgentSpec(byocForm(), CATALOGS).tools).toBeUndefined();
+  });
+
+  it("does not leak into another method's spec after a method switch", () => {
+    const checked = { ...byocForm(), byocBuiltins: ["browser", "code-interpreter"] as const };
+    for (const method of ["harness", "zip_runtime", "container"] as const) {
+      const spec = buildAgentSpec({ ...checked, byocBuiltins: [...checked.byocBuiltins], method }, CATALOGS);
+      expect((spec.tools ?? []).filter((tool) => tool.type === "builtin")).toEqual([]);
+    }
+  });
+
+  it("refills the boxes from a stored byoc spec, ignoring unknown builtin names", () => {
+    const stored = {
+      method: "byoc",
+      byoc: { artifact_kind: "code_zip", upload_id: "u1" },
+      tools: [
+        { type: "builtin", name: "code-interpreter" },
+        { type: "builtin", name: "browser" },
+        { type: "builtin", name: "web-search" },
+      ],
+    };
+    expect(formFromStoredSpec("byoc", "byoc-agent", stored).form.byocBuiltins).toEqual(["browser", "code-interpreter"]);
+    expect(formFromStoredSpec("zip_runtime", "z", { ...stored, method: "zip_runtime" }).form.byocBuiltins).toEqual([]);
+  });
+});

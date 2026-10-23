@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next";
 
 import {
   type AgentForm,
+  BYOC_BUILTINS,
+  byocBuiltinLabelKey,
   byocEnv,
   byocModelList,
   contextLayerSupported,
@@ -91,6 +93,7 @@ export function WizardReview({
     const models = byocModelList(form.byocModels);
     const env = Object.keys(byocEnv(form.byocEnvRows));
     const upload = ui.byocUpload;
+    const builtins = BYOC_BUILTINS.filter((n) => form.byocBuiltins.includes(n));
     items = [
       ...head,
       { label: t("v2.agents.wizard.artifactTitle"), value: t(`create.configure.byocKindName.${form.byocKind}`) },
@@ -126,6 +129,14 @@ export function WizardReview({
         ),
       },
       { label: t("create.configure.byocEnv"), value: env.length ? mono(env.join(", ")) : none },
+      {
+        label: t("v2.agents.wizard.byocBuiltinsReview"),
+        value: builtins.length ? (
+          <span data-testid="v2-agent-review-byoc-builtins">{builtins.map((n) => t(byocBuiltinLabelKey(n))).join(", ")}</span>
+        ) : (
+          none
+        ),
+      },
       { label: t("create.configure.byocDescription"), value: form.byocDescription || none },
     ];
   } else {

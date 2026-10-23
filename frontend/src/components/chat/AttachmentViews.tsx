@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { AttachmentCapability, ChatAttachmentMetadata } from "../../lib/api";
+import { chatApi } from "../../lib/api";
+import type { AttachmentCapability, ChatAttachmentMetadata, ChatReplyAttachment } from "../../lib/api";
 import type { PendingAttachment } from "./attachments";
 import { formatAttachmentSize } from "./attachments";
 
@@ -62,6 +63,78 @@ export function MessageAttachments({ files }: { files?: ChatAttachmentMetadata[]
               {formatAttachmentSize(file.size)} · {t(`chatPage.attachments.delivery.${file.delivery}`)}
             </span>
           </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const DROP_REASONS = ["too_many", "too_large", "invalid", "unsupported_type", "storage_unavailable"];
+
+/** One stored reply image: fetched with the console's workspace header into a blob
+ * URL, shown at most bubble-wide, and opened full size in a new tab on click. */
+function ReplyImage({ agentId, file }: { agentId: string; file: ChatReplyAttachment }) {
+  const { t } = useTranslation();
+  const [url, setUrl] = useState<string>();
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!file.id) return;
+    let live = true;
+    let objectUrl: string | undefined;
+    setFailed(false);
+    chatApi.replyAttachment(agentId, file.id).then(
+      (blob) => {
+        if (!live) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      },
+      () => live && setFailed(true),
+    );
+    return () => {
+      live = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [agentId, file.id]);
+  if (failed) {
+    return <div className="chat-reply-image-note dim">{t("chatPage.attachments.reply.unavailable", { name: file.name })}</div>;
+  }
+  if (!url) {
+    return <div className="chat-reply-image-note dim">{t("chatPage.attachments.reply.loading", { name: file.name })}</div>;
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={t("chatPage.attachments.reply.open", { name: file.name })}
+    >
+      <img className="chat-reply-image-img" src={url} alt={file.name} />
+    </a>
+  );
+}
+
+/** The images an agent answered with, and a notice for each one the platform dropped. */
+export function ReplyAttachments({ agentId, files }: { agentId?: string; files?: ChatReplyAttachment[] }) {
+  const { t } = useTranslation();
+  if (!files?.length) return null;
+  return (
+    <ul className="chat-reply-images" aria-label={t("chatPage.attachments.reply.label")} data-testid="reply-attachments">
+      {files.map((file, index) => (
+        <li className="chat-reply-image" key={file.id ?? `dropped-${index}`}>
+          {file.status === "stored" && file.id && agentId ? (
+            <ReplyImage agentId={agentId} file={file} />
+          ) : (
+            <div className="chat-reply-image-note" role="note" data-testid="reply-attachment-dropped">
+              {t("chatPage.attachments.reply.dropped", {
+                name: file.name || t("chatPage.attachments.reply.unnamed"),
+                reason: t(
+                  `chatPage.attachments.reply.reasons.${
+                    DROP_REASONS.includes(file.reason_code ?? "") ? file.reason_code : "invalid"
+                  }`,
+                ),
+              })}
+            </div>
+          )}
         </li>
       ))}
     </ul>

@@ -44,8 +44,25 @@ scopes and agent allowlists are not implemented.
 curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
   -H "X-Api-Key: $LP_KEY" -H 'Content-Type: application/json' \
   -d '{"prompt": "What is 2+2?", "session_id": null}'
-# → {"agent":"…","text":"4","session_id":"…","latency_ms":1234}
+# → {"agent":"…","text":"4","session_id":"…","attachments":[],"latency_ms":1234}
 ```
+
+**Reply attachments.** When a code-owned runtime answers with images (see
+[architecture](architecture.md#agent-reply-attachments-outbound-images)),
+`attachments` lists them — metadata only, never base64:
+`{id, name, media_type, size_bytes, sha256, status: "stored", url}` for a stored
+image, `{name, status: "dropped", reason_code}` for one the platform refused
+(`too_many`, `too_large`, `invalid`, `unsupported_type`, `storage_unavailable`).
+Download the bytes from `url`:
+
+```bash
+curl -s localhost:8000/v1/agents/<AGENT_ID>/attachments/<ATTACHMENT_ID> \
+  -H "X-Api-Key: $LP_KEY" -o shot.png
+```
+
+Only the key whose turn produced the image may read it (any other key, agent or
+an expired image → `404 chat.attachment_not_found`). Images expire with the
+bucket's lifecycle rule (30 days on the hub bucket).
 
 ## Streaming invoke (SSE) / 流式调用
 
@@ -68,6 +85,10 @@ Managed Harness, `policy_denied` — a Gateway tool call a Cedar policy refused:
 then `gateway_id` names the workspace gateway; otherwise the Harness tool name and
 `null`; `policy_id` is set only when the reason names the determining policy).
 The agent's own answer still follows; clients may ignore both events.
+
+An `attachment` event carries one reply image's metadata, in the same shape as the
+sync reply's `attachments` items (including `url`); it follows the text it belongs
+to.
 
 Ordinary Agent/proposal `timeout_seconds` defaults to **600 seconds** and `max_iterations` to **100**; explicit
 values are retained. Harness executes the corresponding native `timeoutSeconds`
@@ -1126,7 +1147,8 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 |---|---|---|
 | `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`), plus `saved {message_id}` right before the event that closes a persisted answer (tool / error / done, or the stream's end without `done`) — the id thumbs feedback attaches to; `/v1` streams never carry it; `{prompt?, attachments?, session_id?}`, a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases. `auth_required` `{provider, tool, scopes[], url, agent_id}` is an as_user (3LO) consent ask from a tool: `url` is the single-use authorization URL (the console links it only when it is `https:`), the `sessionUri` stays server-side, and the answer keeps streaming around it. History keeps the ask as a `role: "auth"` row (`text` = the Connection, `name` = the tool) **without** the URL, so a restored ask can only be retried; poll `GET /api/identity/grants/{connection}/status` to see when consent completes. `policy_denied` (Harness; payload under *Streaming invoke*) is kept as a `role: "policy"` row (`text` = the reason, `name` = the tool) and restored as the V2 Chat policy-deny card, which then links to the Governance landing page rather than a specific gateway |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
-| `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order; each carries its ledger `id` and the caller's own `verdict` (`up`/`down`/`null`) |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order; each carries its ledger `id` and the caller's own `verdict` (`up`/`down`/`null`). An agent row's `attachments` are its reply images (`{id, name, media_type, size_bytes, sha256, status}` or a dropped `{name, status, reason_code}`) |
+| `GET` | `/api/chat/{agent_id}/attachments/{attachment_id}` | The bytes of one reply image (streamed, `Content-Type` = the validated media type, `nosniff`, `Content-Security-Policy: default-src 'none'`, `Cache-Control: private`). The agent must be visible to the caller, the image must come from console Chat in this workspace, and its session must not be another principal's private session; otherwise — and once the image has expired — `404 chat.attachment_not_found` |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
 
 Ending is explicit: NEW SESSION in the console only forgets the id locally, so the
@@ -1150,6 +1172,11 @@ and nonblank scanned/graphic-only PDF pages require a native-capable agent.
 Generated Strands/Claude/Studio/converted HTTP runtimes need a compatible
 published artifact and a fresh session; old entrypoints cannot silently discard
 files. Native attachments are unavailable during an active canary.
+
+The console stream also carries `attachment` events (one reply image each, the
+`/v1` shape; the console reads stored ones through
+`/api/chat/{agent_id}/attachments/{id}`). They join the open answer bubble — or
+open one — and are saved on that answer's history row.
 
 The SSE `meta.attachments` and each history message's `attachments` contain
 `{name, media_type, size, delivery}` metadata (`native`, `text`, or `pdf_text`).

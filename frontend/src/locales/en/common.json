@@ -2579,6 +2579,21 @@
         "custom": "The native attachment contract of this custom or imported agent is unknown. Text files and PDF text extraction are available; images and scanned PDFs require a verified native contract.",
         "model": "Native files are not enabled for this agent’s current model. Text files and PDF text extraction remain available. For native files, select a supported model, republish, then start a new session.",
         "not_active": "This agent is not active. Complete deployment before sending attachments."
+      },
+      "reply": {
+        "label": "Images from the agent",
+        "loading": "Loading {{name}}…",
+        "unavailable": "“{{name}}” is no longer available.",
+        "open": "Open {{name}} full size in a new tab",
+        "dropped": "An image from the agent (“{{name}}”) was not shown: {{reason}}",
+        "unnamed": "unnamed",
+        "reasons": {
+          "too_many": "the reply exceeded the per-turn image limit.",
+          "too_large": "it exceeds the size limit.",
+          "invalid": "its content is not a valid PNG, JPEG, WebP or GIF of the declared type.",
+          "unsupported_type": "only PNG, JPEG, WebP and GIF images are shown.",
+          "storage_unavailable": "the platform could not store it. Try again later."
+        }
       }
     }
   },
@@ -5686,6 +5701,12 @@
         "byocModelList": "Models",
         "byocModelsMax": "The first one is the primary; up to {{max}}.",
         "byocEnvSub": "Injected into the runtime; a variable set here wins over a platform-injected one of the same name.",
+        "byocBuiltinsTitle": "AgentCore built-in tools",
+        "byocBuiltinsSub": "Grant the execution role session permissions for AgentCore built-in tools your code uses.",
+        "byocBuiltinsNote": "Only grants the execution role the matching session permissions. The platform does not wire the tool into your code — call it yourself (e.g. bedrock_agentcore browser_session / code_session).",
+        "byocBuiltinBrowser": "AgentCore Browser",
+        "byocBuiltinCodeInterpreter": "AgentCore Code Interpreter",
+        "byocBuiltinsReview": "Built-in tool permissions",
         "envEmpty": "No environment variables",
         "contractShow": "Show runtime contract",
         "contractHide": "Hide runtime contract",

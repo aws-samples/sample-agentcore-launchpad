@@ -16,14 +16,14 @@ from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.assistant.sessions import refuse_assistant_session
+from app.assistant.sessions import PrivateSessions, refuse_assistant_session
 from app.core.billing_policy import SOURCE_V1
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.attachments import AttachmentRequest
-from app.services import agent_access, budgets, visibility
+from app.services import agent_access, budgets, outbound_attachments, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
@@ -31,7 +31,7 @@ from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import invoke_capability, require_invoke_capability
 from app.services.usage_meter import UsageMeter
-from app.services.workspace import get_workspace_row
+from app.services.workspace import context_for_workspace, get_workspace_row
 
 router = APIRouter(prefix="/v1", tags=["public-v1"])
 
@@ -151,6 +151,7 @@ def v1_invoke(
             actor_id=scoped_actor(agent.id, req.actor_id),
             console_user=False,
             on_usage=meter.on_usage,
+            attachment_owner=outbound_attachments.api_key_owner(key.id),
             **extra,
         )
     finally:
@@ -161,6 +162,8 @@ def v1_invoke(
         "agent": agent.name,
         "text": result["text"],
         "session_id": result["session_id"],
+        # reply images: metadata + this key's download `url`, never the bytes
+        "attachments": result.get("attachments") or [],
         "latency_ms": int((time.monotonic() - started) * 1000),
     }
     return body
@@ -187,7 +190,8 @@ def v1_invoke_stream(
         # `error` event (identity.as_user_requires_console) — see v1_invoke
         for event in chat_stream(
             agent, req.prompt, session_id=req.session_id, actor_id=mem_actor,
-            console_user=False, meter=meter, **extra,
+            console_user=False, meter=meter,
+            attachment_owner=outbound_attachments.api_key_owner(key.id), **extra,
         ):
             yield sse_encode(event)
 
@@ -196,3 +200,36 @@ def v1_invoke_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get(
+    "/agents/{agent_id}/attachments/{attachment_id}",
+    summary="Download an image the agent answered with",
+)
+def v1_reply_attachment(
+    agent_id: str,
+    attachment_id: str,
+    db: Session = Depends(get_db),
+    key: ApiKey = Depends(require_api_key),
+) -> StreamingResponse:
+    """The bytes behind an ``attachments[].url`` of a /v1 reply. Only the API key
+    whose turn produced the image may read it; another key, workspace, agent or a
+    private session reads exactly like a missing id (404)."""
+    agent = agent_access.agent_in(
+        db, key.workspace_id, agent_id, viewer=visibility.viewer_for_key(db, key),
+    )
+    row = (
+        outbound_attachments.find(
+            db, key.workspace_id, agent_id, attachment_id,
+            outbound_attachments.api_key_owner(key.id),
+        )
+        if agent is not None else None
+    )
+    private = PrivateSessions(db, key.workspace_id, None)
+    body = (
+        outbound_attachments.open_object(context_for_workspace(key.workspace_id), row)
+        if row is not None and private.visible(row.session_id) else None
+    )
+    if body is None:
+        raise NotFoundError("chat.attachment_not_found", "attachment not found")
+    return outbound_attachments.image_response(row, body)

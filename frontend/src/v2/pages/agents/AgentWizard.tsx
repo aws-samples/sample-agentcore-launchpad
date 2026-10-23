@@ -46,6 +46,7 @@ import {
   BasicCard,
   ByocArtifactCard,
   ByocBasicCard,
+  ByocBuiltinsCard,
   ByocEnvCard,
   ByocModelsCard,
   ContainerToolsCard,
@@ -552,6 +553,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           />
           <ByocModelsCard form={form} set={set} err={err} applySource={applySource} />
           <ByocEnvCard form={form} set={set} />
+          <ByocBuiltinsCard form={form} set={set} />
           <IdentityCard
             form={form}
             set={set}

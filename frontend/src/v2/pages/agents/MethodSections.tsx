@@ -4,9 +4,12 @@ import { useTranslation } from "react-i18next";
 
 import {
   BUILTIN_TOOLS,
+  BYOC_BUILTINS,
+  byocBuiltinLabelKey,
   BYOC_KINDS,
   BYOC_MODELS_MAX,
   BYOC_PYTHON_VERSIONS,
+  type ByocBuiltin,
   byoMountsAllowed,
   DEFAULT_SESSION_MOUNT,
   filesystemIssues,
@@ -783,6 +786,27 @@ export function ByocModelsCard({
             </div>
           )}
         </Field>
+      </div>
+    </Card>
+  );
+}
+
+/** byoc builtin IAM declarations: the role gets the session actions, the member's code opens the session. */
+export function ByocBuiltinsCard({ form, set }: Omit<SectionProps, "cat" | "err">) {
+  const { t } = useTranslation();
+  return (
+    <Card title={t("v2.agents.wizard.byocBuiltinsTitle")} sub={t("v2.agents.wizard.byocBuiltinsSub")} testId="v2-agent-byoc-builtins-card">
+      <CheckList
+        items={[...BYOC_BUILTINS]}
+        keyOf={(n) => n}
+        labelOf={(n) => t(byocBuiltinLabelKey(n))}
+        selected={form.byocBuiltins}
+        onToggle={(n) => set((prev) => ({ byocBuiltins: toggle(prev.byocBuiltins, n as ByocBuiltin) }))}
+        empty=""
+        testId="v2-agent-byoc-builtins"
+      />
+      <div className="v2-agents-foot">
+        <Alert>{t("v2.agents.wizard.byocBuiltinsNote")}</Alert>
       </div>
     </Card>
   );

@@ -1,7 +1,12 @@
-import type { ChatAttachmentMetadata, FeedbackVerdict } from "../../../lib/api";
+import type {
+  ChatAttachmentMetadata,
+  ChatHistoryMessage,
+  ChatReplyAttachment,
+  FeedbackVerdict,
+} from "../../../lib/api";
 import type { BudgetRefusalCode } from "../../../lib/budgets";
-import type { PolicyDeny } from "../../../lib/policy-deny";
-import type { AuthAsk } from "../../../lib/user-grants";
+import { type PolicyDeny, restoredPolicyDeny } from "../../../lib/policy-deny";
+import { type AuthAsk, restoredAuthAsk } from "../../../lib/user-grants";
 
 export { retryPromptFor } from "../../../lib/user-grants";
 
@@ -11,6 +16,8 @@ export interface ChatMessage {
   name?: string;
   streaming?: boolean;
   attachments?: ChatAttachmentMetadata[];
+  /** kind "agent": the images the agent answered with (metadata; bytes fetched by id) */
+  replyAttachments?: ChatReplyAttachment[];
   /** kind "auth": the as_user consent ask */
   auth?: AuthAsk;
   /** kind "agent": ledger id of the persisted answer — what a thumbs verdict attaches to */
@@ -66,4 +73,30 @@ export function setVerdict(messages: ChatMessage[], messageId: number, verdict: 
   const next = [...messages];
   next[i] = { ...messages[i], verdict };
   return next;
+}
+
+/** One persisted history row as the thread item it was rendered as — an agent
+ * answer keeps its reply images (metadata; the bytes are fetched again by id). */
+export function restoredMessage(r: ChatHistoryMessage, agentId: string): ChatMessage {
+  if (r.role === "user") {
+    return { kind: "user", text: r.text, attachments: r.attachments as ChatAttachmentMetadata[] | undefined };
+  }
+  if (r.role === "agent") {
+    return {
+      kind: "agent",
+      text: r.text,
+      id: r.id,
+      verdict: r.verdict ?? null,
+      replyAttachments: r.attachments?.length ? (r.attachments as ChatReplyAttachment[]) : undefined,
+    };
+  }
+  if (r.role === "tool") return { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" };
+  if (r.role === "auth") {
+    // the URL is single-use and never persisted: a restored card retries
+    return { kind: "auth", text: r.text, name: r.name ?? "", auth: restoredAuthAsk(r, agentId) };
+  }
+  if (r.role === "policy") {
+    return { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) };
+  }
+  return { kind: "error", text: r.text };
 }

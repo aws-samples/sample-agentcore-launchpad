@@ -337,7 +337,7 @@ CodeBuild 源码包,**覆盖上传中自带的任何 buildspec**——成员只�
 永远不控制构建配方。
 
 **v1 范围。** 仅 HTTP 协议(不支持 A2A);spec 上不支持
-toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线——请在你自己的
+toolkits/skills/knowledge_bases(平台不生成这份代码,无法接线——请在你自己的
 代码里配置能力);`system_prompt` 可选,作为描述使用。配置包实验与金丝雀候选按
 `custom-source-unverified` 降级,与其他自带源码的运行时一致。示例见
 [`samples/byoc/`](../samples/byoc/README.md);实验手册见
@@ -351,6 +351,22 @@ Chat 会把原始图片/PDF 以 `attachments: [{name, media_type, data}]`(base64
 回复带 `"attachment_contract": "v1"`,或 SSE 首个事件 `{"event": "attachments", "contract": "v1"}`)。
 容器类 artifact 从不记录约定,仍只接受文本/文本 PDF 输入。
 
+**回复附件（agent 输出图片）。** 与传入附件对称：自带代码的运行时（`zip_runtime`、
+`container`、`byoc`，以及走缓冲路径、共用同一解析器的 `studio`）可以用图片作答——浏览器截图、
+图表——Chat 会直接显示在 agent 气泡里。agent 不需要存储桶、环境变量或任何 S3 权限：它把字节放在
+调用响应里交回，由**平台**用自己的 workspace 凭证保存。SSE 帧为
+`{"event": "attachment", "name": …, "media_type": …, "data": "<base64>"}`（可多次，通常在回答
+文本之后）；非流式 JSON 回复在顶层带 `"attachments": [{name, media_type, data}]`，该列表绝不进入
+回复文本。每轮最多 5 张、单张 ≤3 MiB、合计 ≤10 MiB，尺寸/像素上限与传入附件相同；Pillow 解码后
+的真实格式必须与声明的 `media_type`（PNG/JPEG/WebP/GIF）一致。不合规的图片不会让整轮失败，而是变成
+`{name, status: "dropped", reason_code}` 并在 Chat 里显示提示。图片写入 workspace 的
+`artifacts_bucket`，key 为 `chat-attachments/<workspace_id>/<agent_id>/<session_id>/<uuid>.<ext>`，
+SSE-S3 加密；台账只存元数据（`chat_output_attachments` 表与回答行的 `attachments`），不存字节。
+读取接口 `GET /api/chat/{agent_id}/attachments/{id}` 经后端流式返回（控制台按 workspace 头取回为
+blob URL），沿用 agent 可见性与 `PrivateSessions.visible` 规则；`/v1` 另有按 API key 限定的下载
+接口。hub 桶对该前缀设置了 30 天过期规则；spoke 桶的生命周期规则留作后续。完整说明见英文版
+[Agent reply attachments](architecture.md#agent-reply-attachments-outbound-images)。
+
 **可观测性(`code_zip`)。** span 由 agent 进程自身产生,因此直接代码运行时只有在 ADOT
 下启动才会出现在可观测性页面。package 阶段检查最终部署包中是否存在
 `bin/opentelemetry-instrument`——zip 的 `requirements.txt` 列出 `aws-opentelemetry-distro`
@@ -358,6 +374,27 @@ Chat 会把原始图片/PDF 以 `attachments: [{name, media_type, data}]`(base64
 平台生成的代码一样使用 `["opentelemetry-instrument", <入口>]`。没有启动器时入口直接运行(缺失的
 启动器会让运行时启动失败),agent 不产生 span;其 stdout 仍写入运行时日志组。容器类 artifact
 自己掌控 `CMD`,插桩由镜像负责。
+
+**工具声明。** byoc agent 的 `spec.tools` 只是*声明*:平台只给每 agent 角色授
+IAM、注入 env,从不往制品里接代码——会话/网关调用由你的代码自己完成。接受三种
+形状,其余(如无 `auth` 的 MCP 工具)一律拒绝:
+
+- `{type: "builtin", name: "browser" | "code-interpreter"}`(无 `config`、无
+  `auth`)→ 授 `AgentCoreBrowser` / `AgentCoreCodeInterpreter` 会话动作,不注入 env。
+- `{type: "gateway", name, config?: {gateway_id, tools}}`(不带 `auth`)→ 授
+  `AgentCoreWorkloadIdentity` + `IdentityVaultSecrets`,`config.gateway_id` 存在时再授
+  `AgentCoreGatewayInvoke`;工作区有网关 URL 与 OAuth provider 时注入
+  `LAUNCHPAD_GATEWAY_URL`、`LAUNCHPAD_GATEWAY_PROVIDER`、`LAUNCHPAD_GATEWAY_SCOPE`、
+  `LAUNCHPAD_GATEWAY_TOOLS`(逗号分隔的 fnmatch 模式:`config.tools`,否则 `<name>___*`)。
+- 带 `auth` 的 `rest` / `mcp` 工具 → 按 Connection 授权,注入 `LAUNCHPAD_OUTBOUND_AUTH`。
+
+byoc **不**注入 `LAUNCHPAD_WORKLOAD_NAME`:运行时的 workload identity 随运行时自动
+创建,创建时名称未知,更新时 byoc 部署器(与其他运行时部署器一样)也不传入;需要
+workload token 的代码请使用 Runtime 每次调用传入的令牌(`BedrockAgentCoreContext`)。
+两个控制台的 byoc 向导都有「AgentCore 内置工具」卡片(Browser / Code Interpreter 复选框 →
+不带 config/auth 的 `builtin` 引用;表单是唯一真相源,取消勾选后重新发布即移除授权)。
+没有 gateway 选择器——gateway 引用请通过 API(`POST /api/agents`)声明;控制台重新发布会沿用
+已存的 gateway 引用(`lib/agent-spec.ts::republishSpec`)。
 
 ### 推荐的 trace 来源
 

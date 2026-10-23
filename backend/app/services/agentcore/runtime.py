@@ -18,12 +18,19 @@ from typing import Any
 import httpx
 
 from app.core.errors import AppError
+from app.schemas.attachments import MAX_FILE_BYTES
 from app.services.agentcore.harness import new_session_id
 
 logger = logging.getLogger("launchpad.agentcore.runtime")
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED"}
 SSE_READ_CHUNK_BYTES = 32
+# Once a line outgrows a few frames it is an attachment frame: read it in larger
+# pieces (a 4 MB line in 32-byte reads is 131k reads).
+SSE_LONG_LINE_READ_BYTES = 8192
+# One SSE line may hold a reply attachment frame (base64 of MAX_FILE_BYTES plus its
+# JSON envelope); a longer line is discarded while it streams, never buffered whole.
+MAX_SSE_LINE_BYTES = 4 * ((MAX_FILE_BYTES + 2) // 3) + 64 * 1024
 
 # Bearer (JWT) invocation of the Runtime data plane. boto3 cannot send a
 # bearer token, so JWT-mode runtimes are invoked over plain HTTPS (devguide
@@ -443,17 +450,109 @@ def flatten_sse_text(raw: str, *, on_usage: Any = None) -> str | None:
     return "".join(parts) or None
 
 
-def _sse_payloads(lines: Iterable[bytes | str]) -> Iterator[Any]:
+class _OversizedFrame:
+    """Stands for an SSE line longer than ``MAX_SSE_LINE_BYTES`` (it was dropped
+    as it streamed), and for the frame that contained it."""
+
+    def __repr__(self) -> str:
+        return "<oversized SSE frame>"
+
+
+OVERSIZED_FRAME = _OversizedFrame()
+
+
+def _split_lines(
+    chunks: Iterable[bytes], *, next_size: Any = None,
+) -> Iterator[bytes | _OversizedFrame]:
+    """Lines of a byte stream in linear time, each bounded by ``MAX_SSE_LINE_BYTES``.
+
+    botocore's ``StreamingBody.iter_lines`` re-concatenates its pending buffer with
+    every chunk, which is quadratic in the length of one line — fine for text
+    deltas, prohibitive for a multi-megabyte attachment frame. ``next_size.pending``
+    is kept at the length of the open line, so a reader can size its next read."""
+    buf = bytearray()
+    discarding = False
+    for chunk in chunks:
+        start = 0
+        while True:
+            newline = chunk.find(b"\n", start)
+            if newline < 0:
+                if not discarding:
+                    buf += chunk[start:]
+                    if len(buf) > MAX_SSE_LINE_BYTES:
+                        buf.clear()
+                        discarding = True
+                break
+            if discarding:
+                discarding = False
+                yield OVERSIZED_FRAME
+            else:
+                buf += chunk[start:newline]
+                if len(buf) > MAX_SSE_LINE_BYTES:
+                    yield OVERSIZED_FRAME
+                else:
+                    yield bytes(buf).rstrip(b"\r")
+                buf.clear()
+            start = newline + 1
+        if next_size is not None:
+            next_size.pending = len(buf) if not discarding else MAX_SSE_LINE_BYTES
+    if discarding:
+        yield OVERSIZED_FRAME
+    elif buf:
+        yield bytes(buf).rstrip(b"\r")
+
+
+class _ReadSize:
+    """The open line's length, shared by ``_split_lines`` and its reader."""
+
+    pending = 0
+
+
+def _streaming_body_chunks(body: Any, size: _ReadSize) -> Iterator[bytes]:
+    """``body.read(n)`` until EOF: 32 bytes while lines are short (a heartbeat or
+    delta is forwarded as soon as it arrives), larger once one line is long."""
+    while True:
+        amount = (
+            SSE_LONG_LINE_READ_BYTES if size.pending >= SSE_LONG_LINE_READ_BYTES
+            else SSE_READ_CHUNK_BYTES
+        )
+        chunk = body.read(amount)
+        if not chunk:
+            return
+        yield chunk
+
+
+def _body_lines(body: Any) -> Iterable[bytes | str | _OversizedFrame]:
+    """The SSE lines of a runtime response body (botocore or the httpx adapter)."""
+    if hasattr(body, "iter_bytes"):
+        return _split_lines(body.iter_bytes())
+    if hasattr(body, "iter_chunks") and hasattr(body, "read"):
+        size = _ReadSize()
+        return _split_lines(_streaming_body_chunks(body, size), next_size=size)
+    if hasattr(body, "iter_lines"):
+        return body.iter_lines(chunk_size=SSE_READ_CHUNK_BYTES)
+    return body.read().splitlines()
+
+
+def _sse_payloads(lines: Iterable[bytes | str | _OversizedFrame]) -> Iterator[Any]:
     """Decode SSE data fields without buffering beyond one event."""
     data_lines: list[str] = []
+    oversized = False
     for raw_line in lines:
+        if raw_line is OVERSIZED_FRAME:
+            oversized = True
+            continue
         line = (
             raw_line.decode("utf-8", errors="replace")
             if isinstance(raw_line, bytes)
             else str(raw_line)
         ).rstrip("\r\n")
         if not line:
-            if data_lines:
+            if oversized:
+                data_lines.clear()
+                oversized = False
+                yield OVERSIZED_FRAME
+            elif data_lines:
                 data = "\n".join(data_lines)
                 data_lines.clear()
                 try:
@@ -463,7 +562,9 @@ def _sse_payloads(lines: Iterable[bytes | str]) -> Iterator[Any]:
             continue
         if line.startswith("data:"):
             data_lines.append(line[len("data:"):].lstrip())
-    if data_lines:
+    if oversized:
+        yield OVERSIZED_FRAME
+    elif data_lines:
         data = "\n".join(data_lines)
         try:
             yield json.loads(data)
@@ -531,6 +632,18 @@ def report_usage(on_usage: Any, usage: Any, kind: str = "call") -> None:
         pass
 
 
+def _reply_attachment(item: Any) -> dict[str, Any]:
+    """One reply attachment as the runtime sent it (validated by the invoke layer,
+    ``services/outbound_attachments.py``)."""
+    item = item if isinstance(item, dict) else {}
+    data = item.get("data")
+    return {
+        "name": str(item.get("name") or "")[:255],
+        "media_type": str(item.get("media_type") or "")[:128],
+        "data": data if isinstance(data, str) else "",
+    }
+
+
 def _runtime_payload_events(
     payload: Any, on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
@@ -541,7 +654,35 @@ def _runtime_payload_events(
     ``on_usage(usage, kind)`` receives the token usage the runtime reported: the
     Claude Agent SDK template's ``complete.usage`` (Anthropic field names, one
     aggregate for the whole turn → ``"turn"``), a ``{"result", "usage"}`` body, and
-    each Converse-shaped ``metadata`` event (one model call → ``"call"``)."""
+    each Converse-shaped ``metadata`` event (one model call → ``"call"``).
+
+    Reply attachments come out as ``attachment`` events carrying the raw
+    ``{name, media_type, data}``: an SSE ``{"event": "attachment", …}`` frame, each
+    item of a JSON reply's top-level ``attachments`` list (after its text, and
+    never inside it), and an SSE line too long to buffer (``OVERSIZED_FRAME`` →
+    ``{"oversized": True}``)."""
+    if payload is OVERSIZED_FRAME:
+        logger.warning("dropped an SSE frame over %d bytes", MAX_SSE_LINE_BYTES)
+        yield {"event": "attachment", "data": {"oversized": True}}
+        return
+    if isinstance(payload, dict) and payload.get("event") == "attachment":
+        yield {"event": "attachment", "data": _reply_attachment(payload)}
+        return
+    reply_attachments = None
+    listed = payload.get("attachments") if isinstance(payload, dict) else None
+    if (
+        isinstance(listed, list) and listed and "event" not in payload
+        # an unrelated business field of that name (e.g. a list of file names) stays
+        and all(isinstance(item, dict) and "data" in item for item in listed)
+    ):
+        reply_attachments = payload["attachments"]
+        payload = {k: v for k, v in payload.items() if k != "attachments"}
+    yield from _payload_events(payload, on_usage)
+    for item in reply_attachments or ():
+        yield {"event": "attachment", "data": _reply_attachment(item)}
+
+
+def _payload_events(payload: Any, on_usage: Any) -> Iterator[dict[str, Any]]:
     if isinstance(payload, str) and _REPR_EVENT.match(payload):
         recovered = _repr_event(payload)
         if recovered is None:
@@ -834,13 +975,9 @@ def _runtime_body_events(
     body: Any, content_type: str, require_attachments: bool, *, on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     if "text/event-stream" in content_type:
-        lines = (
-            body.iter_lines(chunk_size=SSE_READ_CHUNK_BYTES)
-            if hasattr(body, "iter_lines")
-            else body.read().splitlines()
-        )
         yield from _normalized_runtime_events(
-            _sse_payloads(lines), require_attachments=require_attachments, on_usage=on_usage,
+            _sse_payloads(_body_lines(body)), require_attachments=require_attachments,
+            on_usage=on_usage,
         )
         return
 
@@ -893,6 +1030,7 @@ def invoke_runtime_text(
         extra["on_usage"] = on_usage
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
+    reply_attachments: list[dict[str, Any]] = []
     for event in stream_runtime_events(
         client,
         runtime_arn,
@@ -908,9 +1046,14 @@ def invoke_runtime_text(
             parts.append(event["data"]["text"])
         elif event["event"] == "auth_required":
             auth_required.append(event["data"])
+        elif event["event"] == "attachment":
+            reply_attachments.append(event["data"])
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
+    if reply_attachments:
+        # raw frames: the invoke layer validates/stores them and never returns these
+        result["reply_attachments"] = reply_attachments
     return result
 
 
@@ -937,6 +1080,9 @@ class _HttpxBody:
 
     def __init__(self, response: Any):
         self._response = response
+        if hasattr(response, "iter_bytes"):
+            # bytes as they arrive, split by the bounded linear splitter
+            self.iter_bytes = response.iter_bytes
 
     def iter_lines(self, chunk_size: int | None = None) -> Iterator[str]:
         return self._response.iter_lines()
@@ -1029,6 +1175,7 @@ def invoke_runtime_text_bearer(
     session_id = session_id or new_session_id()
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
+    reply_attachments: list[dict[str, Any]] = []
     for event in stream_runtime_events_bearer(
         region,
         runtime_arn,
@@ -1044,9 +1191,14 @@ def invoke_runtime_text_bearer(
             parts.append(event["data"]["text"])
         elif event["event"] == "auth_required":
             auth_required.append(event["data"])
+        elif event["event"] == "attachment":
+            reply_attachments.append(event["data"])
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
+    if reply_attachments:
+        # raw frames: the invoke layer validates/stores them and never returns these
+        result["reply_attachments"] = reply_attachments
     return result
 
 

@@ -70,6 +70,7 @@
 .v2 .v2-chat-bub .md pre, .v2 .v2-chat-bub .md code { border-radius: 4px; }
 .v2 .v2-chat-bub .md strong { color: inherit; }
 .v2 .v2-chat-bub .chat-attachment { background: #fff; border-color: var(--v2-line); border-radius: 6px; }
+.v2 .v2-chat-bub .chat-reply-image-img { border-color: var(--v2-line); border-radius: 6px; }
 .v2 .v2-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: text-bottom; background: var(--v2-primary); animation: v2chatblink 1s steps(2) infinite; }
 @keyframes v2chatblink { 50% { opacity: 0; } }
 .v2 .v2-chat-tool {

@@ -465,9 +465,33 @@ any buildspec the upload carries** — the member controls the Dockerfile only,
 never the build recipe.
 
 **v1 scope.** HTTP protocol only (no A2A); no toolkits/skills/knowledge
-bases/tools on the spec (the platform does not generate this code, so it cannot
+bases on the spec (the platform does not generate this code, so it cannot
 wire them — configure capabilities inside your own code); `system_prompt` is
-optional and serves as a description. Config-bundle experiments and canary
+optional and serves as a description.
+
+**Tool declarations.** `spec.tools` on a byoc agent is a list of *declarations*:
+the platform only grants IAM on the per-agent role and injects env — it never
+wires code into the artifact, so your code opens the session / calls the
+gateway itself. Three shapes are accepted (`_byoc_constraints`), anything else
+(e.g. an MCP tool without `auth`) is refused:
+
+| Declaration | IAM granted | Env injected |
+|---|---|---|
+| `{type: "builtin", name: "browser" \| "code-interpreter"}` (no `config`, no `auth`) | `AgentCoreBrowser` / `AgentCoreCodeInterpreter` session actions | — |
+| `{type: "gateway", name, config?: {gateway_id, tools: [...]}}` (no `auth` — the gateway authenticates its own targets) | `AgentCoreWorkloadIdentity` + `IdentityVaultSecrets`; `AgentCoreGatewayInvoke` on `config.gateway_id` when it names one | `LAUNCHPAD_GATEWAY_URL`, `LAUNCHPAD_GATEWAY_PROVIDER` (M2M OAuth provider name), `LAUNCHPAD_GATEWAY_SCOPE`, `LAUNCHPAD_GATEWAY_TOOLS` (comma-separated fnmatch patterns: the ref's `config.tools`, else `<name>___*`) — set only when the workspace has a gateway URL and OAuth provider |
+| `rest` / `mcp` tool carrying `auth` | per-Connection token grants (see [identity.md](identity.md)) | `LAUNCHPAD_OUTBOUND_AUTH` (JSON) |
+
+`LAUNCHPAD_WORKLOAD_NAME` is **not** injected for byoc: the runtime's
+workload identity is auto-created with the runtime, so its name is unknown at
+create, and the byoc deployer (like the other runtime deployers) does not pass
+one on update either. Code that needs a workload token should use the token the
+Runtime hands each invocation (`BedrockAgentCoreContext`) rather than minting
+its own. Both console byoc wizards have an "AgentCore built-in tools"
+card (Browser / Code Interpreter checkboxes → bare `builtin` refs; the form is the
+only source of truth, so unchecking drops the grant on re-publish). There is no
+gateway picker — declare gateway refs through the API (`POST /api/agents`); a
+console re-publish carries the stored gateway refs forward
+(`lib/agent-spec.ts::republishSpec`). Config-bundle experiments and canary
 candidates degrade with `custom-source-unverified`, exactly like other
 custom-source runtimes. Samples: [`samples/byoc/`](../samples/byoc/README.md);
 lab walkthrough: [docs/lab/13-byoc.md](lab/13-byoc.md).
@@ -482,6 +506,9 @@ sends the original images/PDFs as `attachments: [{name, media_type, data}]`
 code must acknowledge them before its answer (`"attachment_contract": "v1"` on a
 JSON reply, or a leading `{"event": "attachments", "contract": "v1"}` SSE event).
 Container kinds never record a contract, so they keep text/text-PDF input.
+Every BYOC kind may answer *with* images, though — no contract literal, bucket or
+S3 permission needed: see
+[Agent reply attachments](#agent-reply-attachments-outbound-images).
 
 **Observability (`code_zip`).** Spans come from the agent process itself, so a
 direct-code runtime is visible on Observability only when it starts under ADOT.
@@ -2382,6 +2409,74 @@ metadata, while original bytes remain transient in the invocation path. Existing
 framework-owned AgentCore Memory behavior is unchanged. See
 [attachment research and design](playground-attachments-research.md) and the
 [Chat API contract](api.md#console-chat-api).
+
+### Agent reply attachments (outbound images)
+
+The mirror of the inbound contract: a code-owned runtime (`zip_runtime`,
+`container`, `byoc`, and `studio`, whose buffered path joins the same parser) can
+answer with images — a browser screenshot, a chart — that Chat shows inside the
+agent's bubble. The agent needs no bucket, no environment variable and no S3
+permission: it hands the bytes back on the invoke response and the **platform**
+stores them with its own workspace credentials. Managed Harness, A2A and canary
+gateway routing are out of scope (their replies carry no attachment frames).
+
+**Runtime contract.** Over SSE, any number of
+`{"event": "attachment", "name": …, "media_type": …, "data": "<base64>"}` frames,
+conventionally after the answer text. A non-streaming JSON reply carries a
+top-level `"attachments": [{name, media_type, data}]` beside its `result` (or
+other text key); the list never reaches the reply text. `media_type` is
+`image/png`, `image/jpeg`, `image/webp` or `image/gif`.
+
+**Validation** (`services/outbound_attachments.py`, limits shared with
+`schemas/attachments.py`): at most `MAX_FILES` (5) images per turn, `MAX_FILE_BYTES`
+(3 MiB) each and `MAX_TOTAL_BYTES` (10 MiB) per turn, `MAX_IMAGE_DIMENSION` /
+`MAX_IMAGE_PIXELS`; the bytes are decoded with Pillow and the detected format must
+equal the declared `media_type` (a PNG labelled JPEG, an SVG, or a truncated image
+is refused). A refused image never fails the turn: it becomes a metadata item
+`{name, status: "dropped", reason_code}` (`too_many`, `too_large`, `invalid`,
+`unsupported_type`, `storage_unavailable`) that Chat renders as a notice, and the
+backend logs it. An SSE line longer than `rt.MAX_SSE_LINE_BYTES` is discarded
+without being buffered whole and reported the same way. The Runtime SSE body is
+split into lines by a linear splitter (`rt._iter_body_lines`): botocore's
+`iter_lines` re-concatenates its pending buffer per 32-byte chunk, which is
+quadratic on a multi-megabyte attachment line.
+
+**Storage.** The accepted image is written by the backend — through
+`WorkspaceContext.client("s3")`, i.e. the hub's ambient credentials or the spoke
+workspace role, exactly like the coding-agent downloads — to the workspace's
+`artifacts_bucket` at
+`chat-attachments/<workspace_id>/<agent_id>/<session_id>/<uuid>.<ext>` with
+`ServerSideEncryption=AES256` (SSE-S3, also the bucket default) and the validated
+`ContentType`. No new IAM is needed: both credential sets already hold
+`s3:PutObject`/`s3:GetObject` on that bucket. The hub `launchpad-base` bucket expires
+`chat-attachments/` objects after 30 days (noncurrent versions after 1 day); a spoke
+bucket created by workspace bootstrap has no lifecycle rule yet (follow-up — the
+spoke role lacks `s3:PutLifecycleConfiguration`). After expiry the history keeps the
+metadata and the image endpoint answers 404, which the console shows as
+"no longer available".
+
+**Ledger.** One `chat_output_attachments` row per stored image —
+`{id, workspace_id, agent_id, session_id, owner, name, media_type, size_bytes,
+sha256, storage_key, created_at}`; `owner` is `console` or `apikey:<id>`. The agent's
+`ChatMessage.attachments` holds `{id, name, media_type, size_bytes, sha256, status}`
+(the storage key stays on the row the id names). Bytes and base64 never enter
+either. Storing is opt-in per entrance (`attachment_owner`): console Chat and both
+`/v1` invokes pass one; other `invoke_agent_*` callers (evaluation, the console's
+`POST /api/agents/{id}/invoke`) drop attachment frames without an S3 write.
+
+**Reading.** `GET /api/chat/{agent_id}/attachments/{attachment_id}` (MEMBER) streams
+the bytes through the backend rather than redirecting to a presigned URL: the
+console authenticates with its cookie plus the `X-Workspace` header, which an
+`<img src>` cannot send and a cross-origin S3 redirect would need bucket CORS for,
+so the console fetches the image into a blob URL (like Skill Lab's raw artifacts).
+The row must be in the caller's workspace, belong to an agent the caller can see
+(`agent_access`, workspace isolation), be a console row, and its session must pass
+the same `PrivateSessions.visible` rule as the runtime-log view; every failure is
+the same `404 chat.attachment_not_found`. The response carries the stored media
+type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src
+'none'` and `Cache-Control: private`. `/v1` gets
+`GET /v1/agents/{agent_id}/attachments/{attachment_id}`, readable only by the API
+key that produced the turn. Inbound files are still not persisted (follow-up).
 
 ### Gateway (MCP) tools reach both a Harness and a zip runtime
 

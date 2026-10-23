@@ -62,6 +62,24 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       label: "Claude Sonnet 5 (global)",
       api_format: "converse_stream",
     },
+    // Claude 5.5 family + Opus 4.8 / Haiku 4.5: global profiles probed (Converse +
+    // tool use) in us-west-2 and us-east-1, 2026-10-23. Fable is left out — its
+    // global profile rejects Converse in us-west-2 (data retention mode).
+    {
+      model_id: "global.anthropic.claude-opus-5-5",
+      label: "Claude Opus 5.5 (global)",
+      api_format: "converse_stream",
+    },
+    {
+      model_id: "global.anthropic.claude-sonnet-5-5",
+      label: "Claude Sonnet 5.5 (global)",
+      api_format: "converse_stream",
+    },
+    {
+      model_id: "global.anthropic.claude-haiku-5-5",
+      label: "Claude Haiku 5.5 (global)",
+      api_format: "converse_stream",
+    },
     {
       model_id: "global.anthropic.claude-sonnet-4-6",
       label: "Claude Sonnet 4.6 (global)",
@@ -70,6 +88,16 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
     {
       model_id: "global.anthropic.claude-opus-5",
       label: "Claude Opus 5 (global)",
+      api_format: "converse_stream",
+    },
+    {
+      model_id: "global.anthropic.claude-opus-4-8",
+      label: "Claude Opus 4.8 (global)",
+      api_format: "converse_stream",
+    },
+    {
+      model_id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      label: "Claude Haiku 4.5 (global)",
       api_format: "converse_stream",
     },
     { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },

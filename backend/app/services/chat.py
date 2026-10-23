@@ -46,10 +46,14 @@ def chat_stream(
     meter: "UsageMeter | None" = None,
     user_role: str | None = None,
     user_email: str | None = None,
+    attachment_owner: str | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
+    """Yield SSE-ready events: meta → (heartbeat|tool|delta|attachment|policy_denied)*
+    → done.
 
     ``policy_denied`` (Harness only) marks a Gateway tool call a Cedar policy denied.
+    ``attachment`` (code-owned runtimes, only when ``attachment_owner`` names the
+    entrance — see ``invoke.invoke_agent_text``) carries one reply image's metadata.
 
     Never raises mid-stream; errors surface as an `error` event. ``workspace``
     defaults to the agent's own — see ``invoke._agent_workspace``.
@@ -68,7 +72,9 @@ def chat_stream(
     Strands runtime: ``invoke._runtime_gateway_gate``).
     """
     session_id = session_id or new_session_id()
-    member = {"user_role": user_role, "user_email": user_email}
+    member = {
+        "user_role": user_role, "user_email": user_email, "attachment_owner": attachment_owner,
+    }
     if meter is None:
         yield from _chat_events(
             agent, prompt, session_id, actor_id, runtime_user_id, gateway_access_token,
@@ -104,6 +110,7 @@ def _chat_events(
     *,
     user_role: str | None = None,
     user_email: str | None = None,
+    attachment_owner: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     workspace = workspace if workspace is not None else context_for_workspace(
         agent.workspace_id
@@ -160,6 +167,8 @@ def _chat_events(
                 # a gateway-mode Strands agent's consent gate mints for this member
                 invoke_kwargs["user_role"] = user_role
                 invoke_kwargs["user_email"] = user_email
+            if attachment_owner is not None:
+                invoke_kwargs["attachment_owner"] = attachment_owner
             yield from invoke_agent_events(
                 agent,
                 prompt,

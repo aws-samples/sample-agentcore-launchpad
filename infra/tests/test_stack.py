@@ -42,6 +42,25 @@ def test_cognito_groups_and_users(template: Template):
     template.has_resource_properties("AWS::Cognito::UserPoolUser", {"Username": "demo"})
 
 
+def test_chat_reply_attachments_expire_after_30_days(template: Template):
+    template.has_resource_properties(
+        "AWS::S3::Bucket",
+        {
+            "LifecycleConfiguration": {
+                "Rules": Match.array_with([
+                    Match.object_like({
+                        "Id": "ExpireChatReplyAttachments",
+                        "Prefix": "chat-attachments/",
+                        "ExpirationInDays": 30,
+                        "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+                        "Status": "Enabled",
+                    })
+                ])
+            }
+        },
+    )
+
+
 def test_codebuild_is_arm64(template: Template):
     template.has_resource_properties(
         "AWS::CodeBuild::Project",

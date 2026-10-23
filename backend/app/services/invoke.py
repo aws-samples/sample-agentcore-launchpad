@@ -22,7 +22,7 @@ from app.harness_tool_access import (
 from app.models.ledger import Agent
 from app.optimization import canary_harness, canary_service
 from app.services import inbound_auth as inbound_auth_service
-from app.services import oauth_sessions, user_gateways
+from app.services import oauth_sessions, outbound_attachments, user_gateways
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import policy as gateway_api
@@ -726,6 +726,7 @@ def invoke_agent_text(
     on_usage: Any = None,
     user_role: str | None = None,
     user_email: str | None = None,
+    attachment_owner: str | None = None,
 ) -> dict[str, Any]:
     """One synchronous turn. ``console_user=False`` marks a caller with no
     signed-in console user (public /v1): an as_user consent ask is then refused
@@ -734,7 +735,44 @@ def invoke_agent_text(
     ``on_usage`` is a ``UsageMeter.on_usage`` sink (services/usage_meter.py): the
     token usage each path reports in-band reaches it; the caller settles the turn.
     ``user_role`` / ``user_email``: the signed-in member's, for a context layer in
-    gateway mode (``harness_turn_overrides``, ``_runtime_gateway_gate``)."""
+    gateway mode (``harness_turn_overrides``, ``_runtime_gateway_gate``).
+
+    ``attachment_owner`` (``outbound_attachments``: ``console`` or an API key's
+    owner) opts the entrance into reply attachments: the images the runtime
+    answered with are stored and ``result["attachments"]`` lists their metadata.
+    Without it they are dropped unstored; raw bytes never leave this function."""
+    result = _invoke_agent_text(
+        agent, prompt, session_id, actor_id, runtime_user_id, gateway_access_token,
+        workspace, attachments, bearer_token, console_user, on_usage, user_role, user_email,
+    )
+    raw = result.pop("reply_attachments", None) or []
+    if attachment_owner is not None:
+        sink = outbound_attachments.ReplyAttachments(
+            agent, workspace, result.get("session_id"), attachment_owner,
+        )
+        result["attachments"] = [
+            meta for meta in (sink.accept(item) for item in raw) if meta is not None
+        ]
+    elif raw:
+        logger.info("dropped %d reply attachment(s): the entrance relays none", len(raw))
+    return result
+
+
+def _invoke_agent_text(
+    agent: Agent,
+    prompt: str,
+    session_id: str | None,
+    actor_id: str,
+    runtime_user_id: str | None,
+    gateway_access_token: str | None,
+    workspace: WorkspaceContext | None,
+    attachments: PreparedAttachments | None,
+    bearer_token: str | None,
+    console_user: bool,
+    on_usage: Any,
+    user_role: str | None,
+    user_email: str | None,
+) -> dict[str, Any]:
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
@@ -927,6 +965,7 @@ def invoke_agent_events(
     on_usage: Any = None,
     user_role: str | None = None,
     user_email: str | None = None,
+    attachment_owner: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -938,6 +977,8 @@ def invoke_agent_events(
     ``console_user``, ``on_usage``, ``user_role`` and ``user_email`` as on
     ``invoke_agent_text``: a gateway-mode Strands turn without the member's consent
     is one ``auth_required`` event, and the runtime is not invoked.
+    ``attachment_owner`` as on ``invoke_agent_text``: each reply image is one
+    ``attachment`` event carrying its stored (or dropped) metadata.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -951,6 +992,11 @@ def invoke_agent_events(
         if notice is not None:
             yield {"event": "auth_required", "data": notice}
             return
+    if attachment_owner is not None and not session_id:
+        session_id = rt.new_session_id()  # the stored images are keyed on it
+    reply = outbound_attachments.ReplyAttachments(
+        agent, workspace, session_id, attachment_owner,
+    )
     if inbound_auth_service.is_jwt_mode(agent):
         # Streaming parity with SigV4: the HTTPS response feeds the same body
         # parser, so tool/delta/auth_required arrive exactly as they do over
@@ -963,7 +1009,7 @@ def invoke_agent_events(
         )
         kwargs.update(_usage_kw(on_usage))
         try:
-            for event in rt.stream_runtime_events_bearer(
+            for event in outbound_attachments.relay(rt.stream_runtime_events_bearer(
                 workspace.region,
                 agent.arn,
                 token,
@@ -971,7 +1017,7 @@ def invoke_agent_events(
                 session_id=session_id,
                 actor_id=actor_id,
                 **kwargs,
-            ):
+            ), reply):
                 if event.get("event") == "auth_required":
                     event = {
                         "event": "auth_required",
@@ -1005,9 +1051,9 @@ def invoke_agent_events(
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
         kwargs.update(_usage_kw(on_usage))
-        for event in rt.stream_runtime_events(
+        for event in outbound_attachments.relay(rt.stream_runtime_events(
             data_client(workspace), agent.arn, prompt, **kwargs
-        ):
+        ), reply):
             if event.get("event") == "auth_required":
                 event = {
                     "event": "auth_required",
@@ -1026,6 +1072,8 @@ def invoke_agent_events(
         extra["user_role"] = user_role
         extra["user_email"] = user_email
     extra.update(_usage_kw(on_usage))
+    if attachment_owner is not None:
+        extra["attachment_owner"] = attachment_owner
     result = invoke_agent_text(
         agent,
         prompt,
@@ -1044,3 +1092,5 @@ def invoke_agent_events(
             "event": "delta",
             "data": {"text": text[index : index + BUFFERED_CHUNK_CHARS]},
         }
+    for meta in result.get("attachments") or []:
+        yield {"event": "attachment", "data": meta}

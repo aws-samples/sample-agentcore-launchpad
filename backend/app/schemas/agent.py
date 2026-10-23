@@ -423,6 +423,11 @@ def parse_ecr_image_uri(uri: str) -> tuple[str, str] | None:
     return (match.group(1), match.group(2)) if match else None
 
 
+# AgentCore builtins a byoc spec may declare for IAM only (agent_iam grants
+# the session actions; the member's code opens the session itself).
+BYOC_BUILTIN_IAM_TOOLS = frozenset({"browser", "code-interpreter"})
+
+
 class ByocProvenance(BaseModel):
     """Who uploaded what — stamped by the SERVER from the stored upload manifest
     (or, for container_image, from the describe_images check), never taken from
@@ -668,16 +673,39 @@ class AgentSpec(BaseModel):
                     "the platform does not generate this agent's code, so it "
                     "cannot wire them in; configure them inside your own code"
                 )
-        # byoc tools are outbound-auth declarations only: an entry carrying
-        # ``auth`` drives IAM grants + LAUNCHPAD_OUTBOUND_AUTH, and the member's
-        # own code performs the exchange. A tool without auth would ask the
-        # platform to wire code it does not generate — refused.
+        # byoc tools are declarations only — the platform never wires code into
+        # a byoc artifact. Two shapes are accepted:
+        #   * an entry carrying ``auth`` drives IAM grants + LAUNCHPAD_OUTBOUND_AUTH,
+        #     and the member's own code performs the exchange;
+        #   * a ``builtin`` entry (browser / code-interpreter) is a pure IAM
+        #     declaration: the execution role gets the AgentCore session actions
+        #     and the member's own code opens the session;
+        #   * a ``gateway`` entry (shape and config.tools checks as for every other
+        #     method; gateway tools never carry auth — refused in _tool_auth_rules)
+        #     is an IAM + env declaration: the role gets the workload-token grant
+        #     (+ InvokeGateway on config.gateway_id), the runtime gets the
+        #     LAUNCHPAD_GATEWAY_* env, and the member's own code calls the gateway.
+        # Anything else would ask the platform to wire code it does not generate.
         for tool in self.tools:
+            if tool.type == "gateway":
+                continue
+            if tool.type == "builtin" and tool.auth is None:
+                if tool.name not in BYOC_BUILTIN_IAM_TOOLS:
+                    raise ValueError(
+                        f"byoc builtin tool {tool.name!r} is not supported — "
+                        f"allowed: {sorted(BYOC_BUILTIN_IAM_TOOLS)}"
+                    )
+                if tool.config:
+                    raise ValueError(
+                        "byoc builtin tools are IAM declarations only — config is not used"
+                    )
+                continue
             if tool.auth is None:
                 raise ValueError(
                     "tools are not supported by the byoc method in v1 unless they "
-                    "carry an auth block — byoc tools are outbound-auth declarations "
-                    "for your own code; wire the tool itself inside your code"
+                    "carry an auth block, are a builtin IAM declaration "
+                    "(browser / code-interpreter) or a gateway tool — wire the tool "
+                    "itself inside your code"
                 )
         if self.code or self.code_bundle:
             raise ValueError(
