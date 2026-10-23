@@ -42,6 +42,9 @@ SCOPED_SIDS = frozenset(
         "EcrLaunchpad",
         "CodeBuildLaunchpad",
         "BedrockKnowledgeBases",
+        "TransactionSearchLogGroups",
+        "ApplicationSignalsDiscovery",
+        "EvaluationResultLogs",
     }
 )
 

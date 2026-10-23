@@ -369,10 +369,16 @@ Resources:
               # source (DescribeLogStreams + FilterLogEvents). None of
               # StartQuery's siblings (GetQueryResults, StopQuery,
               # DescribeLogGroups) accept a resource, and the account-level X-Ray
-              # setting has no ARN at all.
+              # setting has no ARN at all. Neither have
+              # application-signals:StartDiscovery and cloudtrail:ListChannels,
+              # which UpdateTraceSegmentDestination(CloudWatchLogs) calls as the
+              # caller (LIVE-OBSERVED 2026-10-23, spoke-use2; the rest of that
+              # chain is ApplicationSignalsDiscovery below).
               - Sid: Observability
                 Effect: Allow
                 Action:
+                  - application-signals:StartDiscovery
+                  - cloudtrail:ListChannels
                   - cloudwatch:GetMetricData
                   - cloudwatch:ListMetrics
                   - logs:CreateDelivery
@@ -383,6 +389,7 @@ Resources:
                   - logs:FilterLogEvents
                   - logs:GetDeliveryDestination
                   - logs:GetDeliverySource
+                  - logs:GetLogEvents
                   - logs:GetQueryResults
                   - logs:PutDeliveryDestination
                   - logs:PutDeliverySource
@@ -392,6 +399,57 @@ Resources:
                   - xray:GetTraceSegmentDestination
                   - xray:UpdateTraceSegmentDestination
                 Resource: "*"
+
+              # LIVE-OBSERVED, not call-site derivable (2026-10-23, spoke-use2):
+              # UpdateTraceSegmentDestination(CloudWatchLogs) creates the span log
+              # group and its `default` stream under the CALLER's permissions, and
+              # fails with "not authorized to perform: logs:CreateLogGroup on ...
+              # aws/spans" (then logs:CreateLogStream on ...:log-stream:default)
+              # in a region where Transaction Search was never on. Scoped to the
+              # two groups the TransactionSearchXRayAccess resource policy names.
+              - Sid: TransactionSearchLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans"
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans:*"
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data"
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data:*"
+
+              # The same call enables Application Signals (StartDiscovery), which
+              # creates its service-linked role (CreateServiceLinkedRoles above)
+              # and a service-linked CloudTrail channel, both under the caller's
+              # permissions — "Access denied to perform:
+              # cloudtrail:CreateServiceLinkedChannel" otherwise. Mirrors the
+              # scoping of the AWS managed CloudWatchApplicationSignalsFullAccess.
+              # LIVE-OBSERVED (2026-10-23, spoke-use2): StartBatchEvaluation runs
+              # under the caller's credentials (FAS) and creates and writes its
+              # results group — "FAS credentials do not have permission to create
+              # CloudWatch log groups" otherwise. The actions and scope are the
+              # WriteEvaluationLogs statement of the AgentCore batch-evaluation
+              # prerequisites; its read half (GetLogEvents) is in Observability.
+              - Sid: EvaluationResultLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*"
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*:*"
+
+              - Sid: ApplicationSignalsDiscovery
+                Effect: Allow
+                Action:
+                  - cloudtrail:CreateServiceLinkedChannel
+                  - cloudtrail:GetChannel
+                  - iam:GetRole
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:channel/aws-service-channel/application-signals/*"
+                  - Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals"
 
               # ── Secrets Manager (AgentCore Identity token vault) ──────────
               # LIVE-OBSERVED, not call-site derivable (2026-08-13, first spoke
