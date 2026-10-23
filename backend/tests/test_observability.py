@@ -732,8 +732,9 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
 
 
 def test_transcript_falls_back_to_eval_run_session(monkeypatch):
-    """Eval-run sessions have no chat ledger row; the transcript comes from the
-    BARE "default" actor the eval invoker passed to the runtime."""
+    """Eval-run sessions have no chat ledger row. A run from before per-scenario
+    actors recorded none on its scenario map: its transcript still comes from the
+    BARE "default" actor those replays used."""
     from app.evaluation.models import EvalRun
 
     agent_id = _seed_agent()
@@ -767,6 +768,39 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
     assert result["actor_id"] == "default" and seen["actor"] == "default"
     assert result["agent_name"] == "hr-assistant"
     assert [t["text"] for t in result["turns"]] == ["PTO balance?", "15 days"]
+
+
+def test_transcript_reads_the_eval_scenario_actor(monkeypatch):
+    """A replayed scenario runs under its own actor (memory.eval_actor), recorded on
+    the run's scenario map — the transcript reads exactly that actor."""
+    from app.evaluation.models import EvalRun
+
+    agent_id = _seed_agent()
+    sid = "f" * 64
+    actor = f"{agent_id}__eval-run1-3"
+    db = SessionLocal()
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                  agent_name="hr-assistant", mode="evaluators", evaluators=[],
+                  status="completed", session_ids=[sid],
+                  scenario_map={sid: {"scenario_id": "T01", "input": "q", "actor_id": actor}})
+    db.add(run)
+    db.commit()
+    seen: list[str] = []
+
+    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
+        seen.append(actor_id)
+        return [{"eventTimestamp": "2026-10-23T01:00:00", "payload": [
+            {"conversational": {"role": "USER", "content": {"text": "where is my ticket?"}}},
+            {"conversational": {"role": "ASSISTANT", "content": {"text": "approving"}}},
+        ]}]
+
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    result = obs.session_transcript(db, sid, ws_ctx())
+    db.close()
+    assert seen == [actor] and result["actor_id"] == actor
+    assert result["source"] == "eval" and result["long_term_records"] is None
+    assert [t["text"] for t in result["turns"]] == ["where is my ticket?", "approving"]
 
 
 # ── transcript: sessions in NO platform ledger (gateway traffic, /v1 callers) ─

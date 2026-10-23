@@ -241,7 +241,8 @@ def test_eval_opaque_replay_turns_are_estimated_at_the_agents_recent_average(mon
     _eval_env(monkeypatch)
     counter = {"n": 0}
 
-    def invoke(client, arn, prompt, session_id=None, runtime_user_id=None, on_usage=None):
+    def invoke(client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None,
+               on_usage=None):
         counter["n"] += 1
         return {"text": "ok", "session_id": session_id or f"rt-{counter['n']}" + "x" * 30}
 
@@ -279,7 +280,8 @@ def test_a_claude_sdk_turn_that_reports_usage_gets_no_estimate(monkeypatch):
     run_id = _run(created_by=member, agent_id=agent)
     _eval_env(monkeypatch)
 
-    def invoke(client, arn, prompt, session_id=None, runtime_user_id=None, on_usage=None):
+    def invoke(client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None,
+               on_usage=None):
         on_usage({"input_tokens": 1000, "output_tokens": 100}, "turn")
         return {"text": "ok", "session_id": "cc-" + "x" * 30}
 

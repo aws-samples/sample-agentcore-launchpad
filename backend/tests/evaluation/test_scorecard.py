@@ -24,6 +24,7 @@ from app.evaluation import scorecard
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.scenarios import INPUT_PREVIEW_CHARS, input_preview, items_fingerprint
 from app.models.ledger import Agent, Deployment, SpecSnapshot
+from app.services import memory
 from tests import test_visibility as tv
 from tests.conftest import ws_ctx
 from tests.evaluation.test_datasets_v2 import PERSONA, SCENARIO
@@ -242,7 +243,8 @@ def test_a_skipped_persona_has_no_map_entry_and_previews_are_capped(monkeypatch)
     assert row.session_ids == ["sess-p1-" + "x" * 30, "sess-p3-" + "x" * 30]
     assert set(row.scenario_map) == set(row.session_ids)  # p2 was skipped: no entry
     assert row.scenario_map["sess-p3-" + "x" * 30] == {
-        "scenario_id": "p3", "input": PERSONA["input"]}
+        "scenario_id": "p3", "input": PERSONA["input"],
+        "actor_id": memory.eval_actor(None, row.id, 2)}
     p1 = row.scenario_map["sess-p1-" + "x" * 30]
     assert p1["scenario_id"] == "p1" and len(p1["input"]) <= INPUT_PREVIEW_CHARS
 
@@ -255,8 +257,10 @@ def test_a_budget_stopped_scenario_keeps_its_map_entry(monkeypatch):
     row, sessions, _finished = _execute(monkeypatch, [ok(), stopped])
     assert row.budget_stops and row.budget_stops[0]["session_id"] == sessions[1]
     assert row.scenario_map == {
-        sessions[0]: {"scenario_id": "first", "input": "first"},
-        sessions[1]: {"scenario_id": "second", "input": "second"},
+        sessions[0]: {"scenario_id": "first", "input": "first",
+                      "actor_id": memory.eval_actor(None, row.id, 0)},
+        sessions[1]: {"scenario_id": "second", "input": "second",
+                      "actor_id": memory.eval_actor(None, row.id, 1)},
     }
 
 

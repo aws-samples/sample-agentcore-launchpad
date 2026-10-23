@@ -1811,12 +1811,13 @@ def session_transcript(
         mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
         agent_id, actor_display = row.agent_id, row.actor_id
     else:
-        # Eval-run sessions: replays pass the BARE "default" actor straight to
-        # the runtime — harness runtimes persist the conversation under it
-        # (runtime-backed agents write no memory events, so turns come back
-        # empty for them).
+        # Eval-run sessions: each replayed scenario runs under its own actor
+        # (memory.eval_actor), recorded per session on the run; a run from before
+        # that replayed under the bare "default" actor (runtime-backed agents write
+        # no memory events, so turns come back empty for them).
         agent = db.get(Agent, run.agent_id)
-        mem_actor = "default"
+        entry = (run.scenario_map or {}).get(session_id) or {}
+        mem_actor = str(entry.get("actor_id") or "default")
         agent_id, actor_display = run.agent_id, mem_actor
     memory_error: Exception | None = None
     events: list[dict[str, Any]] = []
@@ -1867,9 +1868,9 @@ def session_transcript(
             )
             if turns:
                 origin = "logs"
-    # Long-term records only make sense for chat sessions — eval traffic all
-    # shares the bare "default" actor, so its namespaces aggregate across
-    # every agent's runs and say nothing about this session.
+    # Long-term records only make sense for chat sessions — an eval scenario's
+    # actor lives for one replay (and legacy runs shared the bare "default"
+    # actor across every agent's runs), so a count would say nothing useful.
     long_term_records = None
     if row is not None and readable and long_term:
         try:

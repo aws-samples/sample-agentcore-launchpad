@@ -102,6 +102,21 @@ def scoped_actor(agent_id: str, base_actor: str = "river") -> str:
     return f"{agent_id}{SCOPE_SEP}{base_actor}"
 
 
+def eval_actor(agent_id: str | None, run_id: str, ordinal: int) -> str:
+    """The memory actor of one replayed scenario of an evaluation run.
+
+    Every scenario is a fresh user: a replay that passed no actor landed every
+    run of every agent on the bare ``"default"`` actor, so one run's long-term
+    records (extracted minutes later) answered the next run's questions — a
+    golden-dataset case scored from another case's memory. Run ids are hex and the
+    ordinal is the scenario's position in the dataset, so the id stays within the
+    actorId charset. The run records it per session (``EvalRun.scenario_map``) for
+    the transcript read.
+    """
+    base = f"eval-{run_id}-{ordinal}"
+    return scoped_actor(agent_id, base) if agent_id else base
+
+
 def create_turn_event(
     workspace: WorkspaceContext, actor_id: str, session_id: str, prompt: str, answer: str
 ) -> dict[str, Any]:

@@ -45,7 +45,7 @@ from app.evaluation.scenarios import (
     scenario_prompts,
 )
 from app.models.ledger import Agent
-from app.services import budgets, creators, job_budget
+from app.services import budgets, creators, job_budget, memory
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -481,7 +481,8 @@ def execute_run(
                 if method == "harness":  # InvokeHarness, not the runtime data plane
                     attempt["session_id"] = sid or hc.new_session_id()
                     return hc.invoke_harness_text(
-                        data, agent_arn, prompt, session_id=attempt["session_id"], **sink,
+                        data, agent_arn, prompt, session_id=attempt["session_id"],
+                        actor_id=attempt["actor_id"], **sink,
                     )
                 if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}; no usage
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
@@ -494,6 +495,7 @@ def execute_run(
                         inbound_auth_service.m2m_bearer_token(workspace),
                         prompt,
                         session_id=sid,
+                        actor_id=attempt["actor_id"],
                         **sink,
                     )
                 return rt.invoke_runtime_text(
@@ -501,6 +503,7 @@ def execute_run(
                     agent_arn,
                     prompt,
                     session_id=sid,
+                    actor_id=attempt["actor_id"],
                     runtime_user_id=runtime_user_id,
                     **sink,
                 )
@@ -534,10 +537,12 @@ def execute_run(
             live_seq = _live_snapshot_seq(agent_id)
             _update(run_id, status="invoking",
                     **({"agent_snapshot_seq": live_seq} if live_seq is not None else {}))
-            for scenario in scenarios:
+            for ordinal, scenario in enumerate(scenarios):
                 _check_stop(run_id, budget)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
+                # each scenario is a fresh user: its own memory actor, never "default"
+                attempt["actor_id"] = memory.eval_actor(agent_id, run_id, ordinal)
                 sid: str | None = None
                 skipped = False
                 for retry in range(TRANSIENT_SCENARIO_RETRIES + 1):
@@ -559,6 +564,7 @@ def execute_run(
                                     actor_model_id=actor_model_id or "",
                                     protocol=protocol,
                                     runtime_user_id=runtime_user_id,
+                                    actor_id=attempt["actor_id"],
                                     **sim_kwargs,
                                 ),
                             )
@@ -601,7 +607,8 @@ def execute_run(
                 session_ids.append(sid)
                 watermark_sid = sid
                 scenario_map[sid] = {"scenario_id": attempt["scenario_id"],
-                                     "input": input_preview(scenario)}
+                                     "input": input_preview(scenario),
+                                     "actor_id": attempt["actor_id"]}
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
                 _update(run_id, session_ids=list(session_ids),
                         budget_stops=list(budget_stops) or None,

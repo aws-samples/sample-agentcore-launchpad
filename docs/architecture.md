@@ -2258,9 +2258,17 @@ evaluated, what it was measured on, and how two runs line up case by case.
   `agent_snapshot_seq` (the newest spec snapshot that reached AWS — a snapshot still
   deploying is not what the run invokes) and, for a replay, `dataset_fingerprint` (16 hex of
   sha256 over the normalized scenarios, key order irrelevant) with `dataset_size`. The
-  replay loop writes `scenario_map` (`{session_id: {scenario_id, input}}`) as each session
-  lands; a skipped persona has no entry. All four columns are nullable and older rows keep
-  them null.
+  replay loop writes `scenario_map` (`{session_id: {scenario_id, input, actor_id}}`) as each
+  session lands; a skipped persona has no entry. All four columns are nullable and older rows
+  keep them null.
+- **A fresh memory actor per scenario.** Each replayed scenario (and each persona) invokes
+  under its own actor, `memory.eval_actor` = `<agent>__eval-<run>-<ordinal>`, recorded as the
+  entry's `actor_id`; the transcript read uses it (a legacy entry without one falls back to the
+  bare `default` actor). Before this, every replay passed no actor, so all runs of every agent
+  shared `default` — on the shared memory a scenario could be answered from the long-term
+  records another run had left there (live on prod3, 2026-10-23: a case the knowledge base could
+  not answer scored as correct). The agent prefix keeps workspace isolation filtering these
+  actors with their agent.
 - **Versions on read.** Every run payload carries `snapshot {seq, source}`: `stamped`, or
   for an older row `inferred` from the snapshot timeline (the newest snapshot whose deploy
   ended by the run's creation, else the oldest), or `observed` for a passive scope, whose

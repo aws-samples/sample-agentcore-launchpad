@@ -38,6 +38,7 @@ def run_simulated_scenario(
     actor_model_id: str,
     protocol: str = "http",
     runtime_user_id: str | None = None,
+    actor_id: str = "default",
     invoke_text: Any = None,
     meter_for: Any = None,
 ) -> str:
@@ -91,7 +92,8 @@ def run_simulated_scenario(
     def _platform_invoke(prompt: str, sink: dict[str, Any]) -> dict[str, Any]:
         if method == "harness":
             return hc.invoke_harness_text(
-                data_client, agent_arn, prompt, session_id=state["session_id"], **sink
+                data_client, agent_arn, prompt, session_id=state["session_id"],
+                actor_id=actor_id, **sink,
             )
         if protocol == "a2a":  # JSON-RPC runtimes reject the {prompt} payload; no usage
             return rt.invoke_a2a_text(
@@ -102,6 +104,7 @@ def run_simulated_scenario(
             agent_arn,
             prompt,
             session_id=state["session_id"],
+            actor_id=actor_id,
             runtime_user_id=runtime_user_id,
             **sink,
         )

@@ -75,16 +75,20 @@ def test_adapter_threads_runtime_session_and_maps_fields(monkeypatch):
 
 def test_adapter_dispatches_harness(monkeypatch):
     stub_executor(monkeypatch, turns=1)
-    monkeypatch.setattr(
-        simulation.hc, "invoke_harness_text",
-        lambda client, arn, prompt, session_id=None, actor_id="default": {
-            "text": "ok", "session_id": "harness-sess-" + "x" * 30},
-    )
+    actors: list[str] = []
+
+    def invoke(client, arn, prompt, session_id=None, actor_id="default"):
+        actors.append(actor_id)
+        return {"text": "ok", "session_id": "harness-sess-" + "x" * 30}
+
+    monkeypatch.setattr(simulation.hc, "invoke_harness_text", invoke)
     sid = simulation.run_simulated_scenario(
         object(), agent_arn="arn:h", method="harness", scenario=PERSONA,
-        actor_model_id="m",
+        actor_model_id="m", actor_id="agent1__eval-run1-0",
     )
     assert sid.startswith("harness-sess-")
+    # the persona's turns run under the scenario's own memory actor
+    assert actors == ["agent1__eval-run1-0"]
 
 
 def test_adapter_raises_on_failed_scenario(monkeypatch):

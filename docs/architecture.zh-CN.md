@@ -1288,8 +1288,13 @@ Agent 详情的「代码」按钮打开 `/v2/agents?view=source&id=`，背后是
 - **运行行上的记录。** `submit_run` 是创建运行行的唯一位置，它记录 `agent_snapshot_seq`（已部署到 AWS 的最新
   配置快照——仍在部署中的快照并不是运行实际调用的版本），回放运行还记录 `dataset_fingerprint`（对规范化后的
   场景做 sha256 取前 16 位十六进制，与键的顺序无关）和 `dataset_size`。回放循环在每个会话完成时写入
-  `scenario_map`（`{session_id: {scenario_id, input}}`）；被跳过的模拟用户场景没有条目。四列都可为空，旧行
-  保持为空。
+  `scenario_map`（`{session_id: {scenario_id, input, actor_id}}`）；被跳过的模拟用户场景没有条目。四列都可为空，
+  旧行保持为空。
+- **每个场景一个全新的记忆参与者。** 每个回放场景（以及每个模拟用户）都以自己的参与者调用，
+  `memory.eval_actor` = `<agent>__eval-<run>-<序号>`，记在条目的 `actor_id` 上；读取会话记录时用它（没有该字段的
+  旧条目回退到裸 `default` 参与者）。此前回放不传参与者，所有 Agent 的所有运行共用 `default`——在共享记忆上，
+  一个场景可能被别的运行留下的长期记录"答对"（prod3 实测，2026-10-23：知识库答不了的用例被判为正确）。
+  参与者带 Agent 前缀，工作区隔离会连同 Agent 一起过滤它们。
 - **读取时的版本。** 每个运行载荷都带 `snapshot {seq, source}`：`stamped`；旧行按快照时间线 `inferred`
   （运行创建时已完成部署的最新快照，没有则取最早的快照）；被动范围为 `observed`，因为其会话早于运行本身。
   推断结果从不回写。
