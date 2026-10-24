@@ -6,7 +6,7 @@ import { errorMessage, v2KnowledgeApi } from "./api";
 
 /** True for an S3 object address: `s3://bucket/key`, virtual-hosted
  *  `bucket.s3[.region].amazonaws.com/key` or path-style `s3[.region].amazonaws.com/bucket/key`. */
-export function isS3ObjectUrl(href: string | undefined | null): href is string {
+export function isS3ObjectUrl(href: string | undefined | null): boolean {
   if (!href) return false;
   if (href.startsWith("s3://")) return /^s3:\/\/[^/]+\/.+/.test(href);
   let url: URL;

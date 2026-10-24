@@ -50,3 +50,27 @@ describe("Markdown links", () => {
   });
 });
 
+describe("Markdown footnotes", () => {
+  const FN = "结论。[^roles]\n\n[^roles]: 知识库《QDocs 角色说明》。";
+
+  it("keeps footnote links in the page instead of opening a new tab", () => {
+    const out = html(FN);
+    expect(out).toMatch(/<sup><a [^>]*href="#md-[A-Za-z0-9]*-fn-roles"/);
+    expect(out).toMatch(/<li id="md-[A-Za-z0-9]*-fn-roles">/);
+    expect(out).not.toContain('target="_blank"');
+    expect(out).not.toContain("user-content-");
+  });
+
+  it("gives every rendered answer its own footnote ids", () => {
+    const out = renderToStaticMarkup(
+      <>
+        <Markdown text={FN} />
+        <Markdown text={FN} />
+      </>,
+    );
+    const ids = [...out.matchAll(/<li id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+

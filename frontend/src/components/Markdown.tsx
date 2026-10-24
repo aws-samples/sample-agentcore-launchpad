@@ -1,3 +1,4 @@
+import { useId } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -8,7 +9,10 @@ import { remarkModelText } from "../lib/remark-model-text";
  * app.css. No rehype-raw — model-emitted HTML stays escaped text. `remarkModelText`
  * repairs model output CommonMark mis-renders (citation markers, CJK bold). A link
  * to an S3 object (a knowledge-base source the agent cites) opens through a
- * presigned URL; `onSourceError` reports a source that cannot be opened. */
+ * presigned URL; `onSourceError` reports a source that cannot be opened. GFM footnotes
+ * get a per-instance id prefix (a thread renders many answers, each with its own
+ * `[^1]`), and their in-page `#…` links scroll within the page instead of opening a
+ * new tab. */
 export function Markdown({
   text,
   onSourceError,
@@ -16,15 +20,17 @@ export function Markdown({
   text: string;
   onSourceError?: (message: string) => void;
 }) {
+  const prefix = `md-${useId().replace(/[^a-zA-Z0-9]/g, "")}-`;
   return (
     <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkModelText]}
         rehypePlugins={[rehypeHighlight]}
+        remarkRehypeOptions={{ clobberPrefix: prefix }}
         components={{
           a: ({ node, children, href, ...props }) => {
             void node;
-            if (isS3ObjectUrl(href)) {
+            if (href && isS3ObjectUrl(href)) {
               return (
                 <a
                   {...props}
@@ -34,6 +40,21 @@ export function Markdown({
                   onClick={(e) => {
                     e.preventDefault();
                     void openKbSource(href, onSourceError ?? (() => undefined));
+                  }}
+                >
+                  {children}
+                </a>
+              );
+            }
+            if (href?.startsWith("#")) {
+              return (
+                <a
+                  {...props}
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const target = document.getElementById(decodeURIComponent(href.slice(1)));
+                    target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
                   }}
                 >
                   {children}

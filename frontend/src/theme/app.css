@@ -407,6 +407,12 @@ td.chipcell{min-width:170px}
 .md th,.md td{border:1px solid var(--line);padding:5px 10px;text-align:left}
 .md th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--ink-3);background:var(--panel-2);font-weight:500;text-transform:uppercase}
 .md input[type=checkbox]{accent-color:var(--amber);margin-right:6px}
+.md .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.md sup>a{text-decoration:none;padding:0 1px}
+.md .footnotes{margin-top:12px;padding-top:6px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+.md .footnotes ol{margin:4px 0}
+.md .footnotes p{margin:2px 0}
+.md [data-footnote-backref]{text-decoration:none;margin-left:4px}
 /* hljs tokens → launchpad palette (rehype-highlight classes) */
 .md .hljs-comment,.md .hljs-quote{color:var(--ink-3);font-style:italic}
 .md .hljs-keyword,.md .hljs-selector-tag,.md .hljs-literal,.md .hljs-doctag,.md .hljs-meta{color:var(--s5)}

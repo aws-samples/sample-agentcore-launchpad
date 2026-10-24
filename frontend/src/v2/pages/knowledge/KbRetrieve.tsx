@@ -23,7 +23,7 @@ function ResultCard({ index, item }: { index: number; item: QueryResultItem }) {
         {isS3ObjectUrl(item.location_uri) ? (
           <a
             className="uri mono"
-            href={item.location_uri}
+            href={item.location_uri ?? undefined}
             data-testid="v2-kb-hit-source"
             onClick={(e) => {
               e.preventDefault();
