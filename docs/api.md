@@ -976,12 +976,16 @@ everything else is a live AWS call. See
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs` | The 50 most recent ingestion jobs, newest first, in the same projection |
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents?page_size=&token=` | One page of `ListKnowledgeBaseDocuments` (`page_size` 1–100, default 50) as `{documents, next_token, page_size}`; each document carries the KB-side `status`/`status_reason`/`indexed_at` plus S3-side `size_bytes`/`uploaded_at` joined by object key (absent when the backend cannot list the bucket) |
 | `POST` | `/api/knowledge-bases/{kb_id}/query` | Retrieval playground — `{text, number_of_results?}` (1–100, default 8) → `Retrieve` with a `managedSearchConfiguration`, answering `{results}` of `{text, score, location_uri, metadata}` |
+| `GET` | `/api/knowledge-bases/source?uri=` | A presigned GET (5 min) for a document a retrieval result cites — `uri` is its S3 address (`s3://…` or the `https://<bucket>.s3.<region>.amazonaws.com/…` form `Retrieve` returns). Signed only when the object sits inside a data source of a managed KB the caller can see; answers `{url, name, kb_id, kb_name, expires_in}`, text sources served as `text/plain`. The console's chat links and playground source labels open through it |
 | `POST` | `/api/knowledge-bases/ensure-gateway` | Create-if-missing the shared `launchpad-kb-gw` MCP gateway and persist `{id, arn, url}` onto the workspace. Idempotent; the harness deploy path calls the same helper, so this is only needed to provision the gateway ahead of time |
 
 Error codes: `kb.not_found` (404 — unknown id, or a KB that is not MANAGED),
 `kb.ds_not_found` (404), `kb.has_attached_agents` (409, with the blocking names
 in `detail.agents`), `kb.delete_conflict` (409 — the KB is still `CREATING`),
 `kb.no_upload_target` (409), `kb.no_files` (400 — no upload part in the form),
+`kb.source_unsupported` (400 — not an S3 address), `kb.source_not_found` (404 — no
+visible KB's data source holds it), `kb.source_missing` (404 — the object is gone),
+`kb.source_unreadable` (502 — the backend cannot read the object),
 `kb.sync_not_ready` (409 — `StartIngestionJob` hit `ValidationException` or
 `ConflictException`: the data source is still provisioning, or a sync is already
 running), `kb.bucket_required` / `kb.invalid_bucket` / `kb.invalid_prefix` /

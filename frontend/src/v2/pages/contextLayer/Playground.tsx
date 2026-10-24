@@ -15,7 +15,7 @@ import {
 } from "../../../lib/api";
 import { sseEvents } from "../../../lib/chat";
 import { fmtDuration } from "../../format";
-import type { Loaded } from "../../hooks";
+import { type Loaded, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, Lamp, Segmented, Select, Spin, Tag } from "../../ui";
 import { AuthCard } from "../chat/AuthCard";
 import "../chat/chat.css";
@@ -111,6 +111,7 @@ function Turn({
   onAuthorized: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useV2Toast();
   const streaming = turn.phase === "streaming";
   const answer = answerOf(turn);
   const result = turn.result;
@@ -161,7 +162,7 @@ function Turn({
         <TurnError turn={turn} consoleUrl={consoleUrl} onAuthorized={onAuthorized} />
         {(answer || streaming) && (
           <div className="v2-chat-bub" data-testid="context-layer-play-answer">
-            {answer ? <Markdown text={answer} /> : <span className="v2-muted">{t("v2.contextLayer.playground.thinking")}</span>}
+            {answer ? <Markdown text={answer} onSourceError={(m) => toast("error", m)} /> : <span className="v2-muted">{t("v2.contextLayer.playground.thinking")}</span>}
             {streaming && <span className="v2-chat-caret" />}
           </div>
         )}

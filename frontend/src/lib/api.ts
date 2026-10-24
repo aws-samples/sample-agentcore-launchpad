@@ -7223,7 +7223,19 @@ export const v2KnowledgeApi = {
       method: "POST",
       body: JSON.stringify({ text, number_of_results: numberOfResults }),
     }),
+  /** A presigned GET (≈5 min) for a document a retrieval result cites, by its S3
+   *  address; `404 kb.source_not_found` when no visible KB's data source holds it. */
+  sourceLink: (uri: string) =>
+    request<KbSourceLink>(`/api/knowledge-bases/source?uri=${encodeURIComponent(uri)}`),
 };
+
+export interface KbSourceLink {
+  url: string;
+  name: string;
+  kb_id: string;
+  kb_name: string | null;
+  expires_in: number;
+}
 
 // ---- coding agent (remote web IDE over the platform coding runtime) ----
 /* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A project is private

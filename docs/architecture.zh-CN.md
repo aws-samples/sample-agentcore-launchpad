@@ -1816,7 +1816,11 @@ ingestion 失败时才暴露。
   挂载时 `generate` 跑在网关存在之前——并以 `CLIENT_CREDENTIALS` 出站鉴权把它作为
   `agentcore_gateway` 工具挂上。`harness.py::_kb_prompt` 会追加一段
   `## Knowledge bases` 提示词，点名网关的 MCP 工具（`…___Retrieve`、
-  `agentic-…___AgenticRetrieveStream`）。网关是惰性创建的：在第一个挂载知识库的
+  `agentic-…___AgenticRetrieveStream`），并要求把每个引用的来源写成以文档标题为文字的
+  Markdown 链接。检索结果引用的是 `location.s3Location.uri`——指向数据源私有桶的 https
+  地址，控制台从不直接跳转：对话和 Playground 里指向 S3 对象的链接，经
+  `GET /api/knowledge-bases/source` 打开；它只为位于可见托管知识库数据源内的对象签发
+  5 分钟的 GET（`knowledge.source_link`）。网关是惰性创建的：在第一个挂载知识库的
   harness 部署（或显式的 `POST /api/knowledge-bases/ensure-gateway`）之前，没有任何
   东西会去预置它。
 - **直连通道——方式A（container）与 `zip_runtime`。** 不经网关；生成的运行时自带两个

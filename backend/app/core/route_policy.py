@@ -292,6 +292,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/knowledge-bases"): MEMBER,
     ("POST", "/api/knowledge-bases"): MEMBER,
     ("POST", "/api/knowledge-bases/ensure-gateway"): MEMBER,
+    ("GET", "/api/knowledge-bases/source"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}"): MEMBER,
     ("PATCH", "/api/knowledge-bases/{kb_id}"): MEMBER,
     ("DELETE", "/api/knowledge-bases/{kb_id}"): MEMBER,

@@ -3,13 +3,16 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, v2KnowledgeApi } from "../../../lib/api";
+import { isS3ObjectUrl, openKbSource } from "../../../lib/kb-source";
 import { KB_QUERY_MAX_RESULTS, type QueryResultItem } from "../../../lib/knowledgeBases";
+import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, LinkButton, Tag } from "../../ui";
 
 const CLAMP = 320;
 
 function ResultCard({ index, item }: { index: number; item: QueryResultItem }) {
   const { t } = useTranslation();
+  const toast = useV2Toast();
   const [open, setOpen] = useState(false);
   const long = item.text.length > CLAMP;
   const meta = Object.entries(item.metadata ?? {});
@@ -17,7 +20,21 @@ function ResultCard({ index, item }: { index: number; item: QueryResultItem }) {
     <div className="v2-knowledge-hit" data-testid="v2-kb-hit">
       <div className="head">
         <span className="rank">#{index + 1}</span>
-        <span className="uri mono">{item.location_uri || "—"}</span>
+        {isS3ObjectUrl(item.location_uri) ? (
+          <a
+            className="uri mono"
+            href={item.location_uri}
+            data-testid="v2-kb-hit-source"
+            onClick={(e) => {
+              e.preventDefault();
+              void openKbSource(item.location_uri as string, (m) => toast("error", m));
+            }}
+          >
+            {item.location_uri}
+          </a>
+        ) : (
+          <span className="uri mono">{item.location_uri || "—"}</span>
+        )}
         {typeof item.score === "number" && (
           <Tag tone="blue">
             {t("knowledge.detail.playground.score")} {item.score.toFixed(3)}

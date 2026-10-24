@@ -13,8 +13,12 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote, unquote, urlsplit
 
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
@@ -798,6 +802,118 @@ def query(
             status_code=502,
         ) from exc
     return [_result_out(r) for r in resp.get("retrievalResults", [])]
+
+
+# ── source documents (the links a retrieval result cites) ─────────────────
+
+# Managed KB retrieval cites ``location.s3Location.uri`` — an https URL into the data
+# source's (private) bucket — so an agent's "source" link answers AccessDenied in a
+# browser. The console resolves it to a short-lived presigned GET instead.
+SOURCE_URL_TTL_S = 300
+_SOURCE_SIGV4 = "kb-source-s3v4"
+# rendered as text in the browser (an .html source must not run on the S3 origin)
+_TEXT_SUFFIXES = (".md", ".markdown", ".txt", ".csv", ".json", ".html", ".htm", ".xml")
+
+
+def parse_source_uri(uri: str) -> tuple[str, str] | None:
+    """(bucket, key) of an S3 object address, or None when ``uri`` is not one.
+
+    Accepts ``s3://bucket/key`` and the https forms retrieval results carry:
+    virtual-hosted ``bucket.s3[.region].amazonaws.com/key`` and path-style
+    ``s3[.region].amazonaws.com/bucket/key``. The https key is percent-decoded."""
+    uri = (uri or "").strip()
+    if uri.startswith("s3://"):
+        bucket, _, key = uri[5:].partition("/")
+        return (bucket, key) if bucket and key else None
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or not host.endswith(".amazonaws.com"):
+        return None
+    path = unquote(parts.path).lstrip("/")
+    if host.startswith(("s3.", "s3-")):  # path-style
+        bucket, _, key = path.partition("/")
+    else:  # virtual-hosted: <bucket>.s3.<region>.amazonaws.com
+        cut = max(host.rfind(".s3."), host.rfind(".s3-"))
+        if cut <= 0:
+            return None
+        bucket, key = host[:cut], path
+    return (bucket, key) if bucket and key else None
+
+
+def _source_owner(
+    client: Any, bucket: str, key: str, visible: Callable[[str], bool]
+) -> dict[str, Any] | None:
+    """The visible managed KB whose S3 data source holds ``bucket/key``."""
+    for summary in _paginate(
+        client.list_knowledge_bases, "knowledgeBaseSummaries", maxResults=100
+    ):
+        kb_id = summary["knowledgeBaseId"]
+        if not visible(kb_id):
+            continue
+        detail = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]
+        if _kb_type(detail) != "MANAGED":
+            continue
+        for ds in _list_data_sources(client, kb_id):
+            full = client.get_data_source(
+                knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"]
+            )["dataSource"]
+            ds_bucket, prefix = _parse_ds_location(full)
+            if ds_bucket == bucket and key.startswith(prefix or ""):
+                return {"kb_id": kb_id, "kb_name": detail.get("name")}
+    return None
+
+
+def source_link(
+    workspace: WorkspaceContext, uri: str, visible: Callable[[str], bool]
+) -> dict[str, Any]:
+    """A presigned GET for a document a retrieval result cites.
+
+    Only objects inside a data source of a managed KB the caller may see are
+    signed — the endpoint must never become a reader of arbitrary S3 objects the
+    backend's credentials reach. A hidden KB answers like a missing one."""
+    parsed = parse_source_uri(uri)
+    if parsed is None:
+        raise AppError(
+            "kb.source_unsupported", "not an S3 object address", status_code=400
+        )
+    bucket, key = parsed
+    owner = _source_owner(agent_client(workspace), bucket, key, visible)
+    if owner is None:
+        raise NotFoundError(
+            "kb.source_not_found", "no visible knowledge base has this document"
+        )
+    s3 = workspace.client(
+        "s3", cache_token=_SOURCE_SIGV4, config=Config(signature_version="s3v4")
+    )
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        code = exc.response.get("Error", {}).get("Code")
+        if status == 404 or code in ("404", "NoSuchKey", "NotFound"):
+            raise NotFoundError(
+                "kb.source_missing", "the document is no longer in the data source"
+            ) from exc
+        raise AppError(
+            "kb.source_unreadable",
+            f"the backend cannot read this document: {exc}",
+            status_code=502,
+        ) from exc
+    name = key.rsplit("/", 1)[-1]
+    params: dict[str, Any] = {
+        "Bucket": bucket,
+        "Key": key,
+        "ResponseContentDisposition": f"inline; filename*=UTF-8''{quote(name)}",
+    }
+    if name.lower().endswith(_TEXT_SUFFIXES):
+        params["ResponseContentType"] = "text/plain; charset=utf-8"
+    url = s3.generate_presigned_url(
+        "get_object", Params=params, ExpiresIn=SOURCE_URL_TTL_S
+    )
+    return {"url": url, "name": name, "expires_in": SOURCE_URL_TTL_S, **owner}
 
 
 def delete_kb(

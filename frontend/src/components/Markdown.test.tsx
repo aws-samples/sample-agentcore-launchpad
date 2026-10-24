@@ -32,3 +32,21 @@ describe("Markdown model-output repairs", () => {
     );
   });
 });
+
+describe("Markdown links", () => {
+  it("routes a cited S3 source through the console instead of a new tab", () => {
+    const out = html(
+      "【来源：[QDocs 角色说明](https://b.s3.us-west-2.amazonaws.com/kb/KB1/04-qdocs-roles.md)】",
+    );
+    expect(out).toContain('data-testid="md-kb-source"');
+    expect(out).toContain(">QDocs 角色说明</a>");
+    expect(out).not.toContain('target="_blank"');
+  });
+
+  it("keeps every other link a plain new-tab link", () => {
+    const out = html("[docs](https://example.com/a)");
+    expect(out).toContain('target="_blank"');
+    expect(out).not.toContain("md-kb-source");
+  });
+});
+

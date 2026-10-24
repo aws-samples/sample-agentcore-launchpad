@@ -611,12 +611,15 @@ Skill Lab 评估与任务生成作业只在启动前检查。当作业的估算�
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs` | 最近 50 个 ingestion 作业，最新优先，投影同上 |
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents?page_size=&token=` | `ListKnowledgeBaseDocuments` 的一页（`page_size` 1–100，默认 50），形如 `{documents, next_token, page_size}`；每个文档带知识库侧的 `status`/`status_reason`/`indexed_at`，以及按对象 key 联结进来的 S3 侧 `size_bytes`/`uploaded_at`（后端无权列举该桶时为空） |
 | `POST` | `/api/knowledge-bases/{kb_id}/query` | 检索 Playground——`{text, number_of_results?}`（1–100，默认 8）→ 带 `managedSearchConfiguration` 的 `Retrieve`，响应 `{results}`，元素为 `{text, score, location_uri, metadata}` |
+| `GET` | `/api/knowledge-bases/source?uri=` | 为检索结果引用的文档签发预签名 GET（5 分钟）——`uri` 是它的 S3 地址（`s3://…`，或 `Retrieve` 返回的 `https://<bucket>.s3.<region>.amazonaws.com/…` 形式）。只有对象位于调用者可见的托管知识库数据源内才签发；响应 `{url, name, kb_id, kb_name, expires_in}`，文本类文档以 `text/plain` 返回。控制台对话里的引用链接和 Playground 的来源标签都经它打开 |
 | `POST` | `/api/knowledge-bases/ensure-gateway` | 按名字「不存在才创建」共享的 `launchpad-kb-gw` MCP 网关，并把 `{id, arn, url}` 持久化到工作区。幂等；harness 部署路径调用的是同一个 helper，因此这条路由只用于提前预置网关 |
 
 错误码：`kb.not_found`（404——未知 id，或该知识库不是 MANAGED）、`kb.ds_not_found`
 （404）、`kb.has_attached_agents`（409，阻塞的 Agent 名在 `detail.agents` 里）、
 `kb.delete_conflict`（409——知识库仍在 `CREATING`）、`kb.no_upload_target`（409）、
-`kb.no_files`（400——表单里没有上传部件）、`kb.sync_not_ready`（409——
+`kb.no_files`（400——表单里没有上传部件）、`kb.source_unsupported`（400——不是 S3 地址）、
+`kb.source_not_found`（404——可见知识库的数据源里都没有它）、`kb.source_missing`（404——
+对象已删除）、`kb.source_unreadable`（502——后端读不到该对象）、`kb.sync_not_ready`（409——
 `StartIngestionJob` 抛出 `ValidationException` 或 `ConflictException`：数据源仍在预置，
 或已有同步在跑）、`kb.bucket_required` / `kb.invalid_bucket` / `kb.invalid_prefix` /
 `kb.invalid_source`（400——数据源校验）、`kb.query_failed`（502——知识库侧检索失败，

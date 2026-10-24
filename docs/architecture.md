@@ -3275,7 +3275,13 @@ canvas and `protocol="a2a"`.
   existed on a first attach — and attaches it as an `agentcore_gateway` tool with
   `CLIENT_CREDENTIALS` outbound auth. `harness.py::_kb_prompt` appends a
   `## Knowledge bases` prompt section naming the gateway's MCP tools
-  (`…___Retrieve`, `agentic-…___AgenticRetrieveStream`). The gateway is created
+  (`…___Retrieve`, `agentic-…___AgenticRetrieveStream`) and asking for each cited
+  source as a Markdown link titled with the document. A retrieval result cites
+  `location.s3Location.uri`, an https URL into the data source's private bucket, so
+  the console never follows it directly: chat and playground links to an S3 object
+  open through `GET /api/knowledge-bases/source`, which signs a 5-minute GET only
+  for an object inside a visible managed KB's data source (`knowledge.source_link`).
+  The gateway is created
   lazily: nothing provisions it until the first KB-mounting harness deploy, or an
   explicit `POST /api/knowledge-bases/ensure-gateway`.
 - **Direct channel — 方式A (container) and `zip_runtime`.** No gateway; the

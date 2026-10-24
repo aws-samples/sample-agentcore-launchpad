@@ -116,6 +116,22 @@ def create_knowledge_base(
     return _with_creator(db, ws, detail)
 
 
+@router.get("/source")
+def get_source_link(
+    uri: str = Query(min_length=1, max_length=2048),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """A short-lived presigned GET for a document an agent's answer cites (the S3
+    address a retrieval result carries). Declared before ``/{kb_id}``."""
+    return knowledge.source_link(
+        ws.context,
+        uri,
+        lambda kb_id: visibility.aws_id_visible(viewer, db, ws.id, creators.KB, kb_id),
+    )
+
+
 @router.get("/{kb_id}")
 def get_knowledge_base(
     kb_id: str,

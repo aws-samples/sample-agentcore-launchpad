@@ -6,6 +6,7 @@ import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { Markdown } from "../../../components/Markdown";
 import type { FeedbackVerdict } from "../../../lib/api";
 import { BudgetRefusalLink } from "../../BudgetBanner";
+import { useV2Toast } from "../../hooks";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
 import { PolicyDenyCard } from "./PolicyDenyCard";
@@ -35,6 +36,7 @@ export function Thread({
   retryDisabled?: boolean;
 }) {
   const { t } = useTranslation();
+  const toast = useV2Toast();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.scrollTo({ top: ref.current.scrollHeight });
@@ -69,7 +71,7 @@ export function Thread({
               )}
             </div>
             <div className="v2-chat-bub">
-              <Markdown text={msg.text} />
+              <Markdown text={msg.text} onSourceError={(m) => toast("error", m)} />
               {msg.streaming && <span className="v2-chat-caret" />}
             </div>
             {onRate && msg.id != null && !msg.streaming && (

@@ -20,7 +20,7 @@ import {
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { fmtDuration, fmtNumber, fmtScore, fmtTime, normalizedScore, scoreTone } from "../../format";
-import { useLoad } from "../../hooks";
+import { useLoad, useV2Toast } from "../../hooks";
 import {
   Alert,
   Button,
@@ -298,6 +298,7 @@ function conversationSub(t: (k: string, o?: Record<string, unknown>) => string, 
 
 export function SessionDetail({ sessionId, range }: { sessionId: string; range: V2Range }) {
   const { t } = useTranslation();
+  const toast = useV2Toast();
   const navigate = useNavigate();
   const [, setParams] = useSearchParams();
   const [force, setForce] = useState(0);
@@ -421,7 +422,7 @@ export function SessionDetail({ sessionId, range }: { sessionId: string; range: 
                           <span className="v2-observability-clock">{turnClock(turn.at)}</span>
                         </span>
                         <div className="msg v2-observability-md">
-                          <Markdown text={turn.text} />
+                          <Markdown text={turn.text} onSourceError={(m) => toast("error", m)} />
                         </div>
                       </div>
                     );

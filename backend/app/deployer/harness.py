@@ -100,14 +100,20 @@ def _kb_prompt(spec: AgentSpec) -> str:
         target = kbgw.retrieve_target_name(kb.kb_id, kb.name or kb.kb_id)
         desc = f" — {kb.description}" if kb.description else ""
         lines.append(f"- {label} (tool `{target}___Retrieve`){desc}")
-    lines.append(
-        "Ground answers on retrieved content and cite sources when you use them."
-    )
+    lines.append(_KB_END)
     return "\n".join(lines)
 
 
 _KB_MARKER = "\n## Knowledge bases\nRetrieval tools are mounted for you."
-_KB_END = "Ground answers on retrieved content and cite sources when you use them."
+# The console opens a cited S3 source through `GET /api/knowledge-bases/source`, so a
+# source must stay a Markdown link — the title reads, the URI is only the target.
+_KB_END = (
+    "Ground answers on retrieved content and cite each source you use as a Markdown "
+    "link: the document title as the text, the result's source URI as the target; "
+    "never paste a bare URI."
+)
+# the closing line Harnesses deployed before that change still carry
+_KB_END_LEGACY = "Ground answers on retrieved content and cite sources when you use them."
 
 
 def _context_prompt(spec: AgentSpec) -> str:
@@ -153,8 +159,13 @@ def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
     start = text.find(_KB_MARKER)
     if start < 0:
         return text
-    end = text.find(_KB_END, start)
-    tail = text[end + len(_KB_END):] if end >= 0 else ""
+    for closing in (_KB_END, _KB_END_LEGACY):
+        end = text.find(closing, start)
+        if end >= 0:
+            tail = text[end + len(closing):]
+            break
+    else:
+        tail = ""
     return (text[:start] + tail).rstrip()
 
 
