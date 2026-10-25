@@ -1,4 +1,4 @@
-import { ArrowRight, Boxes, Code2, Compass, Download, Layers, Plug, Rocket, Sparkles, Workflow } from "lucide-react";
+import { ArrowRight, Boxes, Code2, Compass, Download, Layers, Plug, Rocket, Sparkles, SquareTerminal, Workflow } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -6,12 +6,16 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/auth-context";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { api, type AgentTemplateInfo } from "../../lib/api";
+import { useModelCatalog } from "../../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../../lib/model-defaults";
+import { modelOptionsFor } from "../../lib/models";
 import {
   AGENT_NAME_RE,
   type AgentForm,
   type AgentFormCatalogs,
   agentFormValid,
   buildAgentSpec,
+  defaultModelForMethod,
   emptyAgentForm,
   randomAgentSlug,
   resolveKb,
@@ -88,6 +92,17 @@ export function V3Create() {
   const [pickedProject, setPickedProject] = useState<string | null>(null);
   const [pick, setPick] = useState<string>(BLANK);
   const [form, setForm] = useState<AgentForm>(() => emptyAgentForm("harness"));
+  // the model the form was seeded with, and whether the member picked one since: the
+  // configured default replaces only an untouched seed once it loads (as the full form)
+  const modelSeed = useRef(form.modelId);
+  const [modelPicked, setModelPicked] = useState(false);
+  useModelCatalog(); // the account catalog joins the offered models once it lands
+  useModelDefaultsArrival(() => {
+    setForm((cur) => ({
+      ...cur,
+      modelId: adoptModelDefault(cur.modelId, modelSeed.current, defaultModelForMethod(cur.method, cur.modelSource), modelPicked),
+    }));
+  });
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   // what the create call threw; the notice shows its AWS details (projects §19)
@@ -104,6 +119,11 @@ export function V3Create() {
   // only a managed Harness agent deploys from the quick form; a template for
   // another method (a Strands toolkit demo) continues in the full form
   const quick = !template || template.method === "harness";
+  // the full form's model list; a template's model it does not offer still shows
+  const offered = modelOptionsFor(form.modelSource);
+  const modelOptions = offered.some((o) => o.model_id === form.modelId)
+    ? offered
+    : [{ model_id: form.modelId, label: form.modelId }, ...offered];
   const activeKbs = (kbs.data?.items ?? []).filter((kb) => String(kb.status ?? "ACTIVE").toUpperCase() === "ACTIVE");
   const needsKb = template?.knowledge === "required";
 
@@ -137,9 +157,12 @@ export function V3Create() {
     setTouched(false);
     setError(null);
     const entry = rows.find((r) => r.key === key);
+    const next = entry ? formFromTemplate(entry) : emptyAgentForm("harness");
+    modelSeed.current = next.modelId;
+    setModelPicked(false);
     // keep what the member typed for the name: picking a scenario sets the defaults only
     setForm((prev) => ({
-      ...(entry ? formFromTemplate(entry) : emptyAgentForm("harness")),
+      ...next,
       displayName: prev.displayName,
       name: prev.name,
       nameEdited: prev.nameEdited,
@@ -299,6 +322,18 @@ export function V3Create() {
                     <small id="v3-resource-name-hint" className={touched && nameError ? "v3-err" : "v3-hint"}>{touched && nameError ? nameError : t("v2.agents.wizard.nameHint")}</small>
                   </label>
                 </div>
+                <div className="v3-field">
+                  <span id="v3-create-model-label">{t("v2.agents.model")}</span>
+                  <Select className="v3-select" value={form.modelId} aria-labelledby="v3-create-model-label"
+                    data-testid="v3-create-model"
+                    onChange={(e) => {
+                      const modelId = e.target.value;
+                      setModelPicked(true);
+                      setForm((prev) => ({ ...prev, modelId }));
+                    }}>
+                    {modelOptions.map((o) => <option key={o.model_id} value={o.model_id}>{o.label}</option>)}
+                  </Select>
+                </div>
                 <label className="v3-field">
                   <span>{t("v2.agents.wizard.quick.promptLabel")}</span>
                   <textarea className="v3-input" rows={7} maxLength={20000} value={form.systemPrompt}
@@ -337,7 +372,6 @@ export function V3Create() {
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", color: "var(--v3-text-3)", fontSize: 13 }}>
                   <span>{t("v3.create.carries")}</span>
-                  <Chip>{form.modelId}</Chip>
                   {form.longTerm && <Chip s="info">{t("v3.create.longTerm")}</Chip>}
                   {form.guardrail !== "off" && <Chip s="ok">{t("templates.piiOn")}</Chip>}
                   <span>· {t("v3.create.carriesHint")}</span>
@@ -362,6 +396,7 @@ export function V3Create() {
             <WayCard to="/v2/agents?view=new&method=byoc&protocol=mcp" icon={<Plug size={16} />} title={t("v3.create.wayMcp")} desc={t("v3.create.wayMcpSub")} />
             <div style={{ height: 1, background: "var(--v3-line)", margin: "6px 0" }} aria-hidden="true" />
             <WayCard to="/v3/assistant" icon={<Sparkles size={16} />} title={t("v3.create.wayAssistant")} desc={t("v3.create.wayAssistantSub")} />
+            <WayCard to="/v2/coding" icon={<SquareTerminal size={16} />} title={t("v3.create.wayIde")} desc={t("v3.create.wayIdeSub")} />
             <WayCard to="/create/studio" icon={<Workflow size={16} />} title={t("v3.create.wayStudio")} desc={t("v3.create.wayStudioSub")} />
             <WayCard to="/agents/import" icon={<Download size={16} />} title={t("v3.create.wayImport")} desc={t("v3.create.wayImportSub")} />
             <WayCard to="/agents/new" icon={<Layers size={16} />} title={t("v3.create.wayPresets")} desc={t("v3.create.wayPresetsSub")} />
