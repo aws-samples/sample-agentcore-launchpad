@@ -514,6 +514,33 @@ def test_a_console_evaluator_shows_its_creator_until_deleted(ada, monkeypatch):
         db.close()
 
 
+def test_an_evaluator_name_taken_in_the_account_says_so(ada, monkeypatch):
+    """CreateEvaluator names are account + Region unique: a leftover from an earlier
+    event (or another project) answers ConflictException 'same name', which the
+    generic aws.conflict copy misreads as 'busy, retry later'."""
+    from botocore.exceptions import ClientError
+
+    _user_id, client = ada
+    stub = _stub_evaluators(monkeypatch)
+    stub.create_evaluator.side_effect = ClientError(
+        {"Error": {"Code": "ConflictException",
+                   "Message": "Evaluator with same name already exist"}},
+        "CreateEvaluator",
+    )
+    res = client.post("/api/eval/evaluators", json={
+        "name": "my_judge", "instructions": "Rate {session}", **FORGED,
+    })
+    assert res.status_code == 409, res.text
+    body = res.json()
+    assert body["code"] == "evaluator.name_taken"
+    assert body["detail"] == {"name": "my_judge"}
+    db = SessionLocal()
+    try:
+        assert db.query(ResourceCreator).count() == 0  # nothing recorded for a refused create
+    finally:
+        db.close()
+
+
 def _stub_kbs(monkeypatch) -> MagicMock:
     set_default_resources({"kb_role_arn": "arn:aws:iam::111:role/kb"})
     stub = MagicMock()

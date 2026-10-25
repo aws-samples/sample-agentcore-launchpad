@@ -2322,6 +2322,7 @@
     "skill_lab.attachment_path_conflict": "某个生成的任务既声明了附件，又在同一路径内联定义了文件。",
     "skill_lab.snapshot_exists": "该作业已有不可变输入快照。",
     "agent.name_exists": "同名 Agent 已存在",
+    "evaluator.name_taken": "这个 AWS 账号的当前区域里已经有同名的评估器。评估器名称在账号和区域内唯一，不分项目，同名的可能在别的项目里，或是之前活动留下、控制台里没有记录的。请换一个名称，或请管理员先删除旧的同名评估器。",
     "agent.project_required": "新智能体必须归属一个业务项目，请先选择项目。",
     "agent.project_not_found": "在这个工作空间中找不到该项目，或你不是该项目的成员。",
     "agent.project_mismatch": "所选项目与本次请求所在的项目不一致，请刷新页面后重新选择。",

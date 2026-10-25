@@ -2322,6 +2322,7 @@
     "skill_lab.attachment_path_conflict": "A generated task both declares an attached document and defines the same path inline.",
     "skill_lab.snapshot_exists": "This job already has an immutable input snapshot.",
     "agent.name_exists": "An agent with this name already exists",
+    "evaluator.name_taken": "This AWS account already has an evaluator with this name in this Region. Evaluator names are unique per account and Region, not per project: the existing one may belong to another project, or be left over from an earlier event with no record in this console. Choose another name, or ask an administrator to delete the old evaluator first.",
     "agent.project_required": "A new agent must belong to a business project. Choose one.",
     "agent.project_not_found": "That project was not found in this workspace, or you are not a member of it.",
     "agent.project_mismatch": "The chosen project differs from the project this request runs in. Reload the page and choose again.",
