@@ -58,6 +58,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(su, "UPDATES_DIR", tmp_path / "updates")
     updater = (tmp_path / "updater.path", tmp_path / "apply_update.sh")
     monkeypatch.setattr(su, "UPDATER_FILES", updater)
+    # the host's real free space is not under test (a 3.8 GB tmpfs /tmp on the prod
+    # boxes sits near the 3 GB floor); test_low_disk_is_refused sets its own
+    monkeypatch.setattr(su, "disk_free_bytes", lambda _path: 100 * 1024**3)
     monkeypatch.setenv("LAUNCHPAD_UPDATE_REPO", str(origin))
     monkeypatch.setenv("LAUNCHPAD_UPDATE_BRANCH", "main")
     monkeypatch.delenv("LAUNCHPAD_UPDATE_ENABLED", raising=False)
