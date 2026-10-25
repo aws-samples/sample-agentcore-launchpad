@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # One-command upgrade of a running Launchpad console (docs/upgrade.md "Manual upgrade").
 #
-# For a host on an older console-v3 commit — including every version before online
-# update existed, which cannot update itself — to the latest console-v3 (or any
+# For a host on an older commit — including every version before online
+# update existed, which cannot update itself — to the latest main (or any
 # commit that fast-forwards from the running one). The script ships with the NEW
 # version, so take it from there rather than from the old checkout:
 #
 #   cd /home/ubuntu/agentcore_launchpad
 #   git fetch origin
-#   git show origin/console-v3:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
+#   git show origin/main:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
 #   sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --dry-run   # checks + backup + rehearsal
 #   sudo bash /tmp/lp-upgrade.sh --repo "$PWD"             # the upgrade
 #
@@ -39,7 +39,7 @@ usage() {
   cat <<'EOF'
 usage: upgrade.sh --repo DIR [options]
   --repo DIR          the console's git checkout (required)
-  --target REF        commit, tag or branch to upgrade to (default: <remote>/console-v3)
+  --target REF        commit, tag or branch to upgrade to (default: <remote>/main)
   --remote NAME       git remote to fetch (default: origin)
   --services "A B"    systemd units to restart (default: launchpad-backend, plus
                       launchpad-frontend when that unit exists)
@@ -125,7 +125,7 @@ dirty=$(as_owner git -C "$REPO" status --short --untracked-files=no)
 $dirty"
 PREV=$(as_owner git -C "$REPO" rev-parse HEAD)
 run git -C "$REPO" fetch --quiet "$REMOTE" || die "git fetch $REMOTE failed"
-TARGET=${TARGET:-$REMOTE/console-v3}
+TARGET=${TARGET:-$REMOTE/main}
 NEW=$(as_owner git -C "$REPO" rev-parse --verify --quiet "$TARGET^{commit}") || die "unknown target $TARGET"
 if [ "$NEW" = "$PREV" ]; then say "already at $TARGET (${NEW:0:8}) — nothing to do"; exit 0; fi
 as_owner git -C "$REPO" merge-base --is-ancestor "$PREV" "$NEW" \

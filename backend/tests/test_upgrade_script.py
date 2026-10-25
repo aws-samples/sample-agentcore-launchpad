@@ -66,10 +66,10 @@ class _Console(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def host(tmp_path):
-    """origin console-v3 (c1 → c2) and the live checkout at c1 with a built dist."""
+    """origin main (c1 → c2) and the live checkout at c1 with a built dist."""
     origin = tmp_path / "origin"
     origin.mkdir()
-    sh("git", "init", "-q", "-b", "console-v3", cwd=origin)
+    sh("git", "init", "-q", "-b", "main", cwd=origin)
     c1 = commit(origin, "c1", {
         ".gitignore": "data/\nfrontend/dist*\nfrontend/node_modules*\n",
         "backend/scripts/inflight.py": "# the running version's probe (run through uv)\n",

@@ -754,7 +754,7 @@ proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # 在线备份并校验；服务运行时不要 cp 台账
-git fetch origin && git merge --ff-only origin/console-v3
+git fetch origin && git merge --ff-only origin/main
 cd backend && uv sync --frozen && cd ..
 cd frontend && npm ci && npm run build && cd ..          # 必须:preview 只吃 dist/
 sudo systemctl restart launchpad-backend launchpad-frontend
@@ -777,7 +777,7 @@ systemctl status launchpad-updater.path      # 预期 active (waiting)
 
 页面上的流程：
 
-1. **检查**：比较当前运行的提交和所配置来源的最新提交，只接受快进。来源是部署配置，不是请求参数：`LAUNCHPAD_UPDATE_REPO`（默认 `https://github.com/aws-samples/sample-agentcore-launchpad`）和 `LAUNCHPAD_UPDATE_BRANCH`（默认 `console-v3`）。
+1. **检查**：比较当前运行的提交和所配置来源的最新提交，只接受快进。来源是部署配置，不是请求参数：`LAUNCHPAD_UPDATE_REPO`（默认 `https://github.com/aws-samples/sample-agentcore-launchpad`）和 `LAUNCHPAD_UPDATE_BRANCH`（默认 `main`）。
 2. **准备更新**：把该提交检出到 `data/updates/stage-<sha>`，并以 `nice 10` 在其中只运行固定命令：`uv sync --frozen`、`npm ci`、`npm run build`，然后做导入自检，再用独立的临时台账在临时端口做启动自检。当前服务不受影响。失败（例如访问不了 npm 源）时更新状态为 `prepare_failed`。后端重启后，准备从最后完成的步骤继续。只保留最近两个暂存目录。
 3. **排期重启**（“立即”即一分钟后，或 7 天内的指定时间）会发布公告。如果重启会中断进行中的任务，页面会列出这些任务，并要求先勾选“我已知晓”。到点后控制台写入 `data/updates/apply.request`。更新器随后在线备份台账（`ledger_backup.py`），快进检出，用重命名换入构建好的 `frontend/dist`，执行 `uv sync --frozen` 并重启服务，然后最多等待 120 秒，直到 `/api/auth/status` 返回的 `version.sha` 等于新提交。健康检查失败时，更新器重置到上一个提交，恢复旧的 `dist`，再次重启，并报告 `rolled_back`。控制台读回结果（`data/updates/apply.result`）并结束公告。
 4. **回滚**：准备上一次更新所替换的提交，再像更新一样排期。

@@ -469,7 +469,7 @@ class Settings(BaseSettings):
     # accepted. `update_enabled` None = on when the systemd updater is installed
     # (backend/scripts/install_updater.sh); false turns the whole feature off.
     update_repo: str = "https://github.com/aws-samples/sample-agentcore-launchpad"
-    update_branch: str = "console-v3"
+    update_branch: str = "main"
     update_enabled: bool | None = None
     # Prepare refuses to start below this much free disk under DATA_DIR, and fails
     # a stage that grows past the cap (`update.disk_low`).

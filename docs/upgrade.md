@@ -57,7 +57,7 @@ backend wherever this page restarts `launchpad-backend`.
 ```bash
 cd /home/ubuntu/agentcore_launchpad
 git fetch origin
-git show origin/console-v3:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
+git show origin/main:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
 sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --dry-run      # checks, backup and rehearsal only — changes nothing
 sudo bash /tmp/lp-upgrade.sh --repo "$PWD"                # the upgrade
 sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --install-updater   # the same, then install the online updater
@@ -133,7 +133,7 @@ check (kept as `….corrupt`) — do not continue until you understand why.
 
   ```bash
   git fetch origin
-  git show origin/console-v3:backend/scripts/ledger_backup.py | python3 - --db data/launchpad.db
+  git show origin/main:backend/scripts/ledger_backup.py | python3 - --db data/launchpad.db
   ```
 
 - **Keep this backup out of the rotation.** The online updater prunes
@@ -155,9 +155,9 @@ running checkout — the running service is not touched:
 
 ```bash
 git fetch origin
-git merge-base --is-ancestor HEAD origin/console-v3 && echo "fast-forward: ok"
-git log --oneline HEAD..origin/console-v3 | wc -l          # commits you are behind
-git worktree add --detach /tmp/launchpad-rehearsal origin/console-v3
+git merge-base --is-ancestor HEAD origin/main && echo "fast-forward: ok"
+git log --oneline HEAD..origin/main | wc -l          # commits you are behind
+git worktree add --detach /tmp/launchpad-rehearsal origin/main
 cd /tmp/launchpad-rehearsal/backend
 uv sync --frozen
 uv run python scripts/rehearse_projects_migration.py \
@@ -194,12 +194,14 @@ skip this step; the backup from step 2 is still your safety net.
 ```bash
 cd /home/ubuntu/agentcore_launchpad
 git fetch origin
-git merge --ff-only origin/console-v3
+git merge --ff-only origin/main
 git log --oneline -1
 ```
 
-`console-v3` is the release branch, and the branch the online update follows by
-default. Track a different branch or a specific commit the same way
+`main` is the release branch, and the branch the online update follows by
+default. A host that still tracks the old `console-v3` branch can switch with
+the same command: every `console-v3` commit is an ancestor of `main`, so the
+merge is a fast-forward. Track a different branch or a specific commit the same way
 (`git merge --ff-only <sha>`). `--ff-only` refuses anything that is not a
 fast-forward of your commit, such as local commits or a history rewrite; resolve
 that before you go on rather than forcing it.
@@ -284,10 +286,14 @@ you deliberately want a newer `apply_update.sh`.
 On the page:
 
 1. **Check** compares the running commit with the newest commit of
-   `LAUNCHPAD_UPDATE_BRANCH` (default `console-v3`) in `LAUNCHPAD_UPDATE_REPO`
+   `LAUNCHPAD_UPDATE_BRANCH` (default `main`) in `LAUNCHPAD_UPDATE_REPO`
    (default `https://github.com/aws-samples/sample-agentcore-launchpad`). Only a
    fast-forward is accepted: a host on a commit that is not an ancestor of that
    branch cannot update online — upgrade it manually once onto the branch.
+   The default moved from `console-v3` to `main` once `console-v3` merged into
+   `main`. A host whose environment sets `LAUNCHPAD_UPDATE_BRANCH=console-v3`
+   explicitly keeps following that branch; remove the line (or set `main`) and
+   restart the backend to switch.
 2. **Prepare** builds the new commit in `data/updates/stage-<sha>` (`uv sync --frozen`,
    `npm ci`, `npm run build`, an import check and a start check on a temporary port
    with a throwaway ledger). The running console is not affected.
@@ -371,7 +377,7 @@ unit environment. Added since a7f550d (`backend/app/core/config.py`):
 
 | Setting | Default | What it does |
 |---|---|---|
-| `update_repo` / `update_branch` | `https://github.com/aws-samples/sample-agentcore-launchpad` / `console-v3` | Source of the online update. |
+| `update_repo` / `update_branch` | `https://github.com/aws-samples/sample-agentcore-launchpad` / `main` | Source of the online update. |
 | `update_enabled` | unset | `false` turns the online update off; unset = scheduling only where the updater is installed. |
 | `update_min_free_gb` / `update_stage_max_gb` | `3` / `6` | Free disk needed to prepare; size cap of a prepared stage. |
 | `eval_cost_prices` | `{}` | Overrides of the evaluation unit prices used for cost estimates; keys you leave out keep their defaults. |
@@ -391,7 +397,7 @@ sign-on, cost tags, network profiles and storage are configured on their
 
 | Symptom | What to do |
 |---|---|
-| `git merge --ff-only` refuses | Your checkout has local commits or edits (`git status`, `git log origin/console-v3..HEAD`). Move them aside, or check out the release branch on a clean checkout; do not force-reset over work you need. |
+| `git merge --ff-only` refuses | Your checkout has local commits or edits (`git status`, `git log origin/main..HEAD`). Move them aside, or check out the release branch on a clean checkout; do not force-reset over work you need. |
 | `uv sync --frozen` fails building `xmlsec` / `lxml` | No prebuilt wheel for your platform: install `pkg-config` and the `libxml2` / `libxmlsec1` development packages (step 5) and re-run. |
 | `npm ci` fails | Check access to the npm registry and to `cdn.sheetjs.com` (the `xlsx` package), and the Node.js version (≥ 20). `npm ci` deletes `node_modules` first; a half-finished run is fixed by running it again. |
 | The page looks unchanged after the restart | `npm run build` was skipped or failed — `frontend/dist` is still the old build. Build again; hard-reload the browser. |

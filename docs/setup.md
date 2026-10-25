@@ -988,7 +988,7 @@ version (backup, migration rehearsal, rollback, troubleshooting), follow
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # online + verified; never cp a live ledger
-git fetch origin && git merge --ff-only origin/console-v3
+git fetch origin && git merge --ff-only origin/main
 cd backend && uv sync --frozen && cd ..
 cd frontend && npm ci && npm run build && cd ..          # required: preview serves dist/
 sudo systemctl restart launchpad-backend launchpad-frontend
@@ -1022,7 +1022,7 @@ The flow on the page:
    source. Only a fast-forward is accepted. The source is deployment configuration,
    never a request parameter: `LAUNCHPAD_UPDATE_REPO` (default
    `https://github.com/aws-samples/sample-agentcore-launchpad`) and
-   `LAUNCHPAD_UPDATE_BRANCH` (default `console-v3`).
+   `LAUNCHPAD_UPDATE_BRANCH` (default `main`).
 2. **Prepare** checks the commit out into `data/updates/stage-<sha>` and runs only
    fixed commands there at `nice 10`: `uv sync --frozen`, `npm ci`,
    `npm run build`, then an import check and a start check on a temporary port with

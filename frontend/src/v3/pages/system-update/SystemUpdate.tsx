@@ -194,7 +194,7 @@ function LogPanel({ update }: { update: SystemUpdate }) {
 
 /**
  * Configure → System update (online-update §2.7; administrators): the running and the
- * latest `console-v3` commit, the commits in between, the prepare progress, the restart
+ * latest commit of the configured branch (`main` by default), the commits in between, the prepare progress, the restart
  * schedule with the tasks it interrupts, rollback and history. Hub-global.
  */
 export function V3SystemUpdate() {

@@ -37,7 +37,7 @@ AWS 仍是事实来源：台账只保存标识符和派生的进度。升级不�
 ```bash
 cd /home/ubuntu/agentcore_launchpad
 git fetch origin
-git show origin/console-v3:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
+git show origin/main:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
 sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --dry-run      # 只做检查、备份和演练，不改任何东西
 sudo bash /tmp/lp-upgrade.sh --repo "$PWD"                # 正式升级
 sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --install-updater   # 同上，并安装在线更新器
@@ -88,7 +88,7 @@ df -h .                                        # 空闲磁盘（见下文）
 
   ```bash
   git fetch origin
-  git show origin/console-v3:backend/scripts/ledger_backup.py | python3 - --db data/launchpad.db
+  git show origin/main:backend/scripts/ledger_backup.py | python3 - --db data/launchpad.db
   ```
 
 - **让这份备份不参与轮换。** 在线更新器会删除最新 10 份之外的 `launchpad.db.bak-<stamp>` 文件（`--keep 10`）；带后缀的文件名永远不会被删除。请给升级前的这份备份改名，例如 `mv data/launchpad.db.bak-<stamp> data/launchpad.db.bak-<stamp>-preupgrade`，并保留到新版本稳定运行一段时间之后。
@@ -100,9 +100,9 @@ df -h .                                        # 空闲磁盘（见下文）
 
 ```bash
 git fetch origin
-git merge-base --is-ancestor HEAD origin/console-v3 && echo "fast-forward: ok"
-git log --oneline HEAD..origin/console-v3 | wc -l          # 落后的提交数
-git worktree add --detach /tmp/launchpad-rehearsal origin/console-v3
+git merge-base --is-ancestor HEAD origin/main && echo "fast-forward: ok"
+git log --oneline HEAD..origin/main | wc -l          # 落后的提交数
+git worktree add --detach /tmp/launchpad-rehearsal origin/main
 cd /tmp/launchpad-rehearsal/backend
 uv sync --frozen
 uv run python scripts/rehearse_projects_migration.py \
@@ -130,11 +130,11 @@ OK every row has a workspace, every strict row a project; no drift
 ```bash
 cd /home/ubuntu/agentcore_launchpad
 git fetch origin
-git merge --ff-only origin/console-v3
+git merge --ff-only origin/main
 git log --oneline -1
 ```
 
-`console-v3` 是发布分支，也是在线更新默认跟随的分支。跟随其他分支或指定提交的方法相同（`git merge --ff-only <sha>`）。`--ff-only` 会拒绝任何不是当前提交快进的情况，例如本地提交或历史被改写；请先解决这些问题再继续，不要强制覆盖。
+`main` 是发布分支，也是在线更新默认跟随的分支。还在跟随旧 `console-v3` 分支的主机，用同一条命令即可切换：`console-v3` 的所有提交都是 `main` 的祖先，合并是快进。跟随其他分支或指定提交的方法相同（`git merge --ff-only <sha>`）。`--ff-only` 会拒绝任何不是当前提交快进的情况，例如本地提交或历史被改写；请先解决这些问题再继续，不要强制覆盖。
 
 ### 5. 后端依赖
 
@@ -190,7 +190,7 @@ systemctl status launchpad-updater.path                 # 预期 active (waiting
 
 页面上的流程：
 
-1. **检查**：比较运行中的提交和 `LAUNCHPAD_UPDATE_REPO`（默认 `https://github.com/aws-samples/sample-agentcore-launchpad`）中 `LAUNCHPAD_UPDATE_BRANCH`（默认 `console-v3`）的最新提交。只接受快进：如果主机所在的提交不是该分支的祖先，就无法在线更新，请先手动升级一次到该分支。
+1. **检查**：比较运行中的提交和 `LAUNCHPAD_UPDATE_REPO`（默认 `https://github.com/aws-samples/sample-agentcore-launchpad`）中 `LAUNCHPAD_UPDATE_BRANCH`（默认 `main`）的最新提交。只接受快进：如果主机所在的提交不是该分支的祖先，就无法在线更新，请先手动升级一次到该分支。`console-v3` 合入 `main` 后，默认值从 `console-v3` 改成了 `main`。如果主机的环境里显式设置了 `LAUNCHPAD_UPDATE_BRANCH=console-v3`，它会继续跟随那个分支；删掉这一行（或改成 `main`）并重启后端即可切换。
 2. **准备更新**：在 `data/updates/stage-<sha>` 中构建新提交（`uv sync --frozen`、`npm ci`、`npm run build`、导入自检，以及用一次性台账在临时端口上的启动自检）。运行中的控制台不受影响。
 3. **排期重启**（一分钟后，或 7 天内的指定时间）会发布公告。**如果重启会中断进行中的任务，页面会列出这些任务，必须先确认才能排期**（否则 API 返回 `update.inflight_unacknowledged`）。到点后，更新器备份台账（`ledger_backup.py --keep 10`），快进检出目录，换入构建好的 `dist`，执行 `uv sync --frozen`，重启单元，并最多等待 120 秒，直到 `/api/auth/status` 返回新的 `version.sha`。如果失败，它会重置到上一个提交，恢复旧的 `dist`，再次重启，并报告 `rolled_back`。
 4. **回滚**：准备上一次更新所替换的提交，再像更新一样排期。
@@ -237,7 +237,7 @@ sudo systemctl start launchpad-backend
 
 | 设置 | 默认值 | 作用 |
 |---|---|---|
-| `update_repo` / `update_branch` | `https://github.com/aws-samples/sample-agentcore-launchpad` / `console-v3` | 在线更新的来源。 |
+| `update_repo` / `update_branch` | `https://github.com/aws-samples/sample-agentcore-launchpad` / `main` | 在线更新的来源。 |
 | `update_enabled` | 未设置 | `false` 关闭在线更新；未设置时，只有安装了更新器的主机才能排期。 |
 | `update_min_free_gb` / `update_stage_max_gb` | `3` / `6` | 准备所需的空闲磁盘；暂存目录的大小上限。 |
 | `eval_cost_prices` | `{}` | 覆盖评测成本估算使用的单价；未列出的键保持默认值。 |
@@ -252,7 +252,7 @@ sudo systemctl start launchpad-backend
 
 | 现象 | 处理 |
 |---|---|
-| `git merge --ff-only` 拒绝 | 检出目录有本地提交或修改（`git status`、`git log origin/console-v3..HEAD`）。把它们移走，或在干净的检出目录中切到发布分支；不要用强制重置覆盖你需要的内容。 |
+| `git merge --ff-only` 拒绝 | 检出目录有本地提交或修改（`git status`、`git log origin/main..HEAD`）。把它们移走，或在干净的检出目录中切到发布分支；不要用强制重置覆盖你需要的内容。 |
 | `uv sync --frozen` 编译 `xmlsec` / `lxml` 失败 | 你的平台没有预编译 wheel：安装 `pkg-config` 以及 `libxml2` / `libxmlsec1` 的开发包（第 5 步）后重试。 |
 | `npm ci` 失败 | 检查能否访问 npm 源和 `cdn.sheetjs.com`（`xlsx` 包），以及 Node.js 版本（≥ 20）。`npm ci` 会先删除 `node_modules`；中途失败时重新运行即可。 |
 | 重启后页面没有变化 | 跳过了 `npm run build` 或构建失败，`frontend/dist` 仍是旧构建。重新构建，并在浏览器中强制刷新。 |
