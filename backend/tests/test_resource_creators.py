@@ -532,8 +532,8 @@ def test_an_evaluator_name_taken_in_the_account_says_so(ada, monkeypatch):
     })
     assert res.status_code == 409, res.text
     body = res.json()
-    assert body["code"] == "evaluator.name_taken"
-    assert body["detail"] == {"name": "my_judge"}
+    assert body["code"] == "aws.name_taken"
+    assert body["detail"]["operation"] == "CreateEvaluator"
     db = SessionLocal()
     try:
         assert db.query(ResourceCreator).count() == 0  # nothing recorded for a refused create

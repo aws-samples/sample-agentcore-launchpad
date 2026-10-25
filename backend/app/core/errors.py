@@ -219,6 +219,7 @@ _PUBLIC_AWS_MESSAGES: dict[str, str] = {
     "aws.access_denied": "AWS access denied",
     "aws.throttled": "AWS is throttling this request",
     "aws.conflict": "AWS resource conflict",
+    "aws.name_taken": "An AWS resource with this name already exists",
 }
 
 # botocore renders `str(exc)` as
@@ -247,7 +248,20 @@ def mapped_aws_error(exc: BaseException) -> tuple[int, str] | None:
     """`(status, code)` when the console has a translation for this `ClientError`."""
     if not isinstance(exc, ClientError):
         return None
-    return AWS_ERROR_MAP.get(aws_error_code(exc))
+    code = aws_error_code(exc)
+    if code == "ConflictException" and _NAME_TAKEN.search(aws_error_message(exc)):
+        return (409, "aws.name_taken")
+    return AWS_ERROR_MAP.get(code)
+
+
+# A create refused because the NAME is held: evaluators, knowledge bases, policy
+# engines, gateways… are unique per account + Region, not per project, and the
+# holder may live in another project or be an earlier event's leftover the
+# console has no record of. "Busy, retry once it settles" (aws.conflict) would
+# send the operator into retries that can never succeed. AWS words it
+# "Evaluator with same name already exist" / "KnowledgeBase with name X already
+# exists." / "… already exists".
+_NAME_TAKEN = re.compile(r"already exist|same name", re.IGNORECASE)
 
 
 # The "it is already gone" family across the services a best-effort cleanup

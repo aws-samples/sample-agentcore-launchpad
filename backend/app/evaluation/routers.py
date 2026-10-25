@@ -1288,21 +1288,36 @@ def create_judge(
 ) -> dict[str, Any]:
     _require_one_definition(req)
     client = control_client(ws.context)
-    try:
-        created = _create_evaluator(client, req, ws)
-    except ClientError as exc:
-        if _is_evaluator_name_taken(exc):
-            # Evaluator names are unique per account + Region, not per project:
-            # the holder may live in another project or outside the console (an
-            # earlier event's leftover), so say that instead of AWS's generic
-            # "busy or conflicting" reading of ConflictException.
-            raise AppError(
-                "evaluator.name_taken",
-                f"An evaluator named {req.name!r} already exists in this AWS account and Region",
-                detail={"name": req.name},
-                status_code=409,
-            ) from exc
-        raise
+    if req.lambda_arn:
+        _require_lambda_region(req.lambda_arn, ws.context.region)
+        created = ac.create_code_evaluator(
+            client,
+            name=req.name,
+            lambda_arn=req.lambda_arn,
+            lambda_timeout_s=_lambda_timeout(req),
+            level=req.level,
+            description=req.description,
+        )
+    elif req.base_evaluator_id:
+        created = ac.create_derived_evaluator(
+            client,
+            name=req.name,
+            description=req.description,
+            base_evaluator_id=req.base_evaluator_id,
+            model_id=req.model_id,
+            level=_resolve_base_level(client, req.base_evaluator_id),
+        )
+    else:
+        _require_placeholder(req.instructions)
+        created = ac.create_llm_judge_evaluator(
+            client,
+            name=req.name,
+            instructions=req.instructions,
+            rating_scale=_rating_scale_payload(req.rating_scale),
+            model_id=req.model_id,
+            level=req.level,
+            description=req.description,
+        )
     creator = Creator.of_request(request)
     creators.record(db, ws.id, creators.EVALUATOR, created.get("evaluatorId") or "", creator)
     return {
@@ -1313,43 +1328,6 @@ def create_judge(
         "model_fallback": created.get("launchpadModelFallback"),
         **creators.fields(creator),
     }
-
-
-def _is_evaluator_name_taken(exc: ClientError) -> bool:
-    err = exc.response.get("Error", {})
-    return err.get("Code") == "ConflictException" and "same name" in (err.get("Message") or "")
-
-
-def _create_evaluator(client: Any, req: JudgeCreate, ws: WorkspaceScope) -> dict[str, Any]:
-    if req.lambda_arn:
-        _require_lambda_region(req.lambda_arn, ws.context.region)
-        return ac.create_code_evaluator(
-            client,
-            name=req.name,
-            lambda_arn=req.lambda_arn,
-            lambda_timeout_s=_lambda_timeout(req),
-            level=req.level,
-            description=req.description,
-        )
-    if req.base_evaluator_id:
-        return ac.create_derived_evaluator(
-            client,
-            name=req.name,
-            description=req.description,
-            base_evaluator_id=req.base_evaluator_id,
-            model_id=req.model_id,
-            level=_resolve_base_level(client, req.base_evaluator_id),
-        )
-    _require_placeholder(req.instructions)
-    return ac.create_llm_judge_evaluator(
-        client,
-        name=req.name,
-        instructions=req.instructions,
-        rating_scale=_rating_scale_payload(req.rating_scale),
-        model_id=req.model_id,
-        level=req.level,
-        description=req.description,
-    )
 
 
 @router.get("/evaluators/{evaluator_id}")
