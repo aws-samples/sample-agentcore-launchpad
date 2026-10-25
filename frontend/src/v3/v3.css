@@ -980,7 +980,10 @@ body.v3-body {
   overscroll-behavior: contain;
   background: color-mix(in srgb, var(--v3-scrim) 66%, transparent);
   backdrop-filter: blur(3px);
-  animation: v3-fade 0.12s ease-out;
+  /* the scrim's colour and blur ease in, not its opacity: the dialog is the mask's
+     child, so an opacity fade made it see-through and the page behind read as a
+     second box flashing before the dialog */
+  animation: v3-scrim-in 0.12s ease-out;
 }
 .v3 .v3-modal {
   width: min(480px, calc(100vw - 32px));
@@ -993,7 +996,13 @@ body.v3-body {
   border: 1px solid var(--v3-line-2);
   background: var(--v3-ink-2);
   box-shadow: 0 30px 80px -20px color-mix(in srgb, var(--v3-shade) 80%, transparent);
-  animation: v3-rise 0.18s var(--v3-ease);
+  /* opaque from its first frame; it only slides in */
+  animation: v3-lift 0.18s var(--v3-ease);
+}
+@keyframes v3-scrim-in { from { background-color: transparent; backdrop-filter: blur(0); } }
+@keyframes v3-lift { from { transform: translateY(10px); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-modal-mask, .v3 .v3-modal { animation: none; }
 }
 .v3 .v3-modal h2 { flex: none; margin: 0 0 10px; font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 18px; font-weight: 650; }
 /* the padding / negative margin keep focus rings inside the scroll box visible */
