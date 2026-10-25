@@ -13912,7 +13912,6 @@
       "days_one": "{{count}} 天",
       "days_other": "{{count}} 天",
       "delete": "删除",
-      "deletedAgent": "已删除的智能体",
       "description": "描述",
       "detail": "详情",
       "edit": "编辑",

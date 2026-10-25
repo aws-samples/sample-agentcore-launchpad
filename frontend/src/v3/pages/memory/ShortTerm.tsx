@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { api, type MemoryActor, type MemoryEvent, type MemorySessionRow } from "../../../lib/api";
-import { actorText, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
+import { actorText, agentLabel, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
 import { ago } from "../../format";
 import { Btn, Chip, Panel } from "../../ui";
 import { LoadMore, PaneState, SourceBadge } from "./common";
@@ -104,7 +104,7 @@ export function ShortTerm({
               onClick={() => onSelectActor(a.actor_id)} title={a.actor_id}>
               <span>
                 {a.scoped ? (
-                  <><b>{a.agent_name ?? t("v3.memory.deletedAgent")}</b><span className="v3-mem-muted"> · {a.human_actor}</span></>
+                  <><b>{agentLabel(t, a)}</b><span className="v3-mem-muted"> · {a.human_actor}</span></>
                 ) : (
                   <><b>{a.human_actor}</b> <Chip>{t("v3.memory.unscoped")}</Chip></>
                 )}
