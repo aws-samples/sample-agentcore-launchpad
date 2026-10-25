@@ -35,7 +35,8 @@ const render = (data: AgentInvokeAccess, lang: "cli" | "python" | "ts" = "cli") 
       lang={lang} onLang={() => undefined} docKey="k" onCopy={() => undefined} />,
   );
 
-const unescape = (html: string) => html.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+// `&amp;` last: decoding it first would turn a literal `&amp;lt;` into `<`
+const unescape = (html: string) => html.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
 beforeAll(async () => {
   vi.stubGlobal("document", { documentElement: {} });
