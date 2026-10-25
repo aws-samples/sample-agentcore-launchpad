@@ -3,15 +3,26 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { api, dlcApi } from "../../lib/api";
+import { useAuth } from "../../auth/auth-context";
+import { api, type AnnouncementPage, dlcApi, type InboxInfo, type PublicAnnouncement, type TtfaInfo } from "../../lib/api";
+import { loadTasks } from "../../v2/tasks";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useHiddenNav } from "../hiddenNav";
+import { HOME_SECTIONS } from "../nav";
 import { LaunchSequence } from "../onboarding/LaunchSequence";
 import { YourTurn } from "../story/YourTurn";
 import { type Attention, agentSignal, attentionFor, sortAttention } from "../signals";
 import { Chip, Empty, Lamp, Notice, PageHead, Panel, Skeleton, Spark, Stat } from "../ui";
 import { useLoad } from "../hooks";
 import { ago, ms, pct } from "../format";
+import { AdminInbox } from "./home/AdminInbox";
+import { AnnouncementsBrief } from "./home/AnnouncementsBrief";
+import "./home/home.css";
+import { Lifecycle } from "./home/Lifecycle";
+import { MoreSignals } from "./home/MoreSignals";
+import { RecentTasks } from "./home/RecentTasks";
 import { readReleases } from "./home/releases";
+import { ServiceHealthPanel } from "./home/ServiceHealthPanel";
 
 const ATTENTION_TO: Record<Attention["kind"], (id: string) => string> = {
   deploy_failed: (id) => `/v3/agents?id=${id}`,
@@ -26,6 +37,10 @@ const ATTENTION_TO: Record<Attention["kind"], (id: string) => string> = {
  * failed deploys, releases waiting for a signature, gates that blocked or could not
  * decide — ranked, each one a click from where it gets handled. The fleet and the
  * traffic sit underneath, because quiet is the normal state and should read as such.
+ * Below them, the V2 Workbench's modules: registry assets, pass rate, online quality and
+ * (administrators) time to first agent; the administrator's inbox; recent evaluation
+ * tasks and announcements; the Agent lifecycle and service health. Menu settings may
+ * hide the launch sequence and "Your turn" for everyone (`HOME_SECTIONS`).
  */
 export function V3Home() {
   const { t } = useTranslation();
@@ -37,6 +52,20 @@ export function V3Home() {
   const rel = useLoad(
     () => readReleases(list, (id) => dlcApi.release(id)), `v3-home-rel:${ws}:${releaseKey}`);
   const dash = useLoad(() => api.obsDashboard("24h"), `v3-home-dash:${ws}`);
+  const { isAdmin } = useAuth();
+  const { hidden, ready: hiddenReady } = useHiddenNav();
+  const showLaunch = hiddenReady && !hidden.has(HOME_SECTIONS.launch);
+  const showTurn = hiddenReady && !hidden.has(HOME_SECTIONS.turn);
+  const overview = useLoad(() => api.getOverview(), `v3-home-overview:${ws}`);
+  const quality = useLoad(() => api.overviewOnlineQuality(), `v3-home-quality:${ws}`);
+  // administrator-only reads; a member (or a 403 / older backend) simply gets no tile or inbox
+  const ttfa = useLoad<TtfaInfo | null>(
+    () => (isAdmin ? api.overviewTtfa() : Promise.resolve(null)), `v3-home-ttfa:${ws}:${isAdmin}`);
+  const inbox = useLoad<InboxInfo | null>(
+    () => (isAdmin ? api.inbox() : Promise.resolve(null)), `v3-home-inbox:${ws}:${isAdmin}`);
+  const tasks = useLoad(loadTasks, `v3-home-tasks:${ws}`);
+  // hub-global notices; a failed read just leaves the board out
+  const notices = useLoad<AnnouncementPage<PublicAnnouncement>>(() => api.listAnnouncements(5, 0), "v3-home-announcements");
 
   const queue = useMemo(() => {
     const items = list.flatMap((a) => attentionFor(a, rel.data?.states[a.id]?.pending ?? null));
@@ -51,7 +80,11 @@ export function V3Home() {
   const series = dash.data?.series ?? [];
   const checking = (agents.loading && !agents.data) || (rel.loading && !rel.data);
   const incomplete = Boolean(agents.error || rel.error || rel.data?.unavailable || rel.data?.unchecked);
-  const refresh = () => { agents.reload(); rel.reload(); dash.reload(); };
+  const refresh = () => {
+    agents.reload(); rel.reload(); dash.reload();
+    overview.reload(); quality.reload(); ttfa.reload(); inbox.reload(); tasks.reload(); notices.reload();
+  };
+  const hasNotices = (notices.data?.announcements.length ?? 0) > 0;
 
   const headline =
     checking
@@ -105,9 +138,14 @@ export function V3Home() {
         </Panel>
       </div>
 
-      {agents.data && <LaunchSequence workspace={current ?? null} agents={list} releases={rel.data?.states ?? null} />}
+      <MoreSignals overview={overview.data} quality={quality.data} ttfa={ttfa.data} isAdmin={isAdmin} />
+
+      {agents.data && showLaunch && (
+        <LaunchSequence workspace={current ?? null} agents={list} releases={rel.data?.states ?? null} />
+      )}
       {/* past the opening moves, the storyline's turns: mine and the ones I wait on (storyline-ux §3.4) */}
-      {list.length > 0 && <YourTurn refresh={releaseKey} />}
+      {list.length > 0 && showTurn && <YourTurn refresh={releaseKey} />}
+      {isAdmin && <AdminInbox inbox={inbox.data} />}
 
       <div className="v3-grid v3-split">
         <div data-tour="queue">
@@ -228,6 +266,17 @@ export function V3Home() {
           </table>
         )}
       </Panel>
+
+      <div className="v3-grid v3-split">
+        <Lifecycle />
+        <ServiceHealthPanel info={overview.data} error={overview.error} onRetry={overview.reload}
+          activeAgents={agents.data ? live : null} />
+      </div>
+
+      <div className={hasNotices ? "v3-grid v3-split" : "v3-grid"}>
+        <RecentTasks tasks={tasks.data} loading={tasks.loading} error={tasks.error} onRetry={tasks.reload} />
+        {hasNotices && <AnnouncementsBrief page={notices.data} isAdmin={isAdmin} />}
+      </div>
     </div>
   );
 }

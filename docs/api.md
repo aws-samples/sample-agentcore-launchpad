@@ -1879,10 +1879,13 @@ change).
 | `GET` | `/api/steward/settings` | admin (structure) | `{steward_two_person}` |
 | `PUT` | `/api/steward/settings` | admin (data: a steward does not loosen its own rule) | Body `{steward_two_person: bool}` → the GET shape; journaled as `steward.two_person` |
 
-**Menu settings** (`routers/nav_settings.py`, hub-global): the module entries an
-administrator hid from members' V3 rail and ⌘K, by rail key (the entry path before
-the V3 twin mapping, e.g. `/v2/skill-lab`). A view filter only: no route closes, and
-administrators always see every entry.
+**Menu settings** (`routers/nav_settings.py`, hub-global): the entries an
+administrator hid from everyone's V3 rail and ⌘K, administrators included. A module
+entry is listed by rail key (the entry path before the V3 twin mapping, e.g.
+`/v2/skill-lab`); the list may also carry the pinned entries `/v3` and `/v3/gate` and
+the Command center sections `/v3?section=launch` and `/v3?section=turn`. The backend
+checks only the path shape. A view filter only: no route closes, and
+administrator-only entries are never hidden.
 
 | Method | Path | Auth | Result |
 |---|---|---|---|

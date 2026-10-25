@@ -3553,15 +3553,27 @@ backend surface.
   (`lib/nav-mode.ts`) — a view filter only; ⌘K and URLs reach every page. The "?"
   menu in the top bar reopens the tour, the launch sequence and the glossary.
 - **Menu settings (`/v3/menu-settings`, `services/nav_settings.py`).** An
-  administrator hides module entries from members' rail and ⌘K. The list is one
-  hub-global `platform_settings` row (`nav_hidden_modules`) of rail keys — the entry
-  path before the V3 twin mapping (`/v2/skill-lab`, `/v3/costs?view=project`,
-  `V3NavItem.railKey`). `GET /api/nav/hidden-modules` is every account's (the shell
-  applies `withoutHidden()` before the business/expert slice), `PUT` the
-  administrators' (`ADMIN_DATA`: a steward cannot) and journaled as
-  `console.nav_hidden`. Administrator-only entries are not offered and an
-  administrator always sees every entry. Like the nav mode it is a view filter, not
-  authorization: no route closes, and a failed read hides nothing.
+  administrator hides entries from **everyone's** rail and ⌘K, administrators
+  included. The list is one hub-global `platform_settings` row (`nav_hidden_modules`)
+  holding three kinds of key: module entries by rail key — the entry path before the
+  V3 twin mapping (`/v2/skill-lab`, `/v3/costs?view=project`, `V3NavItem.railKey`);
+  the pinned entries 指挥中心 `/v3` and 放行门 `/v3/gate` (`PINNED_HIDEABLE`; Agents and
+  Chat are not hideable); and the Command center sections 启动序列 `/v3?section=launch`
+  and 轮到你 `/v3?section=turn` (`HOME_SECTIONS`). `GET /api/nav/hidden-modules` is
+  every account's: the shell reads it for everyone but a steward, applies
+  `withoutHidden()` / `withoutHiddenPinned()` before the business/expert slice, and
+  shares the set with the page through `HiddenNavContext` (`v3/hiddenNav.ts`), which
+  `V3Home` reads to leave hidden sections out (the tour skips their stops, and the "?"
+  menu drops its launch-sequence item while that section is hidden). `PUT` is
+  the administrators' (`ADMIN_DATA`: a steward cannot) and journaled as
+  `console.nav_hidden`. Administrator-only entries are never offered and never
+  filtered, so an administrator always keeps Menu settings to undo a choice. Hiding
+  指挥中心 removes only its rail / ⌘K entry: `/v3` and the brand link still open it.
+  The page's 快速设置 has two exact presets that fill the draft (Save applies):
+  **Normal** = `NORMAL_HIDDEN` (`/v2/eval/standards`, `/v3/gate`, both sections) and
+  **Full** = nothing hidden; `menuMode()` shows Normal / Full / Custom, judged only on
+  the keys the page offers. Like the nav mode it is a view filter, not authorization:
+  no route closes, and a failed read hides nothing.
 - **Storyline (`v3/story/`, storyline-ux).** The console follows the workshop's
   storyline (define → build → evaluate → release → observe → feedback). The steps are
   code constants (`AGENT_STORY` in `stories.ts`); each one names its page action from

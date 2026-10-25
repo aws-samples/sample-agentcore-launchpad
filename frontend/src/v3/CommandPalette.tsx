@@ -22,18 +22,21 @@ export interface Command {
 /**
  * ⌘K — one keystroke to any agent, page or action. The console's primary way
  * through: everything reachable from the rail is also here, plus an entry per
- * agent ("open", "chat with", "release gate of").
+ * agent ("open", "chat with", "release gate of"). `gate={false}` drops the per-agent
+ * gate entries, for when Menu settings hides 放行门.
  */
 export function CommandPalette({
   open,
   onClose,
   agents,
   pages,
+  gate = true,
 }: {
   open: boolean;
   onClose: () => void;
   agents: AgentInfo[];
   pages: Command[];
+  gate?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -64,12 +67,12 @@ export function CommandPalette({
           run: go(`/v3/agents?id=${agent.id}`) },
         { id: `c:${agent.id}`, group: t("v3.cmdk.actions"), label: t("v3.cmdk.chatWith", { name }),
           icon: <MessagesSquare size={15} />, run: go(`/v3/chat?agent=${agent.id}`) },
-        { id: `g:${agent.id}`, group: t("v3.cmdk.actions"), label: t("v3.cmdk.gateOf", { name }),
-          icon: <Scale size={15} />, run: go(`/v3/gate?agent=${agent.id}`) },
+        ...(gate ? [{ id: `g:${agent.id}`, group: t("v3.cmdk.actions"), label: t("v3.cmdk.gateOf", { name }),
+          icon: <Scale size={15} />, run: go(`/v3/gate?agent=${agent.id}`) }] : []),
       ];
     });
     return [...pages.map((p) => ({ ...p, run: () => { p.run(); onClose(); } })), ...perAgent];
-  }, [agents, pages, navigate, onClose, t]);
+  }, [agents, pages, navigate, onClose, t, gate]);
 
   const results = useMemo(() => {
     const ranked = commands

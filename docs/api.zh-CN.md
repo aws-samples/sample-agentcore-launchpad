@@ -1372,7 +1372,7 @@ Workspace、网络与存储目录——从不接触数据。路由表归为结�
 | `GET` | `/api/steward/settings` | 管理员（结构） | `{steward_two_person}` |
 | `PUT` | `/api/steward/settings` | 管理员（数据：组织管理员不能放宽约束自己的规则） | 请求体 `{steward_two_person: bool}` → 同 GET 形状；记为 `steward.two_person` |
 
-**菜单设置**（`routers/nav_settings.py`，工作区无关）：管理员对成员隐藏的 V3 侧栏和 ⌘K 模块菜单项，按菜单键记录（映射到 V3 页面之前的路径，如 `/v2/skill-lab`）。只是显示筛选：不关闭任何路由，管理员始终看到全部菜单项。
+**菜单设置**（`routers/nav_settings.py`，工作区无关）：管理员对所有人（包括管理员）隐藏的 V3 侧栏和 ⌘K 菜单项。模块菜单项按菜单键记录（映射到 V3 页面之前的路径，如 `/v2/skill-lab`）；列表里还可以有固定入口 `/v3`、`/v3/gate` 和指挥中心区块 `/v3?section=launch`、`/v3?section=turn`。后端只检查路径格式。只是显示筛选：不关闭任何路由，仅管理员可见的菜单项永远不会被隐藏。
 
 | 方法 | 路径 | 鉴权 | 结果 |
 |---|---|---|---|

@@ -56,7 +56,7 @@ export const V3_ONLY: Record<string, V2NavItem[]> = {
   admin: [
     { to: "/v3/models", labelKey: "v3.models.nav", icon: Cpu, admin: true },
     { to: "/v3/system-update", labelKey: "v3.systemUpdate.nav", icon: DownloadCloud, admin: true },
-    // which rail modules members see (services/nav_settings) — hub-global, admin-only
+    // which rail entries and Command center sections everyone sees (services/nav_settings) — hub-global, admin-only
     { to: "/v3/menu-settings", labelKey: "v3.menuSettings.nav", icon: EyeOff, admin: true },
   ],
 };
@@ -127,24 +127,79 @@ export type V3NavItem = V2NavItem & { railKey: string };
 
 /**
  * The groups without the entries an administrator hid (`/api/nav/hidden-modules`).
- * A view filter for members only: an administrator keeps every entry (it is who can
- * show one again), and a hidden page stays reachable by URL.
+ * A view filter for every account, administrators included: a hidden page stays
+ * reachable by URL. An administrator-only entry is never dropped, whatever the list
+ * says, so an administrator always keeps Menu settings to show an entry again.
  */
-export function withoutHidden(groups: V3ModuleGroup[], hidden: ReadonlySet<string>, isAdmin: boolean): V3ModuleGroup[] {
-  if (isAdmin || hidden.size === 0) return groups;
+export function withoutHidden(groups: V3ModuleGroup[], hidden: ReadonlySet<string>): V3ModuleGroup[] {
+  if (hidden.size === 0) return groups;
   return groups
-    .map((g) => ({ ...g, items: g.items.filter((item) => !hidden.has(item.railKey)) }))
+    .map((g) => ({ ...g, items: g.items.filter((item) => item.admin === true || !hidden.has(item.railKey)) }))
     .filter((g) => g.items.length > 0);
 }
 
 /**
- * What Menu settings offers to hide: the entries a member could see. An
- * administrator-only entry is never a member's to begin with, so it is not offered.
+ * What Menu settings offers to hide among the module entries. An administrator-only
+ * entry is never hidden (it is how an administrator undoes a choice), so it is not offered.
  */
 export function hideableGroups(): V3ModuleGroup[] {
   return hostedGroups(true)
     .map((g) => ({ ...g, items: g.items.filter((item) => !item.admin) }))
     .filter((g) => g.items.length > 0);
+}
+
+/** The pinned rail entries Menu settings offers to hide: 指挥中心 and 放行门. `/v3`
+ *  itself still opens the Command center (the brand link, the tour, the catch-all). */
+export const PINNED_HIDEABLE: readonly string[] = ["/v3", "/v3/gate"];
+
+/** The Command center sections Menu settings offers to hide, keyed like rail paths
+ *  so they share the one hidden list. */
+export const HOME_SECTIONS = {
+  launch: "/v3?section=launch",
+  turn: "/v3?section=turn",
+} as const;
+
+/** The Normal preset: the list exactly (sorted). Full hides nothing. */
+export const NORMAL_HIDDEN: readonly string[] = [
+  "/v2/eval/standards",
+  "/v3/gate",
+  HOME_SECTIONS.launch,
+  HOME_SECTIONS.turn,
+].sort();
+export const FULL_HIDDEN: readonly string[] = [];
+
+/**
+ * Every key Menu settings offers — the pinned entries, the Command center sections and
+ * the module entries' rail keys: the only keys a save writes and a mode is judged on.
+ */
+export function hideableKeys(): Set<string> {
+  return new Set([
+    ...PINNED_HIDEABLE,
+    ...Object.values(HOME_SECTIONS),
+    ...hideableGroups().flatMap((g) => g.items.map((i) => i.railKey)),
+  ]);
+}
+
+export type MenuMode = "normal" | "full" | "custom";
+
+/**
+ * Which preset a hidden set matches, judged on the keys Menu settings offers
+ * (`known`): a stale key the catalog no longer lists does not turn Normal into Custom.
+ */
+export function menuMode(hidden: ReadonlySet<string>, known: ReadonlySet<string>): MenuMode {
+  const offered = [...hidden].filter((k) => known.has(k)).sort();
+  const same = (preset: readonly string[]) => {
+    const want = preset.filter((k) => known.has(k));
+    return want.length === offered.length && want.every((k, i) => k === offered[i]);
+  };
+  if (same(FULL_HIDDEN)) return "full";
+  if (same(NORMAL_HIDDEN)) return "normal";
+  return "custom";
+}
+
+/** The pinned rail entries without the hidden ones; same rule as `withoutHidden`. */
+export function withoutHiddenPinned<T extends { to: string; admin?: boolean }>(items: readonly T[], hidden: ReadonlySet<string>): T[] {
+  return items.filter((item) => item.admin === true || !(PINNED_HIDEABLE.includes(item.to) && hidden.has(item.to)));
 }
 
 /**

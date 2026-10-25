@@ -52,7 +52,8 @@ import { ToastProvider } from "./ui";
 import { useLoad } from "./hooks";
 import { Lang } from "./Lang";
 import { ThemeSwitch } from "./ThemeSwitch";
-import { hostedGroups, isActive, withoutHidden } from "./nav";
+import { HiddenNavContext } from "./hiddenNav";
+import { HOME_SECTIONS, hostedGroups, isActive, withoutHidden, withoutHiddenPinned } from "./nav";
 import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
 import { Tour } from "./onboarding/Tour";
@@ -83,8 +84,9 @@ const NATIVE: RailItem[] = [
   { to: "/v3/gate", labelKey: "v3.nav.gate", icon: <Scale size={16} /> },
 ];
 
-/** "?" in the top bar: the tour, the glossary, the launch sequence and the videos, any time. */
-function HelpMenu() {
+/** "?" in the top bar: the tour, the glossary, the launch sequence and the videos, any time.
+ *  `launch={false}` drops the launch-sequence item, for when Menu settings hides that section. */
+function HelpMenu({ launch = true }: { launch?: boolean }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { current } = useWorkspace();
@@ -108,7 +110,7 @@ function HelpMenu() {
       {open && (
         <div className="v3-help-menu" role="menu">
           {item(<Compass size={15} />, t("v3.onboard.help.tour"), requestTour)}
-          {item(<ListChecks size={15} />, t("v3.onboard.help.launch"), () => { setLaunchHidden(false); navigate("/v3"); })}
+          {launch && item(<ListChecks size={15} />, t("v3.onboard.help.launch"), () => { setLaunchHidden(false); navigate("/v3"); })}
           {item(<BookOpen size={15} />, t("v3.onboard.help.glossary"), () => openGlossary("all"))}
           {item(<PlayCircle size={15} />, t("v3.onboard.help.videos"), () => navigate("/v3/videos"))}
         </div>
@@ -232,7 +234,6 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   // Configure, and every business page answers with its empty state
   const steward = isSteward(role);
   const stewardEmpty = showsStewardEmptyState(role, location.pathname);
-  const native = useMemo(() => (steward ? NATIVE.filter((item) => item.to === "/v3") : NATIVE), [steward]);
   const [changingPassword, setChangingPassword] = useState(false);
   const { current } = useWorkspace();
   const project = useProject();
@@ -294,15 +295,29 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const perms = useMemo(() => [...new Set(project.projects.flatMap((p) => p.permissions))], [project.projects]);
   // a department administrator (§11.1) also sees Projects, Project groups and Departments
   const managesDepartment = project.managedDepartments.length > 0;
-  // the entries an administrator hid from members (services/nav_settings); a failed
-  // read hides nothing — the rail must never vanish because one setting did not load
+  // the entries an administrator hid (services/nav_settings), for every account,
+  // administrators included; a steward's rail has only administrator-only entries,
+  // which are never hidden, so it skips the read. A failed read hides nothing — the
+  // rail must never vanish because one setting did not load
   const hiddenLoad = useLoad(
-    () => (isAdmin || steward ? Promise.resolve({ hidden: [] as string[] }) : navSettingsApi.hiddenModules()),
-    `v3-shell-hidden:${isAdmin}:${steward}`,
+    () => (steward ? Promise.resolve({ hidden: [] as string[] }) : navSettingsApi.hiddenModules()),
+    `v3-shell-hidden:${steward}`,
   );
   const hidden = useMemo(() => new Set(hiddenLoad.data?.hidden ?? []), [hiddenLoad.data]);
+  // answered (or failed, which hides nothing): until then the Command center holds back
+  // the sections the list may hide, so they do not flash in and out
+  const hiddenReady = steward || hiddenLoad.data !== null || hiddenLoad.error !== null;
+  const hiddenNav = useMemo(
+    () => ({ hidden, ready: hiddenReady, isAdmin, reload: hiddenLoad.reload }),
+    [hidden, hiddenReady, isAdmin, hiddenLoad.reload],
+  );
+  // a hidden pinned entry (指挥中心, 放行门) leaves the rail and ⌘K; `/v3` still opens
+  const native = useMemo(
+    () => (steward ? NATIVE.filter((item) => item.to === "/v3") : withoutHiddenPinned(NATIVE, hidden)),
+    [steward, hidden],
+  );
   const allGroups = useMemo(
-    () => withoutHidden(hostedGroups(isAdmin, perms, managesDepartment, steward), hidden, isAdmin),
+    () => withoutHidden(hostedGroups(isAdmin, perms, managesDepartment, steward), hidden),
     [isAdmin, perms, managesDepartment, steward, hidden],
   );
   const groups = useMemo(
@@ -438,7 +453,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
             <ProjectSwitch />
             <Lang />
             <ThemeSwitch />
-            <HelpMenu />
+            <HelpMenu launch={!hidden.has(HOME_SECTIONS.launch)} />
             <button type="button" className="v3-btn sm v3-version-switch" onClick={backToV2} data-testid="v3-switch-v2" aria-label={t("v3.switch.back")} title={t("v3.switch.back")}>
               <ArrowLeftRight size={13} aria-hidden="true" />
               <span>{t("v3.switch.back")}</span>
@@ -530,46 +545,49 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
         </nav>
 
         <main className={hosted ? "v3-main hosted" : "v3-main"}>
-          {hosted === "v2" ? (
-            <V2ToastProvider>
-              {/* workspace-bound pages refetch on a switch; hub-global ones keep drafts */}
-              {/* V2's per-module demo video rides in the hosted page header too */}
-              <ModuleDemoProvider>
-                <div
-                  className="v2 v3-host"
-                  key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
-                >
-                  <NoBoundProjectBanner />
-                  <RouteChunk key={location.pathname}>
-                    {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
-                  </RouteChunk>
-                </div>
-              </ModuleDemoProvider>
-            </V2ToastProvider>
-          ) : hosted === "classic" ? (
-            <div
-              className="view v3-classic"
-              key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
-            >
-              <NoBoundProjectBanner />
-              <RouteChunk key={location.pathname}>
-                {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
-              </RouteChunk>
-            </div>
-          ) : (
-            <div key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}>
-              <NoBoundProjectBanner />
-              <RouteChunk>
-                {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
-              </RouteChunk>
-            </div>
-          )}
+          <HiddenNavContext.Provider value={hiddenNav}>
+            {hosted === "v2" ? (
+              <V2ToastProvider>
+                {/* workspace-bound pages refetch on a switch; hub-global ones keep drafts */}
+                {/* V2's per-module demo video rides in the hosted page header too */}
+                <ModuleDemoProvider>
+                  <div
+                    className="v2 v3-host"
+                    key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
+                  >
+                    <NoBoundProjectBanner />
+                    <RouteChunk key={location.pathname}>
+                      {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
+                    </RouteChunk>
+                  </div>
+                </ModuleDemoProvider>
+              </V2ToastProvider>
+            ) : hosted === "classic" ? (
+              <div
+                className="view v3-classic"
+                key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
+              >
+                <NoBoundProjectBanner />
+                <RouteChunk key={location.pathname}>
+                  {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
+                </RouteChunk>
+              </div>
+            ) : (
+              <div key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}>
+                <NoBoundProjectBanner />
+                <RouteChunk>
+                  {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
+                </RouteChunk>
+              </div>
+            )}
+          </HiddenNavContext.Provider>
         </main>
 
         {changingPassword && username && (
           <ChangePasswordDialog username={username} builtin={builtin} onClose={() => setChangingPassword(false)} />
         )}
-        <CommandPalette open={paletteOpen} onClose={closePalette} agents={agents.data?.agents ?? []} pages={[...pages, ...projectCommands, ...help]} />
+        <CommandPalette open={paletteOpen} onClose={closePalette} agents={agents.data?.agents ?? []} pages={[...pages, ...projectCommands, ...help]}
+          gate={native.some((item) => item.to === "/v3/gate")} />
         <GlossaryDialog />
         {touring && <Tour onClose={() => setTouring(false)} />}
       </ToastProvider>

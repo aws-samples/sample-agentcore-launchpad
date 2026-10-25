@@ -15956,14 +15956,26 @@
     "menuSettings": {
       "nav": "Menu settings",
       "title": "Menu settings",
-      "sub": "Choose which module entries members see in the left menu and in ⌘K. Administrators always see every entry.",
+      "sub": "Choose which entries everyone sees in the left menu and in ⌘K, and which Command center sections show. It applies to everyone, administrators included; administrator-only entries cannot be hidden.",
       "viewOnly": "This only filters the menu: a hidden page is still reachable by URL, and permissions are unchanged. To keep someone out of a page, change their role instead.",
       "shownCount": "{{shown}} / {{total}} shown",
-      "hidden": "Hidden from members",
+      "hidden": "Hidden",
       "save": "Save",
       "reset": "Discard changes",
-      "saved": "Menu settings saved. Members see the change the next time they load the console.",
-      "updated": "Last changed by {{who}} at {{when}}"
+      "saved": "Menu settings saved. Your menu updates now; everyone else sees the change the next time they load the console.",
+      "updated": "Last changed by {{who}} at {{when}}",
+      "quick": "Quick setup",
+      "quickSub": "Normal hides the release gate, criteria, the launch sequence and Your turn; Full shows everything. A preset only fills the checkboxes below: nothing changes until you save. The choice applies to everyone, administrators included.",
+      "currentMode": "Current mode: {{mode}}",
+      "mode": {
+        "normal": "Normal",
+        "full": "Full",
+        "custom": "Custom"
+      },
+      "pinned": "Pinned entries",
+      "pinnedSub": "Entries at the top of the left menu. Hiding the Command center removes only its menu and ⌘K entry: the Launchpad logo and /v3 still open it.",
+      "sections": "Command center sections",
+      "sectionsSub": "Parts of the Command center. A hidden section is left out of everyone's Command center, and the tour skips it."
     },
     "systemUpdate": {
       "nav": "System update",

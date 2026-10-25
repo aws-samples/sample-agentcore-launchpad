@@ -1,15 +1,18 @@
-"""The console modules an administrator hid from the V3 rail.
+"""The console entries an administrator hid from the V3 rail and Command center.
 
 Hub-global, one ``platform_settings`` row (``nav_hidden_modules``) holding a sorted
 JSON list of rail entry paths as the V3 rail names them before its V3 twin mapping
-(``/v2/eval/experiments``, ``/v3/costs?view=project``…). The backend does not know
-the rail's catalog — that lives in the frontend (``v3/nav.ts``) — so it checks only
-the shape of an entry; an unknown path simply never matches a rail entry.
+(``/v2/eval/experiments``, ``/v3/costs?view=project``…), the pinned entries
+(``/v3``, ``/v3/gate``) and the Command center sections (``/v3?section=launch``,
+``/v3?section=turn``). The backend does not know the rail's catalog — that lives in
+the frontend (``v3/nav.ts``) — so it checks only the shape of an entry; an unknown
+path simply never matches a rail entry.
 
-A **view filter, not authorization**, like the business/expert nav mode: the rail
-and the ⌘K palette drop a hidden entry for a member, administrators still see every
-entry (they are the ones who can show it again), and every route stays reachable by
-URL with the route policy untouched.
+A **view filter, not authorization**, like the business/expert nav mode: the rail,
+the ⌘K palette and the Command center drop a hidden entry for every account,
+administrators included. Administrator-only entries are never hidden (so an
+administrator always keeps Menu settings to show an entry again), and every route
+stays reachable by URL with the route policy untouched.
 """
 
 from __future__ import annotations
