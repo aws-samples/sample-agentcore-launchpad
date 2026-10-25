@@ -7451,6 +7451,7 @@
       "moreActors": "Load more actors",
       "searchActor": "Search agent / user / actor ID",
       "unscoped": "Not agent-scoped",
+      "deletedAgentNamed": "{{name}} (deleted)",
       "openInChat": "Open in chat",
       "search": "Search",
       "backToList": "Back to listing",

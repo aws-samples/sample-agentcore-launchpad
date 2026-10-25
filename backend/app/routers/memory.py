@@ -22,6 +22,7 @@ from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory_console
 from app.services.agent_access import HiddenAgents
+from app.services.memory import is_eval_actor
 from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
@@ -58,22 +59,25 @@ def _guard(fn, *args, **kwargs):
         ) from exc
 
 
-def _agent_names(db: Session, ws: WorkspaceScope, agent_ids: list[str]) -> dict[str, str]:
-    """One batched lookup per page — never N+1 across the actor list.
+def _agent_names(
+    db: Session, ws: WorkspaceScope, agent_ids: list[str]
+) -> dict[str, tuple[str, bool]]:
+    """``agent id → (name, deleted)``: one batched lookup per page — never N+1.
 
     Scoped to the request's workspace: an actor id names an agent of *this*
     environment, and an id that resolves elsewhere stays nameless rather than
-    leaking a foreign agent's name.
+    leaking a foreign agent's name. A deleted agent keeps its row (soft delete),
+    so its name still resolves and the flag tells it from a live namesake.
     """
     ids = [i for i in dict.fromkeys(agent_ids) if i]
     if not ids:
         return {}
     rows = (
-        db.query(Agent.id, Agent.name)
+        db.query(Agent.id, Agent.name, Agent.status)
         .filter(Agent.workspace_id == ws.id, Agent.id.in_(ids))
         .all()
     )
-    return {row[0]: row[1] for row in rows}
+    return {row[0]: (row[1], row[2] == "deleted") for row in rows}
 
 
 def _hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> HiddenAgents:
@@ -126,6 +130,11 @@ def overview(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     return _guard(memory_console.memory_overview, ws.context)
 
 
+# ListActors pages read per console page while filtering: enough to skip a run of
+# evaluation actors (eight per run) without turning one click into a full scan.
+ACTOR_FILL_PAGES = 5
+
+
 @router.get("/actors")
 def actors(
     next_token: str | None = None,
@@ -134,18 +143,38 @@ def actors(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    page = _guard(memory_console.list_actors, ws.context, next_token, max_results)
+    """People who have memory, one per (agent, human) partition.
+
+    Evaluation scenarios (``memory.eval_actor``) are left out: each replayed case is
+    its own throwaway actor, and a few runs would bury the real users. Their memory
+    stays reachable through the run's transcript. Filtering can thin a page, so up
+    to ``ACTOR_FILL_PAGES`` AWS pages are read to fill one.
+    """
     hidden = _hidden(db, ws, viewer)
-    if hidden:
-        page["items"] = [a for a in page["items"] if not hidden.hides_actor(a["actor_id"])]
-    names = _agent_names(
-        db, ws, [a["agent_id"] for a in page["items"] if a["agent_id"]]
-    )
-    for item in page["items"]:
+    want = max_results or memory_console.PAGE_MAX
+    items: list[dict[str, Any]] = []
+    token = next_token
+    for _ in range(ACTOR_FILL_PAGES):
+        page = _guard(memory_console.list_actors, ws.context, token, max_results)
+        items += [
+            a
+            for a in page["items"]
+            if not is_eval_actor(a["human_actor"])
+            and not (hidden and hidden.hides_actor(a["actor_id"]))
+        ]
+        token = page["next_token"]
+        if not token or len(items) >= want:
+            break
+    names = _agent_names(db, ws, [a["agent_id"] for a in items if a["agent_id"]])
+    for item in items:
         # A scoped actor whose agent row is gone keeps scoped=True with a null
         # name — the memory partition outlives the agent it belonged to.
-        item["agent_name"] = names.get(item["agent_id"] or "")
-    return page
+        name, deleted = names.get(item["agent_id"] or "", (None, True))
+        item["agent_name"] = name
+        item["agent_deleted"] = item["scoped"] and deleted
+    # a re-created namesake's live partition reads first, its deleted ones after
+    items.sort(key=lambda a: a["agent_deleted"])
+    return {"items": items, "next_token": token}
 
 
 @router.get("/sessions")

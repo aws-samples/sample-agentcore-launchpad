@@ -1,6 +1,7 @@
 """AgentCore Memory helpers — session events (short-term) + records (long-term)."""
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -115,6 +116,14 @@ def eval_actor(agent_id: str | None, run_id: str, ordinal: int) -> str:
     """
     base = f"eval-{run_id}-{ordinal}"
     return scoped_actor(agent_id, base) if agent_id else base
+
+
+_EVAL_ACTOR = re.compile(r"eval-[0-9a-f]+-\d+")
+
+
+def is_eval_actor(human_actor: str) -> bool:
+    """True for the human part ``eval_actor`` builds — a replayed scenario, not a person."""
+    return _EVAL_ACTOR.fullmatch(human_actor) is not None
 
 
 def create_turn_event(

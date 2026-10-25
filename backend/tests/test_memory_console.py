@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 import app.services.memory_console as mc
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, ChatMessage, ChatSession
+from app.services import memory
 
 from .conftest import set_default_resources
 
@@ -236,6 +237,7 @@ def test_actor_decoding_resolves_agent_name(client, configured, monkeypatch):
         "human_actor": "river",
         "scoped": True,
         "agent_name": "front-desk",
+        "agent_deleted": False,
     }
 
 
@@ -249,6 +251,63 @@ def test_actor_decoding_survives_deleted_agent(client, configured, monkeypatch):
     assert item["scoped"] is True
     assert item["agent_id"] == "deadbeef"
     assert item["agent_name"] is None
+    assert item["agent_deleted"] is True
+
+
+def test_soft_deleted_agent_is_told_from_its_live_namesake(client, configured, monkeypatch):
+    """Delete an agent, re-create it under the same name: both partitions read
+    "lab01-itdesk · lab01" unless the deleted one is flagged — and it sorts last."""
+    old = make_agent(name="lab01-itdesk")
+    db = SessionLocal()
+    db.get(Agent, old).status = "deleted"
+    db.commit()
+    db.close()
+    new = make_agent(name="lab01-itdesk")
+    wire(
+        monkeypatch,
+        StubData(list_actors={"actorSummaries": [
+            {"actorId": f"{old}__lab01"}, {"actorId": f"{new}__lab01"}, {"actorId": "river"},
+        ]}),
+    )
+    items = client.get("/api/memory/actors").json()["items"]
+    assert [(i["actor_id"], i["agent_deleted"]) for i in items] == [
+        (f"{new}__lab01", False), ("river", False), (f"{old}__lab01", True),
+    ]
+    assert items[-1]["agent_name"] == "lab01-itdesk"
+
+
+def test_evaluation_actors_are_left_out(client, configured, monkeypatch):
+    agent_id = make_agent(name="graded")
+    wire(
+        monkeypatch,
+        StubData(list_actors={"actorSummaries": [
+            {"actorId": memory.eval_actor(agent_id, "bcdd2a90c1b7", 4)},
+            {"actorId": f"{agent_id}__lab01"},
+            {"actorId": memory.eval_actor(None, "bcdd2a90c1b7", 5)},
+            {"actorId": f"{agent_id}__eval"},  # a person named "eval" is not a scenario
+        ]}),
+    )
+    items = client.get("/api/memory/actors").json()["items"]
+    assert [i["human_actor"] for i in items] == ["lab01", "eval"]
+
+
+def test_filtered_actor_pages_are_filled_from_the_next_ones(client, configured, monkeypatch):
+    """A page made only of evaluation actors must not come back empty with a token."""
+    agent_id = make_agent(name="graded")
+    evals = [{"actorId": memory.eval_actor(agent_id, "abc123", i)} for i in range(3)]
+
+    def page(kw):
+        if kw.get("nextToken") is None:
+            return {"actorSummaries": evals, "nextToken": "p2"}
+        if kw["nextToken"] == "p2":
+            return {"actorSummaries": [{"actorId": f"{agent_id}__lab01"}], "nextToken": "p3"}
+        return {"actorSummaries": [{"actorId": f"{agent_id}__lab02"}]}
+
+    data, _ = wire(monkeypatch, StubData(list_actors=page))
+    body = client.get("/api/memory/actors", params={"max_results": 1}).json()
+    assert [i["human_actor"] for i in body["items"]] == ["lab01"]
+    assert body["next_token"] == "p3"
+    assert len(data.calls) == 2
 
 
 def test_unscoped_actor_is_not_given_a_fake_agent(client, configured, monkeypatch):

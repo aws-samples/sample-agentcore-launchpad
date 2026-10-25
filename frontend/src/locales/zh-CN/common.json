@@ -7451,6 +7451,7 @@
       "moreActors": "加载更多参与者",
       "searchActor": "搜索智能体 / 用户 / 参与者 ID",
       "unscoped": "非智能体分区",
+      "deletedAgentNamed": "{{name}}（已删除）",
       "openInChat": "在对话中打开",
       "search": "检索",
       "backToList": "返回列表",

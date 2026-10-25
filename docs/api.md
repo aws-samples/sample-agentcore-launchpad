@@ -1080,7 +1080,7 @@ See [architecture.md](architecture.md#the-memory-console-console-05).
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/memory/overview` | Resource config, long-term strategies, bounded actor count, sibling memories |
-| `GET` | `/api/memory/actors` | Actors with the compound `<agent_id>__<human>` id decoded and the agent name resolved |
+| `GET` | `/api/memory/actors` | Actors with the compound `<agent_id>__<human>` id decoded and the agent name resolved; `agent_deleted` marks a deleted agent's partition (sorted last, so a re-created namesake reads first). Evaluation scenario actors (`<agent>__eval-<run>-<n>`) are left out; up to 5 AWS pages are read to fill one page |
 | `GET` | `/api/memory/sessions?actor_id=` | Sessions for one actor, joined to the ChatSession ledger when the console wrote them |
 | `GET` | `/api/memory/events?actor_id=&session_id=` | Short-term events; each payload entry is `kind` `conversational` (role + full text), `json` (the JSON value serialized losslessly into `text` — `null`, `false`, `0` and `""` included) or `blob` (byte count only); unknown kinds are omitted |
 | `GET` | `/api/memory/namespaces?actor_id=` | Strategy namespace templates with `{actorId}` substituted; trailing `{sessionId}` segments collapse into an actor-level prefix (`prefix: true`), a placeholder elsewhere yields `resolvable: false` |

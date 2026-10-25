@@ -25,7 +25,13 @@ export const POLL_MS = 8000;
 /** `<agent>__<human>` decoded for display; an unscoped actor is its bare id. */
 export function actorText(t: TFunction, actor: MemoryActor): string {
   if (!actor.scoped) return actor.human_actor;
-  return `${actor.agent_name ?? t("memoryPage.short.deletedAgent")} · ${actor.human_actor}`;
+  return `${agentLabel(t, actor)} · ${actor.human_actor}`;
+}
+
+/** The agent half of a scoped actor; a deleted agent says so, even when its name lives on. */
+export function agentLabel(t: TFunction, actor: MemoryActor): string {
+  if (!actor.agent_name) return t("memoryPage.short.deletedAgent");
+  return actor.agent_deleted ? t("v2.memory.deletedAgentNamed", { name: actor.agent_name }) : actor.agent_name;
 }
 
 /** Long ids (arns, 40-char session ids) shown inline; the full value goes in a title. */

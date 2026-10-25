@@ -701,7 +701,7 @@ Agent 没有可挂载的托管网关、已部署配置中没有它，或本轮�
 | 方法 | 路径 | 结果 |
 |---|---|---|
 | `GET` | `/api/memory/overview` | 资源配置、长期策略、有界的 actor 计数、同级记忆 |
-| `GET` | `/api/memory/actors` | actor 列表，复合 id `<agent_id>__<human>` 已解码并解析出 Agent 名称 |
+| `GET` | `/api/memory/actors` | actor 列表，复合 id `<agent_id>__<human>` 已解码并解析出 Agent 名称；`agent_deleted` 标出已删除 Agent 的分区（排在后面，重建的同名 Agent 排在前）。评测场景 actor（`<agent>__eval-<run>-<n>`）不列出；为填满一页最多读 5 页 AWS 结果 |
 | `GET` | `/api/memory/sessions?actor_id=` | 单个 actor 的会话；由控制台写入的会话会关联到 ChatSession 台账 |
 | `GET` | `/api/memory/events?actor_id=&session_id=` | 短期事件；每条载荷的 `kind` 为 `conversational`（角色 + 全文）、`json`（JSON 值无损序列化到 `text`，含 `null`、`false`、`0` 与 `""`）或 `blob`（只带字节数）；未知类型省略 |
 | `GET` | `/api/memory/namespaces?actor_id=` | 已替换 `{actorId}` 的策略命名空间模板；尾部的 `{sessionId}` 段折叠为 actor 级前缀（`prefix: true`），其他位置的占位符则产生 `resolvable: false` |

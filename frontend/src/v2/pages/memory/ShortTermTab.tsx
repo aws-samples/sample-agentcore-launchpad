@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { api, type MemoryActor, type MemoryEvent, type MemorySessionRow } from "../../../lib/api";
 import { fmtTime } from "../../format";
 import { Alert, Button, Card, LinkButton, SearchInput, Spin, Tag } from "../../ui";
-import { actorText, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "./common";
+import { actorText, agentLabel, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "./common";
 import { LoadMore } from "./widgets";
 
 /** The clamp shows ~3 lines; pretty-printed JSON can exceed that in far fewer
@@ -154,7 +154,7 @@ export function ShortTermTab({ actors, actorId, sessionId, onSelectActor, onSele
               <span className="v2-memory-item-main">
                 {a.scoped ? (
                   <>
-                    <b>{a.agent_name ?? t("memoryPage.short.deletedAgent")}</b>
+                    <b>{agentLabel(t, a)}</b>
                     <span className="v2-muted"> · {a.human_actor}</span>
                   </>
                 ) : (
