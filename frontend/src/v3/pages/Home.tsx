@@ -21,8 +21,11 @@ import "./home/home.css";
 import { Lifecycle } from "./home/Lifecycle";
 import { MoreSignals } from "./home/MoreSignals";
 import { RecentTasks } from "./home/RecentTasks";
-import { readReleases } from "./home/releases";
+import { type ReleaseSnapshot, readReleases } from "./home/releases";
 import { ServiceHealthPanel } from "./home/ServiceHealthPanel";
+
+/** What the page holds instead of release states while it runs without the gate. */
+const NO_RELEASES: ReleaseSnapshot = { states: {}, unavailable: 0, unchecked: 0 };
 
 const ATTENTION_TO: Record<Attention["kind"], (id: string) => string> = {
   deploy_failed: (id) => `/v3/agents?id=${id}`,
@@ -49,11 +52,16 @@ export function V3Home() {
   const agents = useLoad(() => api.listAgents(), `v3-home-agents:${ws}`);
   const list = useMemo(() => (agents.data?.agents ?? []).filter((a) => a.status !== "deleted"), [agents.data]);
   const releaseKey = list.map((a) => `${a.id}:${a.status}:${a.version}:${a.updated_at}`).join(",");
-  const rel = useLoad(
-    () => readReleases(list, (id) => dlcApi.release(id)), `v3-home-rel:${ws}:${releaseKey}`);
-  const dash = useLoad(() => api.obsDashboard("24h"), `v3-home-dash:${ws}`);
   const { isAdmin } = useAuth();
   const { hidden, ready: hiddenReady } = useHiddenNav();
+  // Menu settings hid 放行门: the console runs without the release gate, so the page
+  // reads no release states and speaks only of deploys (no gate wording, no coverage
+  // warning, no release column). Decided once the hidden list has answered.
+  const gateless = hiddenReady && hidden.has("/v3/gate");
+  const rel = useLoad(
+    () => (!hiddenReady || gateless ? Promise.resolve(NO_RELEASES) : readReleases(list, (id) => dlcApi.release(id))),
+    `v3-home-rel:${ws}:${releaseKey}:${hiddenReady}:${gateless}`);
+  const dash = useLoad(() => api.obsDashboard("24h"), `v3-home-dash:${ws}`);
   const showLaunch = hiddenReady && !hidden.has(HOME_SECTIONS.launch);
   const showTurn = hiddenReady && !hidden.has(HOME_SECTIONS.turn);
   const overview = useLoad(() => api.getOverview(), `v3-home-overview:${ws}`);
@@ -68,9 +76,9 @@ export function V3Home() {
   const notices = useLoad<AnnouncementPage<PublicAnnouncement>>(() => api.listAnnouncements(5, 0), "v3-home-announcements");
 
   const queue = useMemo(() => {
-    const items = list.flatMap((a) => attentionFor(a, rel.data?.states[a.id]?.pending ?? null));
+    const items = list.flatMap((a) => attentionFor(a, gateless ? null : rel.data?.states[a.id]?.pending ?? null));
     return sortAttention(items);
-  }, [list, rel.data]);
+  }, [list, rel.data, gateless]);
 
   const live = list.filter((a) => a.status === "active").length;
   const needsYou = queue.filter((q) => q.signal === "act").length;
@@ -78,8 +86,8 @@ export function V3Home() {
   const tiles = dash.data?.tiles;
   const hasTraffic = Boolean(tiles && tiles.traces.total > 0);
   const series = dash.data?.series ?? [];
-  const checking = (agents.loading && !agents.data) || (rel.loading && !rel.data);
-  const incomplete = Boolean(agents.error || rel.error || rel.data?.unavailable || rel.data?.unchecked);
+  const checking = !hiddenReady || (agents.loading && !agents.data) || (rel.loading && !rel.data);
+  const incomplete = Boolean(agents.error || (!gateless && (rel.error || rel.data?.unavailable || rel.data?.unchecked)));
   const refresh = () => {
     agents.reload(); rel.reload(); dash.reload();
     overview.reload(); quality.reload(); ttfa.reload(); inbox.reload(); tasks.reload(); notices.reload();
@@ -100,15 +108,17 @@ export function V3Home() {
       <PageHead
         eyebrow={t("v3.home.eyebrow", { ws: current ? `${current.name} · ${current.region}` : "—" })}
         title={headline}
-        sub={t("v3.home.sub")}
+        sub={t(gateless ? "v3.home.subGateless" : "v3.home.sub")}
         end={<><button type="button" className="v3-btn" onClick={refresh} disabled={agents.loading || rel.loading || dash.loading}>
           <RefreshCw size={14} /> {t("v3.ux.refresh")}
         </button><Link to="/v3/create" className="v3-btn primary">{t("v3.nav.create")}</Link></>}
       />
       {agents.error && <Notice s="act">{t("v3.ux.agentsFailed")} {agents.error}</Notice>}
-      {incomplete && !agents.error && <Notice s="wait">{t("v3.ux.releaseCoverage", {
+      {incomplete && !agents.error && !gateless && <Notice s="wait">{t("v3.ux.releaseCoverage", {
         count: (rel.data?.unavailable ?? 0) + (rel.data?.unchecked ?? 0),
       })} <Link to="/v3/gate" className="v3-inline-link">{t("v3.agent.openGate")}</Link></Notice>}
+      {/* the platform's notices lead the page; nothing when there are none */}
+      {hasNotices && <AnnouncementsBrief page={notices.data} isAdmin={isAdmin} />}
 
       <div className="v3-grid c4" data-tour="stats">
         <Panel signal="ok">
@@ -121,11 +131,11 @@ export function V3Home() {
         </Panel>
         <Panel signal={waiting ? "wait" : undefined}>
           <Stat label={t("v3.home.waiting")} value={!checking && !incomplete ? waiting : "—"} signal={waiting ? "wait" : undefined}
-            foot={t("v3.home.waitingFoot")} />
+            foot={t(gateless ? "v3.home.waitingFootGateless" : "v3.home.waitingFoot")} />
         </Panel>
         <Panel signal={needsYou ? "act" : undefined}>
           <Stat label={t("v3.home.needsYou")} value={!checking && !incomplete ? needsYou : "—"} signal={needsYou ? "act" : undefined}
-            foot={t("v3.home.needsYouFoot")} />
+            foot={t(gateless ? "v3.home.needsYouFootGateless" : "v3.home.needsYouFoot")} />
         </Panel>
         <Panel>
           <Stat
@@ -156,7 +166,7 @@ export function V3Home() {
             <div className="v3-empty">
               {!incomplete && <CheckCircle2 size={30} style={{ color: "var(--v3-ok)" }} aria-hidden="true" />}
               <strong>{t(incomplete ? "v3.ux.incomplete" : "v3.home.queueEmpty")}</strong>
-              <span>{t(incomplete ? "v3.ux.retryHint" : "v3.home.queueEmptySub")}</span>
+              <span>{t(incomplete ? "v3.ux.retryHint" : gateless ? "v3.home.queueEmptySubGateless" : "v3.home.queueEmptySub")}</span>
             </div>
           ) : (
             <table className="v3-table">
@@ -232,7 +242,7 @@ export function V3Home() {
                 <th>{t("v3.agents.name")}</th>
                 <th>{t("v3.agents.method")}</th>
                 <th className="num">{t("v3.agents.version")}</th>
-                <th>{t("v3.agents.release")}</th>
+                {!gateless && <th>{t("v3.agents.release")}</th>}
                 <th className="num">{t("v3.agents.updated")}</th>
               </tr>
             </thead>
@@ -247,7 +257,7 @@ export function V3Home() {
                     </td>
                     <td><Chip>{a.method}</Chip></td>
                     <td className="num">v{a.version ?? "—"}</td>
-                    <td>
+                    {!gateless && <td>
                       {state?.endpoint_mode === "live" ? (
                         <Chip s="ok">live {state.live_version ?? "—"}
                           {state.candidate_version && state.candidate_version !== state.live_version
@@ -257,7 +267,7 @@ export function V3Home() {
                       ) : (
                         <Chip>{t("v3.ux.unknown")}</Chip>
                       )}
-                    </td>
+                    </td>}
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(a.updated_at)}</td>
                   </tr>
                 );
@@ -273,10 +283,7 @@ export function V3Home() {
           activeAgents={agents.data ? live : null} />
       </div>
 
-      <div className={hasNotices ? "v3-grid v3-split" : "v3-grid"}>
-        <RecentTasks tasks={tasks.data} loading={tasks.loading} error={tasks.error} onRetry={tasks.reload} />
-        {hasNotices && <AnnouncementsBrief page={notices.data} isAdmin={isAdmin} />}
-      </div>
+      <RecentTasks tasks={tasks.data} loading={tasks.loading} error={tasks.error} onRetry={tasks.reload} />
     </div>
   );
 }

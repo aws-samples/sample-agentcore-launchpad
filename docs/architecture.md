@@ -3570,10 +3570,15 @@ backend surface.
   filtered, so an administrator always keeps Menu settings to undo a choice. Hiding
   指挥中心 removes only its rail / ⌘K entry: `/v3` and the brand link still open it.
   The page's 快速设置 has two exact presets that fill the draft (Save applies):
-  **Normal** = `NORMAL_HIDDEN` (`/v2/eval/standards`, `/v3/gate`, both sections) and
-  **Full** = nothing hidden; `menuMode()` shows Normal / Full / Custom, judged only on
-  the keys the page offers. Like the nav mode it is a view filter, not authorization:
-  no route closes, and a failed read hides nothing.
+  **Normal** = `NORMAL_HIDDEN` (`/v2/environments`, `/v2/eval/standards`, `/v3/gate`,
+  both sections) and **Full** = nothing hidden; `menuMode()` shows Normal / Full /
+  Custom, judged only on the keys the page offers. **Normal is the default**: while the
+  row was never saved (`updated_at` null) the console applies `NORMAL_HIDDEN`
+  (`effectiveHidden()`); once saved, the stored list is exact (an empty one is Full).
+  With 放行门 hidden the Command center runs **without the release gate**: it reads no
+  release states and drops the gate wording, the release-coverage notice, gate items
+  from the queue and the release column. Like the nav mode it is a view filter, not
+  authorization: no route closes, and a failed read hides nothing.
 - **Storyline (`v3/story/`, storyline-ux).** The console follows the workshop's
   storyline (define → build → evaluate → release → observe → feedback). The steps are
   code constants (`AGENT_STORY` in `stories.ts`); each one names its page action from

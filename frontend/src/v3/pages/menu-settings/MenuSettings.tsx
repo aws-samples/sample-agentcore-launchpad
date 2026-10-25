@@ -9,7 +9,7 @@ import { parseTimestamp } from "../../../lib/timestamps";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { useHiddenNav } from "../../hiddenNav";
-import { FULL_HIDDEN, HOME_SECTIONS, hideableGroups, hideableKeys, menuMode, NORMAL_HIDDEN, PINNED_HIDEABLE } from "../../nav";
+import { effectiveHidden, FULL_HIDDEN, HOME_SECTIONS, hideableGroups, hideableKeys, isDefaultMenu, menuMode, NORMAL_HIDDEN, PINNED_HIDEABLE } from "../../nav";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../../ui";
 
 interface Entry {
@@ -68,11 +68,14 @@ function Editor() {
   const known = useMemo(hideableKeys, []);
   const [hidden, setHidden] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
+  // never saved → the console runs the default Normal preset: start the draft there, and
+  // count it as the saved state (opening the page is not a change)
+  const neverSaved = isDefaultMenu(load.data);
   useEffect(() => {
-    if (load.data) setHidden(new Set(load.data.hidden));
+    if (load.data) setHidden(new Set(effectiveHidden(load.data)));
   }, [load.data]);
 
-  const saved = useMemo(() => new Set(load.data?.hidden ?? []), [load.data]);
+  const saved = useMemo(() => new Set(effectiveHidden(load.data)), [load.data]);
   const dirty = hidden !== null && (hidden.size !== saved.size || [...hidden].some((k) => !saved.has(k)));
   const toggle = (key: string, show: boolean) =>
     setHidden((prev) => {
@@ -118,6 +121,11 @@ function Editor() {
             </span>}>
             <div style={{ display: "grid", gap: 10 }}>
               <p style={{ margin: 0, color: "var(--v3-text-2)" }}>{t("v3.menuSettings.quickSub")}</p>
+              {neverSaved && (
+                <p style={{ margin: 0, color: "var(--v3-text-3)", fontSize: 12.5 }} data-testid="v3-menu-default-note">
+                  {t("v3.menuSettings.defaultNote")}
+                </p>
+              )}
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <Btn kind={mode === "normal" ? "primary" : undefined} onClick={() => fill(NORMAL_HIDDEN)} data-testid="v3-menu-preset-normal">
                   {t("v3.menuSettings.mode.normal")}

@@ -159,14 +159,31 @@ export const HOME_SECTIONS = {
   turn: "/v3?section=turn",
 } as const;
 
-/** The Normal preset: the list exactly (sorted). Full hides nothing. */
+/** The Normal preset: the list exactly (sorted). Full hides nothing. Normal is also
+ *  what a console that never saved Menu settings shows (`effectiveHidden`). */
 export const NORMAL_HIDDEN: readonly string[] = [
+  "/v2/environments",
   "/v2/eval/standards",
   "/v3/gate",
   HOME_SECTIONS.launch,
   HOME_SECTIONS.turn,
 ].sort();
 export const FULL_HIDDEN: readonly string[] = [];
+
+/** Menu settings was never saved: the stored row does not exist yet. */
+export function isDefaultMenu(view: { updated_at: string | null } | null | undefined): boolean {
+  return view != null && view.updated_at === null;
+}
+
+/**
+ * The hidden list the console applies. Never saved → the Normal preset (the default
+ * mode); saved → exactly what was saved (an explicit empty list is Full). Not loaded
+ * or a failed read → nothing hidden: the rail must never vanish because one read failed.
+ */
+export function effectiveHidden(view: { hidden: string[]; updated_at: string | null } | null | undefined): string[] {
+  if (view == null) return [];
+  return isDefaultMenu(view) ? [...NORMAL_HIDDEN] : view.hidden;
+}
 
 /**
  * Every key Menu settings offers — the pinned entries, the Command center sections and

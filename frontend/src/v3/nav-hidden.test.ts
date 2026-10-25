@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  effectiveHidden,
   FULL_HIDDEN,
   HOME_SECTIONS,
   hideableGroups,
   hideableKeys,
   hostedGroups,
+  isDefaultMenu,
   menuMode,
   NORMAL_HIDDEN,
   PINNED_HIDEABLE,
@@ -93,7 +95,7 @@ describe("hideableGroups", () => {
 
 describe("presets", () => {
   it("Normal is exactly the gate, criteria and the two Command center sections", () => {
-    expect([...NORMAL_HIDDEN]).toEqual(["/v2/eval/standards", "/v3/gate", "/v3?section=launch", "/v3?section=turn"]);
+    expect([...NORMAL_HIDDEN]).toEqual(["/v2/environments", "/v2/eval/standards", "/v3/gate", "/v3?section=launch", "/v3?section=turn"]);
     expect(FULL_HIDDEN).toEqual([]);
     // Normal keeps the Command center itself
     expect(NORMAL_HIDDEN).not.toContain("/v3");
@@ -139,5 +141,32 @@ describe("menuMode", () => {
   it("ignores stale keys the page no longer offers", () => {
     expect(menuMode(new Set([...NORMAL_HIDDEN, "/v2/retired-module"]), known)).toBe("normal");
     expect(menuMode(new Set(["/v2/retired-module"]), known)).toBe("full");
+  });
+});
+
+describe("effectiveHidden — Normal is the default mode", () => {
+  it("applies the Normal preset while Menu settings was never saved", () => {
+    const never = { hidden: [], updated_by: "", updated_at: null };
+    expect(isDefaultMenu(never)).toBe(true);
+    expect(effectiveHidden(never)).toEqual([...NORMAL_HIDDEN]);
+    expect(effectiveHidden(never)).toContain("/v2/environments");
+  });
+
+  it("keeps a saved list exactly, an empty one being Full", () => {
+    const savedFull = { hidden: [], updated_by: "admin", updated_at: "2026-10-25T14:00:00" };
+    expect(isDefaultMenu(savedFull)).toBe(false);
+    expect(effectiveHidden(savedFull)).toEqual([]);
+    const custom = { hidden: ["/v2/eval/standards"], updated_by: "admin", updated_at: "2026-10-25T14:00:00" };
+    expect(effectiveHidden(custom)).toEqual(["/v2/eval/standards"]);
+  });
+
+  it("hides nothing before the read answers or when it failed", () => {
+    expect(isDefaultMenu(null)).toBe(false);
+    expect(effectiveHidden(null)).toEqual([]);
+    expect(effectiveHidden(undefined)).toEqual([]);
+  });
+
+  it("treats a steward's stand-in answer (updated_at set) as saved, not as the default", () => {
+    expect(effectiveHidden({ hidden: [], updated_at: "" })).toEqual([]);
   });
 });

@@ -36,7 +36,11 @@ _MAX_PATH = 200
 
 
 def hidden_modules(db: Session) -> list[str]:
-    """The stored list; an absent or unreadable row reads as nothing hidden."""
+    """The stored list; an absent or unreadable row reads as nothing hidden.
+
+    The console reads an *absent* row (``view()['updated_at'] is None``) as its default
+    Normal preset (``effectiveHidden`` in ``frontend/src/v3/nav.ts``); the backend keeps
+    no preset of its own, so the Normal list lives in one place."""
     row = db.get(PlatformSetting, HIDDEN_MODULES_SETTING)
     if row is None or not row.value:
         return []

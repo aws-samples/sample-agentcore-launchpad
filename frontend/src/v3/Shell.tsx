@@ -53,7 +53,7 @@ import { useLoad } from "./hooks";
 import { Lang } from "./Lang";
 import { ThemeSwitch } from "./ThemeSwitch";
 import { HiddenNavContext } from "./hiddenNav";
-import { HOME_SECTIONS, hostedGroups, isActive, withoutHidden, withoutHiddenPinned } from "./nav";
+import { effectiveHidden, HOME_SECTIONS, hostedGroups, isActive, withoutHidden, withoutHiddenPinned } from "./nav";
 import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
 import { Tour } from "./onboarding/Tour";
@@ -298,12 +298,16 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   // the entries an administrator hid (services/nav_settings), for every account,
   // administrators included; a steward's rail has only administrator-only entries,
   // which are never hidden, so it skips the read. A failed read hides nothing — the
-  // rail must never vanish because one setting did not load
+  // rail must never vanish because one setting did not load. A console that never saved
+  // Menu settings applies the Normal preset (`effectiveHidden`); a steward's stand-in
+  // answer is "saved, nothing hidden", so the default never reaches its rail
   const hiddenLoad = useLoad(
-    () => (steward ? Promise.resolve({ hidden: [] as string[] }) : navSettingsApi.hiddenModules()),
+    () => (steward
+      ? Promise.resolve({ hidden: [] as string[], updated_by: "", updated_at: "" })
+      : navSettingsApi.hiddenModules()),
     `v3-shell-hidden:${steward}`,
   );
-  const hidden = useMemo(() => new Set(hiddenLoad.data?.hidden ?? []), [hiddenLoad.data]);
+  const hidden = useMemo(() => new Set(effectiveHidden(hiddenLoad.data)), [hiddenLoad.data]);
   // answered (or failed, which hides nothing): until then the Command center holds back
   // the sections the list may hide, so they do not flash in and out
   const hiddenReady = steward || hiddenLoad.data !== null || hiddenLoad.error !== null;

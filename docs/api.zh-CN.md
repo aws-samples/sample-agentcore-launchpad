@@ -1376,7 +1376,7 @@ Workspace、网络与存储目录——从不接触数据。路由表归为结�
 
 | 方法 | 路径 | 鉴权 | 结果 |
 |---|---|---|---|
-| `GET` | `/api/nav/hidden-modules` | 成员 | `{hidden: [path], updated_by, updated_at}`（已排序；没有隐藏项 → `[]`） |
+| `GET` | `/api/nav/hidden-modules` | 成员 | `{hidden: [path], updated_by, updated_at}`（已排序；从未保存过 → `hidden: []` 且 `updated_at: null`，控制台按默认的 Normal 预设显示；保存过的空列表即 Full） |
 | `PUT` | `/api/nav/hidden-modules` | 管理员（数据：组织管理员不行） | 请求体 `{hidden: [path]}`（最多 100 项，自动去重）→ 同 GET 形状；有变化时记为 `console.nav_hidden`。不是 `/v2/…` 或 `/v3/…` 的路径 → `422 nav.bad_path`；超过 100 项 → `422 nav.too_many` |
 
 注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、

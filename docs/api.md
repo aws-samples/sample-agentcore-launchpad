@@ -1889,7 +1889,7 @@ administrator-only entries are never hidden.
 
 | Method | Path | Auth | Result |
 |---|---|---|---|
-| `GET` | `/api/nav/hidden-modules` | member | `{hidden: [path], updated_by, updated_at}` (sorted; nothing hidden → `[]`) |
+| `GET` | `/api/nav/hidden-modules` | member | `{hidden: [path], updated_by, updated_at}` (sorted; never saved → `hidden: []` with `updated_at: null`, which the console reads as its default Normal preset; a saved empty list is Full) |
 | `PUT` | `/api/nav/hidden-modules` | admin (data: a steward does not) | Body `{hidden: [path]}` (at most 100; deduplicated) → the GET shape; a change is journaled as `console.nav_hidden`. A path that is not `/v2/…` or `/v3/…` → `422 nav.bad_path`; over 100 → `422 nav.too_many` |
 
 Registration error codes: `auth.registration_disabled` (400, gate off or
