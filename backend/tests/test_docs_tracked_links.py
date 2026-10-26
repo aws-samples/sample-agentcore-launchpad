@@ -1,7 +1,8 @@
 """Tracked docs never point a reader at a gitignored path.
 
 `docs/*.md` and the two READMEs ship with every clone; the local-only trees
-(`.trellis/` specs, `docs/issues/`, `self-evolution/`) do not. A link from the
+(`.trellis/` tasks and journals, `docs/issues/`, `self-evolution/`) do not —
+`.trellis/spec/`, `scripts/`, `agents/` and `workflow.md` are tracked. A link from the
 first set into the second reads as a promise the clone cannot keep, so this pins
 the relation the way `test_agents_md_mirror.py` pins CLAUDE.md ↔ AGENTS.md.
 
@@ -18,7 +19,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 # Gitignored repository roots (see .gitignore) that a shipped doc must not cite.
-IGNORED_ROOTS = (".trellis/", "docs/issues/", "self-evolution/")
+IGNORED_ROOTS = (
+    ".trellis/tasks/",
+    ".trellis/workspace/",
+    ".trellis/spec/launchpad/remote-production-deployment.md",
+    "docs/issues/",
+    "self-evolution/",
+)
 
 # Anything that looks like a path mention: a markdown link target or an
 # inline-code span. Both forms have shipped a dead `.trellis/` reference.

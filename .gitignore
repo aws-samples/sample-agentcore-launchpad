@@ -3,7 +3,17 @@
 /self-evolution/
 /.codegraph/
 /.agents/
-/.trellis/
+# Trellis: the shared workflow, specs and scripts are tracked; tasks, journals,
+# caches, backups and the per-developer identity stay local. The deployment
+# spec names the live account, host and SSH key, so it stays local too.
+/.trellis/*
+!/.trellis/.gitignore
+!/.trellis/config.yaml
+!/.trellis/workflow.md
+!/.trellis/agents/
+!/.trellis/scripts/
+!/.trellis/spec/
+/.trellis/spec/launchpad/remote-production-deployment.md
 /.supergoal/
 /.mcp.json
 /.run/
