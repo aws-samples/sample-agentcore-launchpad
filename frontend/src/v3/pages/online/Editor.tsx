@@ -1,13 +1,16 @@
+import "../online.css";
+
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type EvaluatorRow, type OnlineEvalConfigRow, type OnlineEvalMode } from "../../../lib/api";
 import { EvaluatorPicker } from "../../../v2/EvaluatorPicker";
 import {
+  copyDraft,
   createBody,
   draftFromRow,
   eligibleAgent,
@@ -38,7 +41,8 @@ import { Reasoned } from "../../reason";
 import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "../tasks/CostCard";
-import { onlineHref } from "./actions";
+import { StrategySwitch } from "../tasks/StrategySwitch";
+import { onlineHref, onlineList } from "./actions";
 import { Select } from "../../select";
 
 /** canonical order, whatever the click order */
@@ -89,19 +93,32 @@ function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (
   );
 }
 
-/** Create (`id` null) or edit an agent-owned online evaluation config — V2's draft, validation and PATCH. */
-export function OnlineEditor({ id }: { id: string | null }) {
+/**
+ * Create (`id` null) or edit an agent-owned online evaluation config — V2's draft,
+ * validation and PATCH. Creating, `agent=` preselects the agent and `seedFrom` copies a
+ * config; the run-strategy switch on top leads back to the one-off run wizard.
+ */
+export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedFrom?: string | null }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const toast = useToast();
   const { can } = useAuth();
   const { current } = useWorkspace();
   const editing = id !== null;
   const existing = useLoad<OnlineEvalConfigRow | null>(() => (id ? api.v2OnlineConfig(id) : Promise.resolve(null)), `v3-online-edit:${id}`);
+  // a copy starts from its source; a source that cannot be read leaves the defaults
+  const seed = useLoad(
+    () =>
+      !editing && seedFrom
+        ? api.v2OnlineConfig(seedFrom).then((source) => copyDraft(source, t("v2.tasks.copySuffix")))
+        : Promise.resolve(null),
+    `v3-online-seed:${editing ? "" : seedFrom}`,
+  );
   const agents = useLoad(() => api.listAgents(), `v3-online-agents:${current?.id ?? ""}`);
   const evaluators = useLoad(() => api.v2Evaluators(), `v3-online-evaluators:${current?.id ?? ""}`);
   const [draft, setDraft] = useState<OnlineDraft>(newDraft);
-  const [agentId, setAgentId] = useState("");
+  const [agentId, setAgentId] = useState(() => (editing ? "" : (params.get("agent") ?? "")));
   const [enable, setEnable] = useState(true);
   // a validation string, or the ApiError itself so the notice can show AWS details
   const [error, setError] = useState<unknown>(null);
@@ -112,27 +129,35 @@ export function OnlineEditor({ id }: { id: string | null }) {
   useEffect(() => {
     if (row) setDraft(draftFromRow(row));
   }, [row]);
+  const copied = seed.data;
+  useEffect(() => {
+    if (!copied) return;
+    setDraft(copied.draft);
+    setAgentId(copied.agentId);
+  }, [copied]);
 
   const eligible = useMemo(() => (agents.data?.agents ?? []).filter(eligibleAgent), [agents.data]);
+  // a hand-off or copied agent the form cannot watch (inactive, imported) is not picked
+  const pickedAgent = eligible.some((a) => a.id === agentId) ? agentId : "";
   const mode: OnlineEvalMode = row ? modeOf(row) : draft.mode;
   const patch = row ? patchBody(row, draft) : null;
   const dirty = patch ? Object.keys(patch).length > 0 : true;
-  const back = () => navigate(row ? onlineHref({ view: "detail", id: row.config_id }) : "/v3/online");
+  const back = () => navigate(row ? onlineHref({ view: "detail", id: row.config_id }) : onlineList);
 
   // eval-cost §1.1: a new scores config is priced per day before it is created
   const sampling = Number(draft.sampling);
-  const priced = !editing && mode === "scores" && Boolean(agentId) && draft.evaluators.length > 0;
+  const priced = !editing && mode === "scores" && Boolean(pickedAgent) && draft.evaluators.length > 0;
   const estimate = useLoad(
     () => (priced
-      ? evalCostApi.estimate({ agent_id: agentId, scope: "online", evaluators: draft.evaluators,
+      ? evalCostApi.estimate({ agent_id: pickedAgent, scope: "online", evaluators: draft.evaluators,
         sampling_percentage: Number.isFinite(sampling) ? Math.min(100, Math.max(0, sampling)) : 10 })
       : Promise.resolve(null)),
-    `v3-online-estimate:${priced}:${agentId}:${draft.evaluators.join(",")}:${draft.sampling}`,
+    `v3-online-estimate:${priced}:${pickedAgent}:${draft.evaluators.join(",")}:${draft.sampling}`,
   );
   const [confirmCost, setConfirmCost] = useState(false);
   // the estimate a 409 cost refusal carried (the server's figure), until the draft changes
   const [refused, setRefused] = useState<EvalCostEstimate | null>(null);
-  const estimateKey = `${priced}:${agentId}:${draft.evaluators.join(",")}:${draft.sampling}`;
+  const estimateKey = `${priced}:${pickedAgent}:${draft.evaluators.join(",")}:${draft.sampling}`;
   useEffect(() => setRefused(null), [estimateKey]);
   const shown = priced ? refused ?? estimate.data : null;
 
@@ -141,7 +166,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
 
   const submit = async () => {
     setError(null);
-    if (!editing && !agentId) return setError(t("v2.online.err.agent"));
+    if (!editing && !pickedAgent) return setError(t("v2.online.err.agent"));
     const problem = validateDraft(t, draft);
     if (problem) return setError(problem);
     if (shown?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: shown.max_usd ?? "—" }));
@@ -154,7 +179,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
         navigate(onlineHref({ view: "detail", id: row.config_id }));
       } else {
         // eval-cost §1.1: a scores config is priced per day and confirmed like a run
-        const body = createBody(agentId, draft, enable);
+        const body = createBody(pickedAgent, draft, enable);
         const created = await api.v2CreateOnlineConfig(mode === "scores" ? { ...body, confirm_cost: confirmCost } : body);
         toast("ok", t("v2.online.created"));
         navigate(onlineHref({ view: "detail", id: created.config_id }));
@@ -175,10 +200,11 @@ export function OnlineEditor({ id }: { id: string | null }) {
 
   if (editing && existing.loading && !row) return <Skeleton rows={6} />;
   if (editing && existing.error && !row) return <Notice s="act"><ApiErrorDetail error={existing.failure ?? existing.error} /></Notice>;
+  if (!editing && seedFrom && seed.loading && !copied) return <Skeleton rows={6} />;
   const head = (
     <div>
       <button type="button" className="v3-btn ghost sm" onClick={back}>
-        <ArrowLeft size={14} /> {row ? row.name ?? row.config_id : t("v3.online.title")}
+        <ArrowLeft size={14} /> {row ? row.name ?? row.config_id : t("v2.scorecard.tabs.online")}
       </button>
     </div>
   );
@@ -208,6 +234,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
       />
       {!can("eval.run") && <Notice s="wait">{t("v2.tasks.noPermission")}</Notice>}
       {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
+      {!editing && <StrategySwitch value="continuous" agentId={agents.data ? pickedAgent : agentId} />}
 
       <Panel title={t("v3.online.what")}>
         <div className="v3-grid c2" style={{ alignItems: "start" }}>
@@ -216,7 +243,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
             {editing ? (
               <input className="v3-input" value={row?.agent_name ?? row?.agent_id ?? "—"} readOnly />
             ) : (
-              <Select className="v3-select" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              <Select className="v3-select" value={pickedAgent} onChange={(e) => setAgentId(e.target.value)}>
                 <option value="">{t("v2.common.choose")}</option>
                 {eligible.map((a) => <option key={a.id} value={a.id}>{`${a.name} · ${a.method}`}</option>)}
               </Select>

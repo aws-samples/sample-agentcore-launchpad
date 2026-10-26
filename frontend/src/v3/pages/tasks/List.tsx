@@ -1,4 +1,4 @@
-import { Copy, Pause, Play, Plus, RefreshCw, Search, Square, Tag, Trash2 } from "lucide-react";
+import { Copy, RefreshCw, Search, Square, Tag, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -11,7 +11,7 @@ import { evalCostApi } from "../../../lib/api/evalCost";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import {
   evaluatorSummary,
-  loadTasks,
+  loadRunTasks,
   sourceLabel,
   statusLabel,
   TASK_SOURCES,
@@ -22,24 +22,29 @@ import {
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { permReason } from "../../reasons";
-import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../../ui";
+import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
 import { calibrateBlocker, calibrateUrl } from "../standards/calibrationLink";
 import { CopyId } from "./CopyId";
 import { CostCell } from "./CostCard";
 import { copyUrl, detailUrl, listCosts, rankTasks, runsWithoutCost, taskSignal } from "./model";
 import { Select } from "../../select";
 
-type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
+type Pending = { task: V2Task; action: "stop" | "delete" };
 const PAGE = 25;
 
 
-export function TaskList() {
+/**
+ * 一次性评估 — the 评估任务 tab of batch evaluation runs (`loadRunTasks`: an online
+ * config's on-demand insights reports stay on that config), led by what failed and
+ * what is moving.
+ */
+export function RunList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
   const { can } = useAuth();
   const { current } = useWorkspace();
-  const list = useLoad(loadTasks, `v3-tasks:${current?.id ?? ""}`);
+  const list = useLoad(loadRunTasks, `v3-runs:${current?.id ?? ""}`);
   const [state, setState] = useState<"all" | Signal>("all");
   const [mode, setMode] = useState<"all" | TaskMode>("all");
   const [source, setSource] = useState("");
@@ -88,14 +93,8 @@ export function TaskList() {
     setBusy(true);
     setFailure(null);
     try {
-      if (task.kind === "run") {
-        if (action === "stop") await api.stopEvaluationRun(task.id);
-        else if (action === "delete") await api.deleteEvaluationRun(task.id);
-      } else if (action === "delete") {
-        await api.v2DeleteOnlineConfig(task.id);
-      } else if (action === "pause" || action === "resume") {
-        await api.v2OnlineAction(task.id, action);
-      }
+      if (action === "stop") await api.stopEvaluationRun(task.id);
+      else await api.deleteEvaluationRun(task.id);
       toast("ok", t(`v2.tasks.done.${action}`));
       setPending(null);
       list.reload();
@@ -111,24 +110,13 @@ export function TaskList() {
     const active = task.status === "running" || task.status === "queued";
     return (
       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-        {task.kind === "run" && active && (
+        {active && (
           <Btn size="sm" kind="ghost" disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
             title={t("v2.tasks.stop")} aria-label={t("v2.tasks.stop")} onClick={() => setPending({ task, action: "stop" })}>
             <Square size={13} />
           </Btn>
         )}
-        {task.kind === "online" && task.status === "running" && (
-          <Btn size="sm" kind="ghost" title={t("v2.tasks.pause")} onClick={() => setPending({ task, action: "pause" })}>
-            <Pause size={13} />
-          </Btn>
-        )}
-        {task.kind === "online" && task.status === "paused" && (
-          <Btn size="sm" kind="ghost" disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
-            title={t("v2.tasks.resume")} aria-label={t("v2.tasks.resume")} onClick={() => setPending({ task, action: "resume" })}>
-            <Play size={13} />
-          </Btn>
-        )}
-        {task.kind === "run" && mayCalibrate && (() => {
+        {mayCalibrate && (() => {
           const why = calibrateBlocker(task);
           return (
             <Btn size="sm" kind="ghost" disabled={why !== null} disabledReason={why ? t(`v3.tasks.calibrateBlocked.${why}`) : null}
@@ -142,7 +130,7 @@ export function TaskList() {
           title={t("v2.tasks.copy")} aria-label={t("v2.tasks.copy")} onClick={() => navigate(copyUrl(task))}>
           <Copy size={13} />
         </Btn>
-        <Btn size="sm" kind="ghost" disabled={task.kind === "run" && (!mayRun || active)}
+        <Btn size="sm" kind="ghost" disabled={!mayRun || active}
           disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.stopFirst")}
           title={t("v3.tasks.delete")} aria-label={t("v3.tasks.delete")}
           onClick={() => setPending({ task, action: "delete" })}>
@@ -154,22 +142,9 @@ export function TaskList() {
 
   return (
     <div className="v3-reveal v3-task" style={{ display: "grid", gap: 16 }}>
-      <PageHead
-        eyebrow={t("v3.tasks.eyebrow")}
-        title={t("v3.tasks.title")}
-        sub={t("v3.tasks.sub")}
-        end={
-          <>
-            <Btn kind="ghost" onClick={list.reload} title={t("v3.tasks.refresh")}><RefreshCw size={14} /></Btn>
-            <Btn kind="primary" disabled={!mayRun} disabledReason={permReason(t, "eval.run")} onClick={() => navigate("/v3/tasks?view=new")}>
-              <Plus size={14} /> {t("v2.tasks.new")}
-            </Btn>
-          </>
-        }
-      />
       <ErrorCallout error={failure} onDismiss={() => setFailure(null)} data-testid="v3-tasks-error" />
 
-      <div className="v3-grid c4">
+      <div className="v3-grid c3">
         <Panel signal={count("act") ? "act" : undefined}>
           <Stat label={t("v3.tasks.statFailed")} value={list.data ? count("act") : "—"} signal={count("act") ? "act" : undefined} foot={t("v3.tasks.statFailedFoot")} />
         </Panel>
@@ -177,9 +152,6 @@ export function TaskList() {
           <Stat label={t("v3.tasks.statRunning")} value={list.data ? count("info") : "—"} foot={t("v3.tasks.statRunningFoot", { count: count("wait") })} />
         </Panel>
         <Panel><Stat label={t("v3.tasks.statDone")} value={list.data ? count("ok") : "—"} foot={t("v3.tasks.statDoneFoot")} /></Panel>
-        <Panel>
-          <Stat label={t("v3.tasks.statContinuous")} value={list.data ? tasks.filter((task) => task.kind === "online").length : "—"} foot={t("v3.tasks.statContinuousFoot")} />
-        </Panel>
       </div>
 
       {failed.length > 0 && (
@@ -242,10 +214,13 @@ export function TaskList() {
           <input type="checkbox" checked={calibratable} onChange={(e) => { setCalibratable(e.target.checked); setShown(PAGE); }} />
           <span>{t("v3.tasks.filterCalibratable")}</span>
         </label>
-        <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 280 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flex: "1 1 240px", maxWidth: 320 }}>
+          <Btn kind="ghost" onClick={list.reload} title={t("v3.tasks.refresh")} aria-label={t("v3.tasks.refresh")}><RefreshCw size={14} /></Btn>
+          <div style={{ position: "relative", flex: 1 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
           <input className="v3-input" style={{ paddingLeft: 34 }} value={q} onChange={(e) => setQ(e.target.value)}
             placeholder={t("v2.tasks.search")} aria-label={t("v2.tasks.search")} />
+          </div>
         </div>
       </div>
 
@@ -265,7 +240,7 @@ export function TaskList() {
                   <th>{t("v3.tasks.colTask")}</th>
                   <th>{t("v2.tasks.mode")}</th>
                   <th>{t("v2.tasks.colAgent")}</th>
-                  <th>{t("v2.tasks.colSourceStrategy")}</th>
+                  <th>{t("v2.tasks.colSource")}</th>
                   <th>{t("v2.tasks.colEvaluators")}</th>
                   <th className="num">{t("v3.evalCost.colCost")}</th>
                   <th className="num">{t("v3.tasks.colCreated")}</th>
@@ -297,13 +272,12 @@ export function TaskList() {
                       </td>
                       <td>
                         <span className="v3-task-clip" title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>
-                        <small className="v3-task-sub">{task.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")}</small>
                       </td>
                       <td style={{ color: "var(--v3-text-2)" }}>
                         <span className="v3-task-clip" title={task.evaluators.map(label).join("、")}>{evaluatorSummary(t, task.evaluators, label)}</span>
                       </td>
                       <td className="num">
-                        {task.kind === "run" ? <CostCell summary={costs[task.id]} /> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}
+                        <CostCell summary={costs[task.id]} />
                       </td>
                       <td className="num" style={{ color: "var(--v3-text-3)" }} title={task.updatedAt ?? undefined}>{ago(task.createdAt)}</td>
                       <td style={{ width: 1, whiteSpace: "nowrap" }}>{actions(task)}</td>

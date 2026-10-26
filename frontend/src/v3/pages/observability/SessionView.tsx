@@ -12,6 +12,7 @@ import { ago, ms } from "../../format";
 import { useLoad } from "../../hooks";
 import { Btn, Chip, Empty, Notice, PageHead, Panel, Skeleton, Stat } from "../../ui";
 import { CopyId, Explanation, Score, TraceStatus } from "./shared";
+import { onlineHref } from "../online/actions";
 
 /** Event timestamps are UTC ISO: show the browser's clock, else the raw HH:MM:SS. */
 function clock(at: string): string {
@@ -53,7 +54,7 @@ function OnlineScores({ scores }: { scores: OnlineSessionScores }) {
               <Chip s={cfg.owner === "agent" ? "info" : cfg.owner === "external" ? "wait" : undefined}>{t(`evalPage.online.owner.${cfg.owner}`)}</Chip>
               {cfg.agent && <span style={{ color: "var(--v3-text-3)" }}>{t("v3.obs.onlineBy", { agent: cfg.agent.name })}</span>}
               {cfg.owner === "agent" && (
-                <Link to={`/v2/eval/online?view=detail&id=${encodeURIComponent(cfg.config_id)}`} className="v3-btn ghost sm" style={{ marginLeft: "auto" }}>
+                <Link to={onlineHref({ view: "detail", id: cfg.config_id })} className="v3-btn ghost sm" style={{ marginLeft: "auto" }}>
                   {t("v3.obs.onlineOpen")}
                 </Link>
               )}

@@ -121,10 +121,21 @@ describe("v3TwinOf", () => {
     expect(v3TwinOf("/v2/registry", "?view=detail&id=r1&full=1")).toBeNull();
     expect(v3TwinOf("/v2/chat", "?agent=a&full=1")).toBeNull();
     expect(v3TwinOf("/v2/eval/tasks", "")).toBe("/v3/tasks");
-    expect(v3TwinOf("/v2/eval/tasks", "?view=not-rebuilt")).toBeNull();
+    expect(v3TwinOf("/v2/eval/tasks", "?view=agent&key=a1")).toBe("/v3/tasks?view=agent&key=a1");
+    expect(v3TwinOf("/v2/eval/tasks", "?view=compare&a=r1&b=r2&full=1")).toBeNull();
     expect(v3TwinOf("/v2/no-such-page", "")).toBeNull();
     expect(v3TwinOf("/v2/governance", "?tab=tools")).toBe("/v3/governance?tab=tools");
     expect(v3TwinOf("/v2/governance", "?view=policy&id=p")).toBeNull();
+  });
+
+  it("lands 评估任务's tabs and the former 在线评估 page on /v3/tasks", () => {
+    expect(v3TwinOf("/v2/eval/tasks", "?tab=online")).toBe("/v3/tasks?tab=online");
+    expect(v3TwinOf("/v2/eval/tasks", "?view=new&strategy=continuous")).toBe("/v3/tasks?view=new&strategy=continuous");
+    expect(v3TwinOf("/v2/eval/tasks", "?view=edit&kind=online&id=c1")).toBe("/v3/tasks?view=edit&kind=online&id=c1");
+    expect(v3TwinOf("/v2/eval/online", "")).toBe("/v3/tasks?tab=online");
+    expect(v3TwinOf("/v2/eval/online", "?view=new")).toBe("/v3/tasks?view=new&strategy=continuous");
+    expect(v3TwinOf("/v2/eval/online", "?view=detail&id=c1")).toBe("/v3/tasks?view=detail&kind=online&id=c1");
+    expect(v3TwinOf("/v2/eval/online", "?view=edit&id=c1")).toBe("/v3/tasks?view=edit&kind=online&id=c1");
   });
 
   it("lists a rebuilt module at its V3 page, lit on its hosted sub-pages", () => {

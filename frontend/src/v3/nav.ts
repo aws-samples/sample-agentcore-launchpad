@@ -1,6 +1,7 @@
 import { Building2, Cpu, DownloadCloud, EyeOff, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Radar, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
+import { onlineToTasksUrl } from "../v2/pages/tasks/urls";
 import type { V2NavItem } from "../v2/nav";
 
 const BATCH2: Record<string, string> = {
@@ -24,8 +25,7 @@ const MODULES: Record<string, { to: string; views: string[] | "all" }> = {
   "/v2/eval/intents": { to: "/v3/intents", views: [] },
   "/v2/eval/data": { to: "/v3/data", views: ["trace", "dataset"] },
   "/v2/eval/evaluators": { to: "/v3/evaluators", views: "all" },
-  "/v2/eval/tasks": { to: "/v3/tasks", views: ["new", "detail"] },
-  "/v2/eval/online": { to: "/v3/online", views: ["new", "edit", "detail"] },
+  "/v2/eval/tasks": { to: "/v3/tasks", views: "all" },
   "/v2/eval/experiments": { to: "/v3/experiments", views: "all" },
   "/v2/eval/standards": { to: "/v3/standards", views: "all" },
   "/v2/skill-lab": { to: "/v3/skill-lab", views: "all" },
@@ -307,6 +307,9 @@ export function v3TwinOf(pathname: string, search: string): string | null {
       if (!view) return "/v3/registry";
       if (view === "detail" && id) return `/v3/registry?id=${encodeURIComponent(id)}`;
       return null;
+    // the former 在线评估 page is the 持续评估 tab of 评估任务, in V2 and V3 alike
+    case "/v2/eval/online":
+      return onlineToTasksUrl(search).replace(/^\/v2\/eval\/tasks/, "/v3/tasks");
     case "/v2/knowledge-bases":
       if (!view) return "/v3/knowledge";
       if (view === "detail" && id) return `/v3/knowledge?id=${encodeURIComponent(id)}`;

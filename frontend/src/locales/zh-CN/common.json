@@ -7512,15 +7512,8 @@
         "sub": "近 7 天失败的运行，同一 Agent 和数据集之后有运行成功即不再列出",
         "empty": "没有失败的评估任务。"
       },
-      "colSourceStrategy": "数据来源 / 运行策略",
-      "createdOnline": "持续评估任务已创建",
-      "insightsNoContinuous": "持续洞察请在「在线评估」页面创建。",
-      "previewContinuous": "将按 {{rate}}% 的比例对该 Agent 的新会话持续抽样评估。",
-      "sampling": "采样配置",
-      "sessionTimeoutHint": "会话空闲达到该时长后开始评估",
       "strategyContinuous": "基于新数据持续评估",
-      "strategyHistory": "基于历史数据评估",
-      "submitOnline": "创建并启动"
+      "strategyHistory": "基于历史数据评估"
     },
     "taskStatus": {
       "queued": "排队中",
@@ -7565,8 +7558,7 @@
       "insightsTitle": "洞察结果",
       "insightsWait": "任务完成后展示洞察聚类。",
       "insightsEmpty": "该任务未产出洞察聚类。",
-      "scenarioFailures": "{{count}} 个模拟用户场景重试后仍失败，已跳过（不计分），其余场景照常评估：{{list}}",
-      "onlineErrors": "该时间范围内有 {{count}} 次评估调用失败。"
+      "scenarioFailures": "{{count}} 个模拟用户场景重试后仍失败，已跳过（不计分），其余场景照常评估：{{list}}"
     },
     "compare": {
       "title": "对比评估运行",
@@ -14280,10 +14272,6 @@
     },
     "online": {
       "eyebrow": "评估 · 线上流量",
-      "title": "在线评估",
-      "headNeeds_one": "有 {{count}} 个在线评估需要你处理",
-      "headNeeds_other": "有 {{count}} 个在线评估需要你处理",
-      "sub": "持续抽样评判线上会话的配置：要么由评估器打分，要么生成洞察报告，把用户的问题和智能体失败的地方聚类出来。",
       "new": "新建在线评估",
       "configs": "配置",
       "configsFoot": "智能体自有、实验分组和外部配置",
@@ -14344,7 +14332,6 @@
     "tasks": {
       "eyebrow": "评估",
       "title": "评估任务",
-      "sub": "这个工作区的每一次批量评估和持续在线评估。失败的排在最前，其次是仍在进行中的。",
       "newSub": "先选择评估对象和会话范围，再选择用来打分的评估器（或洞察类型）。",
       "refresh": "刷新",
       "delete": "删除",
@@ -14356,8 +14343,6 @@
       "statRunningFoot_other": "另有 {{count}} 个排队或已暂停",
       "statDone": "已完成",
       "statDoneFoot": "结果可以查看",
-      "statContinuous": "持续评估",
-      "statContinuousFoot": "针对线上流量的在线评估",
       "attention": "失败——需要查看",
       "all": "全部",
       "waiting": "排队或已暂停",
@@ -17532,8 +17517,6 @@
       "nothingToRollBack": "当前运行版本不是由已完成的更新产生的，没有可回滚的版本。",
       "stopFirst": "请先停止运行：运行中的任务不能删除。",
       "sessionsNeedAgent": "挑选会话需要以智能体为目标，请先把目标切换为智能体。",
-      "continuousNeedsAgent": "持续运行需要以智能体为目标，不能用 CloudWatch 日志。",
-      "continuousNeedsWindow": "持续运行需要使用时间窗口数据源。",
       "maxEvaluators": "每个任务最多 {{count}} 个评估器。",
       "firstStep": "这已经是第一步。",
       "publishingNow": "它仍在发布中，请等发布完成。",

@@ -1,4 +1,6 @@
-import { ArrowLeft, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import "../online.css";
+
+import { ArrowLeft, Copy, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
@@ -30,7 +32,9 @@ import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { permReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, Skeleton, Spark, Stat } from "../../ui";
-import { onlineHref, useOnlineAction } from "./actions";
+import { OnlineCostCard } from "../tasks/CostCard";
+import { copyUrl } from "../tasks/model";
+import { onlineHref, onlineList, useOnlineAction } from "./actions";
 import { configSignal, modeOf, reportSignal, scoreSignal } from "./common";
 
 /** A V2 results/insights component, on the V3 theme (it is not rebuilt yet). */
@@ -333,7 +337,7 @@ export function OnlineDetail({ id }: { id: string }) {
   const mayRun = can("eval.run");
   const [tick, setTick] = useState(0);
   const config = useLoad(() => api.v2OnlineConfig(id), `v3-online-config:${id}:${tick}`);
-  const action = useOnlineAction((done) => (done === "delete" ? navigate("/v3/online") : setTick((n) => n + 1)));
+  const action = useOnlineAction((done) => (done === "delete" ? navigate(onlineList) : setTick((n) => n + 1)));
   const row = config.data;
   const transient = row ? isTransient(row) : false;
 
@@ -353,8 +357,8 @@ export function OnlineDetail({ id }: { id: string }) {
   return (
     <div className="v3-reveal v3-onl" style={{ display: "grid", gap: 16 }}>
       <div>
-        <button type="button" className="v3-btn ghost sm" onClick={() => navigate("/v3/online")}>
-          <ArrowLeft size={14} /> {t("v3.online.title")}
+        <button type="button" className="v3-btn ghost sm" onClick={() => navigate(onlineList)}>
+          <ArrowLeft size={14} /> {t("v2.scorecard.tabs.online")}
         </button>
       </div>
       <PageHead
@@ -380,6 +384,13 @@ export function OnlineDetail({ id }: { id: string }) {
               <Btn kind="danger" busy={action.busy} disabled={row.status === "DELETING" || !mayRun}
                 disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.deleting")} onClick={() => action.ask({ row, action: "delete" })}>
                 <Trash2 size={14} /> {t("v2.common.delete")}
+              </Btn>
+            )}
+            {/* a copy opens the continuous create form seeded from this config (as V2) */}
+            {isEditable(row) && (
+              <Btn disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
+                onClick={() => navigate(copyUrl({ kind: "online", id: row.config_id }))}>
+                <Copy size={14} /> {t("v2.tasks.copy")}
               </Btn>
             )}
             {isEditable(row) && (
@@ -411,6 +422,9 @@ export function OnlineDetail({ id }: { id: string }) {
         <Panel><Stat label={t("v3.online.timeout")} value={row.session_timeout_minutes ?? "—"} unit={row.session_timeout_minutes ? t("v3.online.minutes") : undefined} foot={t("v3.online.timeoutFoot")} /></Panel>
         <Panel><Stat label={mode === "insights" ? t("v2.online.insightTypes") : t("v3.online.judges")} value={judges.length} foot={agentLabel(row)} /></Panel>
       </div>
+
+      {/* eval-cost §1.3: what an agent-owned config costs per day (judging + its reports) */}
+      {row.owner === "agent" && <OnlineCostCard configId={row.config_id} />}
 
       <Panel title={t("v3.online.setup")}>
         <dl className="v3-kv">

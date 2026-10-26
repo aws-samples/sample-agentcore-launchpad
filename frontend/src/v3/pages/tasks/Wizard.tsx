@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, Rocket, Search } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -17,10 +17,10 @@ import { SERVICE_NAME_RE, type TaskMode } from "../../../v2/tasks";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
-import type { DisabledReason } from "../../reasons";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { StoryHeader } from "../../story/StoryHeader";
-import { HostedV2 } from "./common";
+import { Field, HostedV2, Option } from "./common";
+import { StrategySwitch } from "./StrategySwitch";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "./CostCard";
 import { detailUrl, isPassiveScope } from "./model";
@@ -31,7 +31,6 @@ import { Select } from "../../select";
 
 type Source = "window" | "sessions" | "logs" | "dataset";
 type Target = "agent" | "cloudwatch";
-type Strategy = "history" | "continuous";
 
 const LOOKBACKS = [1, 6, 24, 72, 168, 336];
 const SESSION_RANGE: V2Range = "7d";
@@ -48,15 +47,12 @@ interface Draft {
   logGroups: string[];
   mode: TaskMode;
   source: Source;
-  strategy: Strategy;
   lookbackHours: number;
   sessionIds: string[];
   logSessionIds: string[];
   logHours: number;
   /** local dataset id, or `cloud:<datasetId>` */
   dataset: string;
-  sampling: number;
-  sessionTimeout: number;
   evaluators: string[];
   insights: string[];
   /** pass^k: each dataset scenario runs this many times (1 = off) */
@@ -73,14 +69,11 @@ const EMPTY: Draft = {
   logGroups: [],
   mode: "evaluators",
   source: "window",
-  strategy: "history",
   lookbackHours: 24,
   sessionIds: [],
   logSessionIds: [],
   logHours: 168,
   dataset: "",
-  sampling: 10,
-  sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
   insights: [...INSIGHT_TYPES],
   repeats: 1,
@@ -93,7 +86,8 @@ interface Handoff {
   evaluators: string[];
 }
 
-/** `?from=run:<id>` / `?from=online:<id>` (copy), or hand-off params (agent / dataset / evaluators). */
+/** `?from=run:<id>` (copy a run), or hand-off params (agent / dataset / evaluators). A
+ *  continuous copy (`from=online:`) opens the online editor instead (Tasks.tsx). */
 async function seedDraft(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
@@ -109,54 +103,10 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
     if (name.startsWith("logs:")) return { ...base, source: "logs", logSessionIds: run.session_ids };
     return { ...base, source: "sessions", sessionIds: run.session_ids };
   }
-  if (from?.startsWith("online:")) {
-    const cfg = await api.v2OnlineConfig(from.slice(7));
-    return {
-      ...EMPTY,
-      name: `${cfg.description || cfg.name || cfg.config_id}${copySuffix}`.slice(0, 64),
-      agentId: cfg.agent_id ?? "",
-      strategy: "continuous",
-      sampling: cfg.sampling_percentage ?? 10,
-      sessionTimeout: cfg.session_timeout_minutes ?? 15,
-      evaluators: cfg.evaluators,
-    };
-  }
   const seeded: Draft = { ...EMPTY, agentId: handoff.agent ?? "" };
   if (handoff.evaluators.length) seeded.evaluators = handoff.evaluators;
   if (handoff.dataset) return { ...seeded, source: "dataset", dataset: handoff.dataset };
   return seeded;
-}
-
-function Option({ on, disabled, disabledReason, title, desc, badge, onClick }: {
-  on: boolean;
-  disabled?: boolean;
-  /** why it is off — shown on hover and focus (reason.tsx) */
-  disabledReason?: DisabledReason | null;
-  title: ReactNode;
-  desc: ReactNode;
-  badge?: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <Reasoned disabledReason={disabledReason}>
-      <button type="button" role="radio" aria-checked={on} disabled={disabled}
-        className={on ? "v3-scenario on v3-task-opt" : "v3-scenario v3-task-opt"} onClick={onClick}>
-        <b>{title}</b>
-        <small>{desc}</small>
-        {badge && <span className="tags">{badge}</span>}
-      </button>
-    </Reasoned>
-  );
-}
-
-function Field({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <label className="v3-field">
-      <span>{label}</span>
-      {children}
-      {hint && <small className="v3-hint">{hint}</small>}
-    </label>
-  );
 }
 
 export function TaskWizard() {
@@ -210,14 +160,13 @@ export function TaskWizard() {
   // pass^k replays dataset scenarios against an agent; it has no meaning for past sessions
   const repeatable =
     !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
-    draft.strategy === "history" && !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
+    !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
   // eval-cost §1.1: every entry is priced before submit — a dataset replay (with
-  // pass^k), past sessions / a look-back window, an online evaluation (per day)
+  // pass^k) or past sessions / a look-back window
   const estimateBody = ((): EstimateBody | null => {
     if (!draft || draft.mode !== "evaluators" || draft.evaluators.length === 0) return null;
     if (draft.target === "agent" && !draft.agentId) return null;
     const base = { ...(draft.target === "agent" ? { agent_id: draft.agentId } : {}), evaluators: draft.evaluators };
-    if (draft.strategy === "continuous") return { ...base, scope: "online", sampling_percentage: draft.sampling };
     if (repeatable) return { ...base, scope: "replay", dataset_id: draft.dataset, repeats: draft.repeats };
     if (draft.source === "window") return { ...base, scope: "passive", lookback_hours: draft.lookbackHours };
     if (draft.source === "sessions") return { ...base, scope: "passive", sessions: draft.sessionIds.length };
@@ -279,48 +228,31 @@ export function TaskWizard() {
     setError(null);
     setRefused(null);
     try {
-      if (draft.strategy === "continuous" && !insights) {
-        const cfg = await api.v2CreateOnlineConfig({
-          agent_id: draft.agentId,
-          mode: "scores",
-          evaluators: draft.evaluators,
-          sampling_percentage: draft.sampling,
-          session_timeout_minutes: draft.sessionTimeout,
-          filters: [],
-          description: draft.name.trim().slice(0, 200),
-          enable_on_create: true,
-          // eval-cost §1.1: a scores config is priced per day and confirmed like a run
-          confirm_cost: draft.confirmCost,
-        });
-        toast("ok", t("v2.tasks.createdOnline"));
-        navigate(detailUrl({ kind: "online", id: cfg.config_id }));
-      } else {
-        const scope =
-          draft.source === "window"
-            ? { lookback_hours: draft.lookbackHours }
-            : draft.source === "sessions"
-              ? { session_ids: draft.sessionIds }
-              : draft.source === "logs"
-                ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
-                : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
-                  ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
-                  : { dataset_id: draft.dataset };
-        const run = await withStorageConfirm((confirm) => api.v2CreateRun({
-          ...(draft.target === "cloudwatch"
-            ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
-            : { agent_id: draft.agentId }),
-          name: draft.name.trim(),
-          description: draft.description || undefined,
-          ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
-          ...scope,
-          ...(repeatable ? { repeats: draft.repeats } : {}),
-          // eval-cost §1.1: a replay and a passive run (sessions / look-back) alike
-          ...(!insights && (repeatable || isPassiveScope(scope)) ? { confirm_cost: draft.confirmCost } : {}),
-          ...storageFlag(confirm),
-        }));
-        toast("ok", t("v2.tasks.createdRun"));
-        navigate(detailUrl({ kind: "run", id: run.id }));
-      }
+      const scope =
+        draft.source === "window"
+          ? { lookback_hours: draft.lookbackHours }
+          : draft.source === "sessions"
+            ? { session_ids: draft.sessionIds }
+            : draft.source === "logs"
+              ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
+              : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
+                ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
+                : { dataset_id: draft.dataset };
+      const run = await withStorageConfirm((confirm) => api.v2CreateRun({
+        ...(draft.target === "cloudwatch"
+          ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
+          : { agent_id: draft.agentId }),
+        name: draft.name.trim(),
+        description: draft.description || undefined,
+        ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
+        ...scope,
+        ...(repeatable ? { repeats: draft.repeats } : {}),
+        // eval-cost §1.1: a replay and a passive run (sessions / look-back) alike
+        ...(!insights && (repeatable || isPassiveScope(scope)) ? { confirm_cost: draft.confirmCost } : {}),
+        ...storageFlag(confirm),
+      }));
+      toast("ok", t("v2.tasks.createdRun"));
+      navigate(detailUrl({ kind: "run", id: run.id }));
     } catch (err) {
       const refusal = costRefusal(err);
       if (refusal) {
@@ -350,12 +282,10 @@ export function TaskWizard() {
     set({
       target,
       source: target === "cloudwatch" && (draft.source === "sessions" || draft.source === "dataset") ? "window" : draft.source,
-      strategy: target === "cloudwatch" ? "history" : draft.strategy,
       logSessionIds: [],
     });
-  const chooseSource = (source: Source) => set({ source, strategy: source === "window" ? draft.strategy : "history" });
-  // continuous insights are an online-evaluation config with a report schedule — not a task
-  const chooseMode = (mode: TaskMode) => set({ mode, strategy: mode === "insights" ? "history" : draft.strategy });
+  const chooseSource = (source: Source) => set({ source });
+  const chooseMode = (mode: TaskMode) => set({ mode });
   const toggleInsight = (id: string) =>
     set({ insights: INSIGHT_TYPES.filter((x) => (x === id ? !draft.insights.includes(id) : draft.insights.includes(x))) });
   const fewSessions =
@@ -394,6 +324,7 @@ export function TaskWizard() {
 
       {step === 0 && (
         <>
+          <StrategySwitch value="history" agentId={cloudwatch ? null : draft.agentId} />
           <Panel title={t("v2.tasks.basic")}>
             <div style={{ display: "grid", gap: 16 }}>
               <div className="v3-field">
@@ -452,31 +383,8 @@ export function TaskWizard() {
             </div>
             <div className="v3-grid c2" style={{ marginTop: 20, alignItems: "start" }}>
               <div className="v3-field">
-                <span>{t("v2.tasks.strategy")}</span>
-                <div className="v3-task-opts c2" role="radiogroup">
-                  <Option on={draft.strategy === "history"} title={t("v2.tasks.strategyHistory")}
-                    desc={t(draft.source === "dataset" ? "v2.tasks.strategyReplayDesc" : "v2.tasks.strategyHistoryDesc")} onClick={() => set({ strategy: "history" })} />
-                  <Option on={draft.strategy === "continuous"} disabled={draft.source !== "window" || draft.mode === "insights" || cloudwatch}
-                    disabledReason={cloudwatch ? t("story.reason.continuousNeedsAgent")
-                      : draft.source !== "window" ? t("story.reason.continuousNeedsWindow") : t("v2.tasks.insightsNoContinuous")}
-                    title={t("v2.tasks.strategyContinuous")} desc={t("v2.tasks.strategyContinuousDesc")} onClick={() => set({ strategy: "continuous" })} />
-                </div>
-                {draft.mode === "insights" && draft.source === "window" && <small className="v3-hint">{t("v2.tasks.insightsNoContinuous")}</small>}
-              </div>
-              <div className="v3-field">
-                <span>{draft.strategy === "continuous" ? t("v2.tasks.sampling") : t("v2.tasks.scope")}</span>
-                {draft.strategy === "continuous" ? (
-                  <div className="v3-grid c2" style={{ alignItems: "start" }}>
-                    <Field label={t("v2.tasks.samplingRate")} hint={t("v2.tasks.samplingHint")}>
-                      <input className="v3-input" type="number" min={0.01} max={100} step={1} value={draft.sampling}
-                        onChange={(e) => set({ sampling: Math.max(0.01, Math.min(100, Number(e.target.value) || 10)) })} />
-                    </Field>
-                    <Field label={t("v2.tasks.sessionTimeout")} hint={t("v2.tasks.sessionTimeoutHint")}>
-                      <input className="v3-input" type="number" min={1} max={1440} value={draft.sessionTimeout}
-                        onChange={(e) => set({ sessionTimeout: Math.max(1, Math.min(1440, Number(e.target.value) || 15)) })} />
-                    </Field>
-                  </div>
-                ) : draft.source === "window" || draft.source === "logs" ? (
+                <span>{t("v2.tasks.scope")}</span>
+                {draft.source === "window" || draft.source === "logs" ? (
                   <Field label={draft.source === "logs" ? t("v2.tasks.logs.window") : t("v2.tasks.lookback")}
                     hint={draft.source === "logs" ? t("v2.tasks.logs.picked", { count: draft.logSessionIds.length }) : t("v2.tasks.lookbackHint")}>
                     <Select className="v3-select" value={String(draft.source === "logs" ? draft.logHours : draft.lookbackHours)}
@@ -576,8 +484,6 @@ export function TaskWizard() {
                 ) : (
                   <p className="v3-task-muted">{t("v2.tasks.previewPickDataset")}</p>
                 )
-              ) : draft.strategy === "continuous" ? (
-                <Notice>{t("v2.tasks.previewContinuous", { rate: draft.sampling })}</Notice>
               ) : (
                 <>
                   {draft.source === "window" && <Notice>{t("v2.tasks.previewWindow", { count: windowSessions.length, hours: draft.lookbackHours })}</Notice>}
@@ -747,7 +653,7 @@ export function TaskWizard() {
           <Btn kind="primary" onClick={next}>{t("v2.common.next")} <ArrowRight size={14} /></Btn>
         ) : (
           <Btn kind="primary" disabled={submitting} onClick={() => void submit()}>
-            <Rocket size={14} /> {draft.strategy === "continuous" ? t("v2.tasks.submitOnline") : t("v2.tasks.submitRun")}
+            <Rocket size={14} /> {t("v2.tasks.submitRun")}
           </Btn>
         )}
       </div>

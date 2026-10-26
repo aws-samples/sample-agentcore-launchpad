@@ -1,5 +1,6 @@
 import type { CostSummary } from "../../../lib/api/evalCost";
 import type { ResultRow } from "../../../v2/results";
+import { type NewStrategy, newTaskParams } from "../../../v2/pages/tasks/urls";
 import type { TaskStatus, V2Task } from "../../../v2/tasks";
 import type { Signal } from "../../ui";
 
@@ -40,6 +41,10 @@ export const detailUrl = (task: Pick<V2Task, "kind" | "id">) =>
   `/v3/tasks?view=detail&kind=${task.kind}&id=${encodeURIComponent(task.id)}`;
 export const copyUrl = (task: Pick<V2Task, "kind" | "id">) =>
   `/v3/tasks?view=new&from=${encodeURIComponent(`${task.kind}:${task.id}`)}`;
+
+/** The create form of a run strategy (the strategy switch), carrying only the agent. */
+export const strategyUrl = (strategy: NewStrategy, agentId?: string | null) =>
+  `/v3/tasks?${new URLSearchParams(newTaskParams(strategy, agentId)).toString()}`;
 
 /* ── evaluation cost (eval-cost §1.1, §1.3) ──────────────────────────────── */
 
