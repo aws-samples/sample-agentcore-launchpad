@@ -1,6 +1,8 @@
 /* V3 evaluation tasks — list, run detail and the new-run wizard. */
 
 .v3 .v3-task-clip { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 按 Agent: eight columns and the row action fit the content width */
+.v3 .v3-by-agent .v3-task-clip { max-width: 190px; }
 .v3 .v3-task-clip2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; word-break: break-word; }
 .v3 .v3-task-sub { display: block; margin-top: 2px; font-size: 12px; color: var(--v3-text-3); }
 .v3 .v3-task-muted { margin: 0; color: var(--v3-text-3); font-size: 13px; }

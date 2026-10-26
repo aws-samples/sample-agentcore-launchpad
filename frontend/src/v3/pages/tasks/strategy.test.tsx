@@ -18,6 +18,9 @@ vi.mock("./Detail", () => ({ TaskDetail: () => <div data-form="run-detail" /> })
 vi.mock("./List", () => ({ RunList: () => <div data-form="runs" /> }));
 vi.mock("../online/List", () => ({ OnlineList: () => <div data-form="online-list" /> }));
 vi.mock("../online/Detail", () => ({ OnlineDetail: () => <div data-form="online-detail" /> }));
+vi.mock("./ByAgent", () => ({ ByAgent: () => <div data-form="by-agent" /> }));
+vi.mock("../../../v2/pages/tasks/AgentScorecard", () => ({ AgentScorecard: ({ agentKey }: { agentKey: string }) => <div data-form="agent" data-key={agentKey} /> }));
+vi.mock("../../../v2/pages/tasks/RunCompare", () => ({ RunCompare: ({ a, b }: { a: string; b: string }) => <div data-form="compare" data-ab={`${a}:${b}`} /> }));
 vi.mock("../../../auth/auth-context", () => ({ useAuth: () => ({ can: () => true }) }));
 
 const at = (search: string) =>
@@ -48,9 +51,20 @@ describe("create: the run strategy picks the form", () => {
 });
 
 describe("the list tabs and sub-pages (V2's URL contract)", () => {
-  it("一次性评估 is the bare page and tab=runs / the pre-merge tab=all; 持续评估 is tab=online", () => {
-    for (const search of ["", "?tab=runs", "?tab=all"]) expect(at(search), search).toContain('data-form="runs"');
+  it("按 Agent is the bare page; 一次性评估 is tab=runs / the pre-merge tab=all; 持续评估 is tab=online", () => {
+    expect(at("")).toContain('data-form="by-agent"');
+    for (const search of ["?tab=runs", "?tab=all"]) expect(at(search), search).toContain('data-form="runs"');
     expect(at("?tab=online")).toContain('data-form="online-list"');
+    // 按 Agent leads the tabs
+    const html = at("");
+    expect(html.indexOf(i18n.t("v2.scorecard.tabs.agents"))).toBeLessThan(html.indexOf(i18n.t("v2.scorecard.tabs.runs")));
+  });
+
+  it("an agent's page and a two-run compare are V2's, hosted", () => {
+    expect(at("?view=agent&key=ag-1&bench=b")).toMatch(/class="v2 v3-host"[^]*data-form="agent" data-key="ag-1"/);
+    expect(at("?view=compare&a=r1&b=r2")).toContain('data-ab="r1:r2"');
+    // without their ids they fall back to the list
+    expect(at("?view=agent")).toContain('data-form="by-agent"');
   });
 
   it("a detail opens by kind; edit is an online config's", () => {

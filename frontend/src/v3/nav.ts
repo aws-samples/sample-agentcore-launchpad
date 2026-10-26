@@ -25,7 +25,7 @@ const MODULES: Record<string, { to: string; views: string[] | "all" }> = {
   "/v2/eval/intents": { to: "/v3/intents", views: [] },
   "/v2/eval/data": { to: "/v3/data", views: ["trace", "dataset"] },
   "/v2/eval/evaluators": { to: "/v3/evaluators", views: "all" },
-  "/v2/eval/tasks": { to: "/v3/tasks", views: ["new", "detail", "edit"] },
+  "/v2/eval/tasks": { to: "/v3/tasks", views: "all" },
   "/v2/eval/experiments": { to: "/v3/experiments", views: "all" },
   "/v2/eval/standards": { to: "/v3/standards", views: "all" },
   "/v2/skill-lab": { to: "/v3/skill-lab", views: "all" },

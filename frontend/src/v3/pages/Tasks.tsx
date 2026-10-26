@@ -5,37 +5,37 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
+import { AgentScorecard } from "../../v2/pages/tasks/AgentScorecard";
+import { RunCompare } from "../../v2/pages/tasks/RunCompare";
 import { newStrategy, parseTasksTab, type TasksTab, tasksTabParams } from "../../v2/pages/tasks/urls";
 import { permReason } from "../reasons";
 import { Btn, Filters, PageHead } from "../ui";
 import { OnlineDetail } from "./online/Detail";
 import { OnlineEditor } from "./online/Editor";
 import { OnlineList } from "./online/List";
+import { ByAgent } from "./tasks/ByAgent";
+import { HostedV2 } from "./tasks/common";
 import { TaskDetail } from "./tasks/Detail";
 import { RunList } from "./tasks/List";
 import { strategyUrl } from "./tasks/model";
 import { TaskWizard } from "./tasks/Wizard";
 
-/** The list tabs this page has; the bare URL opens the first. */
-type Tab = Exclude<TasksTab, "agents">;
-const TABS: Tab[] = ["runs", "online"];
-const TAB_DESC: Record<Tab, string> = { runs: "v2.tasks.desc", online: "v2.online.desc" };
-
-/** V2's tab parse, until 按 Agent (its default) is a tab here too. */
-const tabOf = (params: URLSearchParams): Tab => {
-  const tab = parseTasksTab(params);
-  return tab === "agents" ? "runs" : tab;
-};
+/** The list tabs, 按 Agent first: it is the bare URL. */
+const TABS: TasksTab[] = ["agents", "runs", "online"];
+const TAB_DESC: Record<TasksTab, string> = { agents: "v2.scorecard.desc", runs: "v2.tasks.desc", online: "v2.online.desc" };
 
 /**
- * 评估任务 (V3) — every evaluation, by how it runs, with V2's URL contract
- * (`v2/pages/tasks/urls.ts`): 一次性评估 (the bare page, `tab=runs`; the pre-merge
- * `tab=all` reads the same) and 持续评估 (`tab=online`, every online config — the
- * former `/v3/online` page). Sub-pages are `?view=` states:
+ * 评估任务 (V3) — every evaluation, with V2's URL contract (`v2/pages/tasks/urls.ts`):
+ * 按 Agent (the bare page — each agent's scores across its evaluations), 一次性评估
+ * (`tab=runs`; the pre-merge `tab=all` reads the same) and 持续评估 (`tab=online`,
+ * every online config — the former `/v3/online` page). Sub-pages are `?view=` states:
  * - `new` — the run strategy decides the form: the run wizard (`from=run:<id>` to copy,
  *   `agent=` / `dataset=` / `evaluators=` to preselect) or, with `strategy=continuous`
  *   or `from=online:<id>`, the online evaluation form (`agent=`);
- * - `detail` (`kind=run|online&id=`) and `edit` (`kind=online&id=`, agent-owned configs).
+ * - `detail` (`kind=run|online&id=`) and `edit` (`kind=online&id=`, agent-owned configs);
+ * - `agent` (`key=<agentKey>&bench=`: one agent's evaluations — trend, version ×
+ *   evaluator, runs) and `compare` (`a=&b=`: two runs side by side) — V2's pages, hosted
+ *   on the V3 theme; their links are relative, so they stay on this page.
  */
 export function V3Tasks() {
   const [params] = useSearchParams();
@@ -53,10 +53,15 @@ export function V3Tasks() {
   }
   if (view === "detail" && id) return online ? <OnlineDetail key={id} id={id} /> : <TaskDetail key={id} id={id} />;
   if (view === "edit" && id && online) return <OnlineEditor key={`edit:${id}`} id={id} />;
-  return <TaskTabs tab={tabOf(params)} />;
+  const agentKey = params.get("key");
+  if (view === "agent" && agentKey) return <HostedV2><AgentScorecard key={agentKey} agentKey={agentKey} /></HostedV2>;
+  const a = params.get("a");
+  const b = params.get("b");
+  if (view === "compare" && a && b) return <HostedV2><RunCompare key={`${a}:${b}`} a={a} b={b} /></HostedV2>;
+  return <TaskTabs tab={parseTasksTab(params)} />;
 }
 
-function TaskTabs({ tab }: { tab: Tab }) {
+function TaskTabs({ tab }: { tab: TasksTab }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [, setParams] = useSearchParams();
@@ -82,7 +87,7 @@ function TaskTabs({ tab }: { tab: Tab }) {
           options={TABS.map((value) => ({ value, label: t(`v2.scorecard.tabs.${value}`) }))}
         />
       </div>
-      {tab === "online" ? <OnlineList /> : <RunList />}
+      {tab === "online" ? <OnlineList /> : tab === "runs" ? <RunList /> : <ByAgent />}
     </div>
   );
 }
