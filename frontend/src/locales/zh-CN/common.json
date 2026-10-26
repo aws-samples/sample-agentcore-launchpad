@@ -12973,6 +12973,13 @@
       },
       "resume": {
         "reconnecting": "连接中断，智能体仍在回答；正在重新连接（{{n}}/{{total}}）……"
+      },
+      "inspect": {
+        "title": "会话链路与记忆",
+        "toggle": "链路与记忆",
+        "close": "收起面板",
+        "refresh": "刷新",
+        "failed": "加载失败：{{msg}}"
       }
     },
     "gate": {

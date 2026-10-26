@@ -1,4 +1,4 @@
-import { ArrowUp, Plus, RotateCcw, ShieldX, Square, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
+import { ArrowUp, Plus, RotateCcw, ScanSearch, ShieldX, Square, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -17,6 +17,7 @@ import {
 } from "../../lib/api";
 import {
   activityLabel,
+  agentMemoryState,
   AUTO_RETRIES,
   chatEligible,
   chatErrorText,
@@ -78,6 +79,8 @@ import { ago } from "../format";
 import { StoryHeader } from "../story/StoryHeader";
 import { ApiKeysEntry } from "./agent/ApiKeysCard";
 import { Select } from "../select";
+import { Inspector } from "./chat/Inspector";
+import { type InspectTab, inspectTab } from "./chat/inspect";
 import "./chat.css";
 import "./chatStatus.css";
 
@@ -162,10 +165,33 @@ export function V3Chat() {
   // follows the stream only while the reader is at the bottom
   const thread = useStickToBottom();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // the right rail (trace / memory): its open tab is `?inspect=`, absent = closed
+  const inspect = inspectTab(params.get("inspect"));
+  const inspecting = inspect !== null && agent !== undefined;
+  // every navigation inside the page keeps the open rail
+  const nav = (next: Record<string, string>, replace = true) =>
+    setParams((prev) => {
+      const tab = prev.get("inspect");
+      return tab ? { ...next, inspect: tab } : next;
+    }, { replace });
+  const setInspect = (tab: InspectTab | null) =>
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tab) next.set("inspect", tab);
+      else next.delete("inspect");
+      return next;
+    }, { replace: true });
 
   // the first eligible agent is the default, so the page is never empty on arrival
   useEffect(() => {
-    if (!agentId && eligible.length) setParams({ agent: eligible[0].id }, { replace: true });
+    if (!agentId && eligible.length) {
+      setParams((prev) => {
+        const next: Record<string, string> = { agent: eligible[0].id };
+        const tab = prev.get("inspect");
+        if (tab) next.inspect = tab;
+        return next;
+      }, { replace: true });
+    }
   }, [agentId, eligible, setParams]);
 
   const loadSessions = (aid: string) =>
@@ -207,7 +233,7 @@ export function V3Chat() {
       const rows = rowsBeforeTurn(history.messages, running);
       setMessages(restoredThread(rows));
       setSessionId(sid);
-      setParams({ agent: agentId, session: sid }, { replace: true });
+      nav({ agent: agentId, session: sid });
       thread.toBottom(); // an opened conversation starts at its latest turn
     } catch (err) {
       running = null;
@@ -244,7 +270,7 @@ export function V3Chat() {
     setMessages([]);
     setSessionId(undefined);
     setNeedsV2(false);
-    setParams(agentId ? { agent: agentId } : {}, { replace: true });
+    nav(agentId ? { agent: agentId } : {});
     inputRef.current?.focus();
   };
 
@@ -384,7 +410,7 @@ export function V3Chat() {
             return at < 0 ? m : m.map((msg, i) => (i === at ? { ...msg, ledgerId } : msg));
           });
           setSessionId(data.session_id);
-          setParams({ agent: agentId, session: data.session_id }, { replace: true });
+          nav({ agent: agentId, session: data.session_id });
         } else if (event === "rule") {
           curated = true;
         } else if (event === "tool") {
@@ -563,7 +589,7 @@ export function V3Chat() {
   };
 
   return (
-    <div className="v3-chat">
+    <div className={inspecting ? "v3-chat inspecting" : "v3-chat"}>
       <StoryHeader />
       <aside className="v3-chat-side">
         <label className="v3-stat" style={{ display: "block" }}>
@@ -575,7 +601,7 @@ export function V3Chat() {
             onChange={(e) => {
               setMessages([]);
               setSessionId(undefined);
-              setParams({ agent: e.target.value });
+              nav({ agent: e.target.value }, false);
             }}
           >
             {eligible.length === 0 && <option value="">{t("v3.chat.noAgents")}</option>}
@@ -612,6 +638,10 @@ export function V3Chat() {
               <Link to={`/v3/agents?id=${agent.id}`} className="v3-btn ghost sm" style={{ marginLeft: "auto" }}>
                 {t("v3.chat.agentPage")}
               </Link>
+              <button type="button" className={`v3-btn sm${inspect ? "" : " ghost"}`} aria-pressed={!!inspect}
+                onClick={() => setInspect(inspect ? null : "trace")} data-testid="v3-chat-inspect-toggle">
+                <ScanSearch size={14} /> {t("v3.chat.inspect.toggle")}
+              </button>
             </>
           ) : (
             <span style={{ color: "var(--v3-text-3)" }}>{t("v3.chat.pick")}</span>
@@ -765,6 +795,18 @@ export function V3Chat() {
           )}
         </form>
       </section>
+      {inspecting && inspect && agent && (
+        <Inspector
+          key={`${agentId}:${sessionId ?? ""}`}
+          tab={inspect}
+          onTab={setInspect}
+          onClose={() => setInspect(null)}
+          agentId={agentId}
+          sessionId={sessionId}
+          busy={busy || restoring}
+          memoryState={agentMemoryState(agent)}
+        />
+      )}
     </div>
   );
 }

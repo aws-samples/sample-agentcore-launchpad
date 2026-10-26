@@ -12973,6 +12973,13 @@
       },
       "resume": {
         "reconnecting": "Connection lost — the agent is still answering; reconnecting ({{n}}/{{total}})…"
+      },
+      "inspect": {
+        "title": "Session trace and memory",
+        "toggle": "Trace & memory",
+        "close": "Close the panel",
+        "refresh": "Refresh",
+        "failed": "Could not load: {{msg}}"
       }
     },
     "gate": {

@@ -3487,7 +3487,9 @@ backend surface.
   Edit ▾ / ⋯ More — convert, roll back, delete with a typed-name confirm; an
   imported runtime is removed from the platform instead — and the tabs overview /
   deploy & versions / access & integration / release, kept in `?tab=`), Chat (`/v3/chat`, the same
-  `chat_stream` SSE chain), and Release gate (`/v3/gate`: the four-gate pipeline,
+  `chat_stream` SSE chain; a collapsible right rail, `?inspect=trace|memory`, shows the
+  session's trace waterfall from `GET /api/traces/{session}` and its memory, reloaded after
+  each finished turn), and Release gate (`/v3/gate`: the four-gate pipeline,
   per-criterion intervals, sign / block / roll back / run the gate).
 - **Rebuilt modules (batch 1, Agent build).** `/v3/create` is the launch page: the
   scenario templates (`GET /api/agent-templates`) and a blank start fill a quick
