@@ -42,7 +42,7 @@ import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "../tasks/CostCard";
 import { StrategySwitch } from "../tasks/StrategySwitch";
-import { onlineHref } from "./actions";
+import { onlineHref, onlineList } from "./actions";
 import { Select } from "../../select";
 
 /** canonical order, whatever the click order */
@@ -142,7 +142,7 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
   const mode: OnlineEvalMode = row ? modeOf(row) : draft.mode;
   const patch = row ? patchBody(row, draft) : null;
   const dirty = patch ? Object.keys(patch).length > 0 : true;
-  const back = () => navigate(row ? onlineHref({ view: "detail", id: row.config_id }) : "/v3/online");
+  const back = () => navigate(row ? onlineHref({ view: "detail", id: row.config_id }) : onlineList);
 
   // eval-cost §1.1: a new scores config is priced per day before it is created
   const sampling = Number(draft.sampling);
@@ -204,7 +204,7 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
   const head = (
     <div>
       <button type="button" className="v3-btn ghost sm" onClick={back}>
-        <ArrowLeft size={14} /> {row ? row.name ?? row.config_id : t("v3.online.title")}
+        <ArrowLeft size={14} /> {row ? row.name ?? row.config_id : t("v2.scorecard.tabs.online")}
       </button>
     </div>
   );

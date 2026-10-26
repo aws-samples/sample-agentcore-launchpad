@@ -3,8 +3,6 @@ import {
   Copy,
   DatabaseZap,
   Download,
-  Pause,
-  Play,
   RefreshCw,
   RotateCw,
   Square,
@@ -21,23 +19,20 @@ import { api, type V2Range } from "../../../lib/api";
 import { calibrationApi } from "../../../lib/api/calibration";
 import { hasInsightTrees } from "../../../lib/evaluation";
 import { evaluatorLabel } from "../../../lib/evaluators";
-import { downloadCsv, fmtTime, RANGES, rangeLabel } from "../../../v2/format";
+import { downloadCsv, fmtTime } from "../../../v2/format";
 import { InsightClusters } from "../../../v2/InsightClusters";
 import { AddToDatasetModal } from "../../../v2/pages/data/AddToDataset";
 import { RunRecommendations } from "../../../v2/pages/tasks/RunRecommendations";
 import {
   type ResultRow,
-  rowsFromOnline,
   rowsFromRun,
   summarize,
 } from "../../../v2/results";
 import {
   sourceLabel,
   statusLabel,
-  taskFromOnline,
   taskFromRun,
   taskItemLabel,
-  type TaskKind,
   type V2Task,
 } from "../../../v2/tasks";
 import { ago } from "../../format";
@@ -67,22 +62,18 @@ import {
 } from "../standards/calibrationLink";
 import { AtShell, HostedV2, ScoreChip } from "./common";
 import { CopyId } from "./CopyId";
-import { OnlineCostCard, RunCostCard } from "./CostCard";
+import { RunCostCard } from "./CostCard";
 import { copyUrl, outcomeSignal, scoreSignal, taskSignal } from "./model";
 import { permReason } from "../../reasons";
-import { Select } from "../../select";
 
 const POLL_MS = 8000;
 const RESULTS_PAGE = 20;
 
-function useTask(kind: TaskKind, id: string) {
+function useTask(id: string) {
   const [tick, setTick] = useState(0);
   const task = useLoad<V2Task>(
-    () =>
-      kind === "run"
-        ? api.getEvaluationRun(id).then(taskFromRun)
-        : api.v2OnlineConfig(id).then(taskFromOnline),
-    `v3-task:${kind}:${id}:${tick}`,
+    () => api.getEvaluationRun(id).then(taskFromRun),
+    `v3-task:run:${id}:${tick}`,
   );
   const active =
     task.data?.status === "running" ||
@@ -90,10 +81,10 @@ function useTask(kind: TaskKind, id: string) {
     task.data?.status === "pending";
   // a batch run moves through queued → evaluating → completed: keep it fresh (as V2)
   useEffect(() => {
-    if (kind !== "run" || !active) return;
+    if (!active) return;
     const timer = window.setInterval(() => setTick((n) => n + 1), POLL_MS);
     return () => window.clearInterval(timer);
-  }, [kind, active]);
+  }, [active]);
   return { ...task, reload: () => setTick((n) => n + 1) };
 }
 
@@ -513,18 +504,18 @@ function Results({
   );
 }
 
-export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
+/** One batch evaluation run; an online config's page is `online/Detail.tsx`. */
+export function TaskDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
   const { can } = useAuth();
-  const task = useTask(kind, id);
-  const [range, setRange] = useState<V2Range>("24h");
-  const [confirm, setConfirm] = useState<"stop" | "pause" | "resume" | null>(
-    null,
-  );
+  const task = useTask(id);
+  // the window a result's trace is looked up in
+  const range: V2Range = "24h";
+  const [confirm, setConfirm] = useState<"stop" | null>(null);
   const [busy, setBusy] = useState(false);
-  // a failed stop / pause / recheck stays on the page with its way out (storyline-ux §4)
+  // a failed stop / recheck stays on the page with its way out (storyline-ux §4)
   const [failure, setFailure] = useState<unknown>(null);
   const data = task.data;
   const terminal =
@@ -551,31 +542,22 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       // an insights run carries its clusters on the run row — no judged records to read
       if (!data || insightsRun)
         return { rows: [] as ResultRow[], note: null as string | null };
-      if (data.kind === "run") {
-        if (!terminal)
-          return {
-            rows: [] as ResultRow[],
-            note: t("v2.taskDetail.waitResults"),
-          };
-        const res = await api.evaluationRunResults(data.id);
+      if (!terminal)
         return {
-          rows: rowsFromRun(data, res),
-          note: res.available
-            ? res.truncated
-              ? t("v2.taskDetail.truncated")
-              : null
-            : t(`v2.taskDetail.reason.${res.reason ?? "unreadable"}`),
+          rows: [] as ResultRow[],
+          note: t("v2.taskDetail.waitResults"),
         };
-      }
-      const res = await api.v2OnlineResults(data.id, range);
+      const res = await api.evaluationRunResults(data.id);
       return {
-        rows: rowsFromOnline(data, res.recent),
-        note: res.errors.count
-          ? t("v2.taskDetail.onlineErrors", { count: res.errors.count })
-          : null,
+        rows: rowsFromRun(data, res),
+        note: res.available
+          ? res.truncated
+            ? t("v2.taskDetail.truncated")
+            : null
+          : t(`v2.taskDetail.reason.${res.reason ?? "unreadable"}`),
       };
     },
-    `v3-task-results:${kind}:${id}:${data ? `${data.status}` : "none"}:${range}`,
+    `v3-task-results:run:${id}:${data ? `${data.status}` : "none"}`,
   );
   const rows = useMemo(() => results.data?.rows ?? [], [results.data]);
   const summary = useMemo(() => summarize(rows), [rows]);
@@ -592,7 +574,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       calibrationAsk && data
         ? calibrationApi.runCriteria(data.id)
         : Promise.resolve(null),
-    `v3-task-calibration:${kind}:${id}:${calibrationAsk ? "ask" : "no"}`,
+    `v3-task-calibration:run:${id}:${calibrationAsk ? "ask" : "no"}`,
   );
 
   const act = async () => {
@@ -600,8 +582,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
     setBusy(true);
     setFailure(null);
     try {
-      if (confirm === "stop") await api.stopEvaluationRun(data.id);
-      else await api.v2OnlineAction(data.id, confirm);
+      await api.stopEvaluationRun(data.id);
       toast("ok", t(`v2.tasks.done.${confirm}`));
       setConfirm(null);
       task.reload();
@@ -620,7 +601,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const mayRun = can("eval.run");
   const s = taskSignal(data.status);
   const recheck = async () => {
-    if (data.kind !== "run") return;
     setBusy(true);
     setFailure(null);
     try {
@@ -659,7 +639,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           </button>
         </div>
         <PageHead
-          eyebrow={data.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")}
+          eyebrow={t("v2.tasks.strategyHistory")}
           title={
             <span
               style={{ display: "inline-flex", alignItems: "center", gap: 14 }}
@@ -706,16 +686,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                     <RotateCw size={13} /> {t("v2.tasks.recheck")}
                   </Btn>
                 )}
-              {data.kind === "online" && data.status === "running" && (
-                <Btn onClick={() => setConfirm("pause")}>
-                  <Pause size={13} /> {t("v2.tasks.pause")}
-                </Btn>
-              )}
-              {data.kind === "online" && data.status === "paused" && (
-                <Btn disabled={!mayRun} disabledReason={permReason(t, "eval.run")} onClick={() => setConfirm("resume")}>
-                  <Play size={13} /> {t("v2.tasks.resume")}
-                </Btn>
-              )}
               {data.kind === "run" && mayCalibrate && (
                 <Btn
                   busy={calibration.loading}
@@ -790,9 +760,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             })}
           </Notice>
         )}
-        {data.online?.failure_reason && (
-          <Notice s="act">{data.online.failure_reason}</Notice>
-        )}
 
         {data.kind === "run" && (
           <Panel
@@ -814,7 +781,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             running={data.status === "running" || data.status === "queued" || data.status === "pending"}
           />
         )}
-        {data.kind === "online" && <OnlineCostCard configId={data.id} />}
 
         {!insightsRun && (
           <div className="v3-grid c4">
@@ -964,25 +930,8 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                   ))}
                 </span>
               </dd>
-              {data.kind === "run" ? (
-                <>
-                  <dt>{t("v2.taskDetail.sessions")}</dt>
-                  <dd className="mono">{data.run?.session_ids.length ?? 0}</dd>
-                </>
-              ) : (
-                <>
-                  <dt>{t("v2.tasks.samplingRate")}</dt>
-                  <dd className="mono">{data.sourceDetail || "—"}</dd>
-                  <dt>{t("v2.tasks.sessionTimeout")}</dt>
-                  <dd>
-                    {data.online?.session_timeout_minutes
-                      ? t("v2.taskDetail.minutes", {
-                          count: data.online.session_timeout_minutes,
-                        })
-                      : "—"}
-                  </dd>
-                </>
-              )}
+              <dt>{t("v2.taskDetail.sessions")}</dt>
+              <dd className="mono">{data.run?.session_ids.length ?? 0}</dd>
               <dt>{t("v2.tasks.colCreated")}</dt>
               <dd>{fmtTime(data.createdAt)}</dd>
               <dt>{t("v2.tasks.colUpdated")}</dt>
@@ -995,23 +944,6 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           <Panel
             title={t("v2.taskDetail.results")}
             flush
-            end={
-              data.kind === "online" ? (
-                <Select
-                  className="v3-select"
-                  style={{ width: 130, height: 28 }}
-                  value={range}
-                  onChange={(e) => setRange(e.target.value as V2Range)}
-                  aria-label={t("v2.common.timeRange")}
-                >
-                  {RANGES.map((r) => (
-                    <option key={r} value={r}>
-                      {rangeLabel(t, r)}
-                    </option>
-                  ))}
-                </Select>
-              ) : undefined
-            }
           >
             {results.data?.note && (
               <div style={{ padding: "0 20px 12px" }}>

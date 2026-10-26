@@ -9,7 +9,23 @@ import { Confirm, Notice } from "../../ui";
 
 export type Pending = { row: OnlineEvalConfigRow; action: "pause" | "resume" | "delete" };
 
-export const onlineHref = (params: Record<string, string>) => `/v3/online?${new URLSearchParams(params).toString()}`;
+/** The 持续评估 tab of 评估任务 — where the former 在线评估 page lives now. */
+export const onlineList = "/v3/tasks?tab=online";
+
+/**
+ * An online config page under 评估任务, with the former `/v3/online` vocabulary:
+ * `view=new` → the continuous create form, `view=detail|edit` + `id` → that config's
+ * page (`kind=online`); anything else → the 持续评估 tab.
+ */
+export function onlineHref(params: Record<string, string>): string {
+  const { view, id } = params;
+  if (view === "new") return `/v3/tasks?${new URLSearchParams({ view: "new", strategy: "continuous", ...(params.agent ? { agent: params.agent } : {}) })}`;
+  if ((view === "detail" || view === "edit") && id) return `/v3/tasks?${new URLSearchParams({ view, kind: "online", id })}`;
+  return onlineList;
+}
+
+/** An old `/v3/online` search → its 评估任务 URL (bookmarks, links from before the merge). */
+export const v3OnlineToTasks = (search: string) => onlineHref(Object.fromEntries(new URLSearchParams(search)));
 
 /** Pause / resume / delete with V2's confirm copy and guards; shared by the list and a config. */
 export function useOnlineAction(onDone: (action: Pending["action"]) => void) {

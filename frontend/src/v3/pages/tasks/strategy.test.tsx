@@ -14,8 +14,11 @@ vi.mock("../online/Editor", () => ({
     <div data-form="online" data-id={String(id)} data-seed={String(seedFrom ?? "")} />
   ),
 }));
-vi.mock("./Detail", () => ({ TaskDetail: () => <div data-form="detail" /> }));
-vi.mock("./List", () => ({ TaskList: () => <div data-form="list" /> }));
+vi.mock("./Detail", () => ({ TaskDetail: () => <div data-form="run-detail" /> }));
+vi.mock("./List", () => ({ RunList: () => <div data-form="runs" /> }));
+vi.mock("../online/List", () => ({ OnlineList: () => <div data-form="online-list" /> }));
+vi.mock("../online/Detail", () => ({ OnlineDetail: () => <div data-form="online-detail" /> }));
+vi.mock("../../../auth/auth-context", () => ({ useAuth: () => ({ can: () => true }) }));
 
 const at = (search: string) =>
   renderToStaticMarkup(
@@ -44,6 +47,20 @@ describe("create: the run strategy picks the form", () => {
   });
 });
 
+describe("the list tabs and sub-pages (V2's URL contract)", () => {
+  it("一次性评估 is the bare page and tab=runs / the pre-merge tab=all; 持续评估 is tab=online", () => {
+    for (const search of ["", "?tab=runs", "?tab=all"]) expect(at(search), search).toContain('data-form="runs"');
+    expect(at("?tab=online")).toContain('data-form="online-list"');
+  });
+
+  it("a detail opens by kind; edit is an online config's", () => {
+    expect(at("?view=detail&kind=run&id=r1")).toContain('data-form="run-detail"');
+    expect(at("?view=detail&id=r1")).toContain('data-form="run-detail"');
+    expect(at("?view=detail&kind=online&id=c1")).toContain('data-form="online-detail"');
+    expect(at("?view=edit&kind=online&id=c1")).toContain('data-form="online" data-id="c1"');
+  });
+});
+
 describe("the strategy switch", () => {
   const render = (value: "history" | "continuous") =>
     renderToStaticMarkup(
@@ -62,7 +79,7 @@ describe("the strategy switch", () => {
 });
 
 describe("strategyUrl", () => {
-  it("lands on /v3/tasks with only the agent (also from /v3/online?view=new)", () => {
+  it("lands on /v3/tasks with only the agent", () => {
     expect(strategyUrl("continuous", "ag-1")).toBe("/v3/tasks?view=new&strategy=continuous&agent=ag-1");
     expect(strategyUrl("history", "ag-1")).toBe("/v3/tasks?view=new&agent=ag-1");
     expect(strategyUrl("history", null)).toBe("/v3/tasks?view=new");

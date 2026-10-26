@@ -120,6 +120,16 @@ describe("v3TwinOf", () => {
     expect(v3TwinOf("/v2/governance", "?view=policy&id=p")).toBeNull();
   });
 
+  it("lands 评估任务's tabs and the former 在线评估 page on /v3/tasks", () => {
+    expect(v3TwinOf("/v2/eval/tasks", "?tab=online")).toBe("/v3/tasks?tab=online");
+    expect(v3TwinOf("/v2/eval/tasks", "?view=new&strategy=continuous")).toBe("/v3/tasks?view=new&strategy=continuous");
+    expect(v3TwinOf("/v2/eval/tasks", "?view=edit&kind=online&id=c1")).toBe("/v3/tasks?view=edit&kind=online&id=c1");
+    expect(v3TwinOf("/v2/eval/online", "")).toBe("/v3/tasks?tab=online");
+    expect(v3TwinOf("/v2/eval/online", "?view=new")).toBe("/v3/tasks?view=new&strategy=continuous");
+    expect(v3TwinOf("/v2/eval/online", "?view=detail&id=c1")).toBe("/v3/tasks?view=detail&kind=online&id=c1");
+    expect(v3TwinOf("/v2/eval/online", "?view=edit&id=c1")).toBe("/v3/tasks?view=edit&kind=online&id=c1");
+  });
+
   it("lists a rebuilt module at its V3 page, lit on its hosted sub-pages", () => {
     const registry = hostedGroups(true).flatMap((g) => g.items).find((i) => i.to === "/v3/registry");
     expect(registry).toBeDefined();

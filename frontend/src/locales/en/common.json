@@ -7511,7 +7511,6 @@
         "sub": "Runs that failed in the last 7 days, until a later run of the same agent and dataset succeeds",
         "empty": "No evaluation task has failed."
       },
-      "colSourceStrategy": "Source / strategy",
       "strategyContinuous": "Continuously evaluate new data",
       "strategyHistory": "Evaluate historical data"
     },
@@ -7558,8 +7557,7 @@
       "insightsTitle": "Insight results",
       "insightsWait": "Insight clusters appear once the task completes.",
       "insightsEmpty": "This task produced no insight clusters.",
-      "scenarioFailures": "{{count}} simulated scenario(s) still failed after retries and were skipped (not scored); the others were evaluated: {{list}}",
-      "onlineErrors": "{{count}} judge call(s) failed in this range."
+      "scenarioFailures": "{{count}} simulated scenario(s) still failed after retries and were skipped (not scored); the others were evaluated: {{list}}"
     },
     "compare": {
       "title": "Compare evaluation runs",
@@ -14271,10 +14269,6 @@
     },
     "online": {
       "eyebrow": "Evaluation · live traffic",
-      "title": "Online evaluation",
-      "headNeeds_one": "{{count}} online evaluation needs you",
-      "headNeeds_other": "{{count}} online evaluations need you",
-      "sub": "Configs that judge a sample of live sessions continuously: scores from evaluators, or insight reports that cluster what people asked and where the agent failed.",
       "new": "New online evaluation",
       "configs": "Configs",
       "configsFoot": "agent-owned, experiment arms and external",
@@ -14335,7 +14329,6 @@
     "tasks": {
       "eyebrow": "Evaluation",
       "title": "Evaluation tasks",
-      "sub": "Every batch evaluation run and continuous online evaluation of this workspace. What failed comes first, then what is still moving.",
       "newSub": "Choose what to evaluate and over which sessions, then the evaluators (or insight types) that judge them.",
       "refresh": "Refresh",
       "delete": "Delete",
@@ -14347,8 +14340,6 @@
       "statRunningFoot_other": "{{count}} more queued or paused",
       "statDone": "Completed",
       "statDoneFoot": "results ready to read",
-      "statContinuous": "Continuous",
-      "statContinuousFoot": "online evaluations on live traffic",
       "attention": "Failed — needs a look",
       "all": "All",
       "waiting": "Queued or paused",

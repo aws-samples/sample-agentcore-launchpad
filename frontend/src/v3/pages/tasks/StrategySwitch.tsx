@@ -11,8 +11,8 @@ import { strategyUrl } from "./model";
  * run) or keep evaluating new sessions (`OnlineEditor`, an online evaluation config).
  * Picking the other opens its form in place (replace) with the same agent preselected
  * and the history state kept, so Back still returns to where the form was opened from.
- * It always lands on `/v3/tasks`: the editor is also mounted at `/v3/online?view=new`,
- * where a bare search-param write could not reach the run wizard.
+ * It always navigates to a full `/v3/tasks` URL rather than writing search params, so
+ * the switch works wherever a create form is mounted.
  */
 export function StrategySwitch({ value, agentId }: { value: NewStrategy; agentId?: string | null }) {
   const { t } = useTranslation();
