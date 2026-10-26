@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { type CostEstimate, compoundRate, gateTone, goldenVersionsLabel, kappaTone, tierTone, unpricedJudges } from "./dlc";
+import { type CostEstimate, canRunGate, compoundRate, gateTone, goldenVersionsLabel, kappaTone, tierTone, unpricedJudges } from "./dlc";
+
+describe("canRunGate", () => {
+  it("offers the gate for a never-evaluated candidate and again after an INVALID verdict", () => {
+    expect(canRunGate(null)).toBe(false);
+    expect(canRunGate({ decision: "pending", run_ids: [] })).toBe(true);
+    // a gate run interrupted by a backend restart leaves the evidence incomplete
+    expect(canRunGate({ decision: "invalid", run_ids: ["r1", "r2"] })).toBe(true);
+  });
+
+  it("does not re-run an evaluating, blocked or released candidate from the run panel", () => {
+    expect(canRunGate({ decision: "evaluating", run_ids: ["r1"] })).toBe(false);
+    expect(canRunGate({ decision: "blocked", run_ids: ["r1", "r2"] })).toBe(false);
+    expect(canRunGate({ decision: "released", run_ids: ["r1", "r2"] })).toBe(false);
+  });
+});
 
 describe("compoundRate", () => {
   it("multiplies the gates, which is the number nobody types on purpose", () => {

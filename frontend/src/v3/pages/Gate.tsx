@@ -8,7 +8,7 @@ import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, dlcApi } from "../../lib/api";
 import { type ReleaseStorageEvidence, changeDelta, hasStorage, mountLabel, releaseStorage, storageDlcApi } from "../../lib/api/storageDlc";
 import { type EvalCostEstimate, evalCostApi } from "../../lib/api/evalCost";
-import { type GateReport, type GateRow, type ReleaseState, type Scorecard, metricValueLabel } from "../../lib/dlc";
+import { type GateReport, type GateRow, type ReleaseState, type Scorecard, canRunGate, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { firstReason, permReason } from "../reasons";
 import { gateSignal, releaseSignal } from "../signals";
@@ -202,12 +202,14 @@ export function V3Gate() {
     () => (agentId ? dlcApi.scorecard(agentId) : Promise.resolve(null)), `v3-gate-card:${agentId}:${nonce}`);
   const pending = release.data?.pending ?? null;
   const evaluated = Boolean(pending && pending.run_ids.length > 0);
+  // never evaluated, or INVALID (a run did not complete): the run panel is offered
+  const runnable = canRunGate(pending);
   const gate = useLoad(
     () => (evaluated ? dlcApi.gate(agentId) : Promise.resolve(null)), `v3-gate-report:${agentId}:${evaluated}:${nonce}`);
   const report = gate.data?.report ?? null;
   const evaluating = gate.data?.status === "evaluating";
   const storage = releaseStorage(report) ?? releaseStorage(pending);
-  const writes = pending && !evaluated ? (releaseStorage(pending)?.shared_state_writes ?? []) : [];
+  const writes = pending && runnable ? (releaseStorage(pending)?.shared_state_writes ?? []) : [];
 
   // a failed gate action stays on the page with its way out (storyline-ux §4); a
   // signed release says what comes next instead of a toast (§3.1)
@@ -338,15 +340,15 @@ export function V3Gate() {
 
           {hasStorage(storage) && <StoragePanel ev={storage} />}
 
-          {pending && !evaluated && (
+          {pending && runnable && (
             <EstimateCostCard estimate={estimate.data} loading={estimate.loading} error={estimate.error}
               confirmed={confirmCost} onConfirm={setConfirmCost} />
           )}
 
-          {pending && !evaluated && (
+          {pending && runnable && (
             <Panel title={t("v3.gate.run")} signal="wait">
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                <span style={{ color: "var(--v3-text-2)" }}>{t("v3.gate.runHint")}</span>
+                <span style={{ color: "var(--v3-text-2)" }}>{t(pending.decision === "invalid" ? "v3.gate.rerunHint" : "v3.gate.runHint")}</span>
                 <span style={{ flex: 1 }} />
                 <Btn kind="primary" busy={busy || estimate.loading}
                   disabled={!can("eval.run") || Boolean(estimate.data?.over_limit)

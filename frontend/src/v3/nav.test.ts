@@ -21,6 +21,13 @@ describe("hostedGroups", () => {
     expect(items.find((i) => i.labelKey === "v3.nav.create")?.to).toBe("/v3/create");
   });
 
+  it("lists V3's online-evaluation page right after the evaluation tasks, for members", () => {
+    const items = hostedGroups(false).flatMap((g) => g.items.map((i) => i.to));
+    const at = items.indexOf("/v3/online");
+    expect(at).toBeGreaterThan(-1);
+    expect(items[at - 1]).toBe("/v3/tasks");
+  });
+
   it("lists the Agent IDE and the context layer for members in the build group", () => {
     const build = hostedGroups(false).find((g) => g.items.some((i) => i.to === "/v2/coding"));
     expect(build?.items.map((i) => i.to)).toEqual(expect.arrayContaining(["/v2/coding", "/v2/context-layer"]));

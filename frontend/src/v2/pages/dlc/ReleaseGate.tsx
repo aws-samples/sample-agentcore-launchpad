@@ -22,7 +22,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { storedWorkspaceId } from "../../../lib/workspace-header";
-import { type GateRow, type ReleaseState, type Waiver, gateTone, goldenVersionsLabel } from "../../../lib/dlc";
+import { type GateRow, type ReleaseState, type Waiver, canRunGate, gateTone, goldenVersionsLabel } from "../../../lib/dlc";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -618,6 +618,26 @@ export function ReleaseGate({ agentId }: { agentId: string }) {
                   {t("v2.dlc.release.invalidHint")}
                   {report.provenance.issues.length > 0 ? ` ${report.provenance.issues.join("; ")}` : ""}
                 </Alert>
+              )}
+              {report.verdict === "INVALID" && canRunGate(pending) && (
+                <div className="v2-dlc-actions">
+                  <Button
+                    kind="primary"
+                    disabled={busy || estimate.data?.over_limit}
+                    onClick={() =>
+                      run(
+                        () =>
+                          dlcApi.evaluateRelease(agentId, {
+                            repeats,
+                            confirm_cost: Boolean(estimate.data?.confirm_required),
+                          }),
+                        "v2.dlc.release.evaluating",
+                      )
+                    }
+                  >
+                    {t("v2.dlc.release.rerun")}
+                  </Button>
+                </div>
               )}
               {report.verdict === "BLOCKED" && report.redline_violations.length > 0 && (
                 <Alert tone="error">{t("v2.dlc.release.redlineHint", { keys: report.redline_violations.join(", ") })}</Alert>

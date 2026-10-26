@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, EyeOff, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, EyeOff, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Radar, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -69,6 +69,9 @@ export const V3_ONLY: Record<string, V2NavItem[]> = {
  * Project settings for an administrator or a `project.members` holder.
  */
 export const V3_AFTER: Record<string, V2NavItem[]> = {
+  // V2 folded 在线评估 into 评估任务's 持续评估 tab and dropped its sidebar entry;
+  // V3 keeps its own online-evaluation page, so the rail lists it here
+  "/v2/eval/tasks": [{ to: "/v3/online", labelKey: "v3.online.title", icon: Radar, hintKey: "glossary.onlineEvaluation" }],
   "/v2/users": [
     { to: "/v3/admins", labelKey: "v3.admins.nav", icon: UserCog, admin: true },
     { to: "/v3/projects", labelKey: "v3.projects.title", icon: FolderKanban, admin: true },

@@ -97,6 +97,35 @@ def test_every_mapped_code_is_covered_by_the_parametrized_case():
     assert set(AWS_ERROR_MAP) == covered
 
 
+@pytest.mark.parametrize(
+    ("message", "operation"),
+    [
+        ("Evaluator with same name already exist", "CreateEvaluator"),
+        ("KnowledgeBase with name lab-unicorn-policies already exists.", "CreateKnowledgeBase"),
+    ],
+)
+def test_a_conflict_on_a_taken_name_is_not_read_as_busy(message, operation):
+    """Names unique per account + Region answer ConflictException; 'busy, retry once it
+    settles' would send the operator into retries that can never succeed."""
+    res = make_client().get(
+        "/aws/ConflictException", params={"message": message, "operation": operation}
+    )
+    assert res.status_code == 409
+    body = res.json()
+    assert body["code"] == "aws.name_taken"
+    assert body["message"] == message
+    assert body["detail"] == {"aws_error_code": "ConflictException", "operation": operation}
+
+
+def test_a_taken_name_on_v1_keeps_the_generic_public_sentence():
+    res = make_client().get(
+        "/v1/aws/ConflictException", params={"message": "Gateway with name x already exists"}
+    )
+    assert res.status_code == 409
+    assert res.json()["code"] == "aws.name_taken"
+    assert "Gateway" not in res.json()["message"]
+
+
 def test_message_never_carries_the_boto_prefix():
     # No `Message` in the response → botocore's str(exc) is the only text, and
     # it is framed as "An error occurred (…) when calling the … operation: …".

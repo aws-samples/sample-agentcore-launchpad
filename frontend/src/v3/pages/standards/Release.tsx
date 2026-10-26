@@ -14,7 +14,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../../auth/auth-context";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { dlcApi } from "../../../lib/api";
-import { type GateRow, type ReleaseState, type Waiver, estimateValue, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
+import { type GateRow, type ReleaseState, type Waiver, canRunGate, estimateValue, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
@@ -381,6 +381,14 @@ export function Release({ agentId }: { agentId: string }) {
           <div style={{ display: "grid", gap: 10 }}>
             {report.verdict === "INVALID" && (
               <Notice s="wait">{t("v2.dlc.release.invalidHint")}{report.provenance.issues.length > 0 ? ` ${report.provenance.issues.join("; ")}` : ""}</Notice>
+            )}
+            {report.verdict === "INVALID" && canRunGate(pending) && (
+              <div>
+                <Btn kind="primary" busy={busy} disabled={est?.over_limit} disabledReason={t("story.reason.overCostLimit")}
+                  onClick={() => run(() => dlcApi.evaluateRelease(agentId, { repeats, confirm_cost: Boolean(est?.confirm_required) }), "v2.dlc.release.evaluating")}>
+                  {t("v2.dlc.release.rerun")}
+                </Btn>
+              </div>
             )}
             {report.verdict === "BLOCKED" && report.redline_violations.length > 0 && (
               <Notice s="act">{t("v2.dlc.release.redlineHint", { keys: report.redline_violations.join(", ") })}</Notice>

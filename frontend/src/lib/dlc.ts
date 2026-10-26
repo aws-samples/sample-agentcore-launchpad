@@ -937,6 +937,15 @@ export function kappaTone(kappa: number | null): "green" | "blue" | "orange" | "
   return "red";
 }
 
+/** Whether the pending candidate can be sent to the gate (again): never evaluated, or
+ *  INVALID — a run did not complete (a backend restart, an AgentCore failure), so the
+ *  evidence is incomplete and the backend accepts a fresh submit. A BLOCKED or PASS
+ *  verdict is not re-run from here: it is fixed by a new candidate or a waiver. */
+export function canRunGate(pending: Pick<ReleaseRecord, "decision" | "run_ids"> | null | undefined): boolean {
+  if (!pending) return false;
+  return (pending.run_ids ?? []).length === 0 || pending.decision === "invalid";
+}
+
 export function gateTone(
   verdict: GateRowVerdict | GateVerdict | null,
 ): "green" | "red" | "orange" | "gray" | "blue" {

@@ -190,6 +190,35 @@ def test_gate_evaluate_sign_and_rollback(db, ep):
     assert rolled["live_version"] == "2" and ep.endpoints["live"] == "2"
 
 
+def test_an_interrupted_gate_run_is_invalid_and_can_be_submitted_again(db, ep):
+    """A backend restart fails a gate run before it is scored: the report says INVALID
+    (evidence incomplete, not BLOCKED), and the same candidate can be sent to the gate
+    again; the fresh runs replace the old ones and decide it."""
+    _gated(db)
+    ep.endpoints["live"] = "2"
+    agent = _agent(db, version="3")
+    cset = _criteria(db, agent)
+    _golden(db, cset, agent)
+    releases.after_deploy(db, agent, note=None, actor="dev1")
+    record = db.query(ReleaseRecord).one()
+    submit, _ = _submitted(db)
+    first = releases.start_evaluation(db, record, agent, SimpleNamespace(), actor="dev1",
+                                      submit=submit)
+    _complete(db, record)
+    lost = db.get(EvalRun, first[1])
+    lost.status, lost.criteria_summary = "failed", None
+    db.commit()
+    out = releases.evaluate(db, record)
+    assert out["report"]["verdict"] == "INVALID", out["report"]
+    assert record.decision == "invalid"
+    again = releases.start_evaluation(db, record, agent, SimpleNamespace(), actor="dev1",
+                                      submit=submit)
+    assert set(again).isdisjoint(first) and record.run_ids == again
+    assert record.decision == "evaluating"
+    _complete(db, record)
+    assert releases.evaluate(db, record)["report"]["verdict"] == "PASS"
+
+
 def test_a_red_line_violation_blocks_the_release(db, ep):
     _gated(db)
     agent = _agent(db)
