@@ -7512,14 +7512,8 @@
         "empty": "No evaluation task has failed."
       },
       "colSourceStrategy": "Source / strategy",
-      "createdOnline": "Continuous evaluation task created",
-      "insightsNoContinuous": "Continuous insights are created on the Online evaluation page.",
-      "previewContinuous": "New sessions of this agent will be sampled at {{rate}}% and scored continuously.",
-      "sampling": "Sampling configuration",
-      "sessionTimeoutHint": "A session is scored after it is idle this long",
       "strategyContinuous": "Continuously evaluate new data",
-      "strategyHistory": "Evaluate historical data",
-      "submitOnline": "Create and start"
+      "strategyHistory": "Evaluate historical data"
     },
     "taskStatus": {
       "queued": "Queued",
@@ -17529,8 +17523,6 @@
       "nothingToRollBack": "No finished update produced the running version, so there is nothing to roll back to.",
       "stopFirst": "Stop the run first: a running task cannot be deleted.",
       "sessionsNeedAgent": "Picking sessions needs an agent target: switch the target to an agent first.",
-      "continuousNeedsAgent": "Continuous runs need an agent target, not CloudWatch logs.",
-      "continuousNeedsWindow": "Continuous runs need the time-window data source.",
       "maxEvaluators": "At most {{count}} evaluators per task.",
       "firstStep": "This is the first step.",
       "publishingNow": "It is still publishing: wait for that to finish.",

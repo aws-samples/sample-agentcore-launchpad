@@ -7512,14 +7512,8 @@
         "empty": "没有失败的评估任务。"
       },
       "colSourceStrategy": "数据来源 / 运行策略",
-      "createdOnline": "持续评估任务已创建",
-      "insightsNoContinuous": "持续洞察请在「在线评估」页面创建。",
-      "previewContinuous": "将按 {{rate}}% 的比例对该 Agent 的新会话持续抽样评估。",
-      "sampling": "采样配置",
-      "sessionTimeoutHint": "会话空闲达到该时长后开始评估",
       "strategyContinuous": "基于新数据持续评估",
-      "strategyHistory": "基于历史数据评估",
-      "submitOnline": "创建并启动"
+      "strategyHistory": "基于历史数据评估"
     },
     "taskStatus": {
       "queued": "排队中",
@@ -17529,8 +17523,6 @@
       "nothingToRollBack": "当前运行版本不是由已完成的更新产生的，没有可回滚的版本。",
       "stopFirst": "请先停止运行：运行中的任务不能删除。",
       "sessionsNeedAgent": "挑选会话需要以智能体为目标，请先把目标切换为智能体。",
-      "continuousNeedsAgent": "持续运行需要以智能体为目标，不能用 CloudWatch 日志。",
-      "continuousNeedsWindow": "持续运行需要使用时间窗口数据源。",
       "maxEvaluators": "每个任务最多 {{count}} 个评估器。",
       "firstStep": "这已经是第一步。",
       "publishingNow": "它仍在发布中，请等发布完成。",
