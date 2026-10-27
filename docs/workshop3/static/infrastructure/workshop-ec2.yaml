@@ -244,10 +244,14 @@ Resources:
           Value: agentcore-launchpad-workshop
         - Key: Workshop
           Value: agentcore-launchpad
-      # NOTE: EC2 caps encoded UserData at 25600 bytes and this script runs close
-      # to that ceiling. Explanation belongs in these YAML comments, which cost
-      # nothing, rather than inside the script, which is measured. Check the
-      # headroom before adding to it.
+      # NOTE: EC2 caps UserData at 16384 bytes of RAW script, counted before the
+      # base64 encoding and after !Sub substitution; RunInstances rejects anything
+      # longer with "User data is limited to 16384 bytes" (this note used to say
+      # 25600 encoded bytes, which is not the limit that applies).
+      # infra/tests/test_workshop_template.py renders the script with worst-case
+      # substitutions and fails before the stack would. Explanation belongs in
+      # these YAML comments, which cost nothing, rather than inside the script,
+      # which is measured -- `#` lines in it count like code.
       #
       # Publishing the console, in order:
       #  1. Derive two secrets from the stack id. They are derived rather than
@@ -273,6 +277,41 @@ Resources:
       # the content works. A missing nova or a missing Claude is a loud warning
       # instead: the participant still gets a usable environment and the
       # facilitator can substitute, whereas failing would leave them nothing.
+      #
+      # Notes on the script, in script order (kept here, out of the measured
+      # bytes):
+      # * /etc/profile.d/agentcore-workshop.sh exports LAUNCHPAD_REGION because
+      #   the app's Settings uses env_prefix="LAUNCHPAD_" and hardcodes
+      #   region="us-west-2", so AWS_REGION does NOT reach it. Without it the
+      #   backend reads us-west-2 while every AWS SDK call around it uses the
+      #   event's real region.
+      # * Mantle has no boto3 client and no AWS CLI command: auth is a bearer
+      #   token minted client-side by aws-bedrock-token-generator (SigV4
+      #   presign, no network call), so probe-mantle.py needs that package and a
+      #   plain HTTPS POST. It runs as ubuntu so uv's cache lands in its HOME.
+      # * probe-mantle.py retries ride out transient 5xx and cold-start latency.
+      #   They do NOT help with a Marketplace denial: the openai.gpt-oss-*
+      #   candidates do not go through Marketplace at all, and the openai.gpt-5.*
+      #   family is denied outright rather than pending -- retrying that never
+      #   converges, which is why those ids are no longer candidates. The
+      #   catalogue pre-check short-circuits ids this region does not offer.
+      #   DEADLINE_S bounds it because the stack's ResourceSignal timeout (PT45M)
+      #   also has to cover bootstrap and Transaction Search.
+      # * base_url() mirrors strands/models/_openai_bedrock.py: only the
+      #   openai.gpt-5.* family is served from /openai/v1, everything else from
+      #   /v1.
+      # * [bedrock] runs first so it leads the report -- it is the main line.
+      #   nova-2-lite is what ch02/ch03 use. The Claude ids follow because the
+      #   ch03 container path is hard-pinned to Anthropic, and availability
+      #   differs per account: sonnet-5 is denied in some, and sonnet-4-6 is not
+      #   in the console dropdown (needs `Custom model ID…`).
+      # * [mantle] is probed after [bedrock] and appended below it. The lab does
+      #   not use this surface; it is reported so participants can see it exists
+      #   and switch to it deliberately.
+      # * /etc/launchpad-auth.env is 0600 because it carries the password; the
+      #   unit file itself is 0644.
+      # * The last health check fails closed: no console, or a console with the
+      #   login gate off, must not ship.
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -359,10 +398,6 @@ Resources:
           cat >/etc/profile.d/agentcore-workshop.sh <<'PROFILE'
           export AWS_REGION=${AWS::Region}
           export AWS_DEFAULT_REGION=${AWS::Region}
-          # The app's Settings uses env_prefix="LAUNCHPAD_" and hardcodes
-          # region="us-west-2", so AWS_REGION does NOT reach it. Without this the
-          # backend reads us-west-2 while every AWS SDK call around it uses the
-          # event's real region.
           export LAUNCHPAD_REGION=${AWS::Region}
           export AGENTCORE_LAUNCHPAD_HOME=/home/ubuntu/agentcore_launchpad
           PROFILE
@@ -433,10 +468,6 @@ Resources:
           #           us-east-1) regardless of the runtime's region.
           HEADER
 
-          # Mantle has no boto3 client and no AWS CLI command: auth is a bearer
-          # token minted client-side by aws-bedrock-token-generator (SigV4
-          # presign, no network call), so this probe needs that package and a
-          # plain HTTPS POST. Run as ubuntu so uv's cache lands in its HOME.
           cat >/tmp/probe-mantle.py <<'PROBE'
           import json
           import sys
@@ -450,21 +481,11 @@ Resources:
           candidates = sys.argv[2:]
           ATTEMPTS = 9
           SLEEP_S = 20
-          # Retries ride out transient 5xx and cold-start latency. They do NOT
-          # help with a Marketplace denial: the openai.gpt-oss-* candidates do
-          # not go through Marketplace at all, and the openai.gpt-5.* family is
-          # denied outright rather than pending -- retrying that never converges,
-          # which is why those ids are no longer candidates. The catalogue
-          # pre-check short-circuits ids this region does not offer. Bounded here
-          # because the stack's ResourceSignal timeout (PT45M) also has to cover
-          # bootstrap and Transaction Search.
           DEADLINE_S = 150
           started = time.monotonic()
 
 
           def base_url(model_id):
-              # Mirrors strands/models/_openai_bedrock.py: only the openai.gpt-5.*
-              # family is served from /openai/v1, everything else from /v1.
               path = '/openai/v1' if model_id.startswith('openai.gpt-5.') else '/v1'
               return 'https://bedrock-mantle.' + region + '.api.aws' + path
 
@@ -554,11 +575,6 @@ Resources:
           PROBE
           chmod 0644 /tmp/probe-mantle.py
 
-          # [bedrock] runs first so it leads the report -- it is the main line.
-          # nova-2-lite is what ch02/ch03 use. The Claude ids follow because the
-          # ch03 container path is hard-pinned to Anthropic, and availability
-          # differs per account: sonnet-5 is denied in some, and sonnet-4-6 is
-          # not in the console dropdown (needs `Custom model ID…`).
           for MODEL_ID in global.amazon.nova-2-lite-v1:0 global.anthropic.claude-sonnet-5 global.anthropic.claude-sonnet-4-6; do
             MODEL_OK=no
             for ATTEMPT in $(seq 1 9); do
@@ -586,9 +602,6 @@ Resources:
             fi
           done
 
-          # [mantle] is probed after [bedrock] and appended below it. The lab does
-          # not use this surface; it is reported so participants can see it exists
-          # and switch to it deliberately.
           MANTLE_OUT=/tmp/mantle-probe.out
           if runuser -u ubuntu -- env \
                HOME=/home/ubuntu \
@@ -607,7 +620,6 @@ Resources:
           cat "$MANTLE_OUT" >>"$MODEL_REPORT" || true
 
           chown ubuntu:ubuntu "$MODEL_REPORT"
-          # Fail only when the whole [bedrock] surface is dead. See YAML note.
           if ! grep -q '^available    \[bedrock\]' "$MODEL_REPORT"; then
             echo "No Bedrock Converse model is invocable in this account; the lab cannot run." >&2
             signal_failure
@@ -620,7 +632,6 @@ Resources:
             echo "WARNING: no Anthropic model. ch03 container path deploys but cannot chat." >&2
           fi
 
-          # Publish the console. See the YAML comment above UserData.
           STACK_UUID="$(printf '%s' "${AWS::StackId}" | awk -F/ '{print $3}')"
           ADMIN_PASSWORD="$(printf '%s' "$STACK_UUID" | awk -F- '{print $1 $5}')"
           ORIGIN_KEY="$(printf '%s' "$STACK_UUID" | awk -F- '{print $5 $1 $4}')"
@@ -632,7 +643,6 @@ Resources:
           echo "Building the frontend bundle (vite preview serves dist/)..."
           $RUNAS bash -c "cd $APP/frontend && npm run build"
 
-          # 0600 because it carries the password; the unit file itself is 0644.
           install -m 0600 /dev/null /etc/launchpad-auth.env
           cat >/etc/launchpad-auth.env <<ENV
           LAUNCHPAD_AUTH_USERNAME=admin
@@ -702,7 +712,6 @@ Resources:
                   http://127.0.0.1/ 2>/dev/null; then UP=yes; break; fi
             sleep 5
           done
-          # Fail closed: no console, or a console with the login gate off, must not ship.
           if [ "$UP" != yes ] || ! curl -fs http://127.0.0.1:8000/api/auth/status \
              | grep -q '"auth_required":true'; then
             echo "Console down or auth gate off; refusing to publish." >&2
