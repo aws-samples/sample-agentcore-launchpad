@@ -8367,6 +8367,8 @@ export interface CodingDeployRequest {
   artifact_kind?: "code_zip" | "container_source";
   entrypoint?: string;
   python_version?: ByocPythonVersion;
+  /** the business project a NEW agent is filed under (ignored on a re-publish) */
+  project_id?: string;
 }
 
 /** `POST …/download` — a short-lived presigned S3 GET that answers with
@@ -8446,5 +8448,9 @@ export const codingApi = {
       body: JSON.stringify(path === undefined ? {} : { path }),
     }),
   deploy: (id: string, body: CodingDeployRequest) =>
-    request<CodingDeployResult>(codingPath(id, "/deploy"), { method: "POST", body: JSON.stringify(body) }),
+    request<CodingDeployResult>(codingPath(id, "/deploy"), {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: pinnedProject(body.project_id),
+    }),
 };

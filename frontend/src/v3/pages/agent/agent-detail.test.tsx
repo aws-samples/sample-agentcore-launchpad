@@ -147,6 +147,9 @@ describe("ActionDialog", () => {
     expect(html).not.toContain("v3-agent-delete-name");
     expect(html).toContain('data-testid="v3-agent-action-error"');
     expect(html).toContain("nope");
+    // the twin is a NEW agent: the dialog asks for its project, confirm waits for it (#356)
+    expect(html).toContain('data-testid="v3-convert-project-field"');
+    expect(html).toMatch(/<button[^>]*class="v3-btn primary"[^>]*disabled/);
   });
 
   it("renders nothing without a pending action", () => {

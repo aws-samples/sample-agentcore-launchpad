@@ -186,6 +186,20 @@ describe("installWorkspaceHeader", () => {
     expect(sentHeaders().get(WORKSPACE_HEADER)).toBe("dev");
   });
 
+  it("a coding deploy naming its project sends it in body and header (#356)", async () => {
+    env.store.set(WORKSPACE_STORAGE_KEY, "dev");
+    env.store.set(`${PROJECT_STORAGE_PREFIX}dev`, "default");
+    fetchImpl = async () => json(202, { agent_id: "a", job_id: "j", created: true });
+    vi.stubGlobal("fetch", window.fetch);
+    // a fresh module graph re-initialises i18n, which sets <html lang>
+    vi.stubGlobal("document", { documentElement: {} });
+    const { codingApi } = await import("./api");
+    await codingApi.deploy("repo1", { agent_name: "helper", project_id: "risk-bot" });
+    const init = env.network.mock.calls.at(-1)?.[1];
+    expect(JSON.parse(String(init?.body))).toMatchObject({ project_id: "risk-bot" });
+    expect(sentHeaders().get(PROJECT_HEADER)).toBe("risk-bot");
+  });
+
   it("stays quiet on an unrelated error", async () => {
     env.store.set(WORKSPACE_STORAGE_KEY, "dev");
     env.store.set(`${PROJECT_STORAGE_PREFIX}dev`, "risk-bot");

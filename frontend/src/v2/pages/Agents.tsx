@@ -26,12 +26,14 @@ import {
   useDeployProgress,
 } from "../../lib/agent-admin";
 import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
+import { useAgentProjectPick } from "../../lib/useAgentProjectPick";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { AgentSource } from "./agents/AgentSource";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { RuntimeLogsCard } from "./agents/RuntimeLogsCard";
 import { AgentWizard } from "./agents/AgentWizard";
+import { ProjectField } from "./agents/ProjectCard";
 import { IntegrationCard } from "./agents/IntegrationCard";
 import { ReleaseCard } from "./agents/ReleaseCard";
 import { SnapshotsCard } from "./agents/SnapshotsCard";
@@ -165,6 +167,9 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
   });
 
   const external = pending?.agent.method === "discovered_runtime";
+  // the twin a conversion creates is a NEW agent: it names its business project (#356)
+  const converting = pending?.kind === "convert";
+  const project = useAgentProjectPick("agents.convert", converting);
   const dialog = (
     <Confirm
       open={pending !== null}
@@ -175,14 +180,23 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
             ? t("v2.agents.removeTitle")
             : t("v2.agents.deleteTitle")
       }
-      body={t(
-        pending?.kind === "convert"
-          ? "v2.agents.convertBody"
-          : external
-            ? "v2.agents.removeBody"
-            : "v2.agents.deleteBody",
-        { name: pending?.agent.display_name || pending?.agent.name || "" },
-      )}
+      body={
+        <>
+          {t(
+            pending?.kind === "convert"
+              ? "v2.agents.convertBody"
+              : external
+                ? "v2.agents.removeBody"
+                : "v2.agents.deleteBody",
+            { name: pending?.agent.display_name || pending?.agent.name || "" },
+          )}
+          {converting && (
+            <div style={{ marginTop: 16 }}>
+              <ProjectField pick={project} />
+            </div>
+          )}
+        </>
+      }
       confirmLabel={
         pending?.kind === "convert"
           ? t("v2.agents.convert")
@@ -192,7 +206,8 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
       }
       danger={pending?.kind === "delete"}
       busy={busy}
-      onConfirm={() => void confirm()}
+      confirmDisabled={converting && !project.projectId}
+      onConfirm={() => void confirm(converting ? project.projectId : undefined)}
       onClose={cancel}
     />
   );

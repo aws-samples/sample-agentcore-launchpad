@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
-import { Btn, Chip, ConfirmDialog, Panel, useToast } from "../components";
+import { AgentProjectSelect, Btn, Chip, ConfirmDialog, Panel, useToast } from "../components";
 import type { ChipTone } from "../components";
 import type {
   AgentInfo,
@@ -14,6 +14,7 @@ import type {
   ExperimentSummary,
 } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import { useAgentProjectPick } from "../lib/useAgentProjectPick";
 import { storageFlag, withStorageConfirm } from "../lib/storage-confirm";
 import type { DeployedAgent } from "../lib/assistant";
 import type { EvaluationRunInfo } from "../lib/evaluation";
@@ -129,6 +130,7 @@ export function AssistantNextSteps({
   const [twins, setTwins] = useState<AgentInfo[] | null>(null);
   const [twinError, setTwinError] = useState<string | null>(null);
   const [confirmConvert, setConfirmConvert] = useState(false);
+  const convertProject = useAgentProjectPick("agents.convert", confirmConvert);
   const [converting, setConverting] = useState(false);
   const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
   const loadTwins = useCallback(async () => {
@@ -174,12 +176,12 @@ export function AssistantNextSteps({
     : !agentReady
       ? t("assistantNext.run.agentNotReady")
       : undefined;
-  const convert = async () => {
-    if (!harnessId || !convertable) return;
+  const convert = async (projectId: string) => {
+    if (!harnessId || !convertable || !projectId) return;
     setConverting(true);
     setTwinError(null);
     try {
-      const res = await api.convertAgent(harnessId);
+      const res = await api.convertAgent(harnessId, projectId);
       setTwins((prev) => [res.agent, ...(prev ?? []).filter((a) => a.id !== res.agent.id)]);
       toast(t("assistantNext.ab.convert.startedToast", { name: res.agent.name }), "good");
     } catch (err) {
@@ -683,12 +685,16 @@ export function AssistantNextSteps({
           region: operation.region,
         })}
         confirmLabel={t("assistantNext.ab.convert.confirm")}
+        confirmDisabled={!convertProject.projectId}
         onConfirm={() => {
           setConfirmConvert(false);
-          void convert();
+          void convert(convertProject.projectId);
         }}
         onCancel={() => setConfirmConvert(false)}
-      />
+      >
+        {/* the twin is a NEW agent: it names its business project (#356) */}
+        <AgentProjectSelect pick={convertProject} id="next-convert-project" />
+      </ConfirmDialog>
     </Panel>
   );
 }

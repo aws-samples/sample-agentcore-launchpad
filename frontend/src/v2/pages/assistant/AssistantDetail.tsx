@@ -35,6 +35,8 @@ import {
   toLiveMessages,
 } from "../../../lib/assistant";
 import { envelopeText } from "../../../lib/errors";
+import { useAgentProjectPick } from "../../../lib/useAgentProjectPick";
+import { ProjectField } from "../agents/ProjectCard";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
@@ -99,6 +101,7 @@ export function AssistantDetail({
   const [confirm, setConfirm] = useState<
     { kind: "approve"; pin: PinnedApproval } | { kind: "reject"; revision: number } | null
   >(null);
+  const approveProject = useAgentProjectPick("agents.deploy", confirm?.kind === "approve");
   const [polled, setPolled] = useState<{ jobId: string; job: JobInfo | null; agent: AgentInfo | null }>({
     jobId: "", job: null, agent: null,
   });
@@ -428,13 +431,13 @@ export function AssistantDetail({
     }
   };
 
-  const approve = async (pin: PinnedApproval) => {
-    if (resourcesDirty || resourcesLocked) return;
+  const approve = async (pin: PinnedApproval, projectId: string) => {
+    if (resourcesDirty || resourcesLocked || !projectId) return;
     setConfirm(null);
     if (conversation?.id !== pin.conversationId) return;
     setApproving(true);
     try {
-      const res = await api.assistantApproveProposal(pin.conversationId, pin.revision, pin.hash);
+      const res = await api.assistantApproveProposal(pin.conversationId, pin.revision, pin.hash, projectId);
       if (!alive.current) return;
       toast("success", res.started
         ? t("assistantPage.approvedToast", { job: shortId(res.job_id) })
@@ -770,13 +773,22 @@ export function AssistantDetail({
       <Confirm
         open={confirm?.kind === "approve"}
         title={t("assistantPage.approveTitle", { n: confirm?.kind === "approve" ? confirm.pin.revision : 0 })}
-        body={<Alert tone="warn">{t("assistantPage.approveBody", {
-          name: confirm?.kind === "approve" ? confirm.pin.name : "",
-          account: status.account_id,
-          region: status.region,
-        })}</Alert>}
+        body={
+          <>
+            <Alert tone="warn">{t("assistantPage.approveBody", {
+              name: confirm?.kind === "approve" ? confirm.pin.name : "",
+              account: status.account_id,
+              region: status.region,
+            })}</Alert>
+            {/* approving creates a NEW agent: it names its business project (#356) */}
+            <div style={{ marginTop: 16 }}>
+              <ProjectField pick={approveProject} />
+            </div>
+          </>
+        }
         confirmLabel={t("assistantPage.approveConfirm")}
-        onConfirm={() => { if (confirm?.kind === "approve") void approve(confirm.pin); }}
+        confirmDisabled={!approveProject.projectId}
+        onConfirm={() => { if (confirm?.kind === "approve") void approve(confirm.pin, approveProject.projectId); }}
         onClose={() => setConfirm(null)}
       />
       <Confirm

@@ -41,7 +41,7 @@ from app.models.ledger import Agent, Job
 from app.routers import agents as agents_router
 from app.services import byoc_uploads
 from app.services import users as users_service
-from tests.conftest import set_default_resources
+from tests.conftest import TEST_PROJECT, set_default_resources
 
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
 PEER = ("127.0.0.1", 4321)
@@ -1575,6 +1575,20 @@ def test_the_first_deploy_creates_a_byoc_agent_stamped_with_the_caller(
         assert db.get(Job, result["job_id"]).type == "deploy_agent"
     finally:
         db.close()
+
+
+def test_a_first_deploy_files_the_agent_under_the_named_project(ada, fake, s3, staged, deploys):
+    """#356: the modal names the project in the body (+ X-Project), so a `default`
+    selection elsewhere never decides it, and a `default` one is refused."""
+    _, client = ada
+    repo = _create(client)
+    refused = client.post(f"/api/coding/repos/{repo['id']}/deploy", json={"project_id": "default"})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["code"].startswith("agent.project_")
+    response = client.post(f"/api/coding/repos/{repo['id']}/deploy",
+                           json={"project_id": TEST_PROJECT}, headers={"X-Project": TEST_PROJECT})
+    assert response.status_code == 202, response.text
+    assert _agent(response.json()["agent_id"]).project_id == TEST_PROJECT
 
 
 def test_a_second_deploy_republishes_the_same_agent(ada, fake, s3, staged, deploys):

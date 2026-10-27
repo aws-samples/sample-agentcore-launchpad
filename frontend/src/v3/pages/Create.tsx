@@ -22,7 +22,6 @@ import {
   slugFromDisplayName,
 } from "../../lib/agent-spec";
 import { formFromTemplate } from "../../v2/pages/agents/templateForms";
-import { useProject } from "../../workspace/project-context";
 import { useProdLock } from "../../workspace/useProdLock";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad, useToast } from "../hooks";
@@ -32,7 +31,8 @@ import { Term } from "../onboarding/Glossary";
 import { Select } from "../select";
 import { Chooser } from "./create/NewAgentChooser";
 import { readSkipped, writeSkipped } from "./create/chooser";
-import { agentProjectLabel, pickedAgentProjectId } from "../../lib/agent-project";
+import { useAgentProjectPick } from "../../lib/useAgentProjectPick";
+import { ProjectField } from "./create/ProjectField";
 
 const BLANK = "blank";
 
@@ -87,9 +87,7 @@ export function V3Create() {
   const kbs = useLoad(() => api.listAttachableKnowledgeBases(), `v3-create-kbs:${current?.id ?? ""}`);
   // the business project the agent is filed under: server-filtered to the ones the
   // caller may create in (active, not `default`, with a department)
-  const { current: shellProject } = useProject();
-  const projects = useLoad(() => api.agentEligibleProjects(), `v3-create-projects:${current?.id ?? ""}`);
-  const [pickedProject, setPickedProject] = useState<string | null>(null);
+  const project = useAgentProjectPick("agents.deploy");
   const [pick, setPick] = useState<string>(BLANK);
   const [form, setForm] = useState<AgentForm>(() => emptyAgentForm("harness"));
   // the model the form was seeded with, and whether the member picked one since: the
@@ -178,8 +176,7 @@ export function V3Create() {
   const nameError = !AGENT_NAME_RE.test(form.name) ? t("v2.agents.wizard.errName") : null;
   const promptError = !form.systemPrompt.trim() ? t("v2.agents.wizard.errPrompt") : null;
   const kbError = needsKb && form.selectedKbs.length === 0 ? t("v3.create.errKb") : null;
-  const projectRows = projects.data?.projects ?? [];
-  const projectId = pickedAgentProjectId(projectRows, pickedProject, shellProject?.id);
+  const projectId = project.projectId;
   const projectError = !projectId ? t("v3.create.project.err") : null;
   const valid = agentFormValid(form, catalogs, { knobIssues: [], byocUploading: false, connections: [] }) && !kbError && !projectError;
   const fullForm = template ? `/v2/agents?view=new&scenario=${encodeURIComponent(template.key)}` : "/v2/agents?view=new&method=harness";
@@ -275,30 +272,7 @@ export function V3Create() {
                 style={{ display: "grid", gap: 16 }}
               >
                 <fieldset disabled={busy} className="v3-form-fields">
-                <div className="v3-field">
-                  <span id="v3-create-project-label">{t("v3.create.project.label")} · {t("v3.create.required")}</span>
-                  {projects.error ? <Notice s="act"><ApiErrorDetail error={projects.failure} /> <button type="button" className="v3-btn sm" onClick={projects.reload}>{t("v3.ux.retry")}</button></Notice> : projects.loading && !projects.data ? (
-                    <Skeleton rows={1} />
-                  ) : projectRows.length === 0 ? (
-                    <small id="v3-create-project-hint" className={touched ? "v3-err" : "v3-hint"} role={touched ? "alert" : undefined}>
-                      {t("v3.create.project.none")}{" "}
-                      <Link to="/v3/projects" style={{ textDecoration: "underline" }}>{t("v3.create.project.open")}</Link>
-                    </small>
-                  ) : (
-                    <>
-                      <Select className="v3-select" value={projectId} aria-labelledby="v3-create-project-label"
-                        aria-describedby="v3-create-project-hint" aria-invalid={touched && !!projectError}
-                        onChange={(e) => setPickedProject(e.target.value)}>
-                        <option value="" disabled>{t("v3.create.project.placeholder")}</option>
-                        {projectRows.map((p) => <option key={p.id} value={p.id}>{agentProjectLabel(p)}</option>)}
-                      </Select>
-                      <small id="v3-create-project-hint" className={touched && projectError ? "v3-err" : "v3-hint"}>
-                        {touched && projectError ? projectError : t("v3.create.project.hint")}{" "}
-                        {!projectId && <Link to="/v3/projects" style={{ textDecoration: "underline" }}>{t("v3.create.project.open")}</Link>}
-                      </small>
-                    </>
-                  )}
-                </div>
+                <ProjectField pick={project} touched={touched} />
                 <div className="v3-grid c2" style={{ alignItems: "start" }}>
                   <label className="v3-field">
                     <span>{t("v2.agents.wizard.displayName")}</span>

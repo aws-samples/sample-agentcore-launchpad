@@ -1,4 +1,5 @@
 export { AdminRequired } from "./AdminRequired";
+export { AgentProjectSelect } from "./AgentProjectSelect";
 export { Btn } from "./Btn";
 export { Chip, type ChipTone } from "./Chip";
 export { ConfirmDialog } from "./ConfirmDialog";

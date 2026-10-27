@@ -1319,6 +1319,7 @@ export function Confirm({
   confirmLabel,
   danger,
   busy,
+  confirmDisabled,
   onConfirm,
   onClose,
 }: {
@@ -1328,6 +1329,8 @@ export function Confirm({
   confirmLabel: string;
   danger?: boolean;
   busy?: boolean;
+  /** the dialog still needs an answer (e.g. a project picked) */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -1341,7 +1344,7 @@ export function Confirm({
       footer={
         <>
           <Button onClick={onClose}>{t("v2.common.cancel")}</Button>
-          <Button kind={danger ? "danger" : "primary"} disabled={busy} onClick={onConfirm} testId="v2-confirm-ok">
+          <Button kind={danger ? "danger" : "primary"} disabled={busy || confirmDisabled} onClick={onConfirm} testId="v2-confirm-ok">
             {confirmLabel}
           </Button>
         </>

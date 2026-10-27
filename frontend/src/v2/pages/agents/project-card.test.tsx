@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import i18n from "../../../i18n";
 import { pickedAgentProjectId } from "../../../lib/agent-project";
 import type { EligibleAgentProject } from "../../../lib/api";
-import type { Loaded } from "../../hooks";
+import type { AgentProjectPick } from "../../../lib/useAgentProjectPick";
 import { ProjectCard } from "./ProjectCard";
 
 beforeAll(async () => {
@@ -20,17 +20,14 @@ const risk: EligibleAgentProject = {
   department_name: "Risk",
   is_workspace_default: false,
 };
-const loaded = (over: Partial<Loaded<{ projects: EligibleAgentProject[] }>>) => ({
-  data: null,
-  error: null,
-  loading: false,
-  reload: () => undefined,
-  ...over,
-});
-const render = (projects: ReturnType<typeof loaded>, value = "", error?: string) =>
+const loaded = (over: Partial<AgentProjectPick> & { data?: { projects: EligibleAgentProject[] } | null }) => {
+  const { data, ...rest } = over;
+  return { rows: data?.projects ?? [], error: null, loading: false, reload: () => undefined, projectId: "", pick: () => undefined, label: null, ...rest };
+};
+const render = (pick: AgentProjectPick, projectId = "", error?: string) =>
   renderToStaticMarkup(
     <MemoryRouter>
-      <ProjectCard projects={projects} value={value} onPick={() => undefined} error={error} />
+      <ProjectCard pick={{ ...pick, projectId }} error={error} />
     </MemoryRouter>,
   );
 
@@ -58,7 +55,7 @@ describe("ProjectCard (#351)", () => {
   });
 
   it("shows a failed read with a retry, and a loading state before the list lands", () => {
-    const failed = render(loaded({ error: "boom" }));
+    const failed = render(loaded({ error: new Error("boom") }));
     expect(failed).toContain("boom");
     expect(failed).toContain('data-testid="v2-agent-project-retry"');
     const loading = render(loaded({ loading: true }));

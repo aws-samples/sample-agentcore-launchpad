@@ -17,16 +17,18 @@ export function typedNameMatches(agent: Pick<AgentInfo, "name">, typed: string):
   return typed.trim() === agent.name;
 }
 
-/** Run a confirmed action: delete returns the agent it removed, convert the new code agent. */
+/** Run a confirmed action: delete returns the agent it removed, convert the new code
+ *  agent — filed under `projectId`, the business project the dialog picked (#356). */
 export async function performAgentAction(
   kind: AgentActionKind,
   agent: AgentInfo,
+  projectId?: string,
 ): Promise<{ kind: "delete"; agent: AgentInfo } | { kind: "convert"; agent: AgentInfo }> {
   if (kind === "delete") {
     await api.deleteAgent(agent.id);
     return { kind, agent };
   }
-  const res = await api.convertAgent(agent.id);
+  const res = await api.convertAgent(agent.id, projectId || undefined);
   return { kind, agent: res.agent };
 }
 
@@ -52,12 +54,13 @@ export function useAgentActions(callbacks: AgentActionCallbacks) {
     setPending({ kind, agent });
   };
 
-  const confirm = async () => {
+  /** `projectId`: a conversion's business project (the dialog's picker) */
+  const confirm = async (projectId?: string) => {
     if (!pending) return;
     setBusy(true);
     setError(null);
     try {
-      const done = await performAgentAction(pending.kind, pending.agent);
+      const done = await performAgentAction(pending.kind, pending.agent, projectId);
       if (done.kind === "delete") callbacks.onDeleted(done.agent);
       else callbacks.onConverted(done.agent);
       setPending(null);

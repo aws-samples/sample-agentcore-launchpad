@@ -4,9 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { useProject } from "../../../workspace/project-context";
 import { useProdLock } from "../../../workspace/useProdLock";
-import { useWorkspace } from "../../../workspace/workspace-context";
 import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
@@ -36,7 +34,6 @@ import {
   sourceOnMethodSwitch,
   withContextVia,
 } from "../../../lib/agent-spec";
-import { agentProjectLabel, pickedAgentProjectId } from "../../../lib/agent-project";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, type SharedTemplateInfo } from "../../../lib/api";
 import { networkChoices, RUNTIME_NETWORK_PURPOSES } from "../../../lib/api/agent-network";
 import { networkProfilesApi } from "../../../lib/api/projects";
@@ -44,6 +41,7 @@ import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
 import { useUiVersion } from "../../../lib/ui-version";
+import { useAgentProjectPick } from "../../../lib/useAgentProjectPick";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
@@ -340,14 +338,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   // a NEW agent is filed under a business project the caller may create in, named
   // explicitly (body + X-Project) so a `default` global project never reaches the
   // create call; a re-publish keeps the agent's own project and loads nothing
-  const { current: shellProject } = useProject();
-  const { current: workspace } = useWorkspace();
-  const projects = useLoad(
-    () => (edit ? Promise.resolve({ projects: [] }) : api.agentEligibleProjects()),
-    `v2-agent-projects:${workspace?.id ?? ""}`,
-  );
-  const [pickedProject, setPickedProject] = useState<string | null>(null);
-  const projectId = edit ? "" : pickedAgentProjectId(projects.data?.projects ?? [], pickedProject, shellProject?.id);
+  const project = useAgentProjectPick("agents.deploy", !edit);
+  const projectId = project.projectId;
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
@@ -528,8 +520,6 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     }
   };
 
-  const pickedRow = projects.data?.projects.find((p) => p.id === projectId);
-  const projectLabel = pickedRow ? agentProjectLabel(pickedRow) : null;
   const stepLabels = [t("v2.agents.wizard.stepMethod"), t("v2.agents.wizard.stepConfig"), t("v2.agents.wizard.stepReview")].slice(firstStep);
   // a converted agent's exported code bakes its prompt and model (the backend refuses
   // changing either on re-publish), so both are shown read-only
@@ -689,7 +679,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       )}
 
       {step === 1 && !edit && (
-        <ProjectCard projects={projects} value={projectId} onPick={setPickedProject} error={err("project")} />
+        <ProjectCard pick={project} error={err("project")} />
       )}
 
       {step === 1 && method === "harness" && quick && (
@@ -889,7 +879,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           form={form}
           cat={cat}
           ui={{ ...ui, customSkills }}
-          project={edit ? null : projectLabel}
+          project={edit ? null : project.label}
           inlineKb={kb.inline && form.selectedKbs.includes(kb.inline.kb_id) ? kb.inline : null}
           shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
           workspaceDefault={inboundDefault.data?.default ?? null}

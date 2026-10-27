@@ -10,7 +10,9 @@ import {
   type CodingDeployResult,
   type CodingRepo,
 } from "../../../lib/api";
+import { useAgentProjectPick } from "../../../lib/useAgentProjectPick";
 import { Alert, Button, Field, Modal, Select } from "../../ui";
+import { ProjectField } from "../agents/ProjectCard";
 import { deployFailureText } from "./deployError";
 import { agentNameFrom } from "./prefs";
 
@@ -46,15 +48,20 @@ export function DeployModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CodingDeployResult | null>(null);
   const nameValid = redeploy || AGENT_NAME_RE.test(name);
+  // a first deploy creates a NEW agent: it names its business project (#356)
+  const project = useAgentProjectPick("agents.deploy", open && !redeploy && !result);
   const zipFields = kind !== "container_source";
-  const ready = nameValid && !(zipFields && !entrypoint.trim());
+  const ready = nameValid && !(zipFields && !entrypoint.trim()) && (redeploy || !!project.projectId);
 
   const submit = async () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
     const body: CodingDeployRequest = {};
-    if (!redeploy) body.agent_name = name;
+    if (!redeploy) {
+      body.agent_name = name;
+      body.project_id = project.projectId;
+    }
     if (description.trim()) body.description = description.trim();
     if (kind !== "auto") body.artifact_kind = kind;
     if (zipFields) {
@@ -130,6 +137,7 @@ export function DeployModal({
               />
             </Field>
           )}
+          {!redeploy && <ProjectField pick={project} />}
           <Field label={t("v2.coding.deploy.description")}>
             <textarea
               className="v2-textarea"

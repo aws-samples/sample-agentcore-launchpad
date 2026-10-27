@@ -156,8 +156,10 @@ def deploy_repo(
     artifact_kind: str | None = None,
     entrypoint: str | None = None,
     python_version: str | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create or re-publish the repo's Agent; ``{agent_id, job_id, created}``."""
+    """Create or re-publish the repo's Agent; ``{agent_id, job_id, created}``.
+    ``project_id`` names a new agent's business project (a re-publish keeps its own)."""
     from app.routers import agents as agents_router  # local import: router ↔ service cycle
 
     if repo.status == REPO_RUNNING:
@@ -206,6 +208,7 @@ def deploy_repo(
                 system_prompt=(description if description is not None
                                else repo.description or ""),
                 byoc=block,
+                project_id=project_id,
             )
             # request: V3's project resolution (body project_id / X-Project), quota
             # and project budget gates run exactly as for POST /api/agents

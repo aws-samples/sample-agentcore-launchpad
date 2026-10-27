@@ -6,6 +6,7 @@ import type { Edge, Node } from "@xyflow/react";
 import { useAuth } from "../auth/auth-context";
 import {
   AdminRequired,
+  AgentProjectSelect,
   Btn,
   Chip,
   ConfirmDialog,
@@ -17,6 +18,7 @@ import {
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 import { networkChoices, RUNTIME_NETWORK_PURPOSES } from "../lib/api/agent-network";
+import { useAgentProjectPick } from "../lib/useAgentProjectPick";
 import { type NetworkProfile, networkProfilesApi } from "../lib/api/projects";
 import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
@@ -398,6 +400,10 @@ export function CreateAgentStudio() {
 
   const doPublish = async () => {
     setPublishErr(null);
+    if (!projectReady) {
+      setPublishErr(t("v3.create.project.err"));
+      return;
+    }
     if (publishBlockedByErrors) {
       setPublishErr(t("studio.publish.errHasErrors"));
       return;
@@ -422,6 +428,7 @@ export function CreateAgentStudio() {
       code: codeState.code,
       memory: { short_term: false, long_term: false },
       studio_flow: { nodes, edges, graphMode },
+      ...(editing ? {} : { project_id: project.projectId }),
       ...(extraReqs.length ? { requirements: extraReqs } : {}),
       ...(Object.keys(publishEnv).length ? { env: publishEnv } : {}),
       ...(networkId === null
@@ -450,6 +457,9 @@ export function CreateAgentStudio() {
   };
 
   const nameValid = editing || NAME_RE.test(publishName);
+  // a first publish creates a NEW agent: it names its business project (#356)
+  const project = useAgentProjectPick("agents.deploy", publishOpen && !editing);
+  const projectReady = editing || !!project.projectId;
   const canPublish = nodes.length > 0;
   const showReadonly = noFlowNotice && nodes.length === 0 && readonlyCode !== null;
   // Local chat needs a flow that generates valid code (or an already-applied fix).
@@ -697,6 +707,8 @@ export function CreateAgentStudio() {
               </div>
             )}
 
+            {!editing && <AgentProjectSelect pick={project} id="studio-project" />}
+
             <div className="kv">
               <span className="k">{t("studio.publish.generatedCode")}</span>
               <span className="v">
@@ -781,8 +793,10 @@ export function CreateAgentStudio() {
               <Btn onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Btn>
               <Btn
                 primary
-                disabled={!nameValid}
-                disabledReason={nameValid ? undefined : t("studio.publish.disabledName")}
+                disabled={!nameValid || !projectReady}
+                disabledReason={
+                  !nameValid ? t("studio.publish.disabledName") : projectReady ? undefined : t("v3.create.project.err")
+                }
                 onClick={() => void doPublish()}
               >
                 ▲ {editing ? t("studio.toolbar.rePublish") : t("studio.toolbar.publish")}

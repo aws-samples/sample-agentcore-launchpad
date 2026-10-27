@@ -5,6 +5,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import {
+  AgentProjectSelect,
   Btn,
   Chip,
   ConfirmDialog,
@@ -60,6 +61,7 @@ import {
 } from "../lib/assistant";
 import { useModelCatalog } from "../lib/model-catalog";
 import { modelOptionsFor, type ModelSource } from "../lib/models";
+import { useAgentProjectPick } from "../lib/useAgentProjectPick";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 import { PreparationPanel } from "./assistant/PreparationPanel";
@@ -137,6 +139,7 @@ export function CreateAgentAssistant() {
     | { kind: "reject"; revision: number }
     | null
   >(null);
+  const approveProject = useAgentProjectPick("agents.deploy", confirm?.kind === "approve");
   // CLEAR on a history row: the footprint is read first and shown in the confirm;
   // `deleting` while the durable clear job runs (canaries, assets, Agents — each read
   // back gone); closing the dialog only stops following it (`clearDetached`)
@@ -766,8 +769,8 @@ export function CreateAgentAssistant() {
     }
   };
 
-  const approve = async (pin: PinnedApproval) => {
-    if (resourcesDirty || resourcesLocked) return;
+  const approve = async (pin: PinnedApproval, projectId: string) => {
+    if (resourcesDirty || resourcesLocked || !projectId) return;
     const startedIn = scope.current;
     const gen = generation.current;
     setConfirm(null);
@@ -778,6 +781,7 @@ export function CreateAgentAssistant() {
         pin.conversationId,
         pin.revision,
         pin.hash,
+        projectId,
       );
       if (!stillCurrent(startedIn, gen)) return;
       toast(
@@ -1391,11 +1395,15 @@ export function CreateAgentAssistant() {
           region: status?.region ?? "",
         })}
         confirmLabel={t("assistantPage.approveConfirm")}
+        confirmDisabled={!approveProject.projectId}
         onConfirm={() => {
-          if (confirm?.kind === "approve") void approve(confirm.pin);
+          if (confirm?.kind === "approve") void approve(confirm.pin, approveProject.projectId);
         }}
         onCancel={() => setConfirm(null)}
-      />
+      >
+        {/* approving creates a NEW agent: it names its business project (#356) */}
+        <AgentProjectSelect pick={approveProject} id="assistant-approve-project" />
+      </ConfirmDialog>
       <ConfirmDialog
         open={confirm?.kind === "reject"}
         title={t("assistantPage.rejectTitle")}

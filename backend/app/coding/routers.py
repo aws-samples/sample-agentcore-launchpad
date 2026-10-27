@@ -139,6 +139,9 @@ class DeployRequest(BaseModel):
     artifact_kind: Literal["code_zip", "container_source"] | None = None
     entrypoint: str | None = Field(default=None, min_length=1, max_length=255)
     python_version: ByocPythonVersion | None = None
+    # the business project a NEW agent is filed under (services/agent_project); must
+    # match X-Project when both are sent, ignored when the repo re-publishes its agent
+    project_id: str | None = Field(default=None, max_length=32)
 
 
 def _owned(request: Request, ws: WorkspaceScope, db: Session, repo_id: str):
@@ -365,4 +368,5 @@ def deploy_coding_repo(
         db, ws, row, identity, request=request, viewer=viewer, agent_name=body.agent_name,
         description=body.description, artifact_kind=body.artifact_kind,
         entrypoint=body.entrypoint, python_version=body.python_version,
+        project_id=body.project_id,
     )

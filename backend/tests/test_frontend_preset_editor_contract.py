@@ -70,7 +70,8 @@ def test_wizard_system_branch_saves_through_maintenance_route_only() -> None:
     assert "redeployAgent" not in system_branch and "buildSpec" not in system_branch
     # the ordinary paths are unchanged (a re-publish carries the stored non-form fields)
     assert "await api.redeployAgent(editing.id, republishSpec(spec, editing.spec))" in wizard
-    assert "await api.createAgent(spec)" in wizard
+    # a fresh create also names its business project (#356)
+    assert "await api.createAgent({ ...spec, project_id: newProject.projectId })" in wizard
     # the poll that follows a system save is pinned too
     assert "api.getAgent(launch.agentId, launch.workspaceId)" in wizard
     assert "api.getJob(launch.jobId, launch.workspaceId)" in wizard

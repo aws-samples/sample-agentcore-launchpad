@@ -129,8 +129,9 @@ describe("delete / convert", () => {
     expect(del).toHaveBeenCalledWith("a1");
     const twin = agent({ id: "a2", name: "lab-service-code" });
     const conv = vi.spyOn(api, "convertAgent").mockResolvedValue({ agent: twin, job_id: "j", deployment_id: "d" });
-    expect(await performAgentAction("convert", agent({ method: "harness" }))).toEqual({ kind: "convert", agent: twin });
-    expect(conv).toHaveBeenCalledWith("a1");
+    expect(await performAgentAction("convert", agent({ method: "harness" }), "risk-bot")).toEqual({ kind: "convert", agent: twin });
+    // the twin is filed under the project the dialog picked (#356)
+    expect(conv).toHaveBeenCalledWith("a1", "risk-bot");
   });
 
   it("passes the API error through untouched", async () => {

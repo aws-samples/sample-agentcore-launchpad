@@ -8,6 +8,7 @@ import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
 
 import { useAuth } from "../auth/auth-context";
 import {
+  AgentProjectSelect,
   Btn,
   Chip,
   ConfirmDialog,
@@ -45,6 +46,7 @@ import type {
   Toolkit,
 } from "../lib/api";
 import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
+import { useAgentProjectPick } from "../lib/useAgentProjectPick";
 import { catalogRowsFromSpec } from "../lib/api/storage";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
 import { adotLauncher } from "../lib/byocTelemetry";
@@ -291,6 +293,8 @@ function RuntimeDiscovery() {
   const toast = useToast();
   const { can } = useAuth();
   const canImport = can("agents.import");
+  // imported rows are NEW agents: they name the business project they land in (#356)
+  const project = useAgentProjectPick("agents.import", canImport);
   const [region, setRegion] = useState("");
   const [runtimes, setRuntimes] = useState<RuntimeDiscoveryCandidate[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessDiscoveryCandidate[]>([]);
@@ -428,13 +432,14 @@ function RuntimeDiscovery() {
   };
 
   const importSelected = async () => {
-    if (!selected.size) return;
+    if (!selected.size || !project.projectId) return;
     setImporting(true);
     setError(null);
     try {
       const result = await api.importRuntimes(
         idsOfKind(selected, "rt:"),
         idsOfKind(selected, "hn:"),
+        project.projectId,
       );
       setImportResult(result);
       toast(
@@ -479,7 +484,8 @@ function RuntimeDiscovery() {
             <Btn
               primary
               onClick={() => void importSelected()}
-              disabled={!canImport || !selected.size || importing}
+              disabled={!canImport || !selected.size || importing || !project.projectId}
+              disabledReason={canImport && !project.projectId ? t("v3.create.project.err") : undefined}
             >
               <Download size={14} aria-hidden="true" />
               {importing
@@ -490,6 +496,11 @@ function RuntimeDiscovery() {
         </div>
       </div>
 
+      {canImport && (
+        <div style={{ maxWidth: 520 }}>
+          <AgentProjectSelect pick={project} id="discovery-project" touched={selected.size > 0} />
+        </div>
+      )}
       {error && (
         <div className="note discovery-error">
           <span className="i">[!]</span>
@@ -1043,6 +1054,7 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
     | { kind: "convert"; id: string; name: string }
     | null
   >(null);
+  const convertProject = useAgentProjectPick("agents.convert", confirm?.kind === "convert");
 
   const failureToasted = useRef(false);
   const poll = useCallback(async () => {
@@ -1298,6 +1310,9 @@ const deployLock = !canDeploy
   /* ── system-preset edit: the same page, a different save ─────────────── */
 
   const systemEdit = editing?.system ?? null;
+  // a fresh create (not a re-publish, not a preset save) names its business project (#356)
+  const creating = !editing;
+  const newProject = useAgentProjectPick("agents.deploy", creating && step === 2);
   // the page is read-only for a member's review (and for an administrator while
   // the preset is not settled / the workspace lost a prerequisite)
   const locked = systemEdit ? !systemEdit.editable : false;
@@ -1426,7 +1441,7 @@ const deployLock = !canDeploy
       const spec = buildSpec();
       const res = editing
         ? await api.redeployAgent(editing.id, republishSpec(spec, editing.spec))
-        : await api.createAgent(spec);
+        : await api.createAgent({ ...spec, project_id: newProject.projectId });
       if (!alive.current) return;
       setDetailKbs((spec as { knowledge_bases?: KbRef[] }).knowledge_bases ?? []);
       failureToasted.current = false;
@@ -1720,9 +1735,9 @@ const deployLock = !canDeploy
     }
   };
 
-  const doConvert = async (id: string) => {
+  const doConvert = async (id: string, projectId: string) => {
     try {
-      const res = await api.convertAgent(id);
+      const res = await api.convertAgent(id, projectId);
       toast(t("create.list.convertStarted", { name: res.agent.name }));
       reloadAgents();
     } catch (err) {
@@ -3549,6 +3564,12 @@ const deployLock = !canDeploy
               )}
             </Panel>
             <div style={{ height: 14 }} />
+            {creating && (
+              <Panel>
+                <AgentProjectSelect pick={newProject} id="create-project" />
+              </Panel>
+            )}
+            {creating && <div style={{ height: 14 }} />}
             {knobIssues.length > 0 && (
               <div
                 className="note"
@@ -3615,8 +3636,8 @@ const deployLock = !canDeploy
                   <Btn
                     primary
                     data-testid="launch-submit"
-                    disabled={!configValid || !canDeploy || submitting}
-                    disabledReason={knobIssues[0]}
+                    disabled={!configValid || !canDeploy || submitting || (creating && !newProject.projectId)}
+                    disabledReason={knobIssues[0] ?? (creating && !newProject.projectId ? t("v3.create.project.err") : undefined)}
                     onClick={() => (editing ? setConfirm({ kind: "republish" }) : void submit())}
                   >
                     {submitting
@@ -3836,12 +3857,16 @@ const deployLock = !canDeploy
           name: confirm?.kind === "convert" ? confirm.name : "",
         })}
         confirmLabel={t("create.list.convert")}
+        confirmDisabled={!convertProject.projectId}
         onConfirm={() => {
-          if (confirm?.kind === "convert") void doConvert(confirm.id);
+          if (confirm?.kind === "convert") void doConvert(confirm.id, convertProject.projectId);
           setConfirm(null);
         }}
         onCancel={() => setConfirm(null)}
-      />
+      >
+        {/* the twin is a NEW agent: it names its business project (#356) */}
+        <AgentProjectSelect pick={convertProject} id="convert-project" />
+      </ConfirmDialog>
       <ConfirmDialog
         open={confirm?.kind === "delete"}
         title={t(
