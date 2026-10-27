@@ -34,10 +34,13 @@ export function WizardReview({
   inlineKb = null,
   workspaceDefault = null,
   cognitoIssuer = null,
+  project = null,
 }: {
   form: AgentForm;
   cat: WizardCatalogs;
   ui: WizardUi;
+  /** a new agent's business project (`Department · Project`); null on a re-publish */
+  project?: string | null;
   /** re-publish of an agent deployed without short-term memory (kept off on save) */
   shortTermOff?: boolean;
   /** the knowledge base created inside the wizard, when one is mounted */
@@ -310,7 +313,7 @@ export function WizardReview({
       sub={t(mcpServer ? "v2.agents.wizard.mcp.reviewSub" : `v2.agents.wizard.reviewSubBy.${method}`)}
       testId="v2-agent-review"
     >
-      <Descriptions items={items} />
+      <Descriptions items={project ? [{ label: t("v3.create.project.label"), value: project }, ...items] : items} />
       {mismatch && <ReachabilityWarning mismatch={mismatch} testId="v2-agent-review-issuer-warning" />}
       {method !== "byoc" && (
         <>

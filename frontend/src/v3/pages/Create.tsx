@@ -32,7 +32,7 @@ import { Term } from "../onboarding/Glossary";
 import { Select } from "../select";
 import { Chooser } from "./create/NewAgentChooser";
 import { readSkipped, writeSkipped } from "./create/chooser";
-import { agentProjectLabel, pickedAgentProjectId } from "./create/project-pick";
+import { agentProjectLabel, pickedAgentProjectId } from "../../lib/agent-project";
 
 const BLANK = "blank";
 

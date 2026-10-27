@@ -172,6 +172,20 @@ describe("installWorkspaceHeader", () => {
     expect(env.store.has(`${PROJECT_STORAGE_PREFIX}dev`)).toBe(false);
   });
 
+  it("a create naming its project sends it in body and header over a `default` selection (#351)", async () => {
+    env.store.set(WORKSPACE_STORAGE_KEY, "dev");
+    env.store.set(`${PROJECT_STORAGE_PREFIX}dev`, "default");
+    fetchImpl = async () => json(202, { agent: {}, job_id: "j", deployment_id: "d" });
+    // the typed client calls the bare global fetch — route it through the wrapper
+    vi.stubGlobal("fetch", window.fetch);
+    const { api } = await import("./api");
+    await api.createAgent({ name: "helper", method: "harness", system_prompt: "Be brief.", project_id: "risk-bot" });
+    const init = env.network.mock.calls.at(-1)?.[1];
+    expect(JSON.parse(String(init?.body))).toMatchObject({ project_id: "risk-bot" });
+    expect(sentHeaders().get(PROJECT_HEADER)).toBe("risk-bot");
+    expect(sentHeaders().get(WORKSPACE_HEADER)).toBe("dev");
+  });
+
   it("stays quiet on an unrelated error", async () => {
     env.store.set(WORKSPACE_STORAGE_KEY, "dev");
     env.store.set(`${PROJECT_STORAGE_PREFIX}dev`, "risk-bot");

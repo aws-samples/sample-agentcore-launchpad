@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agentProjectLabel, defaultAgentProjectId, pickedAgentProjectId } from "./project-pick";
+import { agentProjectLabel, defaultAgentProjectId, pickedAgentProjectId } from "./agent-project";
 
 const eligible = [{ id: "sales-bot" }, { id: "hr-faq" }];
 

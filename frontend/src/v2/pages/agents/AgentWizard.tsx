@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
+import { useProject } from "../../../workspace/project-context";
 import { useProdLock } from "../../../workspace/useProdLock";
+import { useWorkspace } from "../../../workspace/workspace-context";
 import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
@@ -34,6 +36,7 @@ import {
   sourceOnMethodSwitch,
   withContextVia,
 } from "../../../lib/agent-spec";
+import { agentProjectLabel, pickedAgentProjectId } from "../../../lib/agent-project";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, type SharedTemplateInfo } from "../../../lib/api";
 import { networkChoices, RUNTIME_NETWORK_PURPOSES } from "../../../lib/api/agent-network";
 import { networkProfilesApi } from "../../../lib/api/projects";
@@ -64,6 +67,7 @@ import {
   StrandsToolsCard,
 } from "./MethodSections";
 import { NetworkSection } from "./NetworkSection";
+import { ProjectCard } from "./ProjectCard";
 import { TemplateGallery } from "./TemplateGallery";
 import { formFromSharedTemplate, formFromTemplate } from "./templateForms";
 import { GuardrailCard, MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
@@ -332,6 +336,17 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   // the workspace's COA context layer + the member's own authorization; a failed
   // read hides the section unless the stored spec already attaches a namespace
   const contextStatus = useLoad(() => api.getContextLayer(), "context-layer");
+  // a NEW agent is filed under a business project the caller may create in, named
+  // explicitly (body + X-Project) so a `default` global project never reaches the
+  // create call; a re-publish keeps the agent's own project and loads nothing
+  const { current: shellProject } = useProject();
+  const { current: workspace } = useWorkspace();
+  const projects = useLoad(
+    () => (edit ? Promise.resolve({ projects: [] }) : api.agentEligibleProjects()),
+    `v2-agent-projects:${workspace?.id ?? ""}`,
+  );
+  const [pickedProject, setPickedProject] = useState<string | null>(null);
+  const projectId = edit ? "" : pickedAgentProjectId(projects.data?.projects ?? [], pickedProject, shellProject?.id);
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
@@ -422,16 +437,18 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     method === "harness"
       ? knobProblems({ max_tokens: form.maxTokens, max_iterations: form.maxIterations, timeout_seconds: form.timeoutSeconds }, t)
       : [];
-  const valid = agentFormValid(form, specCatalogs, {
-    knobIssues,
-    byocUploading: ui.byocUploading,
-    connections,
-  });
+  const valid =
+    agentFormValid(form, specCatalogs, {
+      knobIssues,
+      byocUploading: ui.byocUploading,
+      connections,
+    }) && (Boolean(edit) || Boolean(projectId));
   // a KB created here must exist (ACTIVE) to be mounted; its ingestion never blocks
   const kbBlock = inlineKbBlock(kb.inline, form.selectedKbs);
   const problems = useMemo(() => {
     const out: Record<string, string> = {};
     if (!AGENT_NAME_RE.test(form.name)) out.name = t("v2.agents.wizard.errName");
+    if (!edit && !projectId) out.project = t("v3.create.project.err");
     if (!inboundValid(form)) out.inbound = "inbound";
     if (!contextLayerValid(form)) out.contextLayer = "contextLayer";
     if (form.authTools.length) {
@@ -471,7 +488,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     return out;
     // specCatalogs is derived from cat
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, method, cat, connections, t]);
+  }, [form, method, cat, connections, projectId, t]);
   // after `problems`: reading it earlier hits the TDZ and crashes every render
   const readouts = strandsReadouts(form);
   const advancedProblem = ["model", "maxTokens", "maxIterations", "timeout", "gateway"].some((k) => problems[k]);
@@ -495,7 +512,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       const built = buildAgentSpec(form, specCatalogs);
       const res = edit
         ? await api.redeployAgent(edit.id, republishSpec(built, edit.spec))
-        : await api.createAgent(built);
+        : await api.createAgent({ ...built, project_id: projectId });
       toast("success", t(edit ? "v2.agents.wizard.redeployStarted" : "v2.agents.wizard.started", { name: res.agent.display_name || res.agent.name }));
       // in V3 the agent's V3 detail page, replacing the wizard so "back" from
       // there returns to the page that started it (§4)
@@ -510,6 +527,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     }
   };
 
+  const pickedRow = projects.data?.projects.find((p) => p.id === projectId);
+  const projectLabel = pickedRow ? agentProjectLabel(pickedRow) : null;
   const stepLabels = [t("v2.agents.wizard.stepMethod"), t("v2.agents.wizard.stepConfig"), t("v2.agents.wizard.stepReview")].slice(firstStep);
   // a converted agent's exported code bakes its prompt and model (the backend refuses
   // changing either on re-publish), so both are shown read-only
@@ -666,6 +685,10 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             </div>
           </Card>
         </>
+      )}
+
+      {step === 1 && !edit && (
+        <ProjectCard projects={projects} value={projectId} onPick={setPickedProject} error={err("project")} />
       )}
 
       {step === 1 && method === "harness" && quick && (
@@ -864,6 +887,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           form={form}
           cat={cat}
           ui={{ ...ui, customSkills }}
+          project={edit ? null : projectLabel}
           inlineKb={kb.inline && form.selectedKbs.includes(kb.inline.kb_id) ? kb.inline : null}
           shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
           workspaceDefault={inboundDefault.data?.default ?? null}

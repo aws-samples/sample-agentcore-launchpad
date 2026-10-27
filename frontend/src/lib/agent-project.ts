@@ -1,4 +1,4 @@
-import type { EligibleAgentProject } from "../../../lib/api";
+import type { EligibleAgentProject } from "./api";
 
 /**
  * The project the create form starts on: the shell's current project when the
