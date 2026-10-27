@@ -63,7 +63,10 @@ Engine, and choose its initial Gateway attachment mode (`ENFORCE` by default or
 before relying on Gateway traffic.
 
 Bootstrap still enables CloudWatch Transaction Search for general
-observability. It does not create the per-Gateway CloudWatch Logs delivery used
+observability. Before it switches the X-Ray destination it places the CloudWatch
+Logs resource policy `TransactionSearchXRayAccess`, which lets X-Ray write the
+`aws/spans` log group, unless an existing policy already grants that. It does
+not create the per-Gateway CloudWatch Logs delivery used
 for detailed Policy decision spans. Policy decision counts come from
 CloudWatch metrics and remain available after Policy is configured; detailed
 decision rows require separately managed trace delivery.

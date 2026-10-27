@@ -1,5 +1,6 @@
 """Span normalizer, policy bootstrap builders, decision recorder."""
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -15,6 +16,7 @@ from app.services.policy_bootstrap import (
     POLICY_ENGINE_NAME,
     ensure_gateway_traces,
     ensure_policy_engine,
+    ensure_spans_resource_policy,
     ensure_transaction_search,
     gateway_trace_delivery_status,
     render_policy_statement,
@@ -74,6 +76,80 @@ def test_ensure_transaction_search_noop_when_active():
     assert state == {"enabled": True, "changed": False, "status": "ACTIVE"}
     xray.update_trace_segment_destination.assert_not_called()
 
+
+
+def _logs_with(policies: dict[str, dict]) -> MagicMock:
+    logs = MagicMock()
+    logs.describe_resource_policies.return_value = {
+        "resourcePolicies": [
+            {"policyName": name, "policyDocument": json.dumps(doc)}
+            for name, doc in policies.items()
+        ]
+    }
+    return logs
+
+
+def _xray_spans_grant(sid: str = "TransactionSearchXRayAccess") -> dict:
+    return {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": sid,
+            "Effect": "Allow",
+            "Principal": {"Service": "xray.amazonaws.com"},
+            "Action": "logs:PutLogEvents",
+            "Resource": [
+                "arn:aws:logs:us-west-2:111:log-group:aws/spans:*",
+                "arn:aws:logs:us-west-2:111:log-group:/aws/application-signals/data:*",
+            ],
+        }],
+    }
+
+
+def test_spans_resource_policy_placed_in_a_fresh_region():
+    """Without it UpdateTraceSegmentDestination is refused: "XRay does not have
+    permission to call PutLogEvents on the aws/spans Log Group"."""
+    logs = _logs_with({})
+    assert ensure_spans_resource_policy(logs, "111", "us-west-2") is True
+    kwargs = logs.put_resource_policy.call_args.kwargs
+    assert kwargs["policyName"] == "TransactionSearchXRayAccess"
+    statement = json.loads(kwargs["policyDocument"])["Statement"][0]
+    assert statement["Principal"] == {"Service": "xray.amazonaws.com"}
+    assert statement["Action"] == "logs:PutLogEvents"
+    assert "arn:aws:logs:us-west-2:111:log-group:aws/spans:*" in statement["Resource"]
+    assert statement["Condition"] == {
+        "StringEquals": {"aws:SourceAccount": "111"},
+        "ArnLike": {"aws:SourceArn": "arn:aws:xray:us-west-2:111:*"},
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "TransactionSearchXRayAccess",
+        # the Workshop Studio host template places the same grant under this name
+        "AgentCoreLaunchpadTransactionSearch",
+    ],
+)
+def test_spans_resource_policy_reuses_an_existing_grant(name):
+    logs = _logs_with({name: _xray_spans_grant()})
+    assert ensure_spans_resource_policy(logs, "111", "us-west-2") is False
+    logs.put_resource_policy.assert_not_called()
+
+
+def test_spans_resource_policy_ignores_unrelated_policies():
+    """A Logs resource policy for another service is not the X-Ray grant."""
+    route53 = {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": "route53.amazonaws.com"},
+            "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+            "Resource": "arn:aws:logs:us-east-1:111:log-group:/aws/route53/*",
+        }],
+    }
+    logs = _logs_with({"route53-query-logging": route53})
+    assert ensure_spans_resource_policy(logs, "111", "us-west-2") is True
+    logs.put_resource_policy.assert_called_once()
 
 # ── gateway TRACES delivery (Policy span channel) ───────────────────────────
 

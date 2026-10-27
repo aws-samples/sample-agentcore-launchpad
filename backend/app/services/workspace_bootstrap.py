@@ -1108,43 +1108,13 @@ def _stage_registry(ctx: BootstrapContext) -> str:
 
 
 def _ensure_spans_resource_policy(ctx: BootstrapContext) -> None:
-    """Let X-Ray write into this region's `aws/spans` log group.
-
-    `UpdateTraceSegmentDestination` fails with AccessDenied until a CloudWatch
-    Logs RESOURCE policy grants xray.amazonaws.com PutLogEvents — the hub region
-    has one from when Transaction Search was first enabled there, a fresh region
-    has none (live-diagnosed on us-east-2, 2026-08-12). Document mirrors the
-    hub's `TransactionSearchXRayAccess` policy.
-    """
-    logs = ctx.workspace.client("logs")
-    account, region = ctx.workspace.account_id, ctx.workspace.region
-    existing = logs.describe_resource_policies().get("resourcePolicies", [])
-    if any(p["policyName"] == "TransactionSearchXRayAccess" for p in existing):
-        return
-    document = {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Sid": "TransactionSearchXRayAccess",
-                "Effect": "Allow",
-                "Principal": {"Service": "xray.amazonaws.com"},
-                "Action": "logs:PutLogEvents",
-                "Resource": [
-                    f"arn:aws:logs:{region}:{account}:log-group:aws/spans:*",
-                    f"arn:aws:logs:{region}:{account}:log-group:"
-                    "/aws/application-signals/data:*",
-                ],
-                "Condition": {
-                    "StringEquals": {"aws:SourceAccount": account},
-                    "ArnLike": {"aws:SourceArn": f"arn:aws:xray:{region}:{account}:*"},
-                },
-            }
-        ],
-    }
-    logs.put_resource_policy(
-        policyName="TransactionSearchXRayAccess", policyDocument=json.dumps(document)
+    """Let X-Ray write into this region's `aws/spans` log group — the same
+    helper the hub's `run_bootstrap` uses (see its docstring)."""
+    placed = policy_bootstrap.ensure_spans_resource_policy(
+        ctx.workspace.client("logs"), ctx.workspace.account_id, ctx.workspace.region
     )
-    ctx.log("aws/spans resource policy placed for X-Ray")
+    if placed:
+        ctx.log("aws/spans resource policy placed for X-Ray")
 
 
 def _stage_observability(ctx: BootstrapContext) -> str:

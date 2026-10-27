@@ -25,6 +25,12 @@ English: [troubleshooting.md](troubleshooting.md)
   `/etc/launchpad-models.env`（见 [setup.zh-CN.md → 切换模型](setup.zh-CN.md#切换模型)）。
   Claude Agent SDK、Studio AI Fix 和 Skill Lab 的 claude / codex 路径不能换成其他
   家族。换评审模型会改变评估分数。
+- **`make bootstrap` 停在 `UpdateTraceSegmentDestination`，报
+  `AccessDeniedException: XRay does not have permission to call PutLogEvents on
+  the aws/spans Log Group`。** 该账号/区域从未开启过 Transaction Search，没有任何
+  CloudWatch Logs 资源策略允许 X-Ray 写入 `aws/spans`。bootstrap 现在会在更新之前放置
+  `TransactionSearchXRayAccess`；旧版本请先更新代码，再重新运行 `make bootstrap`（它是
+  幂等的，已部署的栈和已创建的资源都会复用）。
 - **`config/launchpad.yaml` 已 gitignore。** 它包含账号 id 与演示凭证,因此从不
   提交。若缺失(全新 clone,或你删了它),重新运行 `make bootstrap`——它是幂等的,
   会从既有资源重写该文件。
