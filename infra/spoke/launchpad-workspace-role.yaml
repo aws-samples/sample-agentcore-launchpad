@@ -6,9 +6,10 @@ AWSTemplateFormatVersion: "2010-09-09"
 # Deliberately plain CloudFormation rather than CDK: an Organization admin has to
 # be able to deploy it by console upload, `aws cloudformation deploy`, or a
 # StackSet targeting an OU — none of which want a CDK app or a bootstrapped
-# environment. It creates one IAM role (plus, only when the network enforcement
-# parameters are set, one Deny-only inline policy on it) and nothing else, and
-# deleting the stack revokes the hub's access.
+# environment. It creates one IAM role and the customer managed policy attached
+# to it (plus, only when the network enforcement parameters are set, one
+# Deny-only inline policy on it) and nothing else, and deleting the stack revokes
+# the hub's access.
 #
 # The permission set is DERIVED from the hub's code: every AWS call Launchpad
 # makes through its workspace client funnel (`backend/app/services/aws_clients.py`)
@@ -151,6 +152,8 @@ Resources:
       Tags:
         - Key: launchpad:role
           Value: workspace
+      ManagedPolicyArns:
+        - Ref: WorkspaceBedrockTelemetryPolicy
       Policies:
         - PolicyName: launchpad-workspace
           PolicyDocument:
@@ -450,108 +453,6 @@ Resources:
                   - bedrock-agentcore:*
                 Resource: "*"
 
-              # ── Bedrock (Managed Knowledge Bases) ──────────────────────────
-              # `bedrock:` is the IAM prefix of the bedrock-agent control plane
-              # and bedrock-agent-runtime data plane, which is how Launchpad
-              # manages Managed KBs. `Retrieve` is the console's own retrieval
-              # preview. Agentic retrieval is deliberately absent: agents reach it
-              # through the gateway under their own execution role, and
-              # AgenticRetrieveStream cannot be resource-scoped at all, so it does
-              # not belong in a knowledge-base-scoped statement. TagResource /
-              # ListTagsForResource: an isolated project's KBs carry its
-              # launchpad:project tags, also when an existing KB moves to the
-              # project (projects design §10.5).
-              - Sid: BedrockKnowledgeBases
-                Effect: Allow
-                Action:
-                  - bedrock:CreateDataSource
-                  - bedrock:DeleteDataSource
-                  - bedrock:DeleteKnowledgeBase
-                  - bedrock:GetDataSource
-                  - bedrock:GetKnowledgeBase
-                  - bedrock:ListDataSources
-                  - bedrock:ListIngestionJobs
-                  - bedrock:ListKnowledgeBaseDocuments
-                  - bedrock:ListTagsForResource
-                  - bedrock:Retrieve
-                  - bedrock:StartIngestionJob
-                  - bedrock:TagResource
-                  - bedrock:UntagResource
-                  - bedrock:UpdateKnowledgeBase
-                Resource:
-                  Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:knowledge-base/*"
-
-              # A knowledge base has no ARN before it exists, and ListKnowledgeBases has
-              # no resource type at all.
-              - Sid: BedrockCreateKnowledgeBase
-                Effect: Allow
-                Action:
-                  - bedrock:CreateKnowledgeBase
-                  - bedrock:ListKnowledgeBases
-                  - bedrock:TagResource
-                Resource: "*"
-              # ── Bedrock (model inference) ──────────────────────────────────────────────
-              # The hub itself calls models: intent clustering and answer suggestions
-              # (Converse), prompt optimization (ConverseStream), and AgentCore's test
-              # invoke of a judge model on CreateEvaluator, which runs with the caller's
-              # credentials. Cross-region and global inference profiles resolve to a
-              # foundation model in any region (global ones with no region), so both are
-              # listed. Agents invoke under their own execution roles, not this one.
-              - Sid: BedrockModelInference
-                Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:::foundation-model/*"
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
-
-              # ── Bedrock application inference profiles (projects design §10.8) ──
-              # Behind the hub's project_inference_profiles setting: one profile per
-              # (isolated project, model), copied from the model or the system
-              # cross-region profile the agent names and tagged launchpad:project,
-              # so model spend splits by project. CreateInferenceProfile is called
-              # with tags= (hence TagResource); TO VERIFY live whether it also
-              # authorizes against the copyFrom source, which is why the model and
-              # system-profile ARNs are listed next to the application profiles.
-              - Sid: BedrockApplicationInferenceProfiles
-                Effect: Allow
-                Action:
-                  - bedrock:CreateInferenceProfile
-                  - bedrock:GetInferenceProfile
-                  - bedrock:TagResource
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
-                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
-
-              # A profile found by name after a run died between create and record:
-              # ListInferenceProfiles takes no resource.
-              - Sid: BedrockListInferenceProfiles
-                Effect: Allow
-                Action:
-                  - bedrock:ListInferenceProfiles
-                Resource: "*"
-
-              # ── Bedrock Guardrails (the workspace PII preset) ──────────────────────────
-              - Sid: BedrockGuardrails
-                Effect: Allow
-                Action:
-                  - bedrock:ApplyGuardrail
-                  - bedrock:GetGuardrail
-                Resource:
-                  Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:guardrail/*"
-
-              # Listing has no resource type, and a guardrail has no ARN before it exists.
-              - Sid: BedrockGuardrailsCreate
-                Effect: Allow
-                Action:
-                  - bedrock:CreateGuardrail
-                  - bedrock:ListGuardrails
-                Resource: "*"
-
               # ── Cognito ────────────────────────────────────────────────────
               # The RESOURCE cannot be scoped: a user pool's ARN contains the pool
               # id AWS assigns at creation, so the pool Launchpad is about to
@@ -589,150 +490,6 @@ Resources:
                   - cognito-idp:ListUserPools
                   - cognito-idp:UpdateResourceServer
                   - cognito-idp:UpdateUserPoolClient
-                Resource: "*"
-
-              # ── Observability ──────────────────────────────────────────────
-              # Logs Insights queries over aws/spans and
-              # /aws/bedrock-agentcore/runtimes/*, the CloudWatch token-usage
-              # metrics, the account-level X-Ray span destination, and the log
-              # delivery pipeline the policy engine's decision log needs, and the
-              # runtime log-stream listing behind the evaluation wizard's 日志
-              # source (DescribeLogStreams + FilterLogEvents). None of
-              # StartQuery's siblings (GetQueryResults, StopQuery,
-              # DescribeLogGroups) accept a resource, and the account-level X-Ray
-              # setting has no ARN at all. Neither have
-              # application-signals:StartDiscovery and cloudtrail:ListChannels,
-              # which UpdateTraceSegmentDestination(CloudWatchLogs) calls as the
-              # caller (LIVE-OBSERVED 2026-10-23, spoke-use2; the rest of that
-              # chain is ApplicationSignalsDiscovery below).
-              - Sid: Observability
-                Effect: Allow
-                Action:
-                  - application-signals:StartDiscovery
-                  - cloudtrail:ListChannels
-                  - cloudwatch:GetMetricData
-                  - cloudwatch:ListMetrics
-                  - logs:CreateDelivery
-                  - logs:DescribeDeliveries
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                  - logs:DescribeResourcePolicies
-                  - logs:FilterLogEvents
-                  - logs:GetDeliveryDestination
-                  - logs:GetDeliverySource
-                  - logs:GetLogEvents
-                  - logs:GetQueryResults
-                  - logs:PutDeliveryDestination
-                  - logs:PutDeliverySource
-                  - logs:PutResourcePolicy
-                  - logs:StartQuery
-                  - logs:StopQuery
-                  - xray:GetTraceSegmentDestination
-                  - xray:UpdateTraceSegmentDestination
-                Resource: "*"
-
-              # ── Transaction Search (X-Ray → CloudWatch Logs) ───────────────
-              # LIVE-OBSERVED, not call-site derivable (2026-10-07, first bootstrap
-              # of a fresh region from an EC2 hub): UpdateTraceSegmentDestination is
-              # refused with AccessDenied ("An unknown error occurred") unless the
-              # caller ALSO holds the permissions the service exercises on its
-              # behalf — the indexing rule, the aws/spans log group, Application
-              # Signals discovery and its service-linked role / channel. Without
-              # them a new-region workspace has no aws/spans group, so traces,
-              # observability and every evaluation of that workspace read nothing.
-              # Taken verbatim from "Enable Transaction Search" in the CloudWatch
-              # user guide, scoped exactly as it scopes them.
-              - Sid: TransactionSearchIndexing
-                Effect: Allow
-                Action:
-                  - application-signals:StartDiscovery
-                  - xray:GetIndexingRules
-                  - xray:UpdateIndexingRule
-                Resource: "*"
-              # LIVE-OBSERVED (2026-10-23, spoke-use2): the span log group and its
-              # `default` stream are created under the CALLER's permissions, and
-              # logs:CreateLogGroup is checked against the bare group ARN (no `:*`)
-              # in a region where Transaction Search was never on — so both forms
-              # are listed. Scoped to the two groups the TransactionSearchXRayAccess
-              # resource policy names.
-              - Sid: TransactionSearchLogGroups
-                Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutRetentionPolicy
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans"
-                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans:*"
-                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data"
-                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data:*"
-              - Sid: TransactionSearchServiceLinkedRole
-                Effect: Allow
-                Action:
-                  - iam:GetRole
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals"
-              # GetChannel mirrors the scoping of the AWS managed
-              # CloudWatchApplicationSignalsFullAccess (2026-10-23, spoke-use2)
-              - Sid: TransactionSearchCloudTrailChannel
-                Effect: Allow
-                Action:
-                  - cloudtrail:CreateServiceLinkedChannel
-                  - cloudtrail:GetChannel
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:channel/aws-service-channel/application-signals/*"
-
-              # ── Evaluation result log groups ───────────────────────────────
-              # LIVE-OBSERVED, not call-site derivable (2026-10-07, first batch
-              # evaluation in a fresh region): StartBatchEvaluation creates its
-              # results log group with the CALLER's credentials (a forward access
-              # session) and fails with "FAS credentials do not have permission to
-              # create CloudWatch log groups. Ensure logs:CreateLogGroup is in the
-              # FAS policy." The hub region only worked because its group already
-              # existed. Batch results land under
-              # /aws/bedrock-agentcore/evaluations/batch-evaluations/results/ and
-              # online results under /aws/bedrock-agentcore/evaluations/results/, so
-              # one prefix covers both. GetLogEvents is how the hub reads those
-              # results back, per session (`agentcore_eval.results_stream` and its reader: the
-              # run results route and the Agent-DLC criterion snapshot) — call-site
-              # derivable, but it was missing, and only admin credentials hid that.
-              - Sid: EvaluationResultLogGroups
-                Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:GetLogEvents
-                  - logs:PutLogEvents
-                  - logs:PutRetentionPolicy
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*"
-
-              # ── Cost tags (cost-tags design §1.2 / §1.5) ───────────────────
-              # An agent runtime's log groups carry its project's cost tags,
-              # written by the cost_tags_backfill job. IAM roles (TagRole on
-              # launchpad-*), AgentCore resources (bedrock-agentcore:*), KBs
-              # (bedrock:TagResource) and the token vault's secrets
-              # (secretsmanager:TagResource) are tagged under their own
-              # statements above.
-              - Sid: CostTagsAgentLogGroups
-                Effect: Allow
-                Action:
-                  - logs:ListTagsForResource
-                  - logs:TagResource
-                  - logs:UntagResource
-                Resource:
-                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
-
-              # The bill by launchpad:project (cost-tags design §1.4): Cost Explorer
-              # and the cost-allocation-tag switch take no resource. Activating the
-              # tags is optional — an organization member account is refused and
-              # the console says so.
-              - Sid: CostExplorerByTag
-                Effect: Allow
-                Action:
-                  - ce:GetCostAndUsage
-                  - ce:ListCostAllocationTags
-                  - ce:UpdateCostAllocationTagsStatus
                 Resource: "*"
 
               # ── Secrets Manager (AgentCore Identity token vault) ──────────
@@ -822,6 +579,271 @@ Resources:
                 Action:
                   - sts:GetCallerIdentity
                 Resource: "*"
+
+  # The Bedrock and telemetry grants live in a customer managed policy rather than
+  # inline: IAM caps the inline policies of one role at 10240 characters in total
+  # (whitespace excluded), and the hub's permission set outgrew that. A managed
+  # policy has its own 6144-character cap, and attaching it through the role's
+  # ManagedPolicyArns makes CloudFormation create it BEFORE it updates the role, so
+  # moving statements between the two never opens a gap. The hub cannot edit it:
+  # its IAM policy grants are scoped to launchpad-project-* (IamProjectBoundaryPolicies).
+  # infra/tests/test_spoke_template*.py guard both sizes.
+  WorkspaceBedrockTelemetryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Sub: "${RoleName}-bedrock-telemetry"
+      Description: >-
+        Bedrock (knowledge bases, models, guardrails) and observability grants of the
+        AgentCore Launchpad workspace role.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # ── Bedrock (Managed Knowledge Bases) ──────────────────────────
+          # `bedrock:` is the IAM prefix of the bedrock-agent control plane
+          # and bedrock-agent-runtime data plane, which is how Launchpad
+          # manages Managed KBs. `Retrieve` is the console's own retrieval
+          # preview. Agentic retrieval is deliberately absent: agents reach it
+          # through the gateway under their own execution role, and
+          # AgenticRetrieveStream cannot be resource-scoped at all, so it does
+          # not belong in a knowledge-base-scoped statement. TagResource /
+          # ListTagsForResource: an isolated project's KBs carry its
+          # launchpad:project tags, also when an existing KB moves to the
+          # project (projects design §10.5).
+          - Sid: BedrockKnowledgeBases
+            Effect: Allow
+            Action:
+              - bedrock:CreateDataSource
+              - bedrock:DeleteDataSource
+              - bedrock:DeleteKnowledgeBase
+              - bedrock:GetDataSource
+              - bedrock:GetKnowledgeBase
+              - bedrock:ListDataSources
+              - bedrock:ListIngestionJobs
+              - bedrock:ListKnowledgeBaseDocuments
+              - bedrock:ListTagsForResource
+              - bedrock:Retrieve
+              - bedrock:StartIngestionJob
+              - bedrock:TagResource
+              - bedrock:UntagResource
+              - bedrock:UpdateKnowledgeBase
+            Resource:
+              Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:knowledge-base/*"
+
+          # A knowledge base has no ARN before it exists, and ListKnowledgeBases has
+          # no resource type at all.
+          - Sid: BedrockCreateKnowledgeBase
+            Effect: Allow
+            Action:
+              - bedrock:CreateKnowledgeBase
+              - bedrock:ListKnowledgeBases
+              - bedrock:TagResource
+            Resource: "*"
+          # ── Bedrock (model inference) ──────────────────────────────────────────────
+          # The hub itself calls models: intent clustering and answer suggestions
+          # (Converse), prompt optimization (ConverseStream), and AgentCore's test
+          # invoke of a judge model on CreateEvaluator, which runs with the caller's
+          # credentials. Cross-region and global inference profiles resolve to a
+          # foundation model in any region (global ones with no region), so both are
+          # listed. Agents invoke under their own execution roles, not this one.
+          - Sid: BedrockModelInference
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:::foundation-model/*"
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+
+          # ── Bedrock application inference profiles (projects design §10.8) ──
+          # Behind the hub's project_inference_profiles setting: one profile per
+          # (isolated project, model), copied from the model or the system
+          # cross-region profile the agent names and tagged launchpad:project,
+          # so model spend splits by project. CreateInferenceProfile is called
+          # with tags= (hence TagResource); TO VERIFY live whether it also
+          # authorizes against the copyFrom source, which is why the model and
+          # system-profile ARNs are listed next to the application profiles.
+          - Sid: BedrockApplicationInferenceProfiles
+            Effect: Allow
+            Action:
+              - bedrock:CreateInferenceProfile
+              - bedrock:GetInferenceProfile
+              - bedrock:TagResource
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+              - Fn::Sub: "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+
+          # A profile found by name after a run died between create and record:
+          # ListInferenceProfiles takes no resource.
+          - Sid: BedrockListInferenceProfiles
+            Effect: Allow
+            Action:
+              - bedrock:ListInferenceProfiles
+            Resource: "*"
+
+          # ── Bedrock Guardrails (the workspace PII preset) ──────────────────────────
+          - Sid: BedrockGuardrails
+            Effect: Allow
+            Action:
+              - bedrock:ApplyGuardrail
+              - bedrock:GetGuardrail
+            Resource:
+              Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:guardrail/*"
+
+          # Listing has no resource type, and a guardrail has no ARN before it exists.
+          - Sid: BedrockGuardrailsCreate
+            Effect: Allow
+            Action:
+              - bedrock:CreateGuardrail
+              - bedrock:ListGuardrails
+            Resource: "*"
+
+          # ── Observability ──────────────────────────────────────────────
+          # Logs Insights queries over aws/spans and
+          # /aws/bedrock-agentcore/runtimes/*, the CloudWatch token-usage
+          # metrics, the account-level X-Ray span destination, and the log
+          # delivery pipeline the policy engine's decision log needs, and the
+          # runtime log-stream listing behind the evaluation wizard's 日志
+          # source (DescribeLogStreams + FilterLogEvents). None of
+          # StartQuery's siblings (GetQueryResults, StopQuery,
+          # DescribeLogGroups) accept a resource, and the account-level X-Ray
+          # setting has no ARN at all. Neither have
+          # application-signals:StartDiscovery and cloudtrail:ListChannels,
+          # which UpdateTraceSegmentDestination(CloudWatchLogs) calls as the
+          # caller (LIVE-OBSERVED 2026-10-23, spoke-use2; the rest of that
+          # chain is ApplicationSignalsDiscovery below).
+          - Sid: Observability
+            Effect: Allow
+            Action:
+              - application-signals:StartDiscovery
+              - cloudtrail:ListChannels
+              - cloudwatch:GetMetricData
+              - cloudwatch:ListMetrics
+              - logs:CreateDelivery
+              - logs:DescribeDeliveries
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:DescribeResourcePolicies
+              - logs:FilterLogEvents
+              - logs:GetDeliveryDestination
+              - logs:GetDeliverySource
+              - logs:GetLogEvents
+              - logs:GetQueryResults
+              - logs:PutDeliveryDestination
+              - logs:PutDeliverySource
+              - logs:PutResourcePolicy
+              - logs:StartQuery
+              - logs:StopQuery
+              - xray:GetTraceSegmentDestination
+              - xray:UpdateTraceSegmentDestination
+            Resource: "*"
+
+          # ── Transaction Search (X-Ray → CloudWatch Logs) ───────────────
+          # LIVE-OBSERVED, not call-site derivable (2026-10-07, first bootstrap
+          # of a fresh region from an EC2 hub): UpdateTraceSegmentDestination is
+          # refused with AccessDenied ("An unknown error occurred") unless the
+          # caller ALSO holds the permissions the service exercises on its
+          # behalf — the indexing rule, the aws/spans log group, Application
+          # Signals discovery and its service-linked role / channel. Without
+          # them a new-region workspace has no aws/spans group, so traces,
+          # observability and every evaluation of that workspace read nothing.
+          # Taken verbatim from "Enable Transaction Search" in the CloudWatch
+          # user guide, scoped exactly as it scopes them.
+          - Sid: TransactionSearchIndexing
+            Effect: Allow
+            Action:
+              - application-signals:StartDiscovery
+              - xray:GetIndexingRules
+              - xray:UpdateIndexingRule
+            Resource: "*"
+          # LIVE-OBSERVED (2026-10-23, spoke-use2): the span log group and its
+          # `default` stream are created under the CALLER's permissions, and
+          # logs:CreateLogGroup is checked against the bare group ARN (no `:*`)
+          # in a region where Transaction Search was never on — so both forms
+          # are listed. Scoped to the two groups the TransactionSearchXRayAccess
+          # resource policy names.
+          - Sid: TransactionSearchLogGroups
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutRetentionPolicy
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans"
+              - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans:*"
+              - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data"
+              - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data:*"
+          - Sid: TransactionSearchServiceLinkedRole
+            Effect: Allow
+            Action:
+              - iam:GetRole
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals"
+          # GetChannel mirrors the scoping of the AWS managed
+          # CloudWatchApplicationSignalsFullAccess (2026-10-23, spoke-use2)
+          - Sid: TransactionSearchCloudTrailChannel
+            Effect: Allow
+            Action:
+              - cloudtrail:CreateServiceLinkedChannel
+              - cloudtrail:GetChannel
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:channel/aws-service-channel/application-signals/*"
+
+          # ── Evaluation result log groups ───────────────────────────────
+          # LIVE-OBSERVED, not call-site derivable (2026-10-07, first batch
+          # evaluation in a fresh region): StartBatchEvaluation creates its
+          # results log group with the CALLER's credentials (a forward access
+          # session) and fails with "FAS credentials do not have permission to
+          # create CloudWatch log groups. Ensure logs:CreateLogGroup is in the
+          # FAS policy." The hub region only worked because its group already
+          # existed. Batch results land under
+          # /aws/bedrock-agentcore/evaluations/batch-evaluations/results/ and
+          # online results under /aws/bedrock-agentcore/evaluations/results/, so
+          # one prefix covers both. GetLogEvents is how the hub reads those
+          # results back, per session (`agentcore_eval.results_stream` and its reader: the
+          # run results route and the Agent-DLC criterion snapshot) — call-site
+          # derivable, but it was missing, and only admin credentials hid that.
+          - Sid: EvaluationResultLogGroups
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:GetLogEvents
+              - logs:PutLogEvents
+              - logs:PutRetentionPolicy
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*"
+
+          # ── Cost tags (cost-tags design §1.2 / §1.5) ───────────────────
+          # An agent runtime's log groups carry its project's cost tags,
+          # written by the cost_tags_backfill job. IAM roles (TagRole on
+          # launchpad-*), AgentCore resources (bedrock-agentcore:*), KBs
+          # (bedrock:TagResource) and the token vault's secrets
+          # (secretsmanager:TagResource) are tagged under their own
+          # statements.
+          - Sid: CostTagsAgentLogGroups
+            Effect: Allow
+            Action:
+              - logs:ListTagsForResource
+              - logs:TagResource
+              - logs:UntagResource
+            Resource:
+              - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+
+          # The bill by launchpad:project (cost-tags design §1.4): Cost Explorer
+          # and the cost-allocation-tag switch take no resource. Activating the
+          # tags is optional — an organization member account is refused and
+          # the console says so.
+          - Sid: CostExplorerByTag
+            Effect: Allow
+            Action:
+              - ce:GetCostAndUsage
+              - ce:ListCostAllocationTags
+              - ce:UpdateCostAllocationTagsStatus
+            Resource: "*"
 
   # The optional network enforcement Deny (see the ApprovedSubnetIds parameter).
   # Condition keys per the Service Authorization Reference for bedrock-agentcore:

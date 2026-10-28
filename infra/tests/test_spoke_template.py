@@ -21,6 +21,7 @@ catches). They read the parsed template by key, which is also what turns a typo
 in one of those property names into a failure here.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,13 @@ import pytest
 from aws_cdk import cloudformation_include as cfn_include
 from aws_cdk.assertions import Template
 
-TEMPLATE = Path(__file__).resolve().parents[1] / "spoke" / "launchpad-workspace-role.yaml"
+SPOKE = Path(__file__).resolve().parents[1] / "spoke"
+TEMPLATE = SPOKE / "launchpad-workspace-role.yaml"
+
+# IAM's quotas, counted on the policy JSON with whitespace removed: all inline
+# policies of one role together, and each customer managed policy on its own.
+INLINE_POLICIES_PER_ROLE_MAX = 10240
+MANAGED_POLICY_MAX = 6144
 
 # Statements whose resources Launchpad's naming discipline makes scopable. The
 # rest are `*` by necessity (documented per statement in the template); a bare
@@ -54,6 +61,13 @@ SCOPED_SIDS = frozenset(
 )
 
 
+def _load(path: Path) -> dict[str, Any]:
+    app = cdk.App()
+    stack = cdk.Stack(app, "spoke")
+    cfn_include.CfnInclude(stack, "SpokeRole", template_file=str(path))
+    return Template.from_stack(stack).to_json()
+
+
 @pytest.fixture(scope="module")
 def template() -> dict[str, Any]:
     """The template as CloudFormation will see it.
@@ -62,10 +76,7 @@ def template() -> dict[str, Any]:
     rule to the synthesized stack; the assertions below name what they read, so
     those extras are simply ignored.
     """
-    app = cdk.App()
-    stack = cdk.Stack(app, "spoke")
-    cfn_include.CfnInclude(stack, "SpokeRole", template_file=str(TEMPLATE))
-    return Template.from_stack(stack).to_json()
+    return _load(TEMPLATE)
 
 
 @pytest.fixture(scope="module")
@@ -79,11 +90,40 @@ def role(template: dict[str, Any]) -> dict[str, Any]:
     return roles[0]["Properties"]
 
 
+def _managed_policies(template: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        logical_id: resource["Properties"]
+        for logical_id, resource in template["Resources"].items()
+        if resource["Type"] == "AWS::IAM::ManagedPolicy"
+    }
+
+
 @pytest.fixture(scope="module")
-def statements(role: dict[str, Any]) -> list[dict[str, Any]]:
+def statements(template: dict[str, Any], role: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every Allow/Deny the role carries: its one inline policy plus the customer
+    managed policy the template attaches (the split is only about IAM's size
+    quotas, so the invariants below hold across both)."""
     policies = role["Policies"]
     assert len(policies) == 1
-    return policies[0]["PolicyDocument"]["Statement"]
+    managed = _managed_policies(template)
+    assert role["ManagedPolicyArns"] == [{"Ref": logical_id} for logical_id in managed]
+    return policies[0]["PolicyDocument"]["Statement"] + [
+        statement
+        for policy in managed.values()
+        for statement in policy["PolicyDocument"]["Statement"]
+    ]
+
+
+def test_the_stack_creates_the_role_its_managed_policy_and_nothing_else(
+    template: dict[str, Any],
+):
+    kinds = sorted(resource["Type"] for resource in template["Resources"].values())
+    assert kinds == ["AWS::IAM::ManagedPolicy", "AWS::IAM::Role", "AWS::IAM::RolePolicy"]
+    (policy,) = _managed_policies(template).values()
+    # The hub may write customer managed policies only under launchpad-project-*
+    # (IamProjectBoundaryPolicies); a name there would let it rewrite its own grants.
+    assert policy["ManagedPolicyName"] == {"Fn::Sub": "${RoleName}-bedrock-telemetry"}
+    assert "Roles" not in policy, "attach through ManagedPolicyArns so it exists first"
 
 
 def test_parameters_constrain_what_they_accept(template: dict[str, Any]):
@@ -354,3 +394,51 @@ def test_every_cost_tagged_resource_can_be_tagged(statements: list[dict[str, Any
     logs = by_sid["CostTagsAgentLogGroups"]["Resource"]
     assert len(logs) == 1 and logs[0]["Fn::Sub"].endswith(
         "log-group:/aws/bedrock-agentcore/runtimes/*")
+
+
+def _render(value: Any) -> Any:
+    """A policy document as IAM receives it, for measuring. Placeholders are sized
+    like the real values; a list parameter (the approved subnets / security groups)
+    is three ids, and a condition takes its larger branch."""
+    if isinstance(value, list):
+        return [_render(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if set(value) == {"Fn::Sub"}:
+        return (value["Fn::Sub"].replace("${AWS::Partition}", "aws")
+                .replace("${AWS::AccountId}", "123456789012")
+                .replace("${RoleName}", "LaunchpadWorkspaceRole"))
+    if set(value) == {"Ref"}:
+        assert value["Ref"] in {"ApprovedSubnetIds", "ApprovedSecurityGroupIds"}, value
+        return ["subnet-0123456789abcdef0"] * 3
+    if set(value) == {"Fn::If"}:
+        return _render(value["Fn::If"][1])
+    assert not any(key.startswith("Fn::") for key in value), value
+    return {key: _render(item) for key, item in value.items()}
+
+
+def _size(document: dict[str, Any]) -> int:
+    return len(json.dumps(_render(document), separators=(",", ":")))
+
+
+@pytest.mark.parametrize(
+    "name", ["launchpad-workspace-role.yaml", "launchpad-workspace-role-prod.yaml"])
+def test_the_policies_fit_iams_size_quotas(name: str):
+    """Found on real AWS (2026-10-28): the merged permission set rendered to 10291
+    characters in one inline policy, so the stack could neither be created nor
+    updated (IAM refuses a role whose inline policies exceed 10240 in total), and
+    a spoke stuck on the older template answered the knowledge-base page with
+    bedrock:ListKnowledgeBases denied. Every inline policy on the role — the
+    network-enforcement Deny included — counts toward the one quota."""
+    template = _load(SPOKE / name)
+    resources = template["Resources"].values()
+    inline = [policy["PolicyDocument"]
+              for resource in resources if resource["Type"] == "AWS::IAM::Role"
+              for policy in resource["Properties"]["Policies"]]
+    inline += [resource["Properties"]["PolicyDocument"]
+               for resource in resources if resource["Type"] == "AWS::IAM::RolePolicy"]
+    total = sum(_size(document) for document in inline)
+    assert total <= INLINE_POLICIES_PER_ROLE_MAX, f"inline policies: {total} characters"
+    for logical_id, policy in _managed_policies(template).items():
+        size = _size(policy["PolicyDocument"])
+        assert size <= MANAGED_POLICY_MAX, f"{logical_id}: {size} characters"

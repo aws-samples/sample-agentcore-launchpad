@@ -64,8 +64,11 @@ call into the spoke. Nothing is provisioned yet.
 ### 2. Deploy the role in the spoke account
 
 Template: [`infra/spoke/launchpad-workspace-role.yaml`](../infra/spoke/launchpad-workspace-role.yaml).
-Plain CloudFormation, one IAM role, no CDK and no bootstrapped environment
-needed.
+Plain CloudFormation, one IAM role plus the customer managed policy attached to it
+(`<RoleName>-bedrock-telemetry`), no CDK and no bootstrapped environment needed. The
+permissions are split between the role's inline policy and that managed policy only
+because IAM caps a role's inline policies at 10240 characters in total;
+`infra/tests/test_spoke_template.py` guards both quotas.
 
 ```bash
 aws cloudformation deploy \
@@ -195,6 +198,8 @@ least-privilege hub needs one statement:
 | `validate-access` fails with the account it actually reached | The role exists but lives in a different account than the workspace declares. Re-register with the right pair. |
 | `validate-access` refuses the region | That region already hosts another Launchpad deployment (its gateway/memory/registry/user pool/CodeBuild project are not in this workspace's resource map). Pick another region or detach the other install. |
 | A later stage fails with a named action | A permission gap in the spoke stack. Add the action, update the stack, resume the bootstrap. |
+| A console page fails with `AccessDenied` naming the workspace role, e.g. `bedrock:ListKnowledgeBases` on the knowledge-base page | The spoke stack predates the statement; the template in the repo already grants it. Update the stack from the current template — every stack deployed before 2026-10-28 also gains the `<RoleName>-bedrock-telemetry` managed policy on that update. |
+| A stack update fails with `Maximum policy size of 10240 bytes exceeded` | A template whose inline policies outgrew IAM's per-role quota. Move statements into the managed policy; the size test in `infra/tests/test_spoke_template.py` should have caught it. |
 | `observability` reads `unavailable · AccessDeniedException`, and Home shows Observability (and so Evaluation) as never lighting up | Turning on Transaction Search creates the `aws/spans` log group under the caller's permissions. The same call also enables Application Signals, which creates a service-linked role and a CloudTrail channel. A stack deployed before the `TransactionSearchLogGroups` and `ApplicationSignalsDiscovery` statements existed lacks `logs:CreateLogGroup` / `logs:CreateLogStream` on that group, plus `application-signals:StartDiscovery` and `cloudtrail:CreateServiceLinkedChannel`. Update the stack. Then re-run only that stage: a READY workspace refuses a new bootstrap job, and the stage is idempotent. Without spans, an evaluation finds nothing to score. |
 | An evaluation run fails with `FAS credentials do not have permission to create CloudWatch log groups` | Batch evaluation runs under the caller's credentials and creates its own results group under `/aws/bedrock-agentcore/evaluations/`. A stack deployed before the `EvaluationResultLogs` statement existed cannot do that. Update the stack and start the run again. |
 | A long job dies with an AssumeRole error | The session's refresh failed with under ten minutes of validity left, which propagates rather than being swallowed. Fix the cause and resume; the sessions themselves recover automatically. |

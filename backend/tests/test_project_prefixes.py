@@ -490,8 +490,14 @@ def test_a_shared_projects_agent_record_is_unchanged(monkeypatch):
 
 def _template_statements(name: str) -> dict[str, dict[str, Any]]:
     doc = yaml.safe_load((SPOKE / name).read_text(encoding="utf-8"))
-    role = next(r for r in doc["Resources"].values() if r["Type"] == "AWS::IAM::Role")
-    return {s["Sid"]: s for s in role["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]}
+    # the role's inline policy plus its attached customer managed policy
+    documents = [
+        policy["PolicyDocument"]
+        for r in doc["Resources"].values() if r["Type"] == "AWS::IAM::Role"
+        for policy in r["Properties"]["Policies"]
+    ] + [r["Properties"]["PolicyDocument"]
+         for r in doc["Resources"].values() if r["Type"] == "AWS::IAM::ManagedPolicy"]
+    return {s["Sid"]: s for d in documents for s in d["Statement"]}
 
 
 @pytest.mark.parametrize("name", ["launchpad-workspace-role.yaml",
