@@ -433,8 +433,14 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
         )
         # Transaction Search is shared observability infrastructure. Keep it
         # bootstrapped independently from operator-managed Policy resources.
-        from app.services.policy_bootstrap import ensure_transaction_search
+        # X-Ray needs a Logs resource policy on aws/spans first, or a fresh
+        # account/region refuses the destination update with AccessDenied.
+        from app.services.policy_bootstrap import (
+            ensure_spans_resource_policy,
+            ensure_transaction_search,
+        )
 
+        ensure_spans_resource_policy(_client("logs", region), account_id, region)
         observability_summary = ensure_transaction_search(_client("xray", region))
 
     # Skill Lab exec worker (vendored SkillOpt): role + content-addressed image

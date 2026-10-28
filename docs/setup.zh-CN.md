@@ -64,7 +64,9 @@ Engine，也不会替用户选择 Gateway 的执行模式。重跑 bootstrap 时
 `ENFORCE` 或可选 `LOG_ONLY` 模式挂载。`ENFORCE` 默认拒绝，因此应在依赖 Gateway
 流量前创建并审核明确放行的 Policy。
 
-bootstrap 仍会为通用可观测性开启 CloudWatch Transaction Search，但不创建逐条 Policy
+bootstrap 仍会为通用可观测性开启 CloudWatch Transaction Search。切换 X-Ray 目标之前，它会放置
+CloudWatch Logs 资源策略 `TransactionSearchXRayAccess`，允许 X-Ray 写入 `aws/spans` 日志组；
+已有策略授予了这一权限时则不再放置。bootstrap 不创建逐条 Policy
 决策 span 所需的 per-Gateway CloudWatch Logs delivery。Policy 配置完成后，决策计数
 仍来自 CloudWatch 指标；逐条决策明细需要另行管理 trace delivery。
 

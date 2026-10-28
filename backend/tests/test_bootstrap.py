@@ -183,6 +183,8 @@ def test_run_bootstrap_gateway_does_not_provision_policy(monkeypatch):
         "Destination": "CloudWatchLogs",
         "Status": "ACTIVE",
     }
+    logs = MagicMock()
+    logs.describe_resource_policies.return_value = {"resourcePolicies": []}
     cognito = MagicMock()
     sts = MagicMock()
     sts.get_caller_identity.return_value = {"Account": "111"}
@@ -193,6 +195,7 @@ def test_run_bootstrap_gateway_does_not_provision_policy(monkeypatch):
         "sts": sts,
         "apigateway": MagicMock(),
         "xray": xray,
+        "logs": logs,
     }
     requested_clients: list[str] = []
     written: list[dict] = []
@@ -209,8 +212,6 @@ def test_run_bootstrap_gateway_does_not_provision_policy(monkeypatch):
 
     def client(service: str, _region: str):
         requested_clients.append(service)
-        if service == "logs":
-            raise AssertionError(f"bootstrap requested Policy client {service}")
         return clients[service]
 
     monkeypatch.setattr(bs, "get_stack_outputs", lambda _region: outputs)
@@ -269,7 +270,14 @@ def test_run_bootstrap_gateway_does_not_provision_policy(monkeypatch):
         "status": "ACTIVE",
     }
     assert requested_clients.count("xray") == 1
-    assert "logs" not in requested_clients
+    # The one Logs call is the aws/spans resource policy Transaction Search
+    # needs, placed before the destination update. Policy decision-span delivery
+    # stays operator-managed: no delivery source, destination or delivery.
+    assert requested_clients.index("logs") < requested_clients.index("xray")
+    logs.put_resource_policy.assert_called_once()
+    logs.put_delivery_source.assert_not_called()
+    logs.put_delivery_destination.assert_not_called()
+    logs.create_delivery.assert_not_called()
     assert all(
         "policy_engine_id" not in (entry.get("resources") or {})
         and "policy_engine_arn" not in (entry.get("resources") or {})

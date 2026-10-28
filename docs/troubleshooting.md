@@ -31,6 +31,13 @@ entry below was observed during implementation — none is speculative.
   ([setup.md → Choosing models](setup.md#choosing-models--切换模型)). Claude
   Agent SDK, Studio AI Fix and the Skill Lab claude / codex paths cannot move
   to another family. A new judge changes evaluation scores.
+- **`make bootstrap` stops at `UpdateTraceSegmentDestination` with
+  `AccessDeniedException: XRay does not have permission to call PutLogEvents on
+  the aws/spans Log Group`.** The account/region never had Transaction Search
+  on, so no CloudWatch Logs resource policy lets X-Ray write `aws/spans`.
+  Bootstrap now places `TransactionSearchXRayAccess` before the update; on an
+  older checkout, update and rerun `make bootstrap` (it is idempotent, so the
+  stack and the resources already created are reused).
 - **`config/launchpad.yaml` is gitignored.** It holds account ids and demo
   credentials, so it is never committed. If it is missing (fresh clone, or you
   deleted it), rerun `make bootstrap` — it is idempotent and rewrites the file

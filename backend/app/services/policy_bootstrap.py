@@ -3,9 +3,11 @@
 Same idempotent ensure_* contract as the earlier bootstrap layers.
 Cedar sources live in samples/policies/ (committed for customers);
 __GATEWAY_ARN__ is substituted when an explicit provisioning tool calls these
-helpers. ``make bootstrap`` uses only ``ensure_transaction_search``.
+helpers. ``make bootstrap`` uses only ``ensure_spans_resource_policy`` and
+``ensure_transaction_search``.
 """
 
+import json
 import time
 from typing import Any
 
@@ -17,6 +19,7 @@ POLICY_ENGINE_NAME = "launchpad_pe"
 POLICIES_DIR = REPO_ROOT / "samples" / "policies"
 TRANSACTION_SEARCH_POLL_ATTEMPTS = 30
 TRANSACTION_SEARCH_POLL_INTERVAL_S = 5
+SPANS_RESOURCE_POLICY_NAME = "TransactionSearchXRayAccess"
 
 # Vended-log delivery naming, matching the convention already present in the
 # account for memory/runtime resources (`<resource-id>-traces-source`).
@@ -48,6 +51,84 @@ def _wait_transaction_search_active(xray: Any) -> dict[str, Any]:
         # Deliberate status polling interval; the loop has a fixed attempt cap.
         time.sleep(TRANSACTION_SEARCH_POLL_INTERVAL_S)  # nosemgrep: arbitrary-sleep
     return state
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _grants_xray_spans_write(document: str) -> bool:
+    """True when a Logs resource policy already lets X-Ray write `aws/spans`.
+
+    Matched by content, not by name: the Workshop Studio host template places
+    the grant as `AgentCoreLaunchpadTransactionSearch`, and other tooling uses
+    its own names. A region holds at most 10 Logs resource policies, so adding
+    a second copy of an existing grant is not free.
+    """
+    try:
+        statements = _as_list(json.loads(document).get("Statement"))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    for statement in statements:
+        if not isinstance(statement, dict) or statement.get("Effect") != "Allow":
+            continue
+        principal = statement.get("Principal")
+        services = _as_list(principal.get("Service")) if isinstance(principal, dict) else []
+        actions = _as_list(statement.get("Action"))
+        resources = _as_list(statement.get("Resource"))
+        if (
+            "xray.amazonaws.com" in services
+            and ("logs:PutLogEvents" in actions or "logs:*" in actions)
+            and any(":log-group:aws/spans" in str(resource) for resource in resources)
+        ):
+            return True
+    return False
+
+
+def ensure_spans_resource_policy(logs: Any, account_id: str, region: str) -> bool:
+    """Let X-Ray write into this region's `aws/spans` log group.
+
+    `UpdateTraceSegmentDestination(CloudWatchLogs)` is refused with
+    AccessDeniedException ("XRay does not have permission to call PutLogEvents
+    on the aws/spans Log Group") until a CloudWatch Logs RESOURCE policy grants
+    xray.amazonaws.com PutLogEvents. A region where Transaction Search was never
+    enabled has none: live-diagnosed for a workspace on us-east-2 (2026-08-12)
+    and for the hub's own `make bootstrap` in a fresh account (2026-10-27).
+    Returns True when it placed the policy, False when one already grants it.
+    """
+    existing = logs.describe_resource_policies().get("resourcePolicies", [])
+    if any(
+        policy.get("policyName") == SPANS_RESOURCE_POLICY_NAME
+        or _grants_xray_spans_write(policy.get("policyDocument") or "")
+        for policy in existing
+    ):
+        return False
+    document = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "TransactionSearchXRayAccess",
+                "Effect": "Allow",
+                "Principal": {"Service": "xray.amazonaws.com"},
+                "Action": "logs:PutLogEvents",
+                "Resource": [
+                    f"arn:aws:logs:{region}:{account_id}:log-group:aws/spans:*",
+                    f"arn:aws:logs:{region}:{account_id}:log-group:"
+                    "/aws/application-signals/data:*",
+                ],
+                "Condition": {
+                    "StringEquals": {"aws:SourceAccount": account_id},
+                    "ArnLike": {"aws:SourceArn": f"arn:aws:xray:{region}:{account_id}:*"},
+                },
+            }
+        ],
+    }
+    logs.put_resource_policy(
+        policyName=SPANS_RESOURCE_POLICY_NAME, policyDocument=json.dumps(document)
+    )
+    return True
 
 
 def ensure_transaction_search(xray: Any) -> dict[str, Any]:
