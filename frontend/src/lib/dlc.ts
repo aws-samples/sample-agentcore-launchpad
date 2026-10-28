@@ -28,7 +28,8 @@ export type GoldenSplit = "dev" | "regression" | "holdout";
 /** Admission and the item editor never write the holdout; only initial curation does. */
 export type WritableSplit = "dev" | "regression";
 
-export type ExecutorKind = "evaluator" | "metric" | "manual";
+/** `human` = decided by a person (「人工」); the backend accepts exactly these three. */
+export type ExecutorKind = "evaluator" | "metric" | "human";
 export type EvaluatorKind = "code" | "trajectory" | "judge";
 
 export interface CriterionExecutor {
@@ -165,6 +166,48 @@ export interface CalibrationStatus {
   judge_human_kappa?: number | null;
   expires_at?: string;
   expired_at?: string;
+}
+
+/* ── criteria editor and golden runs ─────────────────────────────────────── */
+
+/** A row the editor renders, keyed by a client-only id: keying by the editable 编号
+ *  remounted the row (and dropped the caret) on every keystroke. */
+export interface EditorRow {
+  uid: number;
+  row: CriterionInput;
+}
+
+let editorRowUid = 0;
+
+export function editorRows(rows: CriterionInput[]): EditorRow[] {
+  return rows.map((row) => ({ uid: ++editorRowUid, row }));
+}
+
+/** The findings of a save / publish the server refused (`422 criteria.invalid`), else
+ *  null. Duck-typed on the error so this module stays free of the API client. */
+export function refusedFindings(error: unknown): CriteriaFinding[] | null {
+  if (!error || typeof error !== "object") return null;
+  const { code, detail } = error as { code?: unknown; detail?: unknown };
+  if (code !== "criteria.invalid" || !detail || typeof detail !== "object") return null;
+  const findings = (detail as { findings?: unknown }).findings;
+  return Array.isArray(findings) ? (findings as CriteriaFinding[]) : null;
+}
+
+/** The newest published version of a lineage, from any version's payload — the one a
+ *  golden split's run is scored against. */
+export function latestPublishedVersion(versions: CriteriaSetVersionRef[]): number | null {
+  const published = versions.filter((v) => v.status === "published").map((v) => v.version);
+  return published.length ? Math.max(...published) : null;
+}
+
+/** The evaluators a criteria version's evaluator rows name, in table order, once each. */
+export function criteriaEvaluatorIds(criteria: { executor?: CriterionExecutor | null }[]): string[] {
+  const ids: string[] = [];
+  for (const row of criteria) {
+    const id = (row.executor?.kind ?? "evaluator") === "evaluator" ? row.executor?.evaluator_id : undefined;
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }
 
 export interface CriteriaSetVersionRef {

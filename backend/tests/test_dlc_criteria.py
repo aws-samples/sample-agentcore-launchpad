@@ -74,6 +74,14 @@ def test_a_red_line_cannot_be_judged_by_an_llm():
     assert "criteria.redline_judge" in codes(svc.validate(rows))
 
 
+def test_a_human_judged_criterion_is_valid_and_manual_is_its_old_name():
+    human = row("C-006", dimension="quality", executor={"kind": "human"})
+    legacy = row("C-007", dimension="quality", executor={"kind": "manual"})
+    rows = normalized(full_table() + [human, legacy])
+    assert [r["executor"]["kind"] for r in rows[-2:]] == ["human", "human"]
+    assert codes(svc.validate(rows, for_publish=True)) == set()
+
+
 def test_cost_and_performance_must_be_metrics():
     rows = normalized([row("C-1", dimension="cost")])
     assert "criteria.metric_dimension" in codes(svc.validate(rows))

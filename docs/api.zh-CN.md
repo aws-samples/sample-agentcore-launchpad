@@ -962,7 +962,7 @@ span，以及最近一次在多久之前。未带 ADOT 启动器部署的 BYOC �
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/eval/datasets` | `{datasets[]}`——本地行,含 `items`、`kind`、`has_ground_truth` 与 `cloud` blob |
+| `GET` | `/api/eval/datasets` | `{datasets[]}`——本地行,含 `items`、`kind`、`has_ground_truth`、`cloud` blob,以及 Agent-DLC 的 `role`(`scratch`/`golden`)、`split` 与 `criteria_lineage_id` |
 | `POST` | `/api/eval/datasets` | 由条目创建(devguide scenario、模拟 persona 或旧式 prompt;kind 自动推断)→ 201 |
 | `PUT` · `DELETE` | `/api/eval/datasets/{dataset_id}` | 编辑(kind 不可变 → 400 `dataset.kind_immutable`)/ 删除本地行;已同步的 AWS 副本保留 |
 | `POST` | `/api/eval/datasets/{dataset_id}/sync-to-aws` | 没有存活云端副本时:`CreateDataset`(内联示例)并轮询到 `ACTIVE`。有副本时:**原地编辑其草稿**——`ListDatasetExamples` → `DeleteDatasetExamples`(草稿为空时跳过)→ 用归一化后的 scenario 调 `AddDatasetExamples`,每步经 `UPDATING` 轮询到 `ACTIVE`;数据集 id 与已发布版本保留,草稿变为 `MODIFIED`。AWS 已不认识的副本(`GetDataset` 返回 `ResourceNotFoundException`)或标为 `deleted` 的副本会重新创建。返回该行;`CREATE_FAILED` / `UPDATE_FAILED` / 超时 → 502 `dataset.sync_failed`,携带 AWS `failureReason` 并记录到 blob |

@@ -309,6 +309,27 @@ def _release_setup(engineer, owner, *, endpoint_mode="live"):
     return agent_id, lineage
 
 
+def test_the_dataset_list_names_a_golden_split_and_its_criteria(engineer, owner):
+    """The task wizard preselects a golden split's criteria evaluators from these."""
+    agent_id = _agent()
+    lineage = _create_set(engineer, agent_id)
+    engineer.put(f"/api/criteria-sets/{lineage}", json={"criteria": CRITERIA})
+    engineer.post(f"/api/criteria-sets/{lineage}/publish", json={})
+    dataset_id = _golden(engineer, lineage, seeder=owner)
+    splits = engineer.get(f"/api/golden-sets/{dataset_id}").json()["splits"]
+    listed = {d["id"]: d for d in engineer.get("/api/eval/datasets").json()["datasets"]}
+    regression = listed[splits["regression"]["id"]]
+    assert (regression["role"], regression["split"], regression["criteria_lineage_id"]) == (
+        "golden", "regression", lineage)
+    assert listed[dataset_id]["split"] is None
+    res = engineer.post("/api/eval/datasets", json={
+        "name": "plain", "items": [{"scenario_id": "p", "turns": [{"input": "q"}]}]})
+    assert res.status_code in (200, 201), res.text
+    plain = {d["id"]: d for d in engineer.get("/api/eval/datasets").json()["datasets"]}[
+        res.json()["id"]]
+    assert (plain["role"], plain["split"], plain["criteria_lineage_id"]) == ("scratch", None, None)
+
+
 def test_a_golden_set_is_not_editable_or_deletable_as_a_plain_dataset(engineer, owner):
     """The plain dataset routes would skip admission and rewrite a sealed holdout."""
     agent_id = _agent()

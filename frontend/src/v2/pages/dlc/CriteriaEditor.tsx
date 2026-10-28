@@ -27,7 +27,11 @@ import {
   type CriterionInput,
   type DlcDimension,
   type DlcTier,
+  type EditorRow,
+  type ExecutorKind,
   compoundRate,
+  editorRows,
+  refusedFindings,
 } from "../../../lib/dlc";
 import { useV2Toast } from "../../hooks";
 import {
@@ -177,14 +181,14 @@ function RowEditor({
             value={kind}
             onChange={(v) =>
               set({
-                executor: { ...row.executor, kind: v as "evaluator" | "metric" | "manual" },
+                executor: { ...row.executor, kind: v as ExecutorKind },
                 metric_rule: v === "metric" ? row.metric_rule ?? { metric: "latency_p95_ms", op: "<=", value: 3000 } : null,
               })
             }
             options={[
               { value: "evaluator", label: t("v2.dlc.criteria.executorEvaluator") },
               { value: "metric", label: t("v2.dlc.criteria.executorMetric") },
-              { value: "manual", label: t("v2.dlc.criteria.executorManual") },
+              { value: "human", label: t("v2.dlc.criteria.executorManual") },
             ]}
           />
         </Field>
@@ -288,7 +292,10 @@ export function CriteriaEditor({
   const { t } = useTranslation();
   const { can, username } = useAuth();
   const toast = useV2Toast();
-  const [rows, setRows] = useState<CriterionInput[]>(() => payload.criteria.map(toInput));
+  const [entries, setEntries] = useState<EditorRow[]>(() => editorRows(payload.criteria.map(toInput)));
+  const rows = entries.map((e) => e.row);
+  // a refused save / publish names what is wrong with the draft as typed, not as saved
+  const [refused, setRefused] = useState<CriteriaFinding[] | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [signing, setSigning] = useState(false);
@@ -303,8 +310,8 @@ export function CriteriaEditor({
 
   const byKey = useMemo(() => new Map(payload.criteria.map((c) => [c.key, c])), [payload.criteria]);
 
-  const update = (index: number, next: CriterionInput) => {
-    setRows((prev) => prev.map((r, i) => (i === index ? next : r)));
+  const update = (uid: number, next: CriterionInput) => {
+    setEntries((prev) => prev.map((e) => (e.uid === uid ? { uid, row: next } : e)));
     setDirty(true);
   };
 
@@ -313,9 +320,11 @@ export function CriteriaEditor({
     try {
       await fn();
       toast("success", t(okKey));
+      setRefused(null);
       setDirty(false);
       onReload();
     } catch (error) {
+      setRefused(refusedFindings(error));
       toast("error", errorMessage(error));
     } finally {
       setBusy(false);
@@ -378,7 +387,8 @@ export function CriteriaEditor({
             {t("v2.dlc.criteria.templateNewer", { v: payload.newer_template_version })}
           </Alert>
         )}
-        <Findings findings={payload.findings} />
+        {refused && <Alert tone="error">{t("v2.dlc.criteria.refusedFindings")}</Alert>}
+        <Findings findings={refused ?? payload.findings} />
       </Card>
 
       <ThresholdAssistant rows={rows} />
@@ -390,7 +400,7 @@ export function CriteriaEditor({
             <Button
               size="sm"
               onClick={() => {
-                setRows((prev) => [...prev, blank(prev.length)]);
+                setEntries((prev) => [...prev, ...editorRows([blank(prev.length)])]);
                 setDirty(true);
               }}
             >
@@ -433,13 +443,13 @@ export function CriteriaEditor({
             </tbody>
           </table>
         ) : (
-          rows.map((row, index) => (
+          entries.map(({ uid, row }) => (
             <RowEditor
-              key={`${row.key}:${index}`}
+              key={uid}
               row={row}
-              onChange={(next) => update(index, next)}
+              onChange={(next) => update(uid, next)}
               onRemove={() => {
-                setRows((prev) => prev.filter((_, i) => i !== index));
+                setEntries((prev) => prev.filter((e) => e.uid !== uid));
                 setDirty(true);
               }}
             />

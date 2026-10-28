@@ -5623,7 +5623,11 @@ dimension needs a criterion or an explicit `n/a:<dimension>` note; at least one 
 A judge criterion's *effective* tier is `observe` until a calibration record says it is
 aligned and unexpired — the editor, the gate and the scorecard all read the effective
 tier. Templates (`kind="template"`) are adopted explicitly into a new agent version; a
-newer template version is reported, never applied under the agent.
+newer template version is reported, never applied under the agent. An executor is
+`evaluator`, `metric` or `human` (「人工」: a person decides, so the row gets no automatic
+verdict; a legacy `manual` is saved as `human`). The editors key their rows by a
+client-only id, not the editable key, and a save or publish refused with
+`422 criteria.invalid` lists that draft's findings in place of the saved version's.
 
 **Golden sets.** A parent `EvalDataset` (`role="golden"`) groups three split datasets,
 each synced to its own AWS Dataset. Item provenance lives in `metadata.dlc` (case tier,
@@ -5631,6 +5635,10 @@ criteria ids, origin, `expected_source`). `POST /api/golden-sets/{id}/seed`
 (`golden.admit`) is the **only** path that writes the holdout: it stratifies by case tier
 and then seals the holdout (`golden.holdout_sealed`). Item adds, moves and admission
 refuse the holdout. Coverage is criteria × case tier with `thin` (< 3 items) flagged.
+`GET /api/eval/datasets` carries each row's `role`, `split` and `criteria_lineage_id`, so
+choosing a golden split in either task wizard preselects the evaluators the lineage's
+newest **published** version names — the version the run is scored against — and says
+when the lineage has no published version yet.
 
 **Runs and pass^k.** AgentCore has no per-scenario repetition parameter, so
 `execute_run(repeats=k)` invokes each scenario k times in distinct sessions and records

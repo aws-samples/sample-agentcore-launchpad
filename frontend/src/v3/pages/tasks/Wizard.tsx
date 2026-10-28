@@ -10,6 +10,7 @@ import { type EstimateBody, evalCostApi, type EvalCostEstimate } from "../../../
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { type GoldenRunCriteria, goldenRunCriteria, isGoldenSplit } from "../../../lib/goldenRun";
 import { INSIGHT_TYPES, insightLabel } from "../../../v2/online";
 import { LogSourceFields } from "../../../v2/pages/tasks/LogSourceFields";
 import { LogStreamPicker } from "../../../v2/pages/tasks/LogStreamPicker";
@@ -136,6 +137,8 @@ export function TaskWizard() {
   const [refused, setRefused] = useState<EvalCostEstimate | null>(null);
   const [evalLevel, setEvalLevel] = useState<"all" | EvaluatorLevel>("all");
   const [evalQ, setEvalQ] = useState("");
+  // a golden split's run is scored against its criteria: what was preselected for it
+  const [criteriaPick, setCriteriaPick] = useState<(GoldenRunCriteria & { dataset: string }) | null>(null);
 
   useEffect(() => {
     if (seed.data && draft === null) setDraft(seed.data);
@@ -267,6 +270,27 @@ export function TaskWizard() {
     }
   };
 
+  // choosing a golden split preselects the evaluators its published criteria name
+  // (a copied run or an ?evaluators= hand-off keeps its own: they never come through here)
+  const chooseDataset = (id: string) => {
+    set({ dataset: id });
+    setCriteriaPick(null);
+    const row = localDatasets.find((d) => d.id === id);
+    if (!isGoldenSplit(row)) return;
+    goldenRunCriteria(row.criteria_lineage_id)
+      .then((pick) => {
+        setCriteriaPick({ ...pick, dataset: id });
+        if (pick.evaluatorIds.length === 0) return;
+        setDraft((prev) => (prev && prev.dataset === id ? { ...prev, evaluators: pick.evaluatorIds.slice(0, MAX_EVALUATORS) } : prev));
+      })
+      .catch(() => setCriteriaPick(null)); // unreadable criteria: the selection stays as it was
+  };
+  const pickNote = criteriaPick && criteriaPick.dataset === draft.dataset && draft.source === "dataset"
+    ? criteriaPick.version === null
+      ? t("v2.tasks.criteriaUnpublished", { name: criteriaPick.name })
+      : t("v2.tasks.criteriaPreselected", { name: criteriaPick.name, version: criteriaPick.version, count: criteriaPick.evaluatorIds.length })
+    : null;
+
   const toggleEvaluator = (id: string) =>
     set({ evaluators: draft.evaluators.includes(id) ? draft.evaluators.filter((e) => e !== id) : [...draft.evaluators, id] });
   // without a platform agent there is nothing to invoke (dataset) and no
@@ -394,7 +418,7 @@ export function TaskWizard() {
                   </Field>
                 ) : draft.source === "dataset" ? (
                   <Field label={`${t("v2.tasks.dataset")} *`} hint={selectedDataset && !selectedDataset.has_ground_truth ? t("v2.tasks.noGroundTruth") : undefined}>
-                    <Select className="v3-select" value={draft.dataset} onChange={(e) => set({ dataset: e.target.value })}>
+                    <Select className="v3-select" value={draft.dataset} onChange={(e) => chooseDataset(e.target.value)}>
                       <option value="">{t("v2.common.choose")}</option>
                       {draft.dataset && !selectedDataset && <option value={draft.dataset}>{draft.dataset}</option>}
                       {localDatasets.map((d) => <option key={d.id} value={d.id}>{`${d.name} · ${t("v2.datasets.items", { count: d.item_count })}`}</option>)}
@@ -591,6 +615,11 @@ export function TaskWizard() {
                 placeholder={t("v2.evaluators.search")} aria-label={t("v2.evaluators.search")} />
             </div>
           </div>
+          {pickNote && (
+            <div style={{ padding: "0 20px 12px" }} data-testid="v3-wiz-criteria-pick">
+              <Notice s={criteriaPick?.version === null ? "wait" : undefined}>{pickNote}</Notice>
+            </div>
+          )}
           {draft.evaluators.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 20px 12px" }}>
               {draft.evaluators.map((id) => <Chip key={id} s="info">{evaluatorLabel(t, id)}</Chip>)}

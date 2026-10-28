@@ -66,3 +66,30 @@ therefore re-grants every other denied key.
 The backend still emits naive strings, so classic pages and `/v1` consumers that use
 `new Date()` directly are still exposed. Fixing it at the source means changing about 34
 `.isoformat()` serializers to attach UTC.
+
+## 6. Agent-DLC criteria editor and golden-run wizard (task `10-28-criteria-editor-fixes`)
+
+Found while recording the 判据 demo on prod2 (2026-10-27); each was a silent mismatch
+between what the console sent or showed and what the server does.
+
+- **Executor kinds are `evaluator | metric | human`.** `app/dlc/criteria.validate`
+  refuses anything else (`criteria.bad_executor`). 「人工」 is `human`; the client type is
+  `ExecutorKind` in `frontend/src/lib/dlc.ts`. `normalize_criterion` still maps a legacy
+  `manual` to `human` for old cached bundles — do not add new aliases there.
+- **Never key an editable list by an editable field.** The editors keyed rows by
+  `` `${row.key}:${index}` ``; typing the 编号 remounted the row on every keystroke and
+  dropped the caret. Keep `EditorRow { uid, row }` (`editorRows()`) and key by `uid`.
+- **A refusal carries its reasons.** Save and publish answer `422 criteria.invalid` with
+  `detail.findings`; `refusedFindings(error)` reads them, and the editor lists them (with
+  the 「没有保存或发布」 note) instead of the last saved version's findings until the next
+  successful save.
+- **A golden split's run is scored against its lineage's newest published version**
+  (`evaluation/routers._golden_lineage`). `GET /api/eval/datasets` carries `role`,
+  `split`, `criteria_lineage_id`; both task wizards call `goldenRunCriteria()`
+  (`frontend/src/lib/goldenRun.ts`) when such a split is chosen and preselect the
+  evaluators that version names. A copied run (`?from=run:`) or an `?evaluators=`
+  hand-off keeps its own selection.
+
+Tests: `backend/tests/test_dlc_criteria.py::test_a_human_judged_criterion_is_valid_and_manual_is_its_old_name`,
+`backend/tests/test_dlc_api.py::test_the_dataset_list_names_a_golden_split_and_its_criteria`,
+`frontend/src/lib/criteriaEditor.test.ts`.

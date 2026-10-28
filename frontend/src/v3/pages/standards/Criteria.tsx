@@ -22,6 +22,10 @@ import {
   DLC_TIERS,
   type DlcDimension,
   type DlcTier,
+  editorRows,
+  type EditorRow,
+  type ExecutorKind,
+  refusedFindings,
 } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
 import type { NextStepNote } from "../../story/flow";
@@ -250,13 +254,13 @@ function RowEditor({ row, onChange, onRemove }: { row: CriterionInput; onChange:
             onChange={(e) => {
               const v = e.target.value;
               set({
-                executor: { ...row.executor, kind: v as "evaluator" | "metric" | "manual" },
+                executor: { ...row.executor, kind: v as ExecutorKind },
                 metric_rule: v === "metric" ? row.metric_rule ?? { metric: "latency_p95_ms", op: "<=", value: 3000 } : null,
               });
             }}>
             <option value="evaluator">{t("v2.dlc.criteria.executorEvaluator")}</option>
             <option value="metric">{t("v2.dlc.criteria.executorMetric")}</option>
-            <option value="manual">{t("v2.dlc.criteria.executorManual")}</option>
+            <option value="human">{t("v2.dlc.criteria.executorManual")}</option>
           </Select>
         </label>
       </div>
@@ -329,15 +333,20 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
   const { t } = useTranslation();
   const { can, username } = useAuth();
   const toast = useToast();
-  const [rows, setRows] = useState<CriterionInput[]>(() => payload.criteria.map(toInput));
+  const [entries, setEntries] = useState<EditorRow[]>(() => editorRows(payload.criteria.map(toInput)));
+  const rows = entries.map((e) => e.row);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [signing, setSigning] = useState(false);
   const [signNote, setSignNote] = useState("");
   const [confirmPublish, setConfirmPublish] = useState(false);
+  const [failure, setFailure] = useState<unknown>(null);
   const set = payload.set;
   const frozen = set.status === "published";
   const errors = payload.findings.filter((f) => f.level === "error");
+  // a refused save / publish names what is wrong with the draft as typed, not as saved
+  const refused = refusedFindings(failure);
+  const shownFindings = refused ?? payload.findings;
   const mayEdit = can("criteria.manage");
   const maySign = can("criteria.sign");
 
@@ -350,7 +359,6 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
 
   // publish / sign / save fail in place, with the way out (storyline-ux §4); a
   // published or signed agent table says what comes next instead (§3.1)
-  const [failure, setFailure] = useState<unknown>(null);
   const nextStep = useNextStep();
   const storyNote = (doneKey: string, after: string): NextStepNote | undefined =>
     set.kind === "agent" && set.agent_id
@@ -414,7 +422,8 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
               )}
             </Notice>
           )}
-          {[...errors, ...payload.findings.filter((f) => f.level === "warning")].map((f, i) => (
+          {refused && <Notice s="act">{t("v2.dlc.criteria.refusedFindings")}</Notice>}
+          {[...shownFindings.filter((f) => f.level === "error"), ...shownFindings.filter((f) => f.level === "warning")].map((f, i) => (
             <Notice key={`${f.code}:${f.key ?? ""}:${i}`} s={f.level === "error" ? "act" : "wait"}>
               {f.key && <span className="mono">{f.key} · </span>}
               {findingText(t, f)}
@@ -442,7 +451,7 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
         flush={frozen}
         end={
           mayEdit && !frozen ? (
-            <Btn size="sm" onClick={() => { setRows((prev) => [...prev, blank(prev.length)]); setDirty(true); }}>
+            <Btn size="sm" onClick={() => { setEntries((prev) => [...prev, ...editorRows([blank(prev.length)])]); setDirty(true); }}>
               <Plus size={13} /> {t("v2.dlc.criteria.addRow")}
             </Btn>
           ) : undefined
@@ -481,10 +490,10 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
           <p className="v3-std-empty">{t("v2.dlc.criteria.noRows")}</p>
         ) : (
           <div style={{ display: "grid", gap: 12 }}>
-            {rows.map((row, index) => (
-              <RowEditor key={`${row.key}:${index}`} row={row}
-                onChange={(next) => { setRows((prev) => prev.map((r, i) => (i === index ? next : r))); setDirty(true); }}
-                onRemove={() => { setRows((prev) => prev.filter((_, i) => i !== index)); setDirty(true); }} />
+            {entries.map(({ uid, row }) => (
+              <RowEditor key={uid} row={row}
+                onChange={(next) => { setEntries((prev) => prev.map((e) => (e.uid === uid ? { uid, row: next } : e))); setDirty(true); }}
+                onRemove={() => { setEntries((prev) => prev.filter((e) => e.uid !== uid)); setDirty(true); }} />
             ))}
           </div>
         )}
