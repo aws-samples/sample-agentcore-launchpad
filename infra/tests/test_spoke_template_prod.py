@@ -31,25 +31,31 @@ def _role(template: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def standard() -> dict[str, Any]:
-    return _role(_load("launchpad-workspace-role.yaml"))
+    return _load("launchpad-workspace-role.yaml")
 
 
 @pytest.fixture(scope="module")
 def prod() -> dict[str, Any]:
-    return _role(_load("launchpad-workspace-role-prod.yaml"))
+    return _load("launchpad-workspace-role-prod.yaml")
 
 
-def _statements(role: dict[str, Any]) -> list[dict[str, Any]]:
-    return role["Policies"][0]["PolicyDocument"]["Statement"]
+def _statements(template: dict[str, Any]) -> list[dict[str, Any]]:
+    """The role's inline policy plus its attached customer managed policy."""
+    statements = list(_role(template)["Policies"][0]["PolicyDocument"]["Statement"])
+    for resource in template["Resources"].values():
+        if resource["Type"] == "AWS::IAM::ManagedPolicy":
+            statements += resource["Properties"]["PolicyDocument"]["Statement"]
+    return statements
 
 
-def _actions(role: dict[str, Any]) -> set[str]:
-    return {a for s in _statements(role) for a in s["Action"]}
+def _actions(template: dict[str, Any]) -> set[str]:
+    return {a for s in _statements(template) for a in s["Action"]}
 
 
 def test_trust_and_session_are_identical_to_the_standard_template(standard, prod):
-    assert prod["AssumeRolePolicyDocument"] == standard["AssumeRolePolicyDocument"]
-    assert prod["MaxSessionDuration"] == standard["MaxSessionDuration"] == 3600
+    std, prd = _role(standard), _role(prod)
+    assert prd["AssumeRolePolicyDocument"] == std["AssumeRolePolicyDocument"]
+    assert prd["MaxSessionDuration"] == std["MaxSessionDuration"] == 3600
 
 
 def test_prod_grants_a_strict_subset_of_the_standard_actions(standard, prod):
