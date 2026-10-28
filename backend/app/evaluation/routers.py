@@ -323,6 +323,11 @@ def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
         "cloud": dataset.cloud,
         "has_ground_truth": _has_ground_truth(dataset.items),
         "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
+        # Agent-DLC: a golden split's run is scored against this lineage's latest
+        # published criteria, so the task wizard can preselect their evaluators
+        "role": dataset.role,
+        "split": dataset.split,
+        "criteria_lineage_id": dataset.criteria_set_id,
         **creators.fields(dataset),
     }
 

@@ -5053,6 +5053,12 @@ export interface V2Dataset {
   cloud: { dataset_id?: string; status?: string; draft_status?: string } | null;
   has_ground_truth: boolean;
   created_at: string | null;
+  /** Agent-DLC: `golden` for a golden set and its splits, else `scratch`. */
+  role?: "scratch" | "golden" | string;
+  /** dev / regression / holdout on a golden split, null otherwise. */
+  split?: string | null;
+  /** The criteria lineage a golden set serves — a split's run is scored against it. */
+  criteria_lineage_id?: string | null;
   /** `users.id` of the creating account (the ownership key); null for the config
    *  admin / auth-disabled operator, system-created and legacy rows. */
   created_by?: string | null;

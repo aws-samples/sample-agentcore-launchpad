@@ -248,6 +248,8 @@ def normalize_criterion(raw: dict[str, Any], kind_of: EvaluatorKindOf) -> dict[s
     """Shape one incoming row; resolve the evaluator kind once, at save time."""
     executor = dict(raw.get("executor") or {})
     kind = executor.get("kind") or "evaluator"
+    if kind == "manual":
+        kind = "human"  # the editors sent "manual" for 人工 until 2026-10; old bundles still may
     executor["kind"] = kind
     if kind == "evaluator" and executor.get("evaluator_id"):
         executor["evaluator_kind"] = (

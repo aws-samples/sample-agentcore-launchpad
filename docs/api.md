@@ -1302,7 +1302,7 @@ replaces the draft's examples in place; PUBLISH VERSION snapshots the draft.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/eval/datasets` | `{datasets[]}` — local rows with `items`, `kind`, `has_ground_truth` and the `cloud` blob |
+| `GET` | `/api/eval/datasets` | `{datasets[]}` — local rows with `items`, `kind`, `has_ground_truth`, the `cloud` blob and the Agent-DLC `role` (`scratch`/`golden`), `split` and `criteria_lineage_id` |
 | `POST` | `/api/eval/datasets` | Create from items (devguide scenarios, simulated personas or legacy prompts; kind is inferred) → 201 |
 | `PUT` · `DELETE` | `/api/eval/datasets/{dataset_id}` | Edit (kind is immutable → 400 `dataset.kind_immutable`) / delete the local row; a synced AWS copy stays |
 | `POST` | `/api/eval/datasets/{dataset_id}/sync-to-aws` | Without a live cloud copy: `CreateDataset` (inline examples) polled to `ACTIVE`. With one: edit its **draft in place** — `ListDatasetExamples` → `DeleteDatasetExamples` (skipped when the draft is empty) → `AddDatasetExamples` with the normalized scenarios, each polled through `UPDATING` to `ACTIVE`; the dataset id and published versions survive and the draft reads `MODIFIED`. A copy AWS no longer knows (`ResourceNotFoundException` on `GetDataset`) or marked `deleted` is re-created. Returns the row; `CREATE_FAILED` / `UPDATE_FAILED` / timeout → 502 `dataset.sync_failed` with the AWS `failureReason`, also recorded on the blob |

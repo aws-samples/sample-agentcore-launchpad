@@ -8,6 +8,7 @@ import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { actorModelOptions, CLOUD_VALUE_PREFIX, defaultActorModel } from "../../../lib/evaluation";
 import { builtinsNotInCatalog, evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { type GoldenRunCriteria, goldenRunCriteria, isGoldenSplit } from "../../../lib/goldenRun";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, STATIC_MODEL_DEFAULTS, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
@@ -154,6 +155,8 @@ export function TaskWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [evalLevel, setEvalLevel] = useState("");
   const [evalQ, setEvalQ] = useState("");
+  // a golden split's run is scored against its criteria: what was preselected for it
+  const [criteriaPick, setCriteriaPick] = useState<(GoldenRunCriteria & { dataset: string }) | null>(null);
   // bumped by the trajectory picker's refresh: re-reads past the 60 s session cache
   const [sessionsForce, setSessionsForce] = useState(0);
 
@@ -312,6 +315,27 @@ export function TaskWizard() {
       setSubmitting(false);
     }
   };
+
+  // choosing a golden split preselects the evaluators its published criteria name
+  // (a copied run or an ?evaluators= hand-off keeps its own: they never come through here)
+  const chooseDataset = (id: string) => {
+    set({ dataset: id });
+    setCriteriaPick(null);
+    const row = localDatasets.find((d) => d.id === id);
+    if (!isGoldenSplit(row)) return;
+    goldenRunCriteria(row.criteria_lineage_id)
+      .then((pick) => {
+        setCriteriaPick({ ...pick, dataset: id });
+        if (pick.evaluatorIds.length === 0) return;
+        setDraft((prev) => (prev && prev.dataset === id ? { ...prev, evaluators: pick.evaluatorIds.slice(0, MAX_EVALUATORS) } : prev));
+      })
+      .catch(() => setCriteriaPick(null)); // unreadable criteria: the selection stays as it was
+  };
+  const pickNote = criteriaPick && criteriaPick.dataset === draft.dataset && draft.source === "dataset"
+    ? criteriaPick.version === null
+      ? t("v2.tasks.criteriaUnpublished", { name: criteriaPick.name })
+      : t("v2.tasks.criteriaPreselected", { name: criteriaPick.name, version: criteriaPick.version, count: criteriaPick.evaluatorIds.length })
+    : null;
 
   const toggleEvaluator = (id: string) =>
     set({ evaluators: draft.evaluators.includes(id) ? draft.evaluators.filter((e) => e !== id) : [...draft.evaluators, id] });
@@ -481,7 +505,7 @@ export function TaskWizard() {
                   <Field label={t("v2.tasks.dataset")} required hint={selectedDataset && !selectedDataset.has_ground_truth ? t("v2.tasks.noGroundTruth") : undefined}>
                     <Select
                       value={draft.dataset}
-                      onChange={(v) => set({ dataset: v })}
+                      onChange={(v) => chooseDataset(v)}
                       testId="v2-task-dataset"
                       placeholder={t("v2.common.choose")}
                       options={[
@@ -758,6 +782,7 @@ export function TaskWizard() {
       {step === 1 && draft.mode === "evaluators" && (
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
           <CustomUnavailableNote marker={evaluators.data?.custom_unavailable} />
+          {pickNote && <Alert tone={criteriaPick?.version === null ? "warn" : "info"}>{pickNote}</Alert>}
           {prunedEvaluators.length > 0 && (
             <Alert tone="warn">
               {t("v2.tasks.prunedEvaluators", { names: prunedEvaluators.map((id) => evaluatorLabel(t, id)).join(", ") })}

@@ -2656,8 +2656,8 @@ uv run python scripts/backfill_projects.py --db /path/to/launchpad.db   # 另一
 完整设计见 [agent-dlc-design.zh-CN.md](agent-dlc-design.zh-CN.md)，英文版本节列出了逐个模块的实现细节。要点：
 
 - **模块**：服务在 `app/dlc/`，统计函数在 `app/evaluation/stats.py`，模型在 `app/models/dlc.py`，路由在 `app/routers/dlc.py`（控制台）与 `app/routers/share_annotate.py`（公开）。控制台页面为 `/v2/eval/standards`，以 `?view=` 切换九个子页。
-- **判据表**：按 `lineage_id` 版本化，发布即冻结，须由编辑人以外的人签署（`criteria.sign`）。红线不能交给大模型裁判；成本与性能必须是指标；裁判类判据在校准通过前实际档位为“观察”。
-- **黄金集**：开发集 / 回归集 / 保留集三个切分。`POST /api/golden-sets/{id}/seed` 是唯一写入保留集的路径，写入后即封存。
+- **判据表**：按 `lineage_id` 版本化，发布即冻结，须由编辑人以外的人签署（`criteria.sign`）。红线不能交给大模型裁判；成本与性能必须是指标；裁判类判据在校准通过前实际档位为“观察”。判定方式为 `evaluator`、`metric` 或 `human`（「人工」，由人判定，没有自动结论；旧的 `manual` 保存时改为 `human`）。编辑器用仅在前端的行 id 作为 key，而不是可编辑的编号；保存或发布被 `422 criteria.invalid` 拒绝时，列出的是这份草稿的问题，而不是已保存版本的。
+- **黄金集**：开发集 / 回归集 / 保留集三个切分。`POST /api/golden-sets/{id}/seed` 是唯一写入保留集的路径，写入后即封存。`GET /api/eval/datasets` 为每行返回 `role`、`split` 与 `criteria_lineage_id`；在任一评估任务向导里选择黄金集切分时，会预选该判据表最新**已发布**版本用到的评估器（运行正是按这个版本判定），尚无发布版本时给出提示。
 - **放行门**：按固定顺序判定——红线 → 分母 → 各维度门限 → 观察项。证据不足判为 INVALID（无法判定），而不是不达标。
 - **流量前置门控**：门控智能体通过具名 `live` 端点对外服务，新版本部署到 `candidate`；签署后才把 `live` 指过去，回滚即重新指回，不删除任何资源。切换到具名端点（`release/migrate`）需要 `release.sign`——生产服务哪个版本是放行决定，不是构建动作。
 - **遥测按端点区分**（真实 AWS e2e 发现）：每个 AgentCore 端点各写自己的内容日志组（`…-<endpoint>`）与 service name（`….<endpoint>`）。统一由 `evaluation.service.telemetry_endpoint(agent, qualifier)` 决定读哪个：钉住端点的运行读自己的，门控智能体读 `live`，其余读 `DEFAULT`。
