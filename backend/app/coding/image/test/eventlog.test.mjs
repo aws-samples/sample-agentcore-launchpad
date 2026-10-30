@@ -5,11 +5,25 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
 
-import { EventLog } from "../src/eventlog.mjs";
+import { EventLog as BaseEventLog } from "../src/eventlog.mjs";
+
+// Every log a test opens, so teardown can flush them first: an append arms a batched
+// flush ~100 ms out, and one firing while the async rm below walks the directory
+// recreates a file in it (ENOTEMPTY on the rmdir).
+const opened = [];
+class EventLog extends BaseEventLog {
+  constructor(...args) {
+    super(...args);
+    opened.push(this);
+  }
+}
 
 let dir;
 before(async () => { dir = await fsp.mkdtemp(path.join(os.tmpdir(), "coding-eventlog-")); });
-after(async () => { await fsp.rm(dir, { recursive: true, force: true }); });
+after(async () => {
+  for (const log of opened) log.flushSync();
+  await fsp.rm(dir, { recursive: true, force: true });
+});
 
 const file = (name) => path.join(dir, name, "events.jsonl");
 
