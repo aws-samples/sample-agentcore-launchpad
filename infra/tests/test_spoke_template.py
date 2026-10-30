@@ -47,6 +47,7 @@ SCOPED_SIDS = frozenset(
         "IamProjectBoundaryPolicies",
         "IamProjectBoundaryOnAgentRoles",
         "IamIsolatedAgentRolesNeedABoundary",
+        "ReadOwnRoleForTemplateVersion",
         "PassLaunchpadRoles",
         "S3Launchpad",
         "EcrLaunchpad",
@@ -442,3 +443,21 @@ def test_the_policies_fit_iams_size_quotas(name: str):
     for logical_id, policy in _managed_policies(template).items():
         size = _size(policy["PolicyDocument"])
         assert size <= MANAGED_POLICY_MAX, f"{logical_id}: {size} characters"
+
+
+@pytest.mark.parametrize(
+    "name", ["launchpad-workspace-role.yaml", "launchpad-workspace-role-prod.yaml"])
+def test_the_role_can_read_its_own_template_version_and_nothing_more(name: str):
+    """The console's "update the spoke stack" warning reads the role's
+    launchpad:template-version tag through GetRole on the role itself; the grant
+    names only that role, so it reveals nothing about any other role."""
+    template = _load(SPOKE / name)
+    (role,) = [r["Properties"] for r in template["Resources"].values()
+               if r["Type"] == "AWS::IAM::Role"]
+    tags = {tag["Key"]: tag["Value"] for tag in role["Tags"]}
+    assert tags["launchpad:template-version"].isdigit()
+    statements = role["Policies"][0]["PolicyDocument"]["Statement"]
+    read = next(s for s in statements if s["Sid"] == "ReadOwnRoleForTemplateVersion")
+    assert read["Action"] == ["iam:GetRole"]
+    assert read["Resource"] == {
+        "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleName}"}

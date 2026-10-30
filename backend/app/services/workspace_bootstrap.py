@@ -55,6 +55,7 @@ from app.services import (
     gateway_bootstrap,
     policy_bootstrap,
     project_telemetry,
+    spoke_template,
     workspace_iam,
 )
 from app.services import bootstrap as hub_bootstrap
@@ -522,7 +523,29 @@ def _stage_validate_access(ctx: BootstrapContext) -> str:
         probed.append(f"{service}:{_probe(ctx, service, operation, call)}")
     ctx.log(f"probed {len(probed)} services in {ctx.region}")
     _refuse_foreign_resources(ctx)
+    _log_role_template(ctx)
     return f"{ctx.region} usable · {len(probed)} services probed"
+
+
+def _log_role_template(ctx: BootstrapContext) -> None:
+    """Warn when the spoke stack predates the repo's template — a later stage, or a
+    console feature long after, would otherwise fail on the missing statement. Never
+    fails the stage: the stack is the spoke administrator's to update."""
+    if not ctx.workspace.role_arn:
+        return
+    try:
+        verdict = spoke_template.check(ctx.workspace, refresh=True)
+    except Exception as exc:  # advisory only: never fail the stage on it
+        ctx.log(f"spoke role template check skipped: {type(exc).__name__}")
+        return
+    if verdict["status"] == spoke_template.OUTDATED:
+        deployed = verdict["deployed"] if verdict["deployed"] is not None else "untagged"
+        ctx.log(
+            f"WARNING spoke role template is outdated (deployed {deployed}, expected "
+            f"{verdict['expected']}) — update the spoke stack: {verdict['stack_command']}"
+        )
+    else:
+        ctx.log(f"spoke role template: {verdict['status']}")
 
 
 # ── stage: iam ─────────────────────────────────────────────────────────────
