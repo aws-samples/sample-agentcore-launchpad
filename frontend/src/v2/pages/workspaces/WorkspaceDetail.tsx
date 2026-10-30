@@ -1,4 +1,4 @@
-import { Check, Loader2, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Copy, Loader2, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -19,6 +19,7 @@ import {
   readBootstrapJobIds,
   rememberBootstrapJobId,
 } from "../../../lib/workspaces";
+import { deployedLabel, roleTemplateSummary, useRoleTemplate } from "../../../workspace/use-role-template";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -51,6 +52,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const [tick, setTick] = useState(0);
   const list = useLoad(() => api.listWorkspaces(), `ws-detail:${workspaceId}:${tick}`);
   const row = list.data?.workspaces.find((w) => w.id === workspaceId) ?? null;
+  const roleTemplate = useRoleTemplate(row);
 
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"bootstrap" | "detach" | "purge" | "tier" | null>(null);
@@ -355,6 +357,40 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       {row.bootstrap_status === "registered" && !row.is_default && !jobId && (
         <Alert tone="warn">{t("v2.workspaces.needsBootstrap")}</Alert>
       )}
+      {roleTemplate.data?.status === "outdated" && roleTemplate.data.stack_command && (
+        <Alert
+          tone="warn"
+          action={
+            <span className="v2-row">
+              <Button
+                size="sm"
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(roleTemplate.data?.stack_command ?? "")
+                    .then(() => toast("success", t("v2.workspaces.roleTemplate.copied")))
+                }
+              >
+                <Copy size={14} aria-hidden="true" /> {t("v2.workspaces.roleTemplate.copy")}
+              </Button>
+              <Button size="sm" disabled={roleTemplate.loading} onClick={() => void roleTemplate.recheck()}>
+                <RefreshCw size={14} aria-hidden="true" /> {t("v2.workspaces.roleTemplate.recheck")}
+              </Button>
+            </span>
+          }
+        >
+          <div data-testid="v2-ws-role-template-outdated">
+            <strong>{t("v2.workspaces.roleTemplate.outdatedTitle")}</strong>
+            <p>
+              {t("v2.workspaces.roleTemplate.outdatedBody", {
+                account: row.account_id,
+                deployed: deployedLabel(t, roleTemplate.data),
+                expected: roleTemplate.data.expected,
+              })}
+            </p>
+            <pre className="v2-pre">{roleTemplate.data.stack_command}</pre>
+          </div>
+        </Alert>
+      )}
 
       <div className="v2-workspaces-layout">
         <Card title={t("v2.workspaces.summary")}>
@@ -392,6 +428,16 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                     {
                       label: t("v2.workspaces.field.roleArn"),
                       value: <span className="mono v2-workspaces-break">{row.role_arn ?? "—"}</span>,
+                    },
+                    {
+                      label: t("v2.workspaces.roleTemplate.label"),
+                      value: (
+                        <span data-testid="v2-ws-role-template">
+                          {roleTemplate.eligible
+                            ? roleTemplateSummary(t, roleTemplate.data, roleTemplate.loading)
+                            : "—"}
+                        </span>
+                      ),
                     },
                   ]
                 : []),

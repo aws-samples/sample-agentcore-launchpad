@@ -4187,6 +4187,26 @@ export interface Workspace {
   updated_at: string | null;
 }
 
+/** `GET /api/workspaces/{id}/role-template` (backend `services/spoke_template.py`):
+ *  is the spoke account's LaunchpadWorkspaceRole stack on the current template? */
+export type RoleTemplateStatus = "current" | "outdated" | "newer" | "not_applicable" | "unknown";
+
+export interface WorkspaceRoleTemplate {
+  workspace_id: string;
+  status: RoleTemplateStatus;
+  /** the stack's `launchpad:template-version`; null when untagged or unreadable */
+  deployed: number | null;
+  expected: number;
+  /** `launchpad:role` tag: `workspace` or `workspace-prod` */
+  variant: string | null;
+  /** repo path of the template to deploy; null for a same-account workspace */
+  template: string | null;
+  /** the `aws cloudformation deploy` update, without parameter values */
+  stack_command: string | null;
+  /** `unreadable` (the role cannot read itself: a pre-tag stack) or an AWS error code */
+  reason?: string;
+}
+
 export interface WorkspaceListResult {
   workspaces: Workspace[];
   /** true when the caller is an admin, i.e. the list is every workspace */
@@ -6074,6 +6094,10 @@ export const api = {
    * would be refused (the workspace turned READY, an agent appeared) says so
    * before the operator confirms rather than after.
    */
+  getWorkspaceRoleTemplate: (id: string, opts: { refresh?: boolean } = {}) =>
+    request<WorkspaceRoleTemplate>(
+      `/api/workspaces/${id}/role-template${opts.refresh ? "?refresh=true" : ""}`,
+    ),
   purgeWorkspace: (id: string, opts: { dryRun?: boolean } = {}) =>
     request<WorkspacePurgeResult>(
       `/api/workspaces/${id}/purge${opts.dryRun ? "?dry_run=true" : ""}`,

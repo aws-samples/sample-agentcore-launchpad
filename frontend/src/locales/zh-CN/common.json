@@ -10336,6 +10336,20 @@
         "title": "需要你处理",
         "empty": "所有工作区都已初始化或正在初始化。",
         "failedHint": "初始化失败——打开查看失败的阶段并继续执行。"
+      },
+      "roleTemplate": {
+        "label": "角色模板",
+        "current": "v{{deployed}} · 已是最新",
+        "newer": "v{{deployed}} · 比本 hub 期望的版本（v{{expected}}）更新：请更新 hub",
+        "unknown": "无法检查（{{reason}}）",
+        "outdatedShort": "已过期（已部署 {{deployed}}，期望 v{{expected}}）",
+        "untagged": "版本跟踪之前的旧模板",
+        "checking": "检查中…",
+        "outdatedTitle": "此工作区的 spoke 角色栈已过期",
+        "outdatedBody": "账号 {{account}} 中的 LaunchpadWorkspaceRole 栈运行的模板比本 hub 旧（已部署 {{deployed}}，期望 v{{expected}}）。更新之前，需要较新权限的功能会报 AccessDenied。请由 spoke 账号的管理员更新该栈，hub 不会自行修改它。现有参数值（包括 ExternalId）会保留：",
+        "copy": "复制命令",
+        "copied": "命令已复制",
+        "recheck": "重新检查"
       }
     },
     "announcements": {

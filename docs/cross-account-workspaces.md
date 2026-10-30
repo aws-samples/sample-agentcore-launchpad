@@ -109,6 +109,34 @@ deploy, invoke, observe, evaluate. CodeBuild builds run in the spoke account,
 per-agent execution roles are created there, and observability queries read the
 spoke's CloudWatch in the spoke's region.
 
+## Keeping the spoke stack current
+
+The hub never updates a spoke stack; the spoke account's administrator does. So
+that a stale stack shows up before a feature fails with AccessDenied, both
+templates tag the role with `launchpad:template-version` and let it `iam:GetRole`
+itself (only itself). The hub compares that tag with
+`spoke_template.EXPECTED_VERSION`:
+
+- the workspace page (V2 detail, V3 Workspaces) shows a **Role template** row,
+  and when the stack is `outdated` a warning with the `aws cloudformation deploy`
+  command to run. The command carries no parameter values: `deploy` keeps a
+  stack's existing ones, including the ExternalId. **Re-check** reads the tag
+  again after the update.
+- the bootstrap's `validate-access` stage logs the same verdict as a warning. It
+  never fails the stage.
+
+A stack deployed before the tag existed cannot read itself and counts as
+`outdated` until its first update.
+
+**Template authors:** any change to a statement, the trust policy or the managed
+policy attachment needs a version bump. Bump `EXPECTED_VERSION` in
+`backend/app/services/spoke_template.py` and the `launchpad:template-version` tag
+in **both** templates, then record the new fingerprints.
+`backend/tests/test_spoke_template_version.py` fails with the values to paste
+until you do. Comment and description edits do not count. Merge the bump, update
+the hubs, then update each spoke stack. Until a spoke is updated, its console
+shows the warning, which is the intended prompt.
+
 ## Rolling out with StackSets
 
 For many accounts, deploy the same template as a **CloudFormation StackSet**

@@ -1,6 +1,6 @@
 import "./workspaces.css";
 
-import { ArrowLeft, Play, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, Copy, Play, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -22,6 +22,7 @@ import { formatRowCounts, PENDING_BOOTSTRAP_STAGES, readBootstrapJobIds, remembe
 import { V2ToastProvider } from "../../v2/ui";
 import { InboundDefaultCard } from "../../v2/pages/workspaces/InboundDefaultCard";
 import { MappingsCard } from "../../v2/pages/workspaces/MappingsCard";
+import { deployedLabel, roleTemplateSummary, useRoleTemplate } from "../../workspace/use-role-template";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
 import { ago } from "../format";
@@ -209,6 +210,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const [tick, setTick] = useState(0);
   const list = useLoad(() => api.listWorkspaces(), `v3-ws-detail:${workspaceId}:${tick}`);
   const row: Workspace | null = list.data?.workspaces.find((w) => w.id === workspaceId) ?? null;
+  const roleTemplate = useRoleTemplate(row);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"bootstrap" | "detach" | "purge" | "tier" | null>(null);
   /** a tier move into or out of prod, waiting on the operator's confirmation */
@@ -415,6 +417,30 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       <ErrorCallout error={failed.error} params={{ workspace_id: workspaceId }} onDismiss={failed.clear} data-testid="v3-workspace-error" />
       {row.is_default && <Notice>{t("workspacesPage.detail.hubNote")}</Notice>}
       {row.bootstrap_status === "registered" && !row.is_default && !jobId && <Notice s="wait">{t("v2.workspaces.needsBootstrap")}</Notice>}
+      {roleTemplate.data?.status === "outdated" && roleTemplate.data.stack_command && (
+        <Notice s="wait">
+          <div data-testid="v3-ws-role-template-outdated">
+            <strong>{t("v2.workspaces.roleTemplate.outdatedTitle")}</strong>
+            <p style={{ margin: "4px 0 8px" }}>
+              {t("v2.workspaces.roleTemplate.outdatedBody", {
+                account: row.account_id,
+                deployed: deployedLabel(t, roleTemplate.data),
+                expected: roleTemplate.data.expected,
+              })}
+            </p>
+            <pre className="v3-pre">{roleTemplate.data.stack_command}</pre>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <Btn onClick={() => void navigator.clipboard?.writeText(roleTemplate.data?.stack_command ?? "")
+                .then(() => toast("ok", t("v2.workspaces.roleTemplate.copied")))}>
+                <Copy size={14} /> {t("v2.workspaces.roleTemplate.copy")}
+              </Btn>
+              <Btn busy={roleTemplate.loading} onClick={() => void roleTemplate.recheck()}>
+                <RefreshCw size={14} /> {t("v2.workspaces.roleTemplate.recheck")}
+              </Btn>
+            </div>
+          </div>
+        </Notice>
+      )}
 
       <div className="v3-grid c4">
         <Panel signal={s === "off" ? undefined : s}><Stat label={t("v2.workspaces.col.status")} value={t(`v2.workspaces.status.${row.bootstrap_status}`)} /></Panel>
@@ -441,6 +467,8 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
             <dd className="mono">{row.account_id}{row.cross_account && <> <Chip s="info">{t("v2.workspaces.external")}</Chip></>}</dd>
             <dt>{t("v2.workspaces.field.region")}</dt><dd className="mono">{row.region}</dd>
             {row.cross_account && <><dt>{t("v2.workspaces.field.roleArn")}</dt><dd className="mono">{row.role_arn ?? "—"}</dd></>}
+            {row.cross_account && <><dt>{t("v2.workspaces.roleTemplate.label")}</dt>
+              <dd data-testid="v3-ws-role-template">{roleTemplate.eligible ? roleTemplateSummary(t, roleTemplate.data, roleTemplate.loading) : "—"}</dd></>}
           </dl>
         </Panel>
         <Panel title={t("v2.workspaces.howTitle")}>
