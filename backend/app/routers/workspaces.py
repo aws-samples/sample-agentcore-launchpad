@@ -42,7 +42,7 @@ from app.core.project_scope import project_context
 from app.core.regions import AGENTCORE_SUGGESTED_REGIONS
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
 from app.routers.auth import ROLE_MEMBER, Identity, require_identity
-from app.services import access, aws_clients, visibility, workspace_bootstrap
+from app.services import access, aws_clients, spoke_template, visibility, workspace_bootstrap
 from app.services import api_keys as api_keys_service
 from app.services import promotion as promotion_service
 from app.services import users as users_service
@@ -882,6 +882,25 @@ def repair_workspace_observability(
     out = workspace_bootstrap.repair_observability(workspace_context(row),
                                                    workspace_id=row.id)
     return {"workspace_id": row.id, **out}
+
+
+@router.get("/{workspace_id}/role-template")
+def role_template(
+    workspace_id: str,
+    refresh: bool = False,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(access.require_structure),
+) -> dict[str, Any]:
+    """Is this cross-account workspace's spoke stack on the current template?
+
+    Reads the role's own `launchpad:template-version` tag (`services/spoke_template`).
+    `outdated` means the administrator should update the spoke stack — the hub never
+    does that itself; `stack_command` is the update to run. A same-account workspace
+    has no spoke role: `not_applicable`.
+    """
+    row = _requested_row(db, workspace_id)
+    return {"workspace_id": row.id,
+            **spoke_template.check(workspace_context(row), refresh=refresh)}
 
 
 @router.get("/{workspace_id}/bootstrap")

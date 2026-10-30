@@ -796,6 +796,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/observability/repair"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
+    # Reads the spoke role's own template-version tag (cached); writes nothing.
+    ("GET", "/api/workspaces/{workspace_id}/role-template"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/grants"): ADMIN,
     # Bulk grant/revoke from the workspace's side (per-user replacement stays on
     # PATCH /api/users/{id}); both write only `user_workspaces`.
@@ -903,6 +905,7 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
         ("POST", "/api/workspaces/{workspace_id}/observability/repair"),
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
+        ("GET", "/api/workspaces/{workspace_id}/role-template"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
         ("PUT", "/api/workspaces/{workspace_id}/grants"),
         # The target is the path parameter, like grants.
@@ -1916,6 +1919,7 @@ _STRUCTURE_ROUTES = (
     ("PUT", "/api/workspaces/{workspace_id}/grants"),
     ("POST", "/api/workspaces/{workspace_id}/observability/repair"),
     ("POST", "/api/workspaces/{workspace_id}/purge"),
+    ("GET", "/api/workspaces/{workspace_id}/role-template"),
     ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),
     ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
     # network and storage catalogs: what a project may use, not what it holds

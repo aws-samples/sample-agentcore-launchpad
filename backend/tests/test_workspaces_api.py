@@ -1327,3 +1327,61 @@ class TestObservabilityRepair:
             assert member.post("/api/auth/login", json=MEMBER_CREDS).status_code == 200
             res = member.post(f"/api/workspaces/{NEW['id']}/observability/repair")
             assert res.status_code == 403
+
+
+class TestRoleTemplate:
+    """`GET /api/workspaces/{id}/role-template` — is the spoke stack current?"""
+
+    @staticmethod
+    def _cross_account_row() -> None:
+        db = SessionLocal()
+        try:
+            db.add(Workspace(id=NEW["id"], name=NEW["name"], account_id=NEW["account_id"],
+                             region=NEW["region"], bootstrap_status="ready",
+                             role_arn=CROSS_ACCOUNT["role_arn"],
+                             external_id=CROSS_ACCOUNT["external_id"]))
+            db.commit()
+        finally:
+            db.close()
+
+    @staticmethod
+    def _iam(monkeypatch, versions: list[str]) -> list[str]:
+        """Each GetRole answers with the next version tag; records the role names."""
+        from app.services import spoke_template
+        from app.services.workspace import WorkspaceContext
+
+        spoke_template.clear_cache()
+        calls: list[str] = []
+
+        def get_role(RoleName):  # noqa: N803 — boto3's casing
+            calls.append(RoleName)
+            version = versions[min(len(calls), len(versions)) - 1]
+            return {"Role": {"Tags": [{"Key": "launchpad:role", "Value": "workspace"},
+                                      {"Key": "launchpad:template-version",
+                                       "Value": version}]}}
+
+        monkeypatch.setattr(WorkspaceContext, "client",
+                            lambda self, service, **_kw: SimpleNamespace(get_role=get_role))
+        return calls
+
+    def test_an_outdated_stack_gets_the_update_command(self, admin, monkeypatch):
+        self._cross_account_row()
+        calls = self._iam(monkeypatch, ["0", "1"])
+        body = admin.get(f"/api/workspaces/{NEW['id']}/role-template").json()
+        assert body["workspace_id"] == NEW["id"]
+        assert (body["status"], body["deployed"], body["expected"]) == ("outdated", 0, 1)
+        assert body["stack_command"].startswith("aws cloudformation deploy")
+        assert calls == ["LaunchpadWorkspaceRole"]
+        # cached until the console asks again after the admin updated the stack
+        assert admin.get(f"/api/workspaces/{NEW['id']}/role-template").json()[
+            "status"] == "outdated"
+        assert admin.get(f"/api/workspaces/{NEW['id']}/role-template?refresh=true").json()[
+            "status"] == "current"
+
+    def test_the_default_workspace_has_no_spoke_role(self, admin, monkeypatch):
+        calls = self._iam(monkeypatch, ["1"])
+        body = admin.get(f"/api/workspaces/{DEFAULT_WORKSPACE_ID}/role-template").json()
+        assert body["status"] == "not_applicable" and calls == []
+
+    def test_an_unknown_workspace_is_404(self, admin):
+        assert admin.get("/api/workspaces/nope/role-template").status_code == 404

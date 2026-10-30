@@ -152,6 +152,11 @@ Resources:
       Tags:
         - Key: launchpad:role
           Value: workspace
+        # Which template, and which revision of it, this stack runs. Bump the version
+        # whenever a statement changes (backend/tests/test_spoke_template_version.py
+        # fails otherwise); the hub compares it with spoke_template.EXPECTED_VERSION.
+        - Key: launchpad:template-version
+          Value: "1"
       ManagedPolicyArns:
         - Ref: WorkspaceBedrockTelemetryPolicy
       Policies:
@@ -249,6 +254,18 @@ Resources:
                 Action:
                   - iam:ListRoles
                 Resource: "*"
+
+              # The hub reads THIS role's own tags (GetRole returns them) to compare
+              # launchpad:template-version with the version it expects, and warns in
+              # the console when the stack is older than the template in the repo.
+              # Only the role itself: `role/launchpad-*` above does not match it (IAM
+              # matches ARNs case-sensitively).
+              - Sid: ReadOwnRoleForTemplateVersion
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleName}"
 
               # PassRole is never *called* by the hub: it is the implicit check
               # AWS performs when a role ARN is handed to a service. Launchpad
