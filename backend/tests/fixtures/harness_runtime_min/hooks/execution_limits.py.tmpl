@@ -1,0 +1,8 @@
+class ExecutionLimitExceeded(Exception):
+    pass
+
+
+class ExecutionLimitsHook:
+    def __init__(self, max_iterations=None, timeout_seconds=None):
+        self.max_iterations = max_iterations
+        self.timeout_seconds = timeout_seconds

@@ -1,4 +1,9 @@
-"""Execute canvas-generated Python input handling against both template adapters."""
+"""Execute canvas-generated Python input handling against the native Bedrock adapter.
+
+CN build (spec C5): the canvas has exactly one model-hosting path (native Bedrock
+Converse) — Amazon Bedrock Mantle / OpenAI Responses codegen was removed, so this
+file no longer generates or exercises a Mantle variant.
+"""
 
 import ast
 import asyncio
@@ -14,7 +19,7 @@ import pytest
 from app.templates.attachment_support import has_attachment_contract
 from app.templates.studio_agent import adapt_studio_code
 
-from .test_runtime_attachments import FILES, assert_binary_content, stock_responses_formatter
+from .test_runtime_attachments import FILES, assert_binary_content
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -29,13 +34,8 @@ import { createRequire } from 'node:module';
 const contents = `
 import { generateStrandsAgentCode } from './src/studio/lib/code-generator';
 import { SAMPLE_FLOWS } from './src/studio/lib/sample-flows';
-import { MANTLE_PROVIDER } from './src/studio/lib/models';
-export const generated = SAMPLE_FLOWS.flatMap(flow => [false, true].map(mantle => {
-  const nodes = flow.nodes.map(node => ({
-    ...node, data: {...node.data, ...(mantle && node.type.includes('agent')
-      ? {modelProvider: MANTLE_PROVIDER, modelId: 'openai.gpt-5.6-sol'} : {})}
-  }));
-  return {id: flow.id, mantle, ...generateStrandsAgentCode(nodes, flow.edges, flow.graphMode)};
+export const generated = SAMPLE_FLOWS.map(flow => ({
+  id: flow.id, ...generateStrandsAgentCode(flow.nodes, flow.edges, flow.graphMode)
 }));
 `;
 const result = buildSync({
@@ -78,7 +78,7 @@ def test_all_sample_flows_generate_compilable_native_contracts(generated):
     ],
 )
 def test_generated_main_passes_native_content_and_keeps_text(generated, flow_id):
-    item = next(item for item in generated if item["id"] == flow_id and not item["mantle"])
+    item = next(item for item in generated if item["id"] == flow_id)
     tree = ast.parse(item["code"])
     main = next(
         node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "main"
@@ -127,34 +127,3 @@ def test_generated_main_passes_native_content_and_keeps_text(generated, flow_id)
     assert seen[-1] == "text"
     asyncio.run(namespace["invoke"]({"prompt": "", "attachments": FILES}))
     assert_binary_content(seen[-1])
-
-
-@pytest.mark.parametrize("flow_id", ["single-agent", "graph-dag"])
-def test_codegen_mantle_formatter_uses_file_data(generated, flow_id):
-    item = next(item for item in generated if item["id"] == flow_id and item["mantle"])
-    tree = ast.parse(item["code"])
-    adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-    namespace = {"OpenAIResponsesModel": stock_responses_formatter()}
-    exec(compile(ast.Module(body=[adapter], type_ignores=[]), "mantle.py", "exec"), namespace)
-    model = namespace["LaunchpadOpenAIResponsesModel"]
-    block = {
-        "document": {
-            "name": "attachment-2",
-            "format": "pdf",
-            "source": {"bytes": b"%PDF\xff\x00"},
-        }
-    }
-    assert model._format_request_message_content(block) == {
-        "type": "input_file",
-        "filename": "attachment-2.pdf",
-        "file_data": "data:application/pdf;base64,JVBERv8A",
-    }
-    constructors = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id.endswith("ResponsesModel")
-    ]
-    assert constructors
-    assert all(node.func.id == "LaunchpadOpenAIResponsesModel" for node in constructors)

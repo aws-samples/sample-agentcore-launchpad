@@ -1,20 +1,30 @@
 """Registry console API — records per type, register, lifecycle actions,
-attachables catalog, search, defaults sync, multi-source skill ingestion."""
+attachables catalog, search, defaults sync, multi-source skill ingestion.
+
+Backed by the ``RegistryBackend`` Protocol (``app.services.registry_backend``).
+Routes that map 1:1 onto the Protocol call it; the console-only surfaces that the
+AWS-era service module provided (register/edit/reimport, skill import, the
+attachables catalog, defaults sync) are implemented in ``app.services.registry_console``
+on top of the Protocol.
+"""
 
 import secrets
 import time
+from contextlib import contextmanager
 from dataclasses import asdict
 from typing import Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from app.assistant.principal import principal_of
-from app.core.errors import AppError, aws_error_message, mapped_aws_error
+from app.core.errors import AppError, NotFoundError, aws_error_message, mapped_aws_error
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import creators, registry_backend
 from app.services import registry_console as console
 from app.services import skill_ingest as si
 from app.services.skill_ingest import (
@@ -23,78 +33,68 @@ from app.services.skill_ingest import (
     bundle_errors,
     bundle_from_zip,
 )
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])
 
 
-class A2ADemoRequest(BaseModel):
-    """Front-desk demo ask: invoke a routing agent and pass its trace through."""
-
-    agent_id: str
-    question: str = Field(min_length=1, max_length=4000)
-
-
-@router.post("/a2a-demo")
-def a2a_demo(
-    req: A2ADemoRequest, ws: WorkspaceScope = Depends(require_workspace)
-) -> dict[str, Any]:
-    """Invoke a front-desk-style agent and return {answer, trace}.
-
-    Deliberately bypasses invoke_agent_text: the demo needs the agent's extra
-    `a2a_trace` payload field (DISCOVER/INVOKE stage records), which the
-    text-only dispatch drops.
-    """
-    import json as _json
-
+def _hidden_record_ids(ws: WorkspaceScope, viewer: Viewer) -> frozenset[str]:
+    """Registry record ids of agents hidden from ``viewer`` by workspace isolation
+    (an A2A record is the agent's: its deploy ``register`` stage created it). Every
+    other record kind stays shared. No ledger read for a viewer who does not filter."""
+    if not viewer.filters:
+        return frozenset()
     from app.core.db import SessionLocal
-    from app.models.ledger import Agent
-    from app.services.agentcore.client import data_client
-    from app.services.agentcore.harness import new_session_id
+    from app.services.agent_access import HiddenAgents
 
     db = SessionLocal()
     try:
-        agent = db.get(Agent, req.agent_id)
-        # An agent from another workspace is as good as absent: this route is the
-        # second invoke entrance, so it owes the same boundary as /agents/{id}/invoke.
-        if agent is not None and agent.workspace_id != ws.id:
-            agent = None
-        if agent is None or agent.status != "active":
-            raise AppError("registry.a2a_demo_agent", "agent not found or not active",
-                           status_code=404)
-        if agent.method not in ("zip_runtime", "studio"):
-            raise AppError("registry.a2a_demo_unsupported",
-                           "the demo drives runtime agents with a {prompt} contract",
-                           status_code=400)
-        if agent.inbound_auth_mode == "jwt":
-            # The demo signs InvokeAgentRuntime with SigV4 (it needs the raw
-            # body's a2a_trace, which the bearer path's normalized events drop),
-            # and a JWT authorizer refuses SigV4 with a bare 403.
-            raise AppError("registry.a2a_demo_jwt_unsupported",
-                           "this agent accepts JWT bearer tokens only, and the A2A "
-                           "demo calls it with SigV4 — use an IAM-inbound front-desk "
-                           "agent, or chat with this one in the Chat console",
-                           status_code=409)
-        arn = agent.arn
+        return HiddenAgents(db, viewer, ws.id).record_ids
     finally:
         db.close()
 
-    started = time.monotonic()
-    session_id = new_session_id()
-    response = data_client(ws.context).invoke_agent_runtime(
-        agentRuntimeArn=arn,
-        runtimeSessionId=session_id,
-        payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
-    )
-    body = _json.loads(response["response"].read())
-    if isinstance(body, dict) and body.get("error"):
-        raise AppError("registry.a2a_demo_failed", str(body["error"])[:300],
-                       status_code=502)
-    return {
-        "answer": str(body.get("result", "")) if isinstance(body, dict) else str(body),
-        "trace": (body.get("a2a_trace") or []) if isinstance(body, dict) else [],
-        "session_id": session_id,
-        "latency_ms": int((time.monotonic() - started) * 1000),
-    }
+
+def _require_record_visible(ws: WorkspaceScope, viewer: Viewer, record_id: str) -> None:
+    """A hidden agent's A2A record answers like a missing record — before the backend."""
+    if record_id in _hidden_record_ids(ws, viewer):
+        raise NotFoundError("registry.record_not_found", "registry record not found")
+
+
+def _visible_records(
+    ws: WorkspaceScope, viewer: Viewer, records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    hidden = _hidden_record_ids(ws, viewer)
+    if not hidden:
+        return records
+    return [r for r in records if str(r.get("recordId") or "") not in hidden]
+
+
+def _require_record_mutable(
+    ws: WorkspaceScope, request: Request, record_id: str, action: str
+) -> dict[str, Any]:
+    """Creator-or-admin on a registry record's content mutations (N15-obs7, contract §8):
+    reads stay shared, but `PUT` / `reimport` / `DELETE` are the creator's or an
+    administrator's — 403 ``registry.forbidden {created_by, created_by_name, record_id,
+    action}`` before any side effect; a NULL creator (legacy, deploy-created, imported,
+    platform default) makes the record an administrator's. Runs AFTER the visibility 404
+    and the system-skill refusal (both learn nothing new) and BEFORE every type / status
+    check, so a forbidden caller learns nothing about the record's state. Returns the
+    record so the caller does not read it twice."""
+    record = registry_backend.get_backend().get_record(ws.context, record_id)
+    console.require_record_mutable(record, require_identity(request), record_id, action)
+    return record
+
+
+@contextmanager
+def _stamping_creator(request: Request):
+    """Records created inside the block carry the caller as their creator
+    (``registry_backend.current_creator``; the local backend stamps the new row)."""
+    token = registry_backend.current_creator.set(creators.Creator.of_request(request))
+    try:
+        yield
+    finally:
+        registry_backend.current_creator.reset(token)
+
 
 # Per workspace: the catalog is that environment's registry + gateways.
 _attachables_cache: dict[str, dict[str, Any]] = {}
@@ -129,6 +129,9 @@ def _record_out(
         "descriptors": record.get("descriptors"),
         "created_at": str(record.get("createdAt", "")) or None,
         "updated_at": str(record.get("updatedAt", "")) or None,
+        # N15-obs7: the creator (`services/creators`); NULL = an administrator's record
+        "created_by": record.get("createdBy"),
+        "created_by_name": record.get("createdByName"),
     }
 
 
@@ -150,14 +153,25 @@ def list_records(
     type: str | None = None,
     status: str | None = None,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    records = console.console_list(ws.context, type, status)
-    return {"records": _with_system(ws, records)}
+    backend = registry_backend.get_backend()
+    try:
+        records = backend.list_records(ws.context, type, status)
+    except ValueError as exc:
+        raise AppError("registry.bad_type", str(exc), status_code=422) from exc
+    return {"records": _with_system(ws, _visible_records(ws, viewer, records))}
 
 
 @router.get("/records/search")
-def search(q: str, ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    return {"records": _with_system(ws, console.console_search(ws.context, q))}
+def search(
+    q: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    backend = registry_backend.get_backend()
+    records = _visible_records(ws, viewer, backend.search_records(ws.context, q))
+    return {"records": _with_system(ws, records)}
 
 
 def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -172,7 +186,9 @@ def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/records/discoverable")
 def list_discoverable(
-    type: str | None = None, ws: WorkspaceScope = Depends(require_workspace)
+    type: str | None = None,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Consumer view of `launchpad-registry`: the records a consumer or agent with
     data-plane access can actually discover (`ListDiscoverableRegistryRecords`,
@@ -181,23 +197,66 @@ def list_discoverable(
     DEPRECATED). Read-only; `descriptors` are never part of a summary — open a
     record (`GET /records/{record_id}`) for the payload.
     """
+    backend = registry_backend.get_backend()
     try:
-        records = console.console_list_discoverable(ws.context, type)
+        records = backend.list_discoverable_records(ws.context, type)
     except ValueError as exc:  # unknown ?type= — a caller mistake, not a 500
         raise AppError("registry.bad_type", str(exc), status_code=422) from exc
+    records = _visible_records(ws, viewer, records)
     return {"records": [_discoverable_out(r) for r in records], "count": len(records)}
+
+
+# N17-obs267: the status buckets of `GET /records/counts`; any other status (DEPRECATED,
+# a transient CREATING / UPDATING) counts only towards `total` — and `deprecated` for the one
+# terminal status the console lists.
+_COUNT_BUCKETS = {
+    "PENDING_APPROVAL": "pending",
+    "APPROVED": "approved",
+    "DRAFT": "draft",
+    "REJECTED": "rejected",
+    "DEPRECATED": "deprecated",
+}
+
+
+@router.get("/records/counts")
+def record_counts(
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, int]:
+    """Per-status record counts of the workspace registry (N17-obs267, user request
+    2026-10-22): the sidebar's pending-approval badge and the list's status tabs.
+
+    Same visibility as ``GET /records`` — a hidden agent's A2A record is not counted for
+    a member under isolation. Computed from the one ``list_records`` call the list route
+    makes (the Protocol has no count primitive and the hidden-record filter is by id), but
+    without the per-record system projection or the response payload: one backend read,
+    one ledger read only for a filtering viewer."""
+    records = _visible_records(ws, viewer, registry_backend.get_backend().list_records(ws.context))
+    out = dict.fromkeys(_COUNT_BUCKETS.values(), 0)
+    for record in records:
+        bucket = _COUNT_BUCKETS.get(str(record.get("status") or "").upper())
+        if bucket:
+            out[bucket] += 1
+    out["total"] = len(records)
+    return out
 
 
 @router.get("/records/{record_id}")
 def get_record(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return _one_with_system(ws, console.console_get(ws.context, record_id))
+    _require_record_visible(ws, viewer, record_id)
+    backend = registry_backend.get_backend()
+    return _one_with_system(ws, backend.get_record(ws.context, record_id))
 
 
 @router.get("/records/{record_id}/live-agent-card")
 def live_agent_card(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """The A2A card the runtime behind this record serves right now (GetAgentCard).
 
@@ -207,9 +266,13 @@ def live_agent_card(
     A2A server (409), an agent not yet deployed / no longer active (409). The
     data plane's ``ClientError`` keeps the standard 4xx envelope; a runtime-side
     failure the envelope has no mapping for is a 502, never a bare 500.
+
+    Note: ``GetAgentCard`` is Runtime A2A data-plane; its availability in the China
+    Regions is unverified — a refusal there surfaces as this envelope, never a 500.
     """
     from app.core.db import SessionLocal
     from app.models.ledger import Agent
+    from app.services.agent_access import agent_clause
 
     db = SessionLocal()
     try:
@@ -219,6 +282,8 @@ def live_agent_card(
                 Agent.registry_record_id == record_id,
                 Agent.workspace_id == ws.id,
                 Agent.status != "deleted",
+                # a hidden agent's record reads as one no Launchpad agent owns
+                agent_clause(viewer),
             )
             .order_by(Agent.updated_at.desc())
             .first()
@@ -264,22 +329,64 @@ class ActionRequest(BaseModel):
     action: str  # submit | approve | publish | reject | disable
 
 
+# N17-obs248 (user ruling 2026-10-22): the review decision is an administrator's. A member
+# submits (DRAFT/REJECTED → PENDING_APPROVAL); approve / publish / reject / disable answer
+# 403 ``registry.approval_admin_only`` for a member. The route itself stays MEMBER in
+# ROUTE_POLICY because submit is a member operation — the gate is per action, here.
+ADMIN_ONLY_ACTIONS = frozenset({"approve", "publish", "reject", "disable"})
+
+
 @router.post("/records/{record_id}/action")
 def record_action(
     record_id: str,
     req: ActionRequest,
     request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    # The caller's role reaches the service explicitly: a system-managed Skill's
-    # lifecycle is administrator-only, ordinary records stay member-operable.
     identity = require_identity(request)
+    # The caller's role reaches the guard explicitly: a system-managed Skill's
+    # lifecycle is administrator-only (its submit too) and keeps its own, more specific
+    # code. A ledger-only check — system Skills are never hidden records, so answering it
+    # first reveals nothing. It runs BEFORE the backend lookup (403 before 503, like
+    # memory_resources).
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    refuse_protected_mutation(
+        ws.context, record_id, req.action, is_admin=identity.is_admin, lifecycle=True
+    )
+    # N17-obs248: approve / publish / reject / disable are an administrator's decision.
+    # Refused for a member BEFORE the visibility check (rev-r23: every member decision
+    # answers 403, so it is no exists-but-hidden oracle) and before any backend call.
+    if req.action in ADMIN_ONLY_ACTIONS and not identity.is_admin:
+        raise AppError(
+            "registry.approval_admin_only",
+            f"only an administrator can {req.action} a registry record — submit it for "
+            "approval instead",
+            status_code=403,
+            detail={"action": req.action},
+        )
+    _require_record_visible(ws, viewer, record_id)
+    backend = registry_backend.get_backend()
+    actions = {
+        "submit": backend.submit_record,
+        "approve": backend.approve_record,
+        "publish": backend.approve_record,
+        "reject": backend.reject_record,
+        "disable": backend.disable_record,
+    }
+    operation = actions.get(req.action)
+    if operation is None:
+        raise AppError(
+            "registry.unknown_action", f"unknown action '{req.action}'", status_code=400
+        )
+    token = registry_backend.current_actor.set(identity.username)
     try:
-        console.console_action(ws.context, record_id, req.action, is_admin=identity.is_admin)
-    except ValueError as exc:
-        raise AppError("registry.unknown_action", str(exc), status_code=400) from exc
+        operation(ws.context, record_id)
+    finally:
+        registry_backend.current_actor.reset(token)
     _invalidate_attachables(ws.id)
-    return _one_with_system(ws, console.console_get(ws.context, record_id))
+    return _one_with_system(ws, backend.get_record(ws.context, record_id))
 
 
 class RegisterRequest(BaseModel):
@@ -295,7 +402,7 @@ class RegisterRequest(BaseModel):
 
 @router.post("/records", status_code=201)
 def register_record(
-    req: RegisterRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: RegisterRequest, request: Request, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
     if req.type == "MCP":
         if not req.url or not req.url.startswith(("https://", "http://")):
@@ -304,9 +411,12 @@ def register_record(
                 "MCP registration needs a http(s) streamable-http server URL",
                 status_code=400,
             )
-        record = console.register_mcp_server(
-            ws.context, req.name, req.description, req.url
-        )
+        # N17-obs256: the platform gateway's records come from the import path only
+        console.refuse_platform_gateway_url(ws.context, req.url)
+        with _stamping_creator(request):
+            record = console.register_mcp_server(
+                ws.context, req.name, req.description, req.url
+            )
         _invalidate_attachables(ws.id)
         return _record_out(record)
     if not req.skill_md or not req.skill_md.strip():
@@ -315,7 +425,8 @@ def register_record(
             "skill registration needs SKILL.md content",
             status_code=400,
         )
-    record = console.register_skill(ws.context, req.name, req.description, req.skill_md)
+    with _stamping_creator(request):
+        record = console.register_skill(ws.context, req.name, req.description, req.skill_md)
     _invalidate_attachables(ws.id)
     return _record_out(record)
 
@@ -380,14 +491,16 @@ async def inspect_skill(
             raise AppError(
                 "registry.invalid_upload", "expected a JSON object body", status_code=400
             )
-        bundles = _acquire_source(body.get("source") or {})
+        # git clone / URL fetch: blocking network + disk I/O, off the event loop
+        # (N-SCN-obs13 audit — same pattern as `routers/agents.py::upload_byoc_artifact`).
+        bundles = await run_in_threadpool(_acquire_source, body.get("source") or {})
     else:
         raise AppError(
             "registry.invalid_upload",
             "expected a multipart .zip upload or a JSON source",
             status_code=400,
         )
-    response = _stage_and_respond(bundles)
+    response = await run_in_threadpool(_stage_and_respond, bundles)
     # Assistant imports require the same immutable principal and workspace that
     # inspected the source. No client-supplied source paths cross this boundary.
     _staging[response["staging_id"]].update(
@@ -410,7 +523,9 @@ async def _acquire_zip(request: Request) -> list[SkillBundle]:
             f"upload exceeds the {SKILL_BUNDLE_MAX_BYTES} byte limit",
             status_code=413,
         )
-    return [bundle_from_zip(data)]  # archive-safety violations raise here (422)
+    # Extracts to a temp dir on disk — blocking, so off the event loop (N-SCN-obs13);
+    # archive-safety violations raise here (422).
+    return [await run_in_threadpool(bundle_from_zip, data)]
 
 
 def _acquire_source(source: dict[str, Any]) -> list[SkillBundle]:
@@ -478,19 +593,15 @@ def _match_bundle(bundles: list[SkillBundle], sel: ImportSelection) -> SkillBund
 
 @router.post("/skills/import")
 def import_skills(
-    req: ImportRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: ImportRequest, request: Request, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
     """Register each selected staged bundle via the shared pipeline. A per-item
     failure (name conflict, validation) is reported inline and never aborts the
     other selections. Staging is consumed once the batch completes."""
-    _sweep_staging()
-    entry = _staging.get(req.staging_id)
-    if entry is None:
-        raise AppError(
-            "registry.staging_expired",
-            "staging session expired or unknown — re-inspect the source",
-            status_code=410,
-        )
+    entry = console.take_staging(
+        req.staging_id, workspace=ws.context,
+        principal=principal_of(require_identity(request)),
+    )
     bundles: list[SkillBundle] = entry["bundles"]
     records: list[dict[str, Any]] = []
     for sel in req.selections:
@@ -504,12 +615,13 @@ def import_skills(
             )
             continue
         try:
-            record = console.register_skill_bundle(
-                bundle,
-                ws.context,
-                name_override=sel.name_override,
-                description_override=sel.description_override,
-            )
+            with _stamping_creator(request):
+                record = console.register_skill_bundle(
+                    bundle,
+                    ws.context,
+                    name_override=sel.name_override,
+                    description_override=sel.description_override,
+                )
             records.append({"name": record.get("name", label), "ok": True,
                             "record": _record_out(record)})
         except AppError as exc:
@@ -545,13 +657,22 @@ def install_git() -> dict[str, Any]:
 
 @router.post("/records/{record_id}/reimport")
 def reimport_record(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Re-run the ingestion pipeline for a git/url-sourced skill: re-acquire from
     the stored source, replace the S3 prefix, and bump the record version. Returns
     the updated record (same shape as GET). inline/zip records (no retrievable
     origin) and DEPRECATED records return 400 ``registry.not_reimportable``; a
-    failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
+    failed re-acquire/validation returns 422 ``registry.skill_invalid``. Creator-or-admin
+    (N15-obs7) after the system-skill refusal, before the type / status checks."""
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    _require_record_visible(ws, viewer, record_id)
+    refuse_protected_mutation(ws.context, record_id, "reimport")  # ledger guard before 503
+    _require_record_mutable(ws, request, record_id, "reimport")
     record = console.reimport_skill(ws.context, record_id)
     _invalidate_attachables(ws.id)
     return _one_with_system(ws, record)
@@ -575,13 +696,17 @@ class UpdateRecordRequest(BaseModel):
 def update_record(
     record_id: str,
     req: UpdateRecordRequest,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Edit a record's description and/or content. Description-only edits don't
     bump the version; content edits (MCP url / skill SKILL.md / whole bundle) do.
     Returns the refreshed record (same shape as GET). DEPRECATED/A2A records are
     not editable (400). A ``staging_id`` bundle is consumed only on success so a
-    failed save can be retried without re-uploading (same as import)."""
+    failed save can be retried without re-uploading (same as import). Creator-or-admin
+    (N15-obs7): another member answers 403 ``registry.forbidden``."""
+    _require_record_visible(ws, viewer, record_id)
     if (
         req.description is None and req.url is None
         and req.skill_md is None and req.staging_id is None
@@ -602,8 +727,11 @@ def update_record(
     # A system-managed Skill (SE-043) refuses every edit here, before the type read.
     from app.system_agents.skill_registry import refuse_protected_mutation
 
-    refuse_protected_mutation(ws.context, record_id, "replace" if req.staging_id else "edit")
-    rtype = console.console_get(ws.context, record_id).get("descriptorType")
+    action = "replace" if req.staging_id else "edit"
+    refuse_protected_mutation(ws.context, record_id, action)
+    # Creator-or-admin (N15-obs7): before the type / url checks so a forbidden caller
+    # learns nothing about the record.
+    rtype = _require_record_mutable(ws, request, record_id, action).get("descriptorType")
     if req.url is not None and rtype != "MCP":
         raise AppError(
             "registry.field_type_mismatch",
@@ -622,17 +750,15 @@ def update_record(
             "MCP url must be a http(s) streamable-http server URL",
             status_code=400,
         )
+    # N17-obs256: a record cannot be re-pointed at the platform gateway either
+    console.refuse_platform_gateway_url(ws.context, req.url)
 
     bundle: SkillBundle | None = None
     if req.staging_id is not None:
-        _sweep_staging()
-        entry = _staging.get(req.staging_id)
-        if entry is None:
-            raise AppError(
-                "registry.staging_expired",
-                "staging session expired or unknown — re-inspect the source",
-                status_code=410,
-            )
+        entry = console.take_staging(
+            req.staging_id, workspace=ws.context,
+            principal=principal_of(require_identity(request)),
+        )
         bundles: list[SkillBundle] = entry["bundles"]
         if not 0 <= req.index < len(bundles):
             raise AppError(
@@ -660,11 +786,29 @@ def update_record(
 
 @router.delete("/records/{record_id}")
 def delete_record(
-    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    record_id: str,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    console.console_delete(ws.context, record_id)
+    """Creator-or-admin (N15-obs7): visibility 404 → system-skill refusal → 403
+    ``registry.forbidden`` → delete."""
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    _require_record_visible(ws, viewer, record_id)
+    refuse_protected_mutation(ws.context, record_id, "delete")  # ledger guard before 503
+    _require_record_mutable(ws, request, record_id, "delete")
+    backend = registry_backend.get_backend()
+    record = backend.get_record(ws.context, record_id)
+    backend.delete_record(ws.context, record_id)
     _invalidate_attachables(ws.id)
-    return {"deleted": True, "record_id": record_id}
+    out: dict[str, Any] = {"deleted": True, "record_id": record_id}
+    if record.get("descriptorType") == "AGENT_SKILLS":
+        # N16-obs35: a skill record's `skills/<name>/` objects go with the row — unless another
+        # record or a live agent still references the prefix (then they stay, named). Additive
+        # `objects` key on skill deletes only; other record types answer as before.
+        out["objects"] = console.delete_skill_objects(ws.context, record)
+    return out
 
 
 @router.get("/attachables")
@@ -682,8 +826,47 @@ def attachables(
 
 
 @router.post("/sync-defaults")
-def sync_defaults(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    """Register gateway targets (MCP) + the sample skill bundle (AGENT_SKILLS)."""
-    results = console.ensure_default_records(ws.context)
+def sync_defaults(
+    request: Request, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """Register gateway targets (MCP) + the sample skill bundle (AGENT_SKILLS).
+    N17-obs257: an administrator's sync approves the platform targets (and reconciles
+    stuck ones); a member's only submits new ones for an administrator."""
+    auto_approve = require_identity(request).is_admin
+    results = console.ensure_default_records(ws.context, auto_approve=auto_approve)
     _invalidate_attachables(ws.id)
-    return {"results": results}
+    return {"results": results, "auto_approved": auto_approve}
+
+
+class ImportGatewayRequest(BaseModel):
+    """``POST /api/registry/import-gateway`` (WB-005). ``gateway_id`` defaults to the
+    platform gateway; ``target_ids`` omitted/null = every target of that gateway."""
+
+    gateway_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    target_ids: list[str] | None = Field(default=None, max_length=500)
+
+
+@router.get("/import-gateway/preview")
+def import_gateway_preview(
+    request: Request, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """Every onboarded MCP Gateway with its targets and the registry record (if any)
+    holding each target's name — what the import dialog lists. Read-only. N17-obs261: for an
+    administrator (whose import approves) each platform row it would promote says so."""
+    return console.gateway_import_preview(
+        ws.context, auto_approve=require_identity(request).is_admin
+    )
+
+
+@router.post("/import-gateway")
+def import_gateway(
+    req: ImportGatewayRequest, request: Request, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """Import the chosen Gateway targets as MCP records — one result item per target
+    (created / already imported / reconciled / failed with ``error``)."""
+    out = console.import_gateway_targets(
+        ws.context, gateway_id=req.gateway_id, target_ids=req.target_ids,
+        auto_approve=require_identity(request).is_admin,  # N17-obs257
+    )
+    _invalidate_attachables(ws.id)
+    return out

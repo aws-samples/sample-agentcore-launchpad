@@ -7,8 +7,6 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-import app.services.harness_convert as harness_convert
-
 SCRIPT = Path(__file__).parents[2] / "scripts" / "bootstrap.py"
 
 
@@ -25,10 +23,6 @@ bootstrap_script = _load_bootstrap_script()
 
 def _proc(stdout: str = "", returncode: int = 0) -> SimpleNamespace:
     return SimpleNamespace(stdout=stdout, stderr="", returncode=returncode)
-
-
-def test_managed_cli_path_matches_conversion_service():
-    assert bootstrap_script.AGENTCORE_CLI == harness_convert.MANAGED_AGENTCORE_CLI
 
 
 def test_managed_cli_current_version_skips_install(monkeypatch):
@@ -131,7 +125,7 @@ def test_managed_cli_npm_failure_is_not_suppressed(monkeypatch):
 
 def test_bootstrap_summary_omits_policy_resources(monkeypatch, capsys):
     monkeypatch.setattr(bootstrap_script, "ensure_agentcore_cli", lambda: "0.21.1")
-    monkeypatch.setattr(bootstrap_script, "stack_exists", lambda _region: True)
+    monkeypatch.setattr(bootstrap_script, "stack_exists", lambda _region, _name=None: True)
     monkeypatch.setattr(
         bootstrap_script.bs,
         "run_bootstrap",
@@ -144,7 +138,12 @@ def test_bootstrap_summary_omits_policy_resources(monkeypatch, capsys):
                 "created": False,
                 "reason": None,
             },
-            "memory": {"arn": "arn:memory", "created": False},
+            "memory": {
+                "endpoint": "search-lp-memory.us-west-2.es.example",
+                "unavailable_reason": "",
+                "created": [],
+                "reused": ["domain", "queue", "lambda"],
+            },
             "gateway": {
                 "gateway": {"url": "https://gateway.example/mcp", "created": True},
                 "api_key_provider": {"created": True},
@@ -154,6 +153,12 @@ def test_bootstrap_summary_omits_policy_resources(monkeypatch, capsys):
                 "enabled": True,
                 "changed": False,
                 "status": "ACTIVE",
+            },
+            # D20 P1-d: the self-hosted policy stage
+            "policy": {
+                "engine": "cedarpy", "mode": "log_only", "active_policies": 2,
+                "log_group": "/launchpad/policy/decisions", "created": False,
+                "retention_days": 90, "unavailable_reason": "", "skipped": False,
             },
             "demo_passwords_set": False,
             "stack_outputs": {
@@ -173,8 +178,118 @@ def test_bootstrap_summary_omits_policy_resources(monkeypatch, capsys):
     assert bootstrap_script.main() == 0
 
     output = capsys.readouterr().out
+    assert "memory domain" in output and "search-lp-memory.us-west-2.es.example" in output
+    assert "memory stage" in output and "0 created" in output and "3 reused" in output
     assert "gateway state" in output
     assert "transaction search" in output
     assert "policy engine" not in output
     assert "gateway policy" not in output
     assert "gateway traces" not in output
+    # D20 P1-d: the self-hosted stage prints engine / mode / ACTIVE count + the log group
+    assert "engine cedarpy · mode log_only · 2 active" in output
+    assert "policy decisions log" in output
+    assert "/launchpad/policy/decisions · reused · retention 90 d" in output
+
+
+def _summary_with_policy(policy: dict) -> dict:
+    return {
+        "account_id": "111", "region": "us-west-2",
+        "registry": {"available": True, "arn": "a", "created": False, "reason": None},
+        "memory": {"endpoint": "e", "unavailable_reason": "", "created": [], "reused": []},
+        "policy": policy,
+        "stack_outputs": {"ArtifactsBucketName": "bucket", "EcrRepoUri": "repo",
+                          "CodeBuildProjectName": "build"},
+    }
+
+
+def test_bootstrap_summary_warns_when_the_policy_log_group_was_not_ensured(monkeypatch, capsys):
+    monkeypatch.setattr(bootstrap_script, "ensure_agentcore_cli", lambda: "0.21.1")
+    monkeypatch.setattr(bootstrap_script, "stack_exists", lambda _region, _name=None: True)
+    monkeypatch.setattr(bootstrap_script.bs, "run_bootstrap", lambda _region: _summary_with_policy(
+        {"engine": "cedarpy", "mode": "log_only", "active_policies": 0,
+         "log_group": "/launchpad/policy/decisions-t1", "created": False, "retention_days": 90,
+         "unavailable_reason": "AccessDeniedException", "skipped": False}))
+    monkeypatch.setattr(bootstrap_script.sys, "argv", ["bootstrap.py", "--region", "us-west-2"])
+    assert bootstrap_script.main() == 0
+    output = capsys.readouterr().out
+    assert "engine cedarpy · mode log_only · 0 active" in output
+    assert "policy decisions log WARN" in output
+    assert "/launchpad/policy/decisions-t1 not ensured (AccessDeniedException)" in output
+
+
+def test_bootstrap_summary_says_skipped_when_the_policy_feature_is_off(monkeypatch, capsys):
+    monkeypatch.setattr(bootstrap_script, "ensure_agentcore_cli", lambda: "0.21.1")
+    monkeypatch.setattr(bootstrap_script, "stack_exists", lambda _region, _name=None: True)
+    monkeypatch.setattr(bootstrap_script.bs, "run_bootstrap", lambda _region: _summary_with_policy(
+        {"engine": "", "mode": "log_only", "active_policies": 0, "log_group": "",
+         "created": False, "retention_days": 90, "unavailable_reason": "policy feature off",
+         "skipped": True}))
+    monkeypatch.setattr(bootstrap_script.sys, "argv", ["bootstrap.py", "--region", "us-west-2"])
+    assert bootstrap_script.main() == 0
+    output = capsys.readouterr().out
+    assert "skipped · feature off" in output and "policy decisions log" not in output
+
+
+def test_cdk_context_args_is_empty_when_the_env_var_is_unset_or_blank(monkeypatch):
+    monkeypatch.delenv("LAUNCHPAD_CDK_CONTEXT", raising=False)
+    assert bootstrap_script.cdk_context_args() == []
+    monkeypatch.setenv("LAUNCHPAD_CDK_CONTEXT", "   ")
+    assert bootstrap_script.cdk_context_args() == []
+
+
+def test_cdk_context_args_parses_comma_separated_pairs_into_repeated_context_flags(monkeypatch):
+    monkeypatch.setenv(
+        "LAUNCHPAD_CDK_CONTEXT",
+        "memory_master_arn=arn:aws-cn:iam::111122223333:role/ops,"
+        " opensearch_version=OpenSearch_2.19,,",
+    )
+    assert bootstrap_script.cdk_context_args() == [
+        "--context",
+        "memory_master_arn=arn:aws-cn:iam::111122223333:role/ops",
+        "--context",
+        "opensearch_version=OpenSearch_2.19",
+    ]
+
+
+def test_deploy_cdk_appends_the_context_args_to_the_cdk_deploy_command(monkeypatch):
+    monkeypatch.setenv(
+        "LAUNCHPAD_CDK_CONTEXT", "memory_master_arn=arn:aws-cn:iam::111122223333:role/ops"
+    )
+    calls = []
+    monkeypatch.setattr(
+        bootstrap_script.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or _proc(),
+    )
+
+    bootstrap_script.deploy_cdk()
+
+    (call,) = calls
+    (cmd,) = call[0]
+    assert cmd == [
+        "uv",
+        "run",
+        "cdk",
+        "deploy",
+        "--all",
+        "--require-approval",
+        "never",
+        "--context",
+        "memory_master_arn=arn:aws-cn:iam::111122223333:role/ops",
+    ]
+
+
+def test_deploy_cdk_appends_nothing_when_the_env_var_is_unset(monkeypatch):
+    monkeypatch.delenv("LAUNCHPAD_CDK_CONTEXT", raising=False)
+    calls = []
+    monkeypatch.setattr(
+        bootstrap_script.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or _proc(),
+    )
+
+    bootstrap_script.deploy_cdk()
+
+    (call,) = calls
+    (cmd,) = call[0]
+    assert cmd == ["uv", "run", "cdk", "deploy", "--all", "--require-approval", "never"]

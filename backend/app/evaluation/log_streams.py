@@ -30,6 +30,8 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
+from app.services.strands_eval.redaction import redact_text
+
 SESSION_STREAM_RE = re.compile(r"\[runtime-logs-(?P<sid>[^\]]+)\]")
 MAX_STREAMS = 500
 _DESCRIBE_PAGE = 50
@@ -53,7 +55,9 @@ _ESCAPED_QUOTE = re.compile(r'\\+"')
 
 def _snippet(message: str, keyword: str) -> str:
     """An excerpt around the keyword; OTel events are JSON (often JSON inside
-    JSON), so escaped line breaks and quotes are flattened for display."""
+    JSON), so escaped line breaks and quotes are flattened for display. Access-key ids
+    are masked before the cut, so no excerpt shows even part of one (N17-obs307)."""
+    message = redact_text(message)
     at = message.find(keyword)
     if at < 0:
         at = message.lower().find(keyword.lower())

@@ -15,6 +15,9 @@ deliberately left at `*` with the reason recorded — see `_UNSCOPABLE` notes in
 Sids are kept identical to the CDK shared role (`infra/stacks/base_stack.py`) so the
 two can be diffed statement by statement during review.
 
+No statement names a Bedrock model: the CN build authenticates to Global Bedrock with
+an API key fetched from AgentCore Identity, not with this role.
+
 The IAM client is injected by the caller: `container.py::_stage_provision` already
 takes one for exactly this reason, and it keeps the derivation testable.
 """
@@ -25,20 +28,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import unquote
 
+from app.core import naming
 from app.models.ledger import Agent
-from app.schemas.agent import (
-    DEFAULT_MODEL_ID,
-    INFERENCE_PROFILE_PREFIXES,
-    AgentSpec,
-    byoc_model_target,
-)
+from app.schemas.agent import AgentSpec
+from app.services import aws_clients
 from app.services.workspace import WorkspaceContext
-
-# Inference-profile prefixes: an id like `global.anthropic.claude-sonnet-5` is a
-# profile, and invoking it authorizes against the profile ARN *and* the underlying
-# foundation-model ARNs. Scoping to only one of the two fails at first invoke.
-_PROFILE_PREFIXES = INFERENCE_PROFILE_PREFIXES
 
 _ROLE_PREFIX = "launchpad-agent-"
 _ROLE_NAME_MAX = 64  # IAM hard limit
@@ -61,32 +57,46 @@ class RoleContext:
     region: str
     artifacts_bucket: str
     ecr_repo_arn: str
-    memory_id: str = ""
-    # The OAuth2 credential provider the KB gateway's CLIENT_CREDENTIALS outbound
-    # auth uses (bootstrap writes it as `oauth_provider_arn`). Only the
-    # system-preset KB path scopes to it; ordinary agents keep the family grant.
-    oauth_provider_arn: str = ""
+    partition: str = "aws"
+    dns_suffix: str = "amazonaws.com"  # cn-lint: allow
+    # --- CN memory/KB (N6) ---
+    # The workspace's self-hosted memory substrate, from its resource map (written by
+    # the `memory` bootstrap stage). All empty when the substrate does not exist, in
+    # which case no memory/KB statement is emitted (ruling R2).
+    memory_store_id: str = ""
+    memory_bucket: str = ""
+    memory_prefix: str = "memory"
+    memory_queue_arn: str = ""
+    memory_domain_arn: str = ""
+    # --- end CN memory/KB (N6) ---
+
+    def arn(
+        self, service: str, resource: str, region: str | None = None, account: str | None = None
+    ) -> str:
+        reg = self.region if region is None else region
+        acct = self.account_id if account is None else account
+        return f"arn:{self.partition}:{service}:{reg}:{acct}:{resource}"
 
 
 def role_context(workspace: WorkspaceContext) -> RoleContext:
     """Build a `RoleContext` from the workspace the agent is deployed into."""
     resources = workspace.resources or {}
-    repo = resources.get("ecr_repo", "launchpad-agents")
+    repo = resources.get("ecr_repo", naming.default_ecr_repo())
     return RoleContext(
         account_id=workspace.account_id,
         region=workspace.region,
         artifacts_bucket=resources.get("artifacts_bucket", ""),
-        ecr_repo_arn=(
-            f"arn:aws:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
-        ),
-        memory_id=resources.get("memory_id", ""),
-        oauth_provider_arn=resources.get("oauth_provider_arn", ""),
+        ecr_repo_arn=workspace.arn("ecr", f"repository/{repo}"),
+        partition=workspace.partition,
+        dns_suffix=workspace.dns_suffix,
+        # --- CN memory/KB (N6) ---
+        memory_store_id=str(resources.get("memory_id") or ""),
+        memory_bucket=str(resources.get("memory_bucket") or resources.get("artifacts_bucket", "")),
+        memory_prefix=str(resources.get("memory_prefix") or "memory"),
+        memory_queue_arn=str(resources.get("memory_queue_arn") or ""),
+        memory_domain_arn=str(resources.get("memory_os_domain_arn") or ""),
+        # --- end CN memory/KB (N6) ---
     )
-
-
-def oauth_provider_name(provider_arn: str) -> str:
-    """`…:token-vault/default/oauth2credentialprovider/<name>` → `<name>`."""
-    return provider_arn.rsplit("/", 1)[-1] if provider_arn else ""
 
 
 def live_runtime_role_arn(
@@ -118,18 +128,30 @@ def shared_role_arn(workspace: WorkspaceContext) -> str:
 # naming
 # ---------------------------------------------------------------------------
 
-def role_name_for(agent_name: str, agent_id: str) -> str:
-    """`launchpad-agent-{name}-{id8}`, inside IAM's 64-character limit.
+def role_name_for(agent_name: str, agent_id: str, env_name: str | None = None) -> str:
+    """`launchpad-agent-{name}-{id8}` (N11: `-{env}` appended under a non-empty
+    `Settings.env_name`), inside IAM's 64-character limit.
 
     The id suffix is not decoration: agent names are user-supplied, so truncating
     the name alone would collide two agents whose names share a prefix. Keeping the
     id *in the name* (rather than only in a tag) also lets an operator reading the
-    IAM console map a role back to a ledger row.
+    IAM console map a role back to a ledger row. The env suffix comes last so the
+    name still falls under the `launchpad-agent-*` wildcards (ops role, FGAC mapping).
     """
+    env = naming.current_env_name() if env_name is None else naming.validate_env_name(env_name)
     suffix = (agent_id or "")[:_ID_SUFFIX_LEN] or "00000000"
-    room = _ROLE_NAME_MAX - len(_ROLE_PREFIX) - 1 - len(suffix)
+    room = _ROLE_NAME_MAX - len(_ROLE_PREFIX) - 1 - len(suffix) - (len(env) + 1 if env else 0)
     stem = _SANITISE_RE.sub("-", agent_name or "agent").strip("-")[:room] or "agent"
-    return f"{_ROLE_PREFIX}{stem}-{suffix}"
+    return naming.suffixed(f"{_ROLE_PREFIX}{stem}-{suffix}", env)
+
+
+def agent_role_pattern(env_name: str | None = None) -> str:
+    """IAM `role/...` wildcard matching THIS environment's per-agent roles — the FGAC
+    role-mapping entry and the bootstrap grants use it. `role/launchpad-agent-*` by
+    default; `role/launchpad-agent-*-t1` under env name `t1`, so one environment's
+    OpenSearch mapping does not admit another's agents."""
+    env = naming.current_env_name() if env_name is None else naming.validate_env_name(env_name)
+    return naming.suffixed(f"role/{_ROLE_PREFIX}*", env)
 
 
 def fs_policy_name(agent_name: str) -> str:
@@ -162,7 +184,7 @@ def trust_policy(ctx: RoleContext, runtime_arn: str | None = None) -> dict:
         "Version": "2012-10-17",
         "Statement": [{
             "Effect": "Allow",
-            "Principal": {"Service": "bedrock-agentcore.amazonaws.com"},
+            "Principal": {"Service": aws_clients.service_principal("bedrock-agentcore")},
             "Action": "sts:AssumeRole",
             "Condition": conditions,
         }],
@@ -172,104 +194,6 @@ def trust_policy(ctx: RoleContext, runtime_arn: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 # capability derivation
 # ---------------------------------------------------------------------------
-
-def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
-    """Resource ARNs authorizing one model id.
-
-    A profile id authorizes against both the profile and the foundation models it
-    fronts. An id matching neither shape falls back to the foundation-model wildcard
-    **on purpose**: custom ids are a first-class feature here (see the comment on
-    `AgentSpec.model_id` — the valid id space cannot be enumerated from the account),
-    so narrowing a shape we do not recognise would break the agent rather than
-    protect it.
-    """
-    if not model_id:
-        return ["*"]
-    profile_prefix = next(
-        (p for p in _PROFILE_PREFIXES if model_id.startswith(p)), None
-    )
-    if profile_prefix:
-        bare = model_id[len(profile_prefix):]
-        return [
-            f"arn:aws:bedrock:*::foundation-model/{bare}",
-            f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{model_id}",
-        ]
-    if re.match(r"^[a-z0-9-]+\.[A-Za-z0-9.:-]+$", model_id):
-        return [f"arn:aws:bedrock:*::foundation-model/{model_id}"]
-    return ["arn:aws:bedrock:*::foundation-model/*"]
-
-
-# Strands Studio canvas flows carry their models on the nodes, not in
-# ``spec.model_id``: the publish sends none, so that field is always AgentSpec's
-# default and scoping the role to it silently refused every other model at
-# invoke. Provider strings and the node types that carry a model mirror
-# ``frontend/src/studio`` (``MANTLE_PROVIDER`` in lib/models.ts, the agent-node
-# filter in lib/graph-code-generator.ts); a node without a model id generates
-# the canvas fallback, which equals ``DEFAULT_MODEL_ID``.
-STUDIO_MODEL_NODE_TYPES = frozenset({"agent", "orchestrator-agent", "swarm"})
-STUDIO_BEDROCK_PROVIDER = "AWS Bedrock"
-STUDIO_MANTLE_PROVIDER = "Amazon Bedrock (Mantle)"
-
-
-def studio_node_models(spec: AgentSpec) -> list[tuple[str, str]]:
-    """``(provider, model id)`` for every model-bearing node of a studio flow."""
-    if spec.method != "studio" or not isinstance(spec.studio_flow, dict):
-        return []
-    models: list[tuple[str, str]] = []
-    for node in spec.studio_flow.get("nodes") or []:
-        if not isinstance(node, dict) or node.get("type") not in STUDIO_MODEL_NODE_TYPES:
-            continue
-        data = node.get("data") if isinstance(node.get("data"), dict) else {}
-        provider = data.get("modelProvider") or STUDIO_BEDROCK_PROVIDER
-        model = data.get("modelId") or (
-            DEFAULT_MODEL_ID if provider == STUDIO_BEDROCK_PROVIDER else ""
-        )
-        models.append((str(provider), str(model)))
-    return models
-
-
-def uses_mantle(spec: AgentSpec) -> bool:
-    """Whether the agent calls Bedrock Mantle (its own IAM service)."""
-    return spec.model_source == "mantle" or any(
-        provider == STUDIO_MANTLE_PROVIDER for provider, _ in studio_node_models(spec)
-    )
-
-
-def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
-    """Union of `model_resources` over every model the spec permits, deduped in
-    order. One entry for every method except byoc, whose ``allowed_models`` list
-    may authorize several — each still scoped to its exact id, never widened —
-    and studio, which authorizes each native-Bedrock model its flow's nodes use."""
-    if spec.method == "studio":
-        ids = [m for provider, m in studio_node_models(spec) if provider == STUDIO_BEDROCK_PROVIDER]
-        resources: list[str] = []
-        # a flow with no Bedrock node (Mantle / OpenAI only) keeps the spec's id so
-        # the statement stays well-formed
-        for model_id in ids or [spec.model_id]:
-            for resource in model_resources(model_id, ctx):
-                if resource not in resources:
-                    resources.append(resource)
-        return resources
-    if spec.method != "byoc":
-        return model_resources(spec.model_id, ctx)
-    resources: list[str] = []
-    for selection in spec.allowed_model_ids:
-        kind, model_id = byoc_model_target(selection)
-        if selection.startswith("arn:"):
-            partition = selection.split(":", 2)[1]
-            resource = selection
-        else:
-            partition = "aws"
-            scope = f"{ctx.region}:{ctx.account_id}" if kind == "inference-profile" else "*:"
-            resource = f"arn:{partition}:bedrock:{scope}:{kind}/{model_id}"
-        if kind == "inference-profile":
-            prefix = next(p for p in _PROFILE_PREFIXES if model_id.startswith(p))
-            resources.append(
-                f"arn:{partition}:bedrock:*::foundation-model/{model_id[len(prefix):]}"
-            )
-        resources.append(resource)
-    return list(dict.fromkeys(resources))
-
 
 def _uses_gateway(spec: AgentSpec) -> bool:
     """Whether anything in the spec needs the FAMILY-WIDE workload-token grant.
@@ -283,7 +207,8 @@ def _uses_gateway(spec: AgentSpec) -> bool:
     change under it.
     """
     if spec.knowledge_bases:
-        return True  # harness KBs ride the shared KB gateway
+        # KBs ride the direct retrieval tools; the family-wide grant stays for compatibility
+        return True
     for tool in spec.tools:
         if tool.type == "gateway":
             return True
@@ -315,6 +240,21 @@ def _gateway_ids(spec: AgentSpec) -> list[str]:
     return sorted(gateway_id for gateway_id in ids if _GATEWAY_ID_RE.fullmatch(gateway_id))
 
 
+def _a2a_peer_arns(spec: AgentSpec) -> list[str]:
+    """Runtime ARNs of the A2A peers the spec mounts (``type="a2a"``, N11 r3-C) — sorted,
+    de-duplicated; the schema already validated each as a bedrock-agentcore runtime ARN."""
+    return sorted({
+        str((tool.config or {}).get("runtime_arn"))
+        for tool in spec.tools
+        if tool.type == "a2a" and (tool.config or {}).get("runtime_arn")
+    })
+
+
+# Length of the random hex suffix ``deployer.zip_runtime.sanitize_runtime_name`` appends
+# to ``runtime_name_base``; the single source for every ``<base>_<hex>`` shape check.
+RUNTIME_SUFFIX_HEX_LEN = 6
+
+
 def runtime_name_base(agent_name: str) -> str:
     """The deterministic part of an agent's Runtime name.
 
@@ -327,18 +267,33 @@ def runtime_name_base(agent_name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]", "_", agent_name).strip("_")[:40] or "agent"
 
 
+def runtime_name_pattern(agent_name: str) -> re.Pattern[str]:
+    """Exact shape of the Runtime names ``sanitize_runtime_name(agent_name)`` can produce:
+    ``^<runtime_name_base(agent_name)>_[0-9a-f]{6}$`` — the base, one ``_``, exactly
+    ``RUNTIME_SUFFIX_HEX_LEN`` hex characters, nothing else.
+
+    Selectors that look a Runtime up by agent name must use this, never a bare
+    ``startswith(base + "_")``: bases are not unique by construction (``launchpad_eval_worker``
+    is a strict prefix of the ``t1`` environment's ``launchpad_eval_worker_t1``), so a prefix
+    test on the default environment's base also matches ``launchpad_eval_worker_t1_bd4aba``
+    (N12-bug12 — a default-env teardown dry run selected t1's evaluation worker).
+    """
+    base = re.escape(runtime_name_base(agent_name))
+    return re.compile(rf"^{base}_[0-9a-f]{{{RUNTIME_SUFFIX_HEX_LEN}}}$")
+
+
 def own_workload_identity_arn(spec: AgentSpec, ctx: RoleContext) -> str:
     """The agent's OWN auto-created workload identity, as an IAM resource.
 
     The Runtime names that identity after the runtime id — ``<runtimeName>-
     <10-char suffix>`` (deployer/return_url.py, live-verified 2026-09-19;
-    evidence docs/identity-e2e-evidence-p2.md / -p3.md) — and the runtime name
+    evidence docs/identity-e2e-evidence-p2.md) — and the runtime name
     is ``<base>_<6 hex>``. Neither random part is known at provision time,
     so the single-character ``?`` wildcard pins the 6-hex segment exactly: the
     pattern matches this agent's runtimes, not another agent whose name merely
     starts with the same characters (``a`` vs ``a_b``).
     """
-    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    base = ctx.arn("bedrock-agentcore", "").rstrip(":")
     return (
         f"{base}:workload-identity-directory/default/workload-identity/"
         f"{runtime_name_base(spec.name)}_??????-*"
@@ -348,7 +303,7 @@ def own_workload_identity_arn(spec: AgentSpec, ctx: RoleContext) -> str:
 def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
     """Per-Connection grants for tools carrying ``ToolRef.auth``.
 
-    Follows the devguide-exact shape of ``_preset_kb_oauth_statements``: the
+    Follows the devguide-exact shape: the
     token action on the token vault + the workload-identity directory + the exact
     provider ARNs, and ``GetSecretValue`` on the vault's fixed secret prefix for
     exactly those Connection names — never the family-wide
@@ -358,10 +313,9 @@ def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, A
     wanted = {(tool.auth.connection, tool.auth.kind) for tool in spec.tools if tool.auth}
     if not wanted:
         return []
-    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    base = ctx.arn("bedrock-agentcore", "").rstrip(":")
     secret_base = (
-        f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}:secret:"
-        "bedrock-agentcore-identity!default"
+        ctx.arn("secretsmanager", "secret:bedrock-agentcore-identity!default")
     )
     oauth2 = sorted({name for name, kind in wanted if kind == "oauth2"})
     api_key = sorted({name for name, kind in wanted if kind == "api_key"})
@@ -400,153 +354,173 @@ def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, A
     return statements
 
 
-def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
-    """The exact OAuth2-credential-provider grants the harness devguide lists for an
-    OAuth-protected gateway ("Execution role policy → OAuth2 credential provider",
-    read 2026-09-12), instantiated for the KB gateway's real provider.
+def _model_credential_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """Every agent: exchange the Runtime-injected workload token for the Global Bedrock
+    API key — ``GetResourceApiKey`` on the workspace's ``model_credential`` provider —
+    the only way a runtime in aws-cn reaches the Global models (spec C3/C4).
 
-    Nothing else: no `GetResourceApiKey` (no API-key provider is attached), no
-    `GetWorkloadAccessToken*` (the devguide's OAuth policy names only
-    `GetResourceOauth2Token`), no family-wide `bedrock-agentcore-identity!*` secret,
-    and no direct `bedrock:Retrieve` / `AgenticRetrieveStream` — a harness reaches the
-    KB through the gateway, whose connector role performs the retrieval.
+    Same devguide-exact shape as ``_tool_auth_statements``: token vault + directory +
+    this agent's OWN workload identity + the exact provider, and ``GetSecretValue`` on
+    that provider's vault secret prefix only (never the family-wide
+    ``bedrock-agentcore-identity!*``). ``GetWorkloadAccessToken`` on the same identity
+    resources backs the templates' last-resort self-mint (``LAUNCHPAD_WORKLOAD_NAME``) for a
+    request that arrives without the injected token — which Identity refuses for a
+    runtime-linked identity ("linked to a service"; N10v3-bug5 live correction), so the
+    grant is harmless but the token has to come from the caller's ``runtimeUserId``.
     """
-    provider = oauth_provider_name(ctx.oauth_provider_arn)
-    if not provider:
-        raise ValueError(
-            "the workspace resource map has no oauth_provider_arn — the KB gateway's "
-            "OAuth2 credential provider is required to scope the preset's grants"
-        )
-    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
-    harness_name = spec.name.replace("-", "_")  # deployer/harness.py harnessName
+    base = ctx.arn("bedrock-agentcore", "").rstrip(":")
+    providers = model_credential_providers(spec.model_credential)
     return [
         {
-            "Sid": "AgentCoreOAuth2TokenVaultDefault",
+            "Sid": "ModelCredentialApiKey",
             "Effect": "Allow",
-            "Action": "bedrock-agentcore:GetResourceOauth2Token",
+            "Action": [
+                "bedrock-agentcore:GetResourceApiKey",
+                "bedrock-agentcore:GetWorkloadAccessToken",
+            ],
             "Resource": [
                 f"{base}:token-vault/default",
                 f"{base}:workload-identity-directory/default",
-                f"{base}:workload-identity-directory/default/workload-identity/"
-                f"harness_{harness_name}-*",
+                own_workload_identity_arn(spec, ctx),
+                *[f"{base}:token-vault/default/apikeycredentialprovider/{name}"
+                  for name in providers],
             ],
         },
         {
-            "Sid": "AgentCoreOAuth2TokenVaultPerProvider",
+            "Sid": "ModelCredentialVaultSecret",
             "Effect": "Allow",
-            "Action": "bedrock-agentcore:GetResourceOauth2Token",
-            "Resource": ctx.oauth_provider_arn,
-        },
-        {
-            "Sid": "AgentCoreOAuth2Secret",
-            "Effect": "Allow",
-            "Action": "secretsmanager:GetSecretValue",
-            "Resource": (
-                f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}:secret:"
-                f"bedrock-agentcore-identity!default/oauth2/{provider}-*"
-            ),
+            "Action": ["secretsmanager:GetSecretValue"],
+            "Resource": [
+                ctx.arn(
+                    "secretsmanager",
+                    f"secret:bedrock-agentcore-identity!default/apikey/{name}-*",
+                )
+                for name in providers
+            ],
         },
     ]
+
+
+# N-R6: every platform model credential provider is named `launchpad-*` (PROVIDERS); a
+# runtime fetches the one its model needs — an agent on a SiliconFlow model, a judge on
+# any catalog model — so the grant covers the family, plus the spec's own provider when it
+# is a custom name outside it.
+MODEL_CREDENTIAL_PROVIDER_PATTERN = "launchpad-*"
+
+
+def model_credential_providers(spec_credential: str) -> list[str]:
+    names = [spec_credential] if not spec_credential.startswith("launchpad-") else []
+    return names + [MODEL_CREDENTIAL_PROVIDER_PATTERN]
+
+
+# --- CN memory/KB (N6) ---
+def _memory_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """S3 snapshot prefix, extraction queue and the memory index — only for agents with
+    memory on, in a workspace whose substrate exists (ruling R2). The Titan key grant is
+    the unconditional ModelCredentialApiKey (N2); nothing here names a model.
+
+    Scope: this agent's store prefix `<prefix>/<store>/*` (a spec-pinned store or the
+    workspace's), the one extraction queue, and this environment's memory index
+    (`launchpad-memory` / `launchpad-<env>-memory`, D17) of the shared domain — never the
+    bucket root, the queue family or the whole domain.
+    """
+    if not (spec.memory.short_term or spec.memory.long_term) or not ctx.memory_domain_arn:
+        return []
+    store = spec.memory.memory_id or ctx.memory_store_id
+    if not store or not ctx.memory_bucket:
+        return []
+    prefix = f"{ctx.memory_prefix.strip('/') or 'memory'}/{store}"
+    statements: list[dict[str, Any]] = [
+        {
+            "Sid": "MemorySnapshotObjects",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            "Resource": [
+                ctx.arn("s3", f"{ctx.memory_bucket}/{prefix}/*", region="", account="")
+            ],
+        },
+        {
+            "Sid": "MemorySnapshotList",
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": [ctx.arn("s3", ctx.memory_bucket, region="", account="")],
+            "Condition": {"StringLike": {"s3:prefix": [f"{prefix}/*"]}},
+        },
+    ]
+    if ctx.memory_queue_arn:
+        statements.append({
+            "Sid": "MemoryExtractionQueue",
+            "Effect": "Allow",
+            "Action": ["sqs:SendMessage"],
+            "Resource": [ctx.memory_queue_arn],
+        })
+    statements.append({
+        "Sid": "MemorySearch",
+        "Effect": "Allow",
+        "Action": ["es:ESHttpGet", "es:ESHttpPost", "es:ESHttpPut", "es:ESHttpHead"],
+        "Resource": [f"{ctx.memory_domain_arn}/{naming.memory_index()}/*"],
+    })
+    return statements
+
+
+def _knowledge_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """Read-only k-NN access to exactly the mounted knowledge bases' indices."""
+    if not spec.knowledge_bases or not ctx.memory_domain_arn:
+        return []
+    return [{
+        "Sid": "KnowledgeSearch",
+        "Effect": "Allow",
+        "Action": ["es:ESHttpGet", "es:ESHttpPost"],
+        "Resource": [
+            f"{ctx.memory_domain_arn}/{naming.kb_index(kb.kb_id)}/*"
+            for kb in spec.knowledge_bases
+        ],
+    }]
+# --- end CN memory/KB (N6) ---
+
+
+def preset_statements(agent: Agent, spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """Statements a system preset's role needs beyond the spec-derived policy
+    (``SystemPreset.extra_iam`` — the evaluation worker's spans / artefacts / invoke
+    grants, N12 plan §B.0); none for ordinary agents."""
+    if not getattr(agent, "system_key", None):
+        return []
+    from app.system_agents.presets import get_preset
+
+    preset = get_preset(agent.system_key or "")
+    if preset is None or preset.extra_iam is None:
+        return []
+    return list(preset.extra_iam(ctx, spec))
 
 
 def policy_document(
     spec: AgentSpec,
     ctx: RoleContext,
     *,
-    system_preset: bool = False,
-    inbound_jwt: bool = False,
+    extra_statements: list[dict[str, Any]] | None = None,
 ) -> dict:
     """The capability policy for one agent.
 
     Statements appear only when the spec calls for them. Sids match the shared CDK
-    role so the two can be diffed. ``system_preset`` selects the narrow, devguide-
-    exact OAuth grants for a preset's KB gateway instead of the generic identity
-    family (see `_preset_kb_oauth_statements`); ordinary agents are unchanged.
-    ``inbound_jwt`` is the RESOLVED inbound mode (spec > workspace default): a
-    JWT-mode runtime exchanges the caller's bearer for a workload token via
-    ``GetWorkloadAccessTokenForJWT``, so its role must allow that call.
+    role so the two can be diffed. ``extra_statements`` are a system preset's additional
+    grants (``preset_statements``), appended after the spec-derived ones. Global parity
+    (2026-10-27): the policy module never shapes this document — a declared Gateway always
+    gets ``AgentCoreGatewayInvoke``; the Gateway interceptor decides each tool call.
     """
     statements: list[dict[str, Any]] = []
 
-    # ---- models: always needed, scoped to the configured id(s) ----
-    statements.append({
-        "Sid": "BedrockModels",
-        "Effect": "Allow",
-        "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        "Resource": allowed_model_resources(spec, ctx),
-    })
+    # ---- model credential: every agent fetches the Global Bedrock API key ----
+    statements.extend(_model_credential_statements(spec, ctx))
 
-    if uses_mantle(spec):
-        # Bedrock Mantle is a SEPARATE IAM service from bedrock — bedrock:InvokeModel
-        # does not cover it. Without these a Mantle agent reaches ACTIVE and then
-        # fails its first invoke with 401 bedrock-mantle:CreateInference.
-        statements.append({
-            "Sid": "BedrockMantleInference",
-            "Effect": "Allow",
-            "Action": [
-                "bedrock-mantle:Get*",
-                "bedrock-mantle:List*",
-                "bedrock-mantle:CreateInference",
-            ],
-            # Mantle models are hosted outside the stack region, so the region
-            # segment stays wildcarded, and projects are not per-agent.
-            "Resource": [f"arn:aws:bedrock-mantle:*:{ctx.account_id}:project/*"],
-        })
-        statements.append({
-            # UNSCOPABLE: minting the short-lived bearer token has no resource.
-            "Sid": "BedrockMantleCallWithBearerToken",
-            "Effect": "Allow",
-            "Action": ["bedrock-mantle:CallWithBearerToken"],
-            "Resource": "*",
-        })
-        statements.append({
-            # Third-party Mantle families are fronted by Marketplace subscriptions.
-            # The CalledViaLast condition is what makes the wildcard acceptable: the
-            # role cannot subscribe to anything on its own initiative.
-            "Sid": "MarketplaceOperationsFromBedrockMantleFor3pModels",
-            "Effect": "Allow",
-            "Action": ["aws-marketplace:Subscribe", "aws-marketplace:ViewSubscriptions"],
-            "Resource": "*",
-            "Condition": {
-                "StringEquals": {"aws:CalledViaLast": "bedrock-mantle.amazonaws.com"}
-            },
-        })
-
-    # ---- memory ----
-    # NOTE: the memory defaults to a shared singleton, so this scopes to one
-    # resource but does NOT give per-agent memory isolation there. Partitioning is
-    # done by folding the agent id into the actor id (see services/memory.py::
-    # scoped_actor). A spec that pins its own memory (spec.memory.memory_id) gets
-    # the grant scoped to that memory instead.
-    if spec.memory.short_term or spec.memory.long_term:
-        selected_memory = spec.memory.memory_id or ctx.memory_id
-        memory_resource = (
-            f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}:memory/{selected_memory}"
-            if selected_memory else "*"
-        )
-        statements.append({
-            "Sid": "AgentCoreMemory",
-            "Effect": "Allow",
-            "Action": [
-                "bedrock-agentcore:CreateEvent",
-                "bedrock-agentcore:GetEvent",
-                "bedrock-agentcore:ListEvents",
-                "bedrock-agentcore:ListSessions",
-                "bedrock-agentcore:ListActors",
-                "bedrock-agentcore:RetrieveMemoryRecords",
-                "bedrock-agentcore:GetMemoryRecord",
-                "bedrock-agentcore:ListMemoryRecords",
-            ],
-            "Resource": memory_resource,
-        })
+    # ---- CN memory/KB (N6): self-hosted substrate, only when the workspace has it ----
+    statements.extend(_memory_statements(spec, ctx))
+    statements.extend(_knowledge_statements(spec, ctx))
 
     # ---- identity / workload tokens ----
     # Tool-level outbound auth: exact per-Connection grants, additive to (and
     # independent of) the family-wide gateway grant below.
     statements.extend(_tool_auth_statements(spec, ctx))
-    if system_preset and spec.knowledge_bases:
-        statements.extend(_preset_kb_oauth_statements(spec, ctx))
-    elif _uses_gateway(spec):
+    if _uses_gateway(spec):
         statements.append({
             # UNSCOPABLE: workload-token actions take no resource.
             "Sid": "AgentCoreWorkloadIdentity",
@@ -565,8 +539,7 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["secretsmanager:GetSecretValue"],
             "Resource": [
-                f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}"
-                ":secret:bedrock-agentcore-identity!*"
+                ctx.arn("secretsmanager", "secret:bedrock-agentcore-identity!*")
             ],
         })
 
@@ -584,34 +557,8 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["bedrock-agentcore:InvokeGateway"],
             "Resource": [
-                f"arn:aws:bedrock-agentcore:*:{ctx.account_id}:gateway/{gateway_id}"
+                ctx.arn("bedrock-agentcore", f"gateway/{gateway_id}", region="*")
                 for gateway_id in gateway_ids
-            ],
-        })
-
-    # ---- inbound JWT ----
-    # A JWT-mode runtime exchanges the validated inbound bearer for a workload
-    # access token (GetWorkloadAccessTokenForJWT) on the runtime's own workload
-    # identity — needed by agents whose role predates the Identity service-
-    # linked role, and by the P2 OBO path. Skipped when the family-wide gateway
-    # grant above already carries the action; scoped to the directory plus the
-    # runtime's OWN identity (its name embeds the runtime id, unknown at
-    # provision time — ``own_workload_identity_arn``), matching the devguide's
-    # GetAgentAccessToken policy shape.
-    if inbound_jwt and not any(
-        s.get("Sid") == "AgentCoreWorkloadIdentity" for s in statements
-    ):
-        base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
-        statements.append({
-            "Sid": "InboundJwtWorkloadToken",
-            "Effect": "Allow",
-            "Action": [
-                "bedrock-agentcore:GetWorkloadAccessToken",
-                "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
-            ],
-            "Resource": [
-                f"{base}:workload-identity-directory/default",
-                own_workload_identity_arn(spec, ctx),
             ],
         })
 
@@ -649,11 +596,9 @@ def policy_document(
         # byoc container_image may name any repo in this account; scope to it
         # rather than the shared launchpad-agents repo
         if byoc_kind == "container_image" and spec.byoc and spec.byoc.image_uri:
-            repo_name = spec.byoc.image_uri.split(".amazonaws.com/", 1)[1]
+            repo_name = spec.byoc.image_uri.split(f".{ctx.dns_suffix}/", 1)[1]
             repo_name = repo_name.split("@", 1)[0].rsplit(":", 1)[0]
-            repo_arn = (
-                f"arn:aws:ecr:{ctx.region}:{ctx.account_id}:repository/{repo_name}"
-            )
+            repo_arn = ctx.arn("ecr", f"repository/{repo_name}")
         else:
             repo_arn = ctx.ecr_repo_arn
         statements.append({
@@ -678,63 +623,34 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["s3:GetObject"],
             "Resource": [
-                f"arn:aws:s3:::{ctx.artifacts_bucket}/{prefix}*" for prefix in prefixes
+                ctx.arn("s3", f"{ctx.artifacts_bucket}/{prefix}*", region="", account="")
+                for prefix in prefixes
             ],
         })
         statements.append({
             "Sid": "SkillBundleList",
             "Effect": "Allow",
             "Action": ["s3:ListBucket"],
-            "Resource": [f"arn:aws:s3:::{ctx.artifacts_bucket}"],
+            "Resource": [ctx.arn("s3", ctx.artifacts_bucket, region="", account="")],
             "Condition": {"StringLike": {"s3:prefix": [f"{p}*" for p in prefixes]}},
         })
 
-    # ---- managed knowledge bases: scoped to the attached ones ----
-    # A system preset reaches its KBs only through the KB gateway (the connector's
-    # own role retrieves), so it gets no direct retrieval grant at all.
-    if spec.knowledge_bases and not system_preset:
-        statements.append({
-            "Sid": "ManagedKbRetrieval",
-            "Effect": "Allow",
-            "Action": ["bedrock:Retrieve", "bedrock:GetKnowledgeBase"],
-            "Resource": [
-                f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:knowledge-base/{kb.kb_id}"
-                for kb in spec.knowledge_bases
-            ],
-        })
-        statements.append({
-            # UNSCOPABLE: AgenticRetrieveStream does not support resource scoping, so
-            # any Launchpad runtime with KBs attached can agentic-retrieve against
-            # any KB in the account. Accepted and unchanged from the shared role —
-            # launchpad-gateway-role carries the same grant for the harness channel.
-            "Sid": "ManagedKbAgenticRetrieval",
-            "Effect": "Allow",
-            "Action": ["bedrock:AgenticRetrieveStream"],
-            "Resource": "*",
-        })
-
-    # ---- routed configuration bundles (config-bundle A/B experiments) ----
+    # ---- routed configuration bundles (config-bundle A/B experiments, N12) ----
     # The generated agent reads its system prompt and tool descriptions from
-    # BedrockAgentCoreContext.get_config_bundle(), and the SDK resolves the baggage
-    # reference by calling GetConfigurationBundleVersion **with this role**. Without
-    # this statement a routed bundle fails with AccessDenied inside the runtime and
-    # the whole invocation 500s — measured live; the shared CDK role has the grant
-    # (base_stack ABTestOrchestration) but a per-agent role did not, so every
-    # experiment on a per-agent-role agent was broken.
-    #
-    # Read-only, and scoped to this account+region: bundle names are generated per
-    # experiment, so there is no narrower resource to name.
-    if spec.method != "harness":
+    # ``_config_bundle()``, which resolves the request's bundle pointer
+    # (``launchpad.bundle=<id>:<v>`` — baggage / Custom header / payload alias, CA-2)
+    # to ``s3://<artifacts>/bundles/<agent>/<id>/v<n>.json`` **with this role**. The
+    # AgentCore ConfigurationBundle service does not exist in aws-cn (plan §B.6), so the
+    # grant is a read on exactly that prefix; bundle ids are generated per experiment,
+    # so there is no narrower object to name. Unconditional for every Runtime method:
+    # the seam is rendered into every template.
+    if ctx.artifacts_bucket:
         statements.append({
-            "Sid": "ConfigurationBundleRead",
+            "Sid": "LaunchpadBundleRead",
             "Effect": "Allow",
-            "Action": [
-                "bedrock-agentcore:GetConfigurationBundle",
-                "bedrock-agentcore:GetConfigurationBundleVersion",
-            ],
+            "Action": ["s3:GetObject"],
             "Resource": [
-                f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
-                ":configuration-bundle/*"
+                ctx.arn("s3", f"{ctx.artifacts_bucket}/bundles/*", region="", account="")
             ],
         })
 
@@ -743,10 +659,20 @@ def policy_document(
         statements.append({
             "Sid": "A2AInvokePeerRuntimes",
             "Effect": "Allow",
-            "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
-            "Resource": [
-                f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}:runtime/*"
-            ],
+            "Action": list(RUNTIME_INVOKE_ACTIONS),
+            "Resource": [ctx.arn("bedrock-agentcore", "runtime/*")],
+        })
+    # ---- A2A *consumers* (N11 r3-C): exactly the mounted peers, nothing wider ----
+    # The ARN is the mounted target's own (schema-validated, any partition); the
+    # endpoint child resource is what InvokeAgentRuntime with ``qualifier=DEFAULT`` is
+    # authorized against alongside the runtime itself.
+    peers = _a2a_peer_arns(spec)
+    if peers:
+        statements.append({
+            "Sid": "A2AInvokeMountedPeers",
+            "Effect": "Allow",
+            "Action": list(RUNTIME_INVOKE_ACTIONS),
+            "Resource": [r for arn in peers for r in (arn, f"{arn}/runtime-endpoint/*")],
         })
 
     # ---- telemetry ----
@@ -763,10 +689,8 @@ def policy_document(
             "logs:DescribeLogStreams",
         ],
         "Resource": [
-            f"arn:aws:logs:{ctx.region}:{ctx.account_id}:log-group:"
-            "/aws/bedrock-agentcore/runtimes/*",
-            f"arn:aws:logs:{ctx.region}:{ctx.account_id}:log-group:"
-            "/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+            ctx.arn("logs", "log-group:/aws/bedrock-agentcore/runtimes/*"),
+            ctx.arn("logs", "log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*"),
         ],
     })
     statements.append({
@@ -783,7 +707,109 @@ def policy_document(
         "Resource": "*",
     })
 
+    statements.extend(extra_statements or [])
     return {"Version": "2012-10-17", "Statement": statements}
+
+
+# ─── the evaluation worker's execution role (N12 E3-5; plan §B.0) ──────────────────
+# Prefixes of the artifacts bucket the worker reads/writes: job artefacts
+# (status/results/done + the cancel marker), dataset snapshots it replays, and the
+# candidate bundles the optimizer writes.
+EVAL_WORKER_PREFIXES: tuple[str, ...] = ("evaluations/*", "eval-datasets/*", "bundles/*")
+# N17-obs394: the ONE name prefix of the reviewed code-evaluator Lambdas — the materializer
+# (`evaluation_assets.function_name`) names its functions, log groups and roles with it, and the
+# worker's grant (and the hub role's `LambdaForCodeEvaluators` in infra/ec2) covers exactly it.
+# The grant used to say `launchpad-eval-*`, which matched none of the `launchpad-evalfn-…` names.
+CODE_EVALUATOR_FUNCTION_PREFIX = "launchpad-evalfn-"
+EVAL_WORKER_CODE_EVALUATOR_FUNCTION = f"function:{CODE_EVALUATOR_FUNCTION_PREFIX}*"
+
+
+def eval_worker_statements(
+    ctx: RoleContext,
+    *,
+    code_evaluators: bool = False,
+    results_mirror_prefix: str = "",
+) -> list[dict[str, Any]]:
+    """Extra statements of the ``launchpad_eval_worker`` preset's execution role, on top
+    of :func:`policy_document` (workload identity + ``ModelCredential*`` already give it
+    the Global Bedrock bearer for the judge).
+
+    * ``EvalWorkerSpansRead`` — Logs Insights over ``aws/spans`` and the runtime log
+      groups (the spans provider's queries);
+    * ``EvalWorkerArtifacts`` / ``EvalWorkerArtifactsList`` — S3 on the three prefixes;
+    * ``EvalWorkerInvokeTargets`` — ``InvokeAgentRuntime`` **and**
+      ``InvokeAgentRuntimeForUser`` (N12-bug5: the worker's ``runtime_invoke.py`` always
+      sends ``runtimeUserId``, which the data plane authorizes as the ForUser action; the
+      first action alone was denied on every replay) for replays and rollouts on
+      ``runtime/*`` **with ``aws:ResourceAccount`` = this account** (lead ruling 3: runtime
+      names are ``sanitize_runtime_name(agent.name)``, so no name-prefix narrowing exists;
+      per-job session-policy narrowing is the recorded follow-up R-15). No
+      ``StopRuntimeSession``: cancelling a job is the hub's action. An existing worker
+      role receives the statement on its next repair/redeploy: ``ensure_role`` re-puts
+      the caps inline policy whenever the rendered document differs.
+    * optional ``EvalWorkerCodeEvaluators`` (``eval_code_evaluators_enabled``) and
+      ``EvalWorkerResultsMirror`` (``eval_results_log_group_prefix``).
+    """
+    if not ctx.artifacts_bucket:
+        raise ValueError("eval_worker_statements needs ctx.artifacts_bucket (run bootstrap)")
+    bucket_arn = ctx.arn("s3", ctx.artifacts_bucket, region="", account="")
+    statements: list[dict[str, Any]] = [
+        {
+            "Sid": "EvalWorkerSpansRead",
+            "Effect": "Allow",
+            "Action": [
+                "logs:StartQuery",
+                "logs:GetQueryResults",
+                "logs:StopQuery",
+                "logs:FilterLogEvents",
+                "logs:DescribeLogGroups",
+            ],
+            "Resource": [
+                ctx.arn("logs", "log-group:aws/spans"),
+                ctx.arn("logs", "log-group:aws/spans:*"),
+                ctx.arn("logs", "log-group:/aws/bedrock-agentcore/runtimes/*"),
+            ],
+        },
+        {
+            "Sid": "EvalWorkerArtifacts",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            "Resource": [f"{bucket_arn}/{prefix}" for prefix in EVAL_WORKER_PREFIXES],
+        },
+        {
+            "Sid": "EvalWorkerArtifactsList",
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": [bucket_arn],
+            "Condition": {"StringLike": {"s3:prefix": list(EVAL_WORKER_PREFIXES)}},
+        },
+        {
+            "Sid": "EvalWorkerInvokeTargets",
+            "Effect": "Allow",
+            "Action": list(RUNTIME_INVOKE_ACTIONS),
+            "Resource": [ctx.arn("bedrock-agentcore", "runtime/*")],
+            "Condition": {"StringEquals": {"aws:ResourceAccount": ctx.account_id}},
+        },
+    ]
+    if code_evaluators:
+        statements.append({
+            "Sid": "EvalWorkerCodeEvaluators",
+            "Effect": "Allow",
+            "Action": ["lambda:InvokeFunction"],
+            "Resource": [ctx.arn("lambda", EVAL_WORKER_CODE_EVALUATOR_FUNCTION)],
+        })
+    if results_mirror_prefix:
+        prefix = results_mirror_prefix.rstrip("/")
+        statements.append({
+            "Sid": "EvalWorkerResultsMirror",
+            "Effect": "Allow",
+            "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+            "Resource": [
+                ctx.arn("logs", f"log-group:{prefix}/*"),
+                ctx.arn("logs", f"log-group:{prefix}/*:*"),
+            ],
+        })
+    return statements
 
 
 def _skill_prefix(skill_path: str) -> str:
@@ -880,6 +906,13 @@ def ensure_role(
             Tags=[
                 {"Key": MANAGED_TAG_KEY, "Value": agent.id},
                 {"Key": "launchpad:managed", "Value": "true"},
+                # N11: only under a non-empty env name, so the default stays byte-identical;
+                # scripts/teardown.py sweeps orphans of its own environment by this tag.
+                *(
+                    [{"Key": naming.ENV_TAG_KEY, "Value": env}]
+                    if (env := naming.current_env_name())
+                    else []
+                ),
             ],
         )
         role_arn = created["Role"]["Arn"]
@@ -887,43 +920,73 @@ def ensure_role(
     except Exception as exc:  # noqa: BLE001 — the SDK's typed error is client-specific
         if not _is_already_exists(exc):
             raise
-        role_arn = iam.get_role(RoleName=name)["Role"]["Arn"]
-        # Adopting: refresh the trust policy so a tightened condition still lands.
-        iam.update_assume_role_policy(RoleName=name, PolicyDocument=trust)
-        log(f"reusing existing execution role {name}")
+        role = iam.get_role(RoleName=name)["Role"]
+        role_arn = role["Arn"]
+        # Adopting: refresh the trust policy so a tightened condition still lands — but
+        # only when it actually differs. N10v2-bug1 (live, 2026-10-10): a resumed deploy
+        # re-entered this path with a byte-identical trust document and the hub's ops
+        # role was denied iam:UpdateAssumeRolePolicy; the unconditional rewrite failed
+        # the deploy and orphaned the runtime the first attempt had created.
+        if _same_policy_document(role.get("AssumeRolePolicyDocument"), trust):
+            log(f"reusing existing execution role {name} (trust policy unchanged)")
+        else:
+            iam.update_assume_role_policy(RoleName=name, PolicyDocument=trust)
+            log(f"reusing existing execution role {name} (trust policy refreshed)")
 
-    iam.put_role_policy(
-        RoleName=name,
-        PolicyName=capability_policy_name(agent.name),
-        PolicyDocument=json.dumps(
-            policy_document(
-                spec,
-                ctx,
-                system_preset=bool(getattr(agent, "system_key", None)),
-                inbound_jwt=_resolves_to_jwt(agent),
-            )
+    _put_inline_policy_if_changed(
+        iam,
+        name,
+        capability_policy_name(agent.name),
+        policy_document(
+            spec, ctx, extra_statements=preset_statements(agent, spec, ctx),
         ),
+        log,
     )
     _sync_fs_policy(iam, name, agent, spec, log)
     return role_arn
 
 
-def _resolves_to_jwt(agent: Agent) -> bool:
-    """Whether this agent's CURRENT deploy resolves to inbound JWT.
+def _policy_as_dict(value: Any) -> dict | None:
+    """Normalize an IAM policy document however a client hands it back: boto3 returns
+    `AssumeRolePolicyDocument` / `PolicyDocument` URL-decoded as a dict, the raw API
+    (and some stubs) as a URL-encoded or plain JSON string. None when unparseable."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        for text in (value, unquote(value)):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
 
-    The provision stage runs before the deploy stage writes the snapshot, so
-    this resolves afresh (spec > workspace default) through the service helper.
-    Late import: services.inbound_auth imports the ledger models, and a top-
-    level import from here would cycle through services.workspace.
-    """
-    from app.core.db import SessionLocal
-    from app.services import inbound_auth as inbound_auth_service
 
-    db = SessionLocal()
+def _same_policy_document(current: Any, wanted: Any) -> bool:
+    cur, want = _policy_as_dict(current), _policy_as_dict(wanted)
+    if cur is None or want is None:
+        return False
+    return json.dumps(cur, sort_keys=True) == json.dumps(want, sort_keys=True)
+
+
+def _put_inline_policy_if_changed(
+    iam: Any, role_name: str, policy_name: str, document: dict, log: Callable[[str], None]
+) -> bool:
+    """PutRolePolicy only when the stored document differs; a failed read (denied,
+    absent, client without GetRolePolicy) means "write it". Returns True on a write."""
     try:
-        return inbound_auth_service.resolve_for_agent(agent, db).mode == "jwt"
-    finally:
-        db.close()
+        current = iam.get_role_policy(RoleName=role_name, PolicyName=policy_name)
+        current_doc = current.get("PolicyDocument") if isinstance(current, dict) else None
+    except Exception:  # noqa: BLE001 — absent policy / denied read / stub without the call
+        current_doc = None
+    if current_doc is not None and _same_policy_document(current_doc, document):
+        log(f"inline policy {policy_name} unchanged")
+        return False
+    iam.put_role_policy(
+        RoleName=role_name, PolicyName=policy_name, PolicyDocument=json.dumps(document)
+    )
+    return True
 
 
 def _sync_fs_policy(
@@ -934,10 +997,8 @@ def _sync_fs_policy(
     policy = fs_policy_document(spec)
     name = fs_policy_name(agent.name)
     if policy:
-        iam.put_role_policy(
-            RoleName=role_name, PolicyName=name, PolicyDocument=json.dumps(policy)
-        )
-        log(f"inline policy {name} attached (BYO file-system mounts)")
+        if _put_inline_policy_if_changed(iam, role_name, name, policy, log):
+            log(f"inline policy {name} attached (BYO file-system mounts)")
         return
     try:
         iam.delete_role_policy(RoleName=role_name, PolicyName=name)
@@ -982,6 +1043,14 @@ def provision_execution_role(
     return arn, detail
 
 
+# Outcomes of a role delete (N16-obs76): the teardown report says ``deleted`` only for a
+# role that existed — a role never created (deploy failed before provision) or already
+# swept is ``absent`` and reported as a skipped step, not a removal.
+ROLE_DELETED = "deleted"
+ROLE_ABSENT = "absent"
+ROLE_FAILED = "failed"
+
+
 def delete_execution_role(
     agent: Agent,
     settings: Any,
@@ -990,47 +1059,92 @@ def delete_execution_role(
     iam: Any = None,
 ) -> bool:
     """Delete the agent's role, if it has one. Never raises."""
+    return delete_execution_role_outcome(agent, settings, workspace, log, iam) != ROLE_FAILED
+
+
+def delete_execution_role_outcome(
+    agent: Agent,
+    settings: Any,
+    workspace: WorkspaceContext,
+    log: Callable[[str], None] = lambda _m: None,
+    iam: Any = None,
+) -> str:
+    """``ROLE_DELETED`` / ``ROLE_ABSENT`` / ``ROLE_FAILED`` for the agent's role. Never
+    raises. A shared (not per-agent) role is not ours to delete → ``ROLE_ABSENT``."""
     if not settings.per_agent_execution_roles:
-        return True  # the shared role is not ours to delete
+        return ROLE_ABSENT  # the shared role is not ours to delete
     if iam is None:
         iam = workspace.client("iam")
-    return delete_role(iam, agent, log)
+    return delete_role_outcome(iam, agent, log)
 
 
 def delete_role(
     iam: Any, agent: Agent, log: Callable[[str], None] = lambda _m: None
 ) -> bool:
+    """Delete the agent's role and its inline policies. Never raises. ``True`` unless
+    the delete failed (an absent role counts as done — see ``delete_role_outcome``)."""
+    return delete_role_outcome(iam, agent, log) != ROLE_FAILED
+
+
+def delete_role_outcome(
+    iam: Any, agent: Agent, log: Callable[[str], None] = lambda _m: None
+) -> str:
     """Delete the agent's role and its inline policies. Never raises.
 
     A failed delete must not block deleting the agent, but it must leave the role
     **findable** — hence the log line naming it, and the `launchpad:managed` tag that
-    lets `scripts/teardown.py` sweep orphans.
+    lets `scripts/teardown.py` sweep orphans. Returns ``ROLE_DELETED``, ``ROLE_ABSENT``
+    (no such role — never created, or already gone) or ``ROLE_FAILED``.
     """
     name = role_name_for(agent.name, agent.id)
     try:
         listed = iam.list_role_policies(RoleName=name).get("PolicyNames", [])
     except Exception as exc:  # noqa: BLE001
         if _is_no_such_entity(exc):
-            return True  # already gone
-        log(f"could not list policies on {name}: {exc}")
-        listed = []
+            return ROLE_ABSENT  # already gone
+        # N10v2-bug8 (live): the hub's ops role may be denied iam:ListRolePolicies; the
+        # platform attaches exactly two inline policies with deterministic names, so the
+        # denial falls back to those instead of letting DeleteRole hit DeleteConflict.
+        listed = [capability_policy_name(agent.name), fs_policy_name(agent.name)]
+        log(
+            f"could not list policies on {name}: {exc} — falling back to the platform's "
+            f"known policy names {listed}"
+        )
     for policy_name in listed:
         try:
             iam.delete_role_policy(RoleName=name, PolicyName=policy_name)
         except Exception as exc:  # noqa: BLE001
+            if _is_no_such_entity(exc):
+                continue  # a known name that was never attached (no BYO mounts)
             log(f"could not delete inline policy {policy_name} on {name}: {exc}")
     try:
         iam.delete_role(RoleName=name)
         log(f"deleted execution role {name}")
-        return True
+        return ROLE_DELETED
     except Exception as exc:  # noqa: BLE001
         if _is_no_such_entity(exc):
-            return True
+            return ROLE_ABSENT
         log(
             f"could not delete execution role {name}: {exc} — it is tagged "
             f"{MANAGED_TAG_KEY}={agent.id} and can be swept by scripts/teardown.py"
         )
-        return False
+        return ROLE_FAILED
+
+
+# Every grant that lets a workload call InvokeAgentRuntime carries BOTH actions
+# (N12-bug5, live t1): the data plane authorizes ``InvokeAgentRuntimeForUser`` as soon
+# as the call carries ``runtimeUserId`` — which every Launchpad caller does (the hub's
+# ``services/invoke.py``, the evaluation worker's ``strands_eval/runtime_invoke.py``,
+# the Skill Lab runner), because the Runtime only injects a workload access token for
+# a user-scoped invoke and the templates self-mint otherwise (N10v3-bug5). The A2A
+# consumer template does not pass it yet; its grant carries the action so the fix for
+# that template needs no role change. ``InvokeAgentRuntime`` alone answered
+# ``AccessDeniedException … not authorized to perform:
+# bedrock-agentcore:InvokeAgentRuntimeForUser`` on every worker replay.
+RUNTIME_INVOKE_ACTIONS: tuple[str, ...] = (
+    "bedrock-agentcore:InvokeAgentRuntime",
+    "bedrock-agentcore:InvokeAgentRuntimeForUser",
+)
 
 
 def _is_already_exists(exc: Exception) -> bool:
@@ -1055,7 +1169,7 @@ def _is_no_such_entity(exc: Exception) -> bool:
 # The wording a brand-new role actually produces was only learned from a live zip
 # deploy (2026-08-04), and it matched none of the guesses above:
 #
-#   ValidationException: Role validation failed for 'arn:aws:iam::…:role/…'. Please
+#   ValidationException: Role validation failed for 'arn:<partition>:iam::…:role/…'. Please
 #   verify that the role exists and its trust policy allows assumption by this service
 #
 # The trust policy was byte-identical to the shared role's, which works — so this

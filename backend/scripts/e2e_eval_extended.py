@@ -4,11 +4,16 @@
 Flow (all through the launchpad backend API — the platform chain, not raw
 boto3): custom-evaluator CRUD (create → get → update → get) → time-window
 evaluators run scored by the custom judge → insights run with a type subset →
-scenario dataset with ground truth (edit → sync to an AWS Dataset resource) →
+scenario dataset with ground truth (edit → publish a cloud snapshot) →
 ground-truth dataset run (Trajectory + Correctness) → cleanup.
 
-The account allows ONE batch evaluation at a time — every run is polled to a
-terminal state before the next starts.
+CN build (N12 / D14): evaluators are local Strands evaluators (custom judges run on
+the CN catalog model they were created with — no ``model_id`` needed below), runs are
+jobs on the ``launchpad-eval-worker`` Runtime (``batch_eval_id`` = job id), and the
+"cloud" dataset is the S3 snapshot store under ``eval-datasets/<id>/`` (the
+``sync-to-aws`` / ``datasets/cloud`` routes keep their contract-frozen names). Runs
+are still polled to a terminal state before the next starts so each one's sessions
+and judge calls are attributable.
 
 Run:  cd backend && uv run python scripts/e2e_eval_extended.py
 """
@@ -149,7 +154,7 @@ def main() -> int:
     run.raise_for_status()
     window_run = wait_run(client, run.json()["id"])
     assert window_run["status"] == "completed", window_run.get("error")
-    print(f"  batch: {window_run['batch_eval_id']}", flush=True)
+    print(f"  job: {window_run['batch_eval_id']}", flush=True)
     print(f"  dataset column: {window_run['dataset_name']}", flush=True)
     print(f"  scores: {json.dumps(window_run['scores'])}", flush=True)
     scored = {s["evaluatorId"]: s["score"] for s in window_run["scores"]}
@@ -169,7 +174,7 @@ def main() -> int:
     insights_run = wait_run(client, run.json()["id"])
     assert insights_run["status"] == "completed", insights_run.get("error")
     trees = insights_run["insights"]
-    print(f"  batch: {insights_run['batch_eval_id']}", flush=True)
+    print(f"  job: {insights_run['batch_eval_id']}", flush=True)
     print(f"  trees: {sorted(trees.keys())} · "
           f"sizes: {({k: len(v) for k, v in trees.items()})}", flush=True)
     assert "failures" not in trees, trees.keys()
@@ -178,7 +183,7 @@ def main() -> int:
     excerpt = json.dumps(trees, ensure_ascii=False)[:400]
     print(f"  excerpt: {excerpt}", flush=True)
 
-    # ── 4. ground-truth dataset: create → edit → sync to AWS ────────────────
+    # ── 4. ground-truth dataset: create → edit → publish a cloud snapshot ────
     ds_name = f"e2e_gt_math_{suffix}"
     print(f"── [4] create dataset {ds_name} (3 GT scenarios) …", flush=True)
     dataset = client.post("/api/eval/datasets", json={
@@ -198,7 +203,7 @@ def main() -> int:
     assert edited.json()["description"].endswith("edited")
     print("  PUT edit ok", flush=True)
 
-    print("  sync-to-aws …", flush=True)
+    print("  sync-to-aws (S3 snapshot store) …", flush=True)
     synced = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
     if synced.status_code != 200:
         print(f"SYNC FAILED: {synced.text}")
@@ -222,7 +227,7 @@ def main() -> int:
     run.raise_for_status()
     gt_run = wait_run(client, run.json()["id"])
     assert gt_run["status"] == "completed", gt_run.get("error")
-    print(f"  batch: {gt_run['batch_eval_id']}", flush=True)
+    print(f"  job: {gt_run['batch_eval_id']}", flush=True)
     print(f"  sessions: {len(gt_run['session_ids'])}", flush=True)
     print(f"  scores: {json.dumps(gt_run['scores'])}", flush=True)
     gt_scored = {s["evaluatorId"]: s["score"] for s in gt_run["scores"]}

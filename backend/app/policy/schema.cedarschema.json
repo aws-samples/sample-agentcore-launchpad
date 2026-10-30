@@ -1,0 +1,158 @@
+{
+  "Launchpad": {
+    "entityTypes": {
+      "Role": {
+        "shape": {
+          "type": "Record",
+          "attributes": {}
+        }
+      },
+      "User": {
+        "memberOfTypes": [
+          "Role"
+        ],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "username": {
+              "type": "String"
+            },
+            "role": {
+              "type": "String"
+            },
+            "user_id": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "ApiKey": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String"
+            },
+            "created_by": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "System": {
+        "shape": {
+          "type": "Record",
+          "attributes": {}
+        }
+      },
+      "Workspace": {
+        "shape": {
+          "type": "Record",
+          "attributes": {}
+        }
+      },
+      "Agent": {
+        "memberOfTypes": [
+          "Workspace"
+        ],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String"
+            },
+            "method": {
+              "type": "String"
+            },
+            "owner": {
+              "type": "String",
+              "required": false
+            },
+            "system": {
+              "type": "Boolean"
+            }
+          }
+        }
+      },
+      "Gateway": {
+        "memberOfTypes": [
+          "Workspace"
+        ],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "gateway_id": {
+              "type": "String"
+            }
+          }
+        }
+      },
+      "Tool": {
+        "memberOfTypes": [
+          "Gateway",
+          "Agent"
+        ],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String"
+            },
+            "tool": {
+              "type": "String"
+            },
+            "target": {
+              "type": "String"
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "call_tool": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "ApiKey",
+            "System",
+            "Agent"
+          ],
+          "resourceTypes": [
+            "Tool"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "channel": {
+                "type": "String"
+              },
+              "agent_id": {
+                "type": "String"
+              }
+            }
+          }
+        }
+      },
+      "list_tool": {
+        "appliesTo": {
+          "principalTypes": [
+            "Agent"
+          ],
+          "resourceTypes": [
+            "Tool"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": {
+                "type": "String"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

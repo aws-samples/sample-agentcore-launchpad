@@ -1,11 +1,17 @@
 """System-managed presets (SE-038): server-owned identity, protected mutation paths,
 idempotent admin install, no AWS on reads — all hermetic (deploy launch stubbed, AWS
-client factory made to fail loudly wherever a read path might reach for it)."""
+client factory made to fail loudly wherever a read path might reach for it).
+
+N7: every preset is a `method="harness"` self-built Harness, rendered by
+`deployer.harness_local` and deployed through the ordinary `zip_runtime` provision/
+deploy/register stages (plan ruling R14) — not the removed AWS-managed Harness API.
+"""
 
 import json
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,34 +20,52 @@ import app.routers.agents as agents_router
 import app.routers.system_agents as system_router
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.deployer.harness import STAGES, build_create_params
+from app.core.errors import AppError
+from app.deployer import harness_local, zip_runtime
+from app.deployer.environment import runtime_environment
+from app.deployer.harness_local import STAGES
 from app.deployer.pipeline import StageContext, create_deployment
 from app.main import create_app
 from app.models.ledger import Agent, Job, Workspace
-from app.optimization.service import canary_capability, experiment_capability
 from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.services import agent_iam, aws_clients
+from app.services import harness_convert as hc
 from app.services import users as users_service
-from app.services.agentcore import harness as hc
 from app.services.runtime_discovery import _display_name
 from app.system_agents import presets, service
 from app.system_agents.presets import ARCHITECT, InstallOptions, PresetEdit
+from tests.conftest import settle_deploy_jobs
 
 from .conftest import ws_ctx
+
+FIXTURE_TEMPLATE = Path(__file__).parent / "fixtures" / "harness_runtime_min"
+
+
+@pytest.fixture(autouse=True)
+def fixture_template(monkeypatch):
+    """Every render in this file uses the minimal fixture template (Task 1), not the
+    real vendored one — swapped in for every test, same as test_harness_local.py."""
+    monkeypatch.setattr(harness_local, "TEMPLATE_DIR", FIXTURE_TEMPLATE)
+
 
 KEY = ARCHITECT.key
 INSTALL = f"/api/system-agents/{KEY}/install"
 BUCKET = "launchpad-artifacts-test"
 VER = ARCHITECT.skill_version  # the catalogue version this build ships
-OAUTH_PROVIDER = ("arn:aws:bedrock-agentcore:us-west-2:111122223333:token-vault/default/"
-                  "oauth2credentialprovider/launchpad-gw-m2m")
 READY_RESOURCES = {
     "artifacts_bucket": BUCKET,
-    "execution_role_arn": "arn:aws:iam::111122223333:role/launchpad-agent-execution-role",
-    "oauth_provider_arn": OAUTH_PROVIDER,
-    "memory_arn": "arn:aws:bedrock-agentcore:us-west-2:111122223333:memory/launchpad_memory-x",
+    "execution_role_arn": "arn:aws-cn:iam::111122223333:role/launchpad-agent-execution-role",
+    "memory_arn": ("arn:aws-cn:bedrock-agentcore:cn-northwest-1:111122223333:memory/"
+                   "launchpad_memory-x"),
     "memory_id": "launchpad_memory-x",
 }
+RUNTIME_ARN = "arn:aws-cn:bedrock-agentcore:cn-northwest-1:111122223333:runtime/arch-1"
+
+
+def _rt_ctx(resources: dict | None = None, **fields):
+    """``ws_ctx`` pinned to the CN region/partition this preset actually deploys to."""
+    fields.setdefault("region", "cn-northwest-1")
+    return ws_ctx(resources if resources is not None else READY_RESOURCES, **fields)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +211,7 @@ def test_load_bundle_refuses_a_version_drift(monkeypatch):
 def test_build_spec_is_server_owned_and_constrained():
     spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions())
     assert spec.name == ARCHITECT.name and spec.method == "harness"
+    assert spec.model_id == DEFAULT_MODEL_ID and spec.reasoning_effort is None
     assert spec.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}/"]
     addressed = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(), digest="ab" * 32)
     assert addressed.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}-abababababab/"]
@@ -199,23 +224,24 @@ def test_build_spec_is_server_owned_and_constrained():
     assert not [t for t in spec.tools if t.type == "builtin"]
     # no secrets / account ids in the prompt
     assert "arn:aws" not in spec.system_prompt and "111122223333" not in spec.system_prompt
-    params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
-    assert params["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
-    assert params["skills"] == [{"s3": {"uri": spec.skills[0]}}]
-    assert params["tools"][0]["type"] == "remote_mcp"
+    bundle = harness_local.render_harness_bundle(spec, _rt_ctx())
+    main, client = bundle.files["main.py"], bundle.files["mcp_client/client.py"]
+    assert "def shell(" in main and "def file_operations(" in main
+    assert hc.GW_SOFT_CLIENT in client and "https://knowledge-mcp.global.api.aws" in client
     assert spec.tools[0].config["auth"] == "none"  # public server → no identity grant
     # persistent memory is explicitly opted out (the flags cannot express
     # "short-term only" against the real API; see presets.build_spec)
     assert spec.memory.short_term is False and spec.memory.long_term is False
-    assert params["memory"] == {"disabled": {}}
-    assert params["clientToken"] if "clientToken" in params else True
+    assert "LAUNCHPAD_MEMORY_ID" not in runtime_environment(spec, READY_RESOURCES)
 
 
 def test_ordinary_harness_spec_sends_empty_allowed_tools():
     """An empty ordinary selection cannot expose Harness native tools."""
     spec = AgentSpec(name="plain-harness", method="harness", system_prompt="hi")
     assert spec.allowed_tools is None
-    assert build_create_params(spec, "arn:aws:iam::111:role/x", None)["allowedTools"] == []
+    bundle = harness_local.render_harness_bundle(spec, _rt_ctx())
+    assert "def shell(" not in bundle.files["main.py"]
+    assert "def file_operations(" not in bundle.files["main.py"]
 
 
 def test_allowed_tools_shape_is_validated():
@@ -226,7 +252,7 @@ def test_allowed_tools_shape_is_validated():
 
 def test_execution_role_grants_only_the_versioned_skill_prefix_and_no_broad_tools():
     spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions())
-    ctx = agent_iam.role_context(ws_ctx(READY_RESOURCES))
+    ctx = agent_iam.role_context(_rt_ctx())
     doc = agent_iam.policy_document(spec, ctx)
     sids = {s["Sid"] for s in doc["Statement"]}
     assert "AgentCoreCodeInterpreter" not in sids and "AgentCoreBrowser" not in sids
@@ -234,11 +260,12 @@ def test_execution_role_grants_only_the_versioned_skill_prefix_and_no_broad_tool
     # unauthenticated docs-only MCP + no persistent memory ⇒ no credential/memory access
     assert "AgentCoreWorkloadIdentity" not in sids and "IdentityVaultSecrets" not in sids
     assert "AgentCoreMemory" not in sids
-    assert sids == {"BedrockModels", "SkillBundleObjects", "SkillBundleList",
+    assert sids == {"ModelCredentialApiKey", "ModelCredentialVaultSecret",
+                    "SkillBundleObjects", "SkillBundleList", "LaunchpadBundleRead",
                     "Telemetry", "TelemetryTracing"}
     objects = next(s for s in doc["Statement"] if s["Sid"] == "SkillBundleObjects")
     assert objects["Resource"] == [
-        f"arn:aws:s3:::{BUCKET}/system-skills/{ARCHITECT.name}/{VER}/*"
+        ctx.arn("s3", f"{BUCKET}/system-skills/{ARCHITECT.name}/{VER}/*", region="", account="")
     ]  # the install itself scopes to the content-addressed release directory
     # member-writable prefixes are never readable by the preset's role
     assert not any("/skills/" in r or "/agent-skills/" in r for r in objects["Resource"])
@@ -247,13 +274,6 @@ def test_execution_role_grants_only_the_versioned_skill_prefix_and_no_broad_tool
                        else statement["Action"]):
             assert not action.startswith(("iam:", "s3:Put", "s3:Delete", "bedrock-agentcore:Create"
                                           "AgentRuntime", "bedrock-agentcore:Delete"))
-
-
-def test_capability_projections_refuse_system_agents():
-    row = Agent(name=ARCHITECT.name, method="zip_runtime", status="active", spec={},
-                system_key=KEY, arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/x")
-    assert experiment_capability(row)["reason_code"] == "system-managed"
-    assert canary_capability(row)["reason_code"] == "system-managed"
 
 
 def test_discovery_import_never_takes_a_reserved_name():
@@ -317,7 +337,7 @@ def test_install_is_explicit_and_idempotent_while_deploying(client, no_real_depl
     assert agent["name"] == ARCHITECT.name
     assert agent["system"] == {
         "managed": True, "key": KEY, "label": ARCHITECT.label, "skill_version": VER,
-        "protected_actions": ["redeploy", "delete", "convert", "experiment", "canary"],
+        "protected_actions": ["redeploy", "delete", "convert", "canary"],
     }
     assert agent["spec"]["allowed_tools"] == ["shell", "file_*", "@aws_knowledge"]
     assert no_real_deploy == [body["job_id"]]
@@ -344,7 +364,7 @@ def test_install_on_active_preset_is_a_no_op_unless_changed_or_forced(client, no
     _mark_ready()
     first = client.post(INSTALL, json={}).json()
     agent_id, first_job = first["agent"]["id"], first["job_id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     assert _status(client)["status"] == "active"
 
     same = client.post(INSTALL, json={})
@@ -352,27 +372,26 @@ def test_install_on_active_preset_is_a_no_op_unless_changed_or_forced(client, no
     # the stable outcome: the job that produced the active preset, no new one
     assert same.json()["job_id"] == first_job and _job_count() == 1
 
-    # the stored default carries the OpenAI reasoning effort; moving to Claude without
-    # clearing it is an unsupported pairing and is refused before any job is queued
+    # a model outside the CN catalog is an unsupported pairing, refused before any
+    # job is queued; the other allowed model (Kimi) is accepted
     refused = client.post(INSTALL, json={"model_id": "global.anthropic.claude-opus-5"})
     assert refused.status_code == 422 and refused.json()["code"] == "system_agent.invalid_options"
     assert _job_count() == 1
-    changed = client.post(INSTALL, json={"model_id": "global.anthropic.claude-opus-5",
-                                         "clear": ["reasoning_effort"]})
+    changed = client.post(INSTALL, json={"model_id": "global.moonshotai.kimi-k3"})
     assert changed.status_code == 202 and changed.json()["changed"] is True
     assert _job_count() == 2
     db = SessionLocal()
     try:
         job = db.get(Job, changed.json()["job_id"])
         assert job.payload["mode"] == "update"
-        assert db.get(Agent, agent_id).spec["model_id"] == "global.anthropic.claude-opus-5"
+        assert db.get(Agent, agent_id).spec["model_id"] == "global.moonshotai.kimi-k3"
         # the administrator's earlier choice is what a bodiless repair keeps
     finally:
         db.close()
     _set_status(agent_id, "active")
     kept = client.post(INSTALL, json={})
     assert kept.status_code == 200 and kept.json()["preset"]["model_id"] == (
-        "global.anthropic.claude-opus-5"
+        "global.moonshotai.kimi-k3"
     )
 
     forced = client.post(INSTALL, json={"force": True})
@@ -391,7 +410,10 @@ def test_failed_preset_is_repaired_by_install(client):
     assert _status(client)["status"] == "deploying" and len(_rows(system_key=KEY)) == 1
 
 
-def test_install_with_knowledge_base_mounts_only_the_given_reference(client):
+def test_install_with_knowledge_base_mounts_only_the_given_reference(client, monkeypatch):
+    from app.services import knowledge_backend
+
+    monkeypatch.setattr(knowledge_backend, "_backend", object())
     _mark_ready()
     res = client.post(INSTALL, json={"knowledge_bases": [
         {"kb_id": "KB123ABC", "name": "whitepaper", "description": "the guide"}
@@ -404,22 +426,24 @@ def test_install_with_knowledge_base_mounts_only_the_given_reference(client):
     assert _status(client)["knowledge_bases"][0]["kb_id"] == "KB123ABC"
 
 
-def test_reserved_name_is_refused_for_ordinary_agents_and_spoofed_metadata_is_ignored(client):
+def test_reserved_name_is_refused_for_ordinary_agents_and_spoofed_metadata_is_refused(client):
     res = client.post("/api/agents", json={
         "name": ARCHITECT.name, "method": "harness", "system_prompt": "impostor",
     })
-    assert res.status_code == 409 and res.json()["code"] == "agent.name_reserved"
+    assert res.status_code == 422 and res.json()["code"] == "agent.name_reserved"
+    assert res.json()["detail"] == {"name": ARCHITECT.name, "reserved_for": ARCHITECT.key}
     assert _rows() == []
 
+    # N10v3 spoof rule, tightened by N16-obs78: the system metadata is never honoured —
+    # a body naming it is now 422 naming the keys (was: silently dropped, 202)
     spoof = client.post("/api/agents", json={
         "name": "totally-ordinary", "method": "harness", "system_prompt": "hi",
         "system_key": KEY, "system": {"managed": True}, "owner": "system",
     })
-    assert spoof.status_code == 202
-    assert spoof.json()["agent"]["system"] is None
-    row = _rows(name="totally-ordinary")[0]
-    assert row.system_key is None and row.owner != "system"
-    assert "system_key" not in row.spec and "system" not in row.spec
+    assert spoof.status_code == 422
+    assert spoof.json()["code"] == "validation.invalid_request"
+    assert sorted(e["loc"][-1] for e in spoof.json()["detail"]) == ["owner", "system", "system_key"]
+    assert _rows(name="totally-ordinary") == []
 
 
 def test_preexisting_ordinary_agent_with_the_reserved_name_is_never_adopted(client):
@@ -551,7 +575,7 @@ def test_cross_workspace_isolation(client):
 def test_ordinary_mutations_are_refused_before_any_aws_call(client, monkeypatch):
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     monkeypatch.setattr(agents_router, "_delete_agent_resources",
                         lambda *a, **k: pytest.fail("teardown reached for a system agent"))
     spec = client.get(f"/api/agents/{agent_id}").json()["spec"]
@@ -561,8 +585,7 @@ def test_ordinary_mutations_are_refused_before_any_aws_call(client, monkeypatch)
     assert res.json()["detail"]["action"] == "delete"
     res = client.post(f"/api/agents/{agent_id}/redeploy", json=spec)
     assert res.status_code == 403 and res.json()["detail"]["action"] == "redeploy"
-    res = client.post(f"/api/agents/{agent_id}/convert")
-    assert res.status_code == 403 and res.json()["detail"]["action"] == "convert"
+    # /convert is gone (R15 — conversion has no CN implementation); not re-tested here
     row = _rows(system_key=KEY)[0]
     assert row.status == "active" and row.spec == spec and _job_count() == 1
 
@@ -614,7 +637,7 @@ def test_member_with_full_lifecycle_permissions_cannot_touch_the_preset(gated, m
     installed = admin.post(INSTALL, json={})
     assert installed.status_code == 202, installed.text
     agent_id = installed.json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     monkeypatch.setattr(agents_router, "_delete_agent_resources",
                         lambda *a, **k: pytest.fail("teardown reached for a system agent"))
 
@@ -630,7 +653,7 @@ def test_member_with_full_lifecycle_permissions_cannot_touch_the_preset(gated, m
     spec = listed[0]["spec"]
     assert member.delete(f"/api/agents/{agent_id}").json()["code"] == "agent.system_managed"
     assert member.post(f"/api/agents/{agent_id}/redeploy", json=spec).status_code == 403
-    assert member.post(f"/api/agents/{agent_id}/convert").status_code == 403
+    # /convert is gone (R15 — conversion has no CN implementation); not re-tested here
     assert member.post(INSTALL, json={}).status_code == 403
     assert member.post(INSTALL, json={}).json()["code"] == "auth.forbidden"
     assert member.delete(f"/api/system-agents/{KEY}").status_code == 403
@@ -646,10 +669,11 @@ def test_member_keeps_ordinary_agent_lifecycle_parity(gated, monkeypatch):
     assert created.status_code == 202, created.text
     agent_id = created.json()["agent"]["id"]
     assert created.json()["agent"]["system"] is None
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h2")
     spec = created.json()["agent"]["spec"]
     assert member.post(f"/api/agents/{agent_id}/redeploy", json=spec).status_code == 202
     _set_status(agent_id, "active")
+    settle_deploy_jobs(agent_id)  # N16-obs83: the redeploy job must end before a delete
     monkeypatch.setattr(agents_router, "_delete_agent_resources", lambda *a, **k: True)
     res = member.delete(f"/api/agents/{agent_id}")
     assert res.status_code == 200 and res.json()["deleted"] is True
@@ -659,7 +683,7 @@ def test_admin_maintains_the_preset_through_the_dedicated_routes_only(gated, mon
     admin, _member = gated
     _mark_ready()
     agent_id = admin.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     # even the administrator does not edit a preset through the ordinary routes
     assert admin.delete(f"/api/agents/{agent_id}").status_code == 403
     assert admin.post(INSTALL, json={"force": True}).status_code == 202
@@ -673,29 +697,48 @@ def test_admin_maintains_the_preset_through_the_dedicated_routes_only(gated, mon
 # ---------------------------------------------------------------------------
 
 
-def test_package_stage_still_skips_for_ordinary_harness_agents():
-    agent = Agent(id="b" * 32, name="plain", method="harness", status="deploying", spec={})
-    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j",
-                       workspace=ws_ctx(READY_RESOURCES))
+def test_package_stage_builds_a_zip_for_ordinary_harness_agents(monkeypatch, tmp_path):
+    """The self-built Harness renders a multi-file bundle and zips it — the package
+    stage is never a no-op for `method="harness"` (plan R1/Task 3)."""
+    agent = Agent(id="b" * 32, name="plain", method="harness", status="deploying",
+                  spec=AgentSpec(name="plain", method="harness", system_prompt="hi").model_dump())
+    uploads: list[tuple[str, str]] = []
+
+    class S3:
+        def upload_file(self, path, bucket, key):
+            uploads.append((bucket, key))
+
+    ws = _rt_ctx()
+    monkeypatch.setattr(type(ws), "client", lambda self, name: S3())
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j", workspace=ws)
+
+    def fake_build_zip(code, requirements, build_dir, *, on_pkg_ready=None, on_lock_ready=None):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir(exist_ok=True)
+        (pkg / "main.py").write_text(code)
+        if on_pkg_ready:
+            on_pkg_ready(pkg)
+        import zipfile
+
+        archive = tmp_path / "pkg.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("main.py", code)
+        return archive
+
+    monkeypatch.setattr(harness_local, "build_zip", fake_build_zip)
+    monkeypatch.setattr(harness_local, "record_input_contract", lambda ctx, code: None)
+    STAGES["generate"](ctx, agent)
     result = STAGES["package"](ctx, agent)
-    assert result.skipped and "no build required" in result.detail
+    assert not result.skipped and "s3 ✓" in result.detail
+    assert uploads == [("launchpad-artifacts-test", "agents/plain/deployment_package.zip")]
 
 
 # ---------------------------------------------------------------------------
 # correction pass 2 — host-reproduced findings
 # ---------------------------------------------------------------------------
 
-import app.deployer.harness as harness_module  # noqa: E402
-import app.optimization.canary_service as canary_svc  # noqa: E402
-import app.optimization.service as exp_svc  # noqa: E402
 from app.core.config import get_settings as _real_settings  # noqa: E402
-from app.core.errors import AppError  # noqa: E402
-from app.optimization.models import Experiment, RuntimeCanary  # noqa: E402
-from app.services import knowledge  # noqa: E402
 
-DEDICATED = "arn:aws:iam::111122223333:role/launchpad-agent-dedicated"
-KB_GW = {"arn": "arn:aws:bedrock-agentcore:us-west-2:111122223333:gateway/kb",
-         "oauth_provider_arn": "arn:aws:bedrock-agentcore:us-west-2:111122223333:token-vault/x"}
 KB_REF = {"kb_id": "KB123ABC", "name": "whitepaper", "description": "the guide"}
 
 
@@ -704,28 +747,37 @@ def _settings(**over):
 
 
 class _Control:
-    """CreateHarness/UpdateHarness/GetHarness stub that records kwargs and can be
-    told to blow up after accepting a create (crash-before-persist simulation)."""
+    """create_agent_runtime/update_agent_runtime/get_agent_runtime stub — the shape
+    `zip_runtime`'s shared provision/deploy stages talk to (the self-built Harness
+    carries no AWS API of its own; copy of test_zip_runtime_deployer.py's fake)."""
+
+    class exceptions:
+        class ResourceNotFoundException(Exception):
+            pass
 
     def __init__(self, fail_first_create: bool = False):
         self.creates: list[dict] = []
         self.updates: list[dict] = []
         self.fail_first_create = fail_first_create
 
-    def create_harness(self, **kwargs):
+    def create_agent_runtime(self, **kwargs):
         self.creates.append(kwargs)
         if self.fail_first_create and len(self.creates) == 1:
             raise ConnectionError("socket closed after the request was accepted")
-        return {"harness": {"harnessId": "h1", "arn": "arn:h1", "harnessVersion": "1"}}
+        return {"agentRuntimeId": "rt-1", "agentRuntimeArn": RUNTIME_ARN,
+                "agentRuntimeVersion": "1", "status": "READY"}
 
-    def update_harness(self, **kwargs):
+    def update_agent_runtime(self, **kwargs):
         self.updates.append(kwargs)
-        return {"harness": {"harnessId": kwargs["harnessId"], "arn": "arn:h1",
-                            "harnessVersion": "2"}}
+        return {"agentRuntimeId": kwargs["agentRuntimeId"], "agentRuntimeArn": RUNTIME_ARN,
+                "agentRuntimeVersion": "2", "status": "READY"}
 
-    def get_harness(self, harnessId):
-        return {"harness": {"harnessId": harnessId, "arn": "arn:h1", "status": "READY",
-                            "harnessVersion": "2" if self.updates else "1"}}
+    def list_agent_runtimes(self, **_kwargs):  # N10v2-bug1: nothing to adopt here
+        return {"agentRuntimes": []}
+
+    def get_agent_runtime(self, agentRuntimeId):
+        return {"agentRuntimeId": agentRuntimeId, "agentRuntimeArn": RUNTIME_ARN,
+                "status": "READY", "agentRuntimeVersion": "2" if self.updates else "1"}
 
 
 def _persist_preset(status="deploying", resource_id=None, spec=None) -> str:
@@ -733,7 +785,7 @@ def _persist_preset(status="deploying", resource_id=None, spec=None) -> str:
     try:
         agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=ARCHITECT.name, method="harness",
                       status=status, system_key=KEY, resource_id=resource_id,
-                      arn=f"arn:h/{resource_id}" if resource_id else None,
+                      arn=RUNTIME_ARN if resource_id else None,
                       spec=spec or presets.build_spec(
                           ARCHITECT, BUCKET, InstallOptions(),
                           digest=presets.snapshot_bundle(ARCHITECT).digest).model_dump())
@@ -746,9 +798,12 @@ def _persist_preset(status="deploying", resource_id=None, spec=None) -> str:
 
 
 def _ctx(agent_id, deployment_id, job_id, **scratch):
+    logs: list[str] = []
     ctx = StageContext(agent_id=agent_id, deployment_id=deployment_id, job_id=job_id,
-                       workspace=ws_ctx(READY_RESOURCES), log=lambda _m: None)
+                       workspace=_rt_ctx(), log=logs.append)
     ctx.scratch.update(scratch)
+    ctx.logs = logs  # the harness package stage logs package_preset_skills' detail;
+    # its own StageResult.detail is the pip+zip summary (R1/Task 3) — check both
     return ctx
 
 
@@ -760,266 +815,112 @@ def _agent(agent_id):
         db.close()
 
 
-# ---- (1) actual Harness role -------------------------------------------------
-
-
-def test_create_request_carries_the_provisioned_dedicated_role_and_client_token(monkeypatch):
+def test_preset_provision_and_deploy_fail_closed_when_per_agent_roles_are_disabled(
+    monkeypatch,
+):
+    """R14: a preset is never deployed on the shared workspace role. zip_runtime's
+    shared provision/deploy stages call service.require_dedicated_role for every
+    system_key agent — toggling the global per-agent-roles setting off must fail
+    closed, not silently fall back to the shared role."""
     agent_id, dep_id, job_id = _persist_preset()
     control = _Control()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
-    monkeypatch.setattr(harness_module.agent_iam, "provision_execution_role",
-                        lambda *a, **k: (DEDICATED, "iam role · dedicated"))
-    ctx = _ctx(agent_id, dep_id, job_id)
-    agent = _agent(agent_id)
-    STAGES["generate"](ctx, agent)
-    assert ctx.scratch["create_params"]["executionRoleArn"] == READY_RESOURCES["execution_role_arn"]
-    STAGES["provision"](ctx, agent)
-    STAGES["deploy"](ctx, agent)
-    assert control.creates[0]["executionRoleArn"] == DEDICATED  # never the shared role
-    assert control.creates[0]["clientToken"] == f"lp-{dep_id}"
-    assert len(control.creates[0]["clientToken"]) >= 33
-    assert control.creates[0]["memory"] == {"disabled": {}}
-    assert control.creates[0]["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
-
-
-def test_resume_without_scratch_rederives_the_dedicated_role(monkeypatch):
-    """A restart drops ctx.scratch; the update must still name the per-agent role."""
-    agent_id, dep_id, job_id = _persist_preset(status="deploying", resource_id="h1")
-    control = _Control()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
-    ctx = _ctx(agent_id, dep_id, job_id, mode="update")  # no create_params, no role
-    STAGES["deploy"](ctx, _agent(agent_id))
-    expected = (f"arn:aws:iam::111122223333:role/"
-                f"{agent_iam.role_name_for(ARCHITECT.name, agent_id)}")
-    assert control.updates[0]["executionRoleArn"] == expected
-    assert control.updates[0]["clientToken"] == f"lp-{dep_id}"
-    assert control.updates[0]["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
-
-
-def test_ordinary_harness_also_gets_its_provisioned_role_on_create(monkeypatch):
-    """Parity fix: the provision stage's role was never applied to the request."""
-    db = SessionLocal()
-    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="plain", method="harness",
-                  status="deploying",
-                  spec=AgentSpec(name="plain", method="harness", system_prompt="x").model_dump())
-    db.add(agent)
-    db.flush()
-    dep, job = create_deployment(db, agent)
-    agent_id, dep_id, job_id = agent.id, dep.id, job.id
-    db.close()
-    control = _Control()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
-    monkeypatch.setattr(harness_module.agent_iam, "provision_execution_role",
-                        lambda *a, **k: (DEDICATED, "iam role · dedicated"))
-    ctx = _ctx(agent_id, dep_id, job_id)
-    a = _agent(agent_id)
-    STAGES["generate"](ctx, a)
-    STAGES["provision"](ctx, a)
-    STAGES["deploy"](ctx, a)
-    assert control.creates[0]["executionRoleArn"] == DEDICATED
-    assert control.creates[0]["allowedTools"] == []
-
-
-def test_preset_fails_closed_when_per_agent_roles_are_disabled(monkeypatch):
-    agent_id, dep_id, job_id = _persist_preset()
-    monkeypatch.setattr(harness_module, "get_settings",
+    monkeypatch.setattr(zip_runtime, "control_client", lambda _ws: control)
+    monkeypatch.setattr(zip_runtime, "get_settings",
                         lambda: _settings(per_agent_execution_roles=False))
-    control = _Control()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
     with pytest.raises(RuntimeError, match="per-agent execution roles"):
-        STAGES["generate"](_ctx(agent_id, dep_id, job_id), _agent(agent_id))
-    # and the deploy stage refuses a shared-role request even if generate was skipped
-    ctx = _ctx(agent_id, dep_id, job_id, execution_role_arn=READY_RESOURCES["execution_role_arn"])
-    monkeypatch.setattr(harness_module, "get_settings", _real_settings)
-    with pytest.raises(RuntimeError, match="shared workspace"):
-        STAGES["deploy"](ctx, _agent(agent_id))
-    assert control.creates == []  # refused before the AWS call
-    # readiness surfaces the same requirement without any AWS call
-    import app.core.config as config_module
-    monkeypatch.setattr(config_module, "get_settings",
-                        lambda: _settings(per_agent_execution_roles=False))
-    db = SessionLocal()
-    try:
-        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
-        row.bootstrap_status = "ready"
-        row.resources = dict(READY_RESOURCES)
-        db.commit()
-        codes = {r["code"] for r in service.workspace_requirements(row)}
-    finally:
-        db.close()
-    assert codes == {"per_agent_roles_disabled"}
+        STAGES["provision"](_ctx(agent_id, dep_id, job_id), _agent(agent_id))
+    assert control.creates == []  # refused before any AWS call
+    # the deploy stage refuses too, even on a resumed job with no provision scratch
+    deploy_ctx = _ctx(agent_id, dep_id, job_id,
+                      execution_role_arn=READY_RESOURCES["execution_role_arn"])
+    with pytest.raises(RuntimeError, match="per-agent execution roles"):
+        STAGES["deploy"](deploy_ctx, _agent(agent_id))
+    assert control.creates == []
+    monkeypatch.setattr(zip_runtime, "get_settings", _real_settings)
 
 
-def test_ordinary_harness_keeps_the_shared_role_when_per_agent_roles_are_off(monkeypatch):
+def test_ordinary_harness_keeps_the_shared_role_when_per_agent_roles_are_off(
+    monkeypatch,
+):
+    """The dedicated-role guard is preset-only; an ordinary agent still falls back to
+    the shared workspace role when per-agent roles are globally disabled."""
     db = SessionLocal()
-    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="plain2", method="harness",
+    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="plain-shared", method="harness",
                   status="deploying",
-                  spec=AgentSpec(name="plain2", method="harness", system_prompt="x").model_dump())
+                  spec=AgentSpec(name="plain-shared", method="harness",
+                                 system_prompt="x").model_dump())
     db.add(agent)
     db.flush()
     dep, job = create_deployment(db, agent)
     ids = (agent.id, dep.id, job.id)
     db.close()
-    monkeypatch.setattr(harness_module, "get_settings",
+    monkeypatch.setattr(zip_runtime, "get_settings",
                         lambda: _settings(per_agent_execution_roles=False))
     control = _Control()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
+    monkeypatch.setattr(zip_runtime, "control_client", lambda _ws: control)
     ctx = _ctx(*ids)
-    a = _agent(ids[0])
-    STAGES["generate"](ctx, a)
-    STAGES["provision"](ctx, a)
-    STAGES["deploy"](ctx, a)
-    assert control.creates[0]["executionRoleArn"] == READY_RESOURCES["execution_role_arn"]
+    result = STAGES["provision"](ctx, _agent(ids[0]))
+    assert ctx.scratch["execution_role_arn"] == READY_RESOURCES["execution_role_arn"]
+    assert "shared" in result.detail
+    monkeypatch.setattr(zip_runtime, "get_settings", _real_settings)
 
 
-# ---- (6) crash-retry identity ------------------------------------------------
+# ---- (5) KB-mode least privilege: direct tools only, no OAuth provider --------
 
 
-def test_create_retry_after_accepted_call_repeats_the_same_client_token(monkeypatch):
-    agent_id, dep_id, job_id = _persist_preset()
-    control = _Control(fail_first_create=True)
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
-    monkeypatch.setattr(harness_module.agent_iam, "retry_iam_propagation",
-                        lambda fn, log: fn())  # no propagation retry in the unit
-    ctx = _ctx(agent_id, dep_id, job_id, execution_role_arn=DEDICATED)
-    with pytest.raises(ConnectionError):
-        STAGES["deploy"](ctx, _agent(agent_id))
-    assert _agent(agent_id).resource_id is None  # nothing persisted — the crash case
-    STAGES["deploy"](_ctx(agent_id, dep_id, job_id, execution_role_arn=DEDICATED),
-                     _agent(agent_id))  # resumed job: same deployment, fresh scratch
-    tokens = [c["clientToken"] for c in control.creates]
-    assert tokens == [f"lp-{dep_id}", f"lp-{dep_id}"]  # AWS dedupes → one harness
-
-
-# ---- (3) KB retrieval tool + verification --------------------------------------
-
-
-def test_mounted_kb_adds_only_its_gateway_tool_to_allowed_tools():
+def test_preset_kb_mode_grants_the_direct_kb_tool_statements_no_oauth(client, monkeypatch):
+    """R13/R16 + Step 0: KB-gateway OAuth reads have no CN implementation and are
+    gone — a KB-mounting preset gets exactly the same workload-identity shape an
+    ordinary agent with a KB gets, never an OAuth-provider-scoped statement."""
     spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
         knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
-    params = build_create_params(spec, DEDICATED, None, kb_gateway=KB_GW)
-    assert [t["name"] for t in params["tools"]] == ["aws_knowledge", "launchpad_kb_gw"]
-    assert params["allowedTools"] == ["shell", "file_*", "@aws_knowledge", "@launchpad_kb_gw"]
-    # Without a mount nothing is added to the preset's explicit override.
-    plain = build_create_params(presets.build_spec(ARCHITECT, BUCKET, InstallOptions()),
-                                DEDICATED, None, kb_gateway=KB_GW)
-    assert plain["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
-    generic = AgentSpec(name="plain", method="harness", system_prompt="x",
-                        knowledge_bases=[KB_REF])
-    assert build_create_params(generic, DEDICATED, None, kb_gateway=KB_GW)["allowedTools"] == [
-        "@launchpad_kb_gw",
-    ]
-    # the KB mode needs the gateway's OAuth path, and only that
-    doc = agent_iam.policy_document(spec, agent_iam.role_context(ws_ctx(READY_RESOURCES)))
+    ctx = agent_iam.role_context(_rt_ctx())
+    doc = agent_iam.policy_document(spec, ctx)
     sids = {s["Sid"] for s in doc["Statement"]}
-    assert {"AgentCoreWorkloadIdentity", "IdentityVaultSecrets", "ManagedKbRetrieval"} <= sids
-    assert "AgentCoreMemory" not in sids and "AgentCoreCodeInterpreter" not in sids
+    assert {"AgentCoreWorkloadIdentity", "IdentityVaultSecrets"} <= sids
+    assert not {"ManagedKbRetrieval", "ManagedKbAgenticRetrieval", "AgentCoreMemory",
+                "AgentCoreCodeInterpreter"} & sids
+    for sid in sids:
+        assert "OAuth2" not in sid
+    resources = " ".join(str(s["Resource"]) for s in doc["Statement"])
+    assert "oauth2credentialprovider" not in resources
+    # an ordinary agent with the same KB gets the identical KB-driven shape — no
+    # preset-only path (the preset's extra sids are its skills, unrelated to the KB)
+    plain = AgentSpec(name="plain", method="harness", system_prompt="x", knowledge_bases=[KB_REF])
+    plain_sids = {s["Sid"] for s in agent_iam.policy_document(plain, ctx)["Statement"]}
+    assert {"AgentCoreWorkloadIdentity", "IdentityVaultSecrets"} <= plain_sids
+    assert not {"ManagedKbRetrieval", "ManagedKbAgenticRetrieval"} & plain_sids
+    # installing with a KB succeeds without any oauth_provider_arn in the resource map,
+    # once a knowledge-base backend is registered (R13: the direct-tools prerequisite)
+    assert "oauth_provider_arn" not in READY_RESOURCES
+    from app.services import knowledge_backend
 
-
-class _KbClient:
-    class exceptions:
-        class ResourceNotFoundException(Exception):
-            pass
-
-    def __init__(self, kbs: dict):
-        self.kbs = kbs
-
-    def get_knowledge_base(self, knowledgeBaseId):
-        if knowledgeBaseId not in self.kbs:
-            raise self.exceptions.ResourceNotFoundException(knowledgeBaseId)
-        return {"knowledgeBase": self.kbs[knowledgeBaseId]}
-
-
-def test_provision_verifies_knowledge_bases_in_the_target_workspace(monkeypatch):
-    import app.services.agentcore.client as ac_client
-
-    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
-        knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
-    ctx = _ctx("a" * 32, "d" * 32, "j" * 32)
-    monkeypatch.setattr(ac_client, "agent_client", lambda _ws: _KbClient({}))
-    with pytest.raises(RuntimeError, match="does not exist in workspace default"):
-        service.verify_knowledge_bases(ctx, spec)
-    monkeypatch.setattr(ac_client, "agent_client", lambda _ws: _KbClient({
-        "KB123ABC": {"status": "CREATING", "knowledgeBaseConfiguration": {"type": "MANAGED"}}}))
-    with pytest.raises(RuntimeError, match="not ACTIVE"):
-        service.verify_knowledge_bases(ctx, spec)
-    monkeypatch.setattr(ac_client, "agent_client", lambda _ws: _KbClient({
-        "KB123ABC": {"status": "ACTIVE", "knowledgeBaseConfiguration": {"type": "VECTOR"}}}))
-    with pytest.raises(RuntimeError, match="not a MANAGED"):
-        service.verify_knowledge_bases(ctx, spec)
-    logs: list[str] = []
-    ctx.log = logs.append
-    monkeypatch.setattr(ac_client, "agent_client", lambda _ws: _KbClient({
-        "KB123ABC": {"status": "ACTIVE", "knowledgeBaseConfiguration": {"type": "MANAGED"}}}))
-    service.verify_knowledge_bases(ctx, spec)
-    assert logs == ["knowledge base KB123ABC verified · MANAGED · ACTIVE"]
-
-
-# ---- (2) KB force delete never rewrites a protected spec ----------------------
-
-
-def _mount_kb_on_preset_and_ordinary(client) -> tuple[str, str]:
+    monkeypatch.setattr(knowledge_backend, "_backend", object())
     _mark_ready()
-    preset_id = client.post(INSTALL, json={"knowledge_bases": [KB_REF]}).json()["agent"]["id"]
-    _set_status(preset_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
-    db = SessionLocal()
-    try:
-        plain = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="kb-user", method="harness",
-                      status="active", spec={"name": "kb-user", "method": "harness",
-                                             "knowledge_bases": [KB_REF]})
-        db.add(plain)
-        db.commit()
-        return preset_id, plain.id
-    finally:
-        db.close()
+    res = client.post(INSTALL, json={"knowledge_bases": [KB_REF]})
+    assert res.status_code == 202, res.text
 
 
-def test_kb_force_delete_is_refused_before_any_mutation_when_a_preset_mounts_it(client):
-    preset_id, plain_id = _mount_kb_on_preset_and_ordinary(client)
-    before = {a.id: a.spec for a in _rows()}
-    res = client.delete("/api/knowledge-bases/KB123ABC?force=true")
-    assert res.status_code == 409, res.text
-    assert res.json()["code"] == "kb.attached_to_system_agent"
-    assert res.json()["detail"]["agents"] == [ARCHITECT.name]
-    assert client.delete("/api/knowledge-bases/KB123ABC").status_code == 409
-    # no spec changed — the ordinary agent's mount included — and no AWS client was
-    # built (the autouse factory stub would have raised)
-    assert {a.id: a.spec for a in _rows()} == before
-    assert _agent(preset_id).spec["knowledge_bases"] == [KB_REF]
-    assert _agent(plain_id).spec["knowledge_bases"] == [KB_REF]
+def test_preset_kb_mode_requires_a_registered_knowledge_backend(client, monkeypatch):
+    """Without a knowledge-base backend registered, nothing could ever answer the
+    mount — refused at request time, before any row (Step 0 rework of the old
+    oauth_provider_arn-gated test)."""
+    from app.services import knowledge_backend
 
-
-def test_member_kb_force_delete_is_refused_with_mixed_attachments(gated):
-    admin, member = gated
-    preset_id, plain_id = _mount_kb_on_preset_and_ordinary(admin)
-    res = member.delete("/api/knowledge-bases/KB123ABC?force=true")
-    assert res.status_code == 409 and res.json()["code"] == "kb.attached_to_system_agent"
-    assert _agent(preset_id).spec["knowledge_bases"] == [KB_REF]
-    assert _agent(plain_id).spec["knowledge_bases"] == [KB_REF]
-
-
-def test_strip_helper_refuses_protected_mounts_and_keeps_ordinary_semantics(client, monkeypatch):
-    preset_id, plain_id = _mount_kb_on_preset_and_ordinary(client)
-    workspace = ws_ctx({**READY_RESOURCES, "kb_gateway_id": "gw-1"}, id=DEFAULT_WORKSPACE_ID)
-    with pytest.raises(AppError) as exc:
-        knowledge._strip_kb_from_agents(workspace, "KB123ABC")
-    assert exc.value.code == "kb.attached_to_system_agent"
-    assert _agent(preset_id).spec["knowledge_bases"] == [KB_REF]
-    # an ordinary-only KB still strips (parity with the pre-existing behaviour)
-    db = SessionLocal()
-    other = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="kb-only", method="harness",
-                  status="active", spec={"name": "kb-only", "method": "harness",
-                                         "knowledge_bases": [{"kb_id": "KBPLAIN01", "name": "p",
-                                                              "description": ""}]})
-    db.add(other)
-    db.commit()
-    other_id = other.id
-    db.close()
-    monkeypatch.setattr(knowledge, "control_client", lambda _ws: object())
-    monkeypatch.setattr(knowledge.kb_gateway, "sync_agentic_target", lambda *a, **k: None)
-    assert knowledge._strip_kb_from_agents(workspace, "KBPLAIN01") == ["kb-only"]
-    assert _agent(other_id).spec["knowledge_bases"] == []
-    assert _agent(plain_id).spec["knowledge_bases"] == [KB_REF]
+    monkeypatch.setattr(knowledge_backend, "_backend", None)
+    _mark_ready()
+    res = client.post(INSTALL, json={"knowledge_bases": [KB_REF]})
+    assert res.status_code == 409 and res.json()["code"] == "system_agent.workspace_not_ready"
+    assert res.json()["detail"]["requirements"][0]["code"] == "missing_knowledge_backend"
+    assert _rows() == []
+    # a docs-only install (no KB) does not need a backend at all
+    first = client.post(INSTALL, json={})
+    assert first.status_code == 202
+    _set_status(first.json()["agent"]["id"], "active")
+    # once a backend is registered, the same request succeeds
+    monkeypatch.setattr(knowledge_backend, "_backend", object())
+    res2 = client.post(INSTALL, json={"knowledge_bases": [KB_REF]})
+    assert res2.status_code == 202, res2.text
 
 
 # ---- (4) durable maintenance claims --------------------------------------------
@@ -1029,7 +930,7 @@ def test_two_sessions_repairing_the_same_active_preset_share_one_job(client):
     """Host reproduction: both sessions loaded the active row before either wrote."""
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     before = _job_count()
     s1, s2 = SessionLocal(), SessionLocal()
     try:
@@ -1055,7 +956,7 @@ def test_status_readiness_and_operation_verdicts_for_installed_presets(client):
     status = _status(client)
     assert status["can_install"] is False and status["can_repair"] is False
     assert status["can_uninstall"] is False  # deploying
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     status = _status(client)
     assert status["can_repair"] is True and status["can_uninstall"] is True
     assert status["memory"] == "disabled"
@@ -1079,83 +980,189 @@ def test_status_readiness_and_operation_verdicts_for_installed_presets(client):
 
 
 
-# ---- (5) stale experiment / canary rows ---------------------------------------
+def test_preset_status_reports_runtime_version_and_releases(client):
+    """N12-obs31 (c): the preset entry used to show no version/release although the agent
+    row said version 1 — now the live runtime version, this build's release (what a
+    repair compares against) and the release the stored spec pins are all projected."""
+    from app.system_agents.presets import EVAL_WORKER
 
-
-def _installed_active(client) -> str:
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
-    return agent_id
-
-
-def test_stale_experiment_referencing_the_preset_cannot_act(client, monkeypatch):
-    agent_id = _installed_active(client)
+    _set_status(agent_id, "active", RUNTIME_ARN)
     db = SessionLocal()
-    exp = Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="EXP-stale", agent_id=agent_id,
-                     agent_name=ARCHITECT.name, status="running", stage="abtest",
-                     artifacts={"agent_meta": {"system_prompt": "x"},
-                                "abtest": {"ab_test_id": "ab1"},
-                                "recommend": {"recommended_prompt": "evil"}})
-    db.add(exp)
+    db.get(Agent, agent_id).version = "3"
     db.commit()
-    exp_id = exp.id
     db.close()
-    monkeypatch.setattr(exp_svc, "data_client", lambda *_a, **_k: pytest.fail("AWS reached"))
-    spec_before = _agent(agent_id).spec
-    for action in ("accept", "bundles", "promote", "traffic", "verdict", "cleanup"):
-        res = client.post(f"/api/experiments/{exp_id}/action", json={"action": action})
-        assert res.status_code == 403, (action, res.text)
-        assert res.json()["code"] == "agent.system_managed"
-    # direct service entry points (what a background thread would run) refuse too
-    with pytest.raises(AppError) as exc:
-        exp_svc.act_promote(exp_id, exp_svc._noop)
-    assert exc.value.code == "agent.system_managed"
-    with pytest.raises(AppError):
-        exp_svc.run_action(exp_id, "promote", lambda _p: pytest.fail("action body ran"))
-    db = SessionLocal()
-    row = db.get(Experiment, exp_id)
-    assert row.running_action is None and row.status == "running"  # no state written
-    db.close()
-    assert _agent(agent_id).spec == spec_before
+
+    st = _status(client)
+    assert st["version"] == "3"
+    rel = st["release"]
+    assert rel["version"] == VER and len(rel["digest"]) == 12
+    assert rel["tag"] == f"{VER}-{rel['digest']}"
+    assert st["installed_release"] == rel["tag"]  # a fresh install pins this build's release
+    # the template preset projects its template release even when not installed
+    rows = {p["key"]: p for p in client.get("/api/system-agents").json()["presets"]}
+    worker = rows[EVAL_WORKER.key]
+    expected = presets.template_release(EVAL_WORKER)
+    assert worker["release"] == {"version": expected["version"],
+                                 "digest": str(expected["digest"])[:12], "tag": expected["tag"]}
+    assert worker["version"] is None and worker["installed_release"] is None
+    assert worker["last_job"] is None
+    # review #5: the release is memoised per preset key — the second read hashes nothing
+    calls = {"n": 0}
+    real = presets.bundle_release
+
+    def counting(preset):
+        calls["n"] += 1
+        return real(preset)
+
+    import pytest as _pytest
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(presets, "bundle_release", counting)
+        assert client.get("/api/system-agents").status_code == 200
+    assert calls["n"] == 0
+    assert service.release_info(presets.ARCHITECT) == rel
 
 
-def test_stale_canary_referencing_the_preset_cannot_act(client, monkeypatch):
-    agent_id = _installed_active(client)
+def _break_bundle(monkeypatch, message: str) -> None:
+    """Make this build unable to release the architect bundle — what the live host saw
+    when `render_skill_md` demanded the disabled SiliconFlow rows (N-ARCH-obs19)."""
+    def broken(preset):
+        raise ValueError(message)
+
+    monkeypatch.setattr(presets, "snapshot_bundle", broken)
+    monkeypatch.setattr(presets, "bundle_release", broken)
+    service._RELEASE_INFO.clear()
+
+
+def _heal_bundle(monkeypatch, originals: tuple) -> None:
+    """Restore the two patched attributes only — never `monkeypatch.undo()`, which would
+    also drop the autouse fixtures' patches (template dir, no-real-deploy)."""
+    monkeypatch.setattr(presets, "snapshot_bundle", originals[0])
+    monkeypatch.setattr(presets, "bundle_release", originals[1])
+    service._RELEASE_INFO.clear()
+
+
+def test_install_and_repair_refuse_an_unreleasable_bundle_with_409_not_500(
+        client, no_real_deploy, monkeypatch):
+    """N-ARCH-obs19 (live 2026-10-16 06:52Z): `POST …/install {}` on the installed
+    architect answered 500 from `_release_pin` → `snapshot_bundle` → `render_skill_md`
+    (`ValueError: … states no model catalog (missing ['siliconflow.…'])`). The route must
+    answer a structured `409 system_agent.bundle_invalid` carrying the message, claim and
+    write nothing, and the status read must expose the same message as `release_error`."""
+    _mark_ready()
+    originals = (presets.snapshot_bundle, presets.bundle_release)
+    reason = ("preset 'aws-agent-solution-architect': SKILL.md states no model catalog "
+              "(missing ['x'])")
+    _break_bundle(monkeypatch, reason)
+
+    # first install: refused before any row or job exists
+    refused = client.post(INSTALL, json={})
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["code"] == "system_agent.bundle_invalid"
+    assert reason in body["message"] and "1.7" in body["message"]
+    assert body["detail"]["preset_key"] == KEY and body["detail"]["skill_version"] == VER
+    assert body["detail"]["reason"] == reason and "catalog_version" in body["detail"]
+    status = _status(client)
+    assert status["status"] == "not_installed" and status["agent_id"] is None
+    assert status["release"] is None and status["release_error"] == reason
+    assert _job_count() == 0
+
+    # a healthy build installs; the preset becomes active
+    _heal_bundle(monkeypatch, originals)
+    first = client.post(INSTALL, json={})
+    assert first.status_code == 202, first.text
+    agent_id = first.json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
+    healthy = _status(client)
+    assert healthy["release"]["version"] == VER and healthy["release_error"] is None
+
+    # repair on a build that cannot release: same verdict, the active row is untouched
+    _break_bundle(monkeypatch, reason)
+    repair = client.post(INSTALL, json={"force": True})
+    assert repair.status_code == 409 and repair.json()["code"] == "system_agent.bundle_invalid"
+    after = _status(client)
+    assert after["status"] == "active" and after["agent_id"] == agent_id
+    assert after["error"] is None and after["last_deploy_failed"] is False
+    assert after["release"] is None and after["release_error"] == reason
+    assert after["installed_release"] == healthy["installed_release"]
+    assert _job_count() == 1
+
+
+def test_release_memo_follows_the_published_catalog_version(client):
+    """N-ARCH-obs19 (b): the release of a Harness preset is a function of the published
+    model catalog (the SKILL.md states it), so a registry write must move the tag the
+    status read reports without a restart — the memo is keyed by catalog version."""
+    import dataclasses
+
+    from app.schemas import model_catalog
+
+    service._RELEASE_INFO.clear()
+    before = _status(client)["release"]
+    assert before["version"] == VER
+    cat = model_catalog.current()
+    fake = "global.example.obs19-model"
+    row = dataclasses.replace(cat.models["global.zai.glm-5.3"], model_id=fake, label=fake,
+                              api_model_name=fake, default=False)
+    try:
+        model_catalog.publish(model_catalog.extended(cat, models={fake: row},
+                                                     version=cat.version + 1))
+        after = _status(client)["release"]
+        assert after["version"] == VER and after["digest"] != before["digest"]
+        assert after["tag"] != before["tag"]
+        assert service.release_info(presets.ARCHITECT) == after
+        # bounded: one entry per preset, the newest catalog version (rev-r11 nit)
+        keys = [k for k in service._RELEASE_INFO if k[0] == KEY]
+        assert keys == [(KEY, cat.version + 1)]
+    finally:
+        model_catalog.reset()
+        service._RELEASE_INFO.clear()
+    assert _status(client)["release"] == before
+
+
+def test_preset_job_is_readable_through_the_preset_route_for_admins(gated, monkeypatch):
+    """N12-obs31 (a): a preset install job filed under a workspace id the agents API does
+    not expose answered 404 on GET /api/jobs/{id}; the preset route resolves it through
+    the preset's agent row, lists it as `last_job`, and is administrator-only."""
+    admin, member = gated
+    _mark_ready()
+    body = admin.post(INSTALL, json={}).json()
+    job_id, agent_id = body["job_id"], body["agent"]["id"]
+    st = _status(admin)
+    assert st["last_job"]["id"] == job_id and st["last_job"]["type"] == "deploy_agent"
+    assert st["last_job"]["status"] == "queued"
+
     db = SessionLocal()
-    row = RuntimeCanary(workspace_id=DEFAULT_WORKSPACE_ID, name="CANARY-stale",
-                        champion_agent_id=agent_id, champion_agent_name=ARCHITECT.name,
-                        challenger_agent_id=agent_id, challenger_agent_name=ARCHITECT.name,
-                        status="running", stage="verdict",
-                        artifacts={"agent_meta": {"id": agent_id, "resource_id": "h1"},
-                                   "edited_spec": {"system_prompt": "evil"}, "rounds": [],
-                                   "setup": {"ab_test_id": "ab1", "v_candidate": "9"},
-                                   "verdict": {"decision": "promote"}})
-    db.add(row)
+    db.get(Job, job_id).workspace_id = "system-workspace"  # how the live install was filed
     db.commit()
-    canary_id = row.id
     db.close()
-    monkeypatch.setattr(canary_svc, "data_client", lambda *_a, **_k: pytest.fail("AWS reached"))
-    monkeypatch.setattr(canary_svc, "control_client", lambda *_a, **_k: pytest.fail("AWS reached"))
-    spec_before = _agent(agent_id).spec
-    for action in ("setup", "traffic", "verdict", "advance", "complete", "rollback", "cleanup"):
-        res = client.post(f"/api/runtime-canaries/{canary_id}/action", json={"action": action})
-        assert res.status_code == 403, (action, res.text)
-        assert res.json()["code"] == "agent.system_managed"
-    for fn in (
-        lambda: canary_svc.act_complete(canary_id, exp_svc._noop, allow_non_significant=True),
-        lambda: canary_svc.act_rollback(canary_id, exp_svc._noop),
-        lambda: canary_svc.act_setup(canary_id, exp_svc._noop),
-        lambda: canary_svc.run_action(canary_id, "complete", lambda _p: pytest.fail("ran")),
-    ):
-        with pytest.raises(AppError) as exc:
-            fn()
-        assert exc.value.code == "agent.system_managed"
+    assert admin.get(f"/api/jobs/{job_id}").status_code == 404  # the agents API's view
+    res = admin.get(f"/api/system-agents/{KEY}/jobs/{job_id}")
+    assert res.status_code == 200, res.text
+    assert res.json()["id"] == job_id and res.json()["status"] == "queued"
+    assert isinstance(res.json()["events"], list)
+    assert member.get(f"/api/system-agents/{KEY}/jobs/{job_id}").status_code == 403
+    assert admin.get(f"/api/system-agents/{KEY}/jobs/nope").status_code == 404
+    # another preset's route does not see this job
+    assert admin.get(f"/api/system-agents/eval-worker/jobs/{job_id}").status_code == 404
+    # an ordinary agent's job is not readable through the preset route either
     db = SessionLocal()
-    row = db.get(RuntimeCanary, canary_id)
-    assert row.running_action is None and row.status == "running"
+    other = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="plain-agent", method="harness",
+                  status="deploying", spec={})
+    db.add(other)
+    db.flush()
+    _dep, other_job = create_deployment(db, other)
     db.close()
-    assert _agent(agent_id).spec == spec_before and _agent(agent_id).version is None
+    assert admin.get(f"/api/system-agents/{KEY}/jobs/{other_job.id}").status_code == 404
+
+    # the uninstall job becomes the preset's last job and stays readable after `deleted`
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    monkeypatch.setattr(system_router, "start_uninstall_async", lambda _jid: None)
+    un = admin.delete(f"/api/system-agents/{KEY}").json()
+    assert _status(admin)["last_job"]["id"] == un["job_id"]
+    _set_status(agent_id, "deleted")
+    assert admin.get(f"/api/system-agents/{KEY}/jobs/{un['job_id']}").status_code == 200
 
 
 def test_allowed_tools_enforce_sdk_bounds():
@@ -1203,6 +1210,12 @@ class _S3:
     def _etag(self, key: str) -> str:
         return '"' + sha256(self.objects[key]).hexdigest()[:16] + '"'
 
+    def upload_file(self, path, bucket, key):
+        """The harness package stage's deployment-zip upload — not part of the
+        versioned skill publish's conditional-write contract."""
+        with open(path, "rb") as fh:
+            self.objects[key] = fh.read()
+
     def get_object(self, Bucket, Key):
         if Key not in self.objects:
             raise _s3_error("NoSuchKey", "GetObject")
@@ -1236,6 +1249,23 @@ def _snapshot():
     return presets.snapshot_bundle(ARCHITECT)
 
 
+def _fake_build_zip(code, requirements, build_dir, *, on_pkg_ready=None, on_lock_ready=None):
+    """Stand-in for `harness_local.build_zip`: no real pip/uv resolution. These tests
+    exercise the versioned-skill S3 publish contract, not the zip-build mechanics
+    (already covered by test_harness_local.py / test_zip_runtime_deployer.py)."""
+    import zipfile
+
+    pkg = Path(build_dir) / "pkg"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "main.py").write_text(code)
+    if on_pkg_ready:
+        on_pkg_ready(pkg)
+    archive = Path(build_dir) / "pkg.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("main.py", code)
+    return archive
+
+
 def _pinned_preset(monkeypatch, fake: _S3, *, spec=None, pin="valid"):
     """A preset row + deployment + job whose pin is valid / missing / malformed / stale.
     An earlier row from the same test is released first (one live key per workspace)."""
@@ -1260,6 +1290,7 @@ def _pinned_preset(monkeypatch, fake: _S3, *, spec=None, pin="valid"):
     db.commit()
     db.close()
     monkeypatch.setattr(aws_clients, "client", lambda service_, ws, **kw: fake)
+    monkeypatch.setattr(harness_local, "build_zip", _fake_build_zip)
     return _ctx(agent_id, dep_id, job_id), _agent(agent_id)
 
 
@@ -1299,7 +1330,7 @@ def test_crash_inside_the_queue_commit_leaves_no_half_queued_install_or_repair(c
         assert tolerant.post(INSTALL, json={}).status_code == 500
     assert _rows(system_key=KEY) == [] and _job_count() == 0
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     with monkeypatch.context() as crash:
         crash.setattr(service, "create_deployment", boom)
         assert tolerant.post(INSTALL, json={"force": True}).status_code == 500
@@ -1346,6 +1377,17 @@ def test_pipeline_resume_reruns_a_pinned_package_stage(monkeypatch):
     for name in ("provision", "deploy", "register"):
         monkeypatch.setitem(STAGES, name, lambda c, a, n=name: calls.append(n) or
                             pipeline_module.StageResult(detail="stub"))
+
+    def fake_build_zip(code, requirements, build_dir, *, on_pkg_ready=None, on_lock_ready=None):
+        import zipfile
+
+        archive = build_dir.parent / "pkg.zip"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("main.py", code)
+        return archive
+
+    monkeypatch.setattr(harness_local, "build_zip", fake_build_zip)
     pipeline_module.execute_deploy_job(ctx.job_id)
     assert calls == ["generate", "provision", "deploy", "register"]
     assert MANIFEST in fake.objects and _agent(agent.id).status == "active"
@@ -1365,7 +1407,7 @@ def test_publish_uploads_the_snapshot_bytes_conditionally_and_verifies_readback(
         return real(preset)
 
     monkeypatch.setattr(presets, "snapshot_bundle", counting)
-    result = STAGES["package"](ctx, agent)
+    STAGES["package"](ctx, agent)
     assert reads["n"] == 1  # the checkout is read ONCE per run
     monkeypatch.setattr(presets, "snapshot_bundle", real)
     snap = _snapshot()
@@ -1376,11 +1418,37 @@ def test_publish_uploads_the_snapshot_bytes_conditionally_and_verifies_readback(
         assert fake.objects[f"{PREFIX}{rel}"] == body  # uploaded bytes ARE the snapshot bytes
     manifest = json.loads(fake.objects[MANIFEST])
     assert manifest["digest"] == snap.digest and manifest["files"] == snap.file_digests()
-    assert "published" in result.detail and snap.digest[:12] in result.detail
+    log_text = " ".join(ctx.logs)
+    assert "published" in log_text and snap.digest[:12] in log_text
     # identical replay: zero writes, still verified against every object
     n = len(fake.puts)
-    again = STAGES["package"](ctx, agent)
-    assert len(fake.puts) == n and "already published · verified" in again.detail
+    ctx.logs.clear()
+    STAGES["package"](ctx, agent)
+    assert len(fake.puts) == n and "already published · verified" in " ".join(ctx.logs)
+
+
+def test_package_stage_publishes_skills_before_building_the_zip(monkeypatch):
+    """R5: the harness package stage publishes the versioned skill bundle BEFORE it
+    builds the deployment zip — a publish failure must never ship a stale or foreign
+    bundle inside an already-built package."""
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    order: list[str] = []
+    real_publish = service.package_preset_skills
+
+    def spy_publish(ctx_, agent_):
+        order.append("publish")
+        return real_publish(ctx_, agent_)
+
+    def spy_build_zip(code, requirements, build_dir, *, on_pkg_ready=None, on_lock_ready=None):
+        order.append("build_zip")
+        return _fake_build_zip(code, requirements, build_dir,
+                               on_pkg_ready=on_pkg_ready, on_lock_ready=on_lock_ready)
+
+    monkeypatch.setattr(service, "package_preset_skills", spy_publish)
+    monkeypatch.setattr(harness_local, "build_zip", spy_build_zip)
+    STAGES["package"](ctx, agent)
+    assert order == ["publish", "build_zip"]
 
 
 def test_publish_detects_a_bad_upload_by_reading_back(monkeypatch):
@@ -1396,10 +1464,10 @@ def test_publish_restarts_after_a_partial_upload_without_rewriting(monkeypatch):
     partial = {f"{PREFIX}{rel}": body for rel, body in list(snap.files.items())[:2]}
     fake = _S3(partial)
     ctx, agent = _pinned_preset(monkeypatch, fake)
-    result = STAGES["package"](ctx, agent)
+    STAGES["package"](ctx, agent)
     written = {p["Key"] for p in fake.puts}
     assert not (written & set(partial))  # existing identical objects were not rewritten
-    assert MANIFEST in written and "published" in result.detail
+    assert MANIFEST in written and "published" in " ".join(ctx.logs)
 
 
 def test_competing_publication_with_different_bytes_is_never_overwritten(monkeypatch):
@@ -1428,7 +1496,8 @@ def test_competing_manifest_with_the_same_content_is_accepted(monkeypatch):
             s3.objects[MANIFEST] = json.dumps({"name": ARCHITECT.name, **snap.release()}).encode()
 
     fake.before_put = racer
-    assert "published" in STAGES["package"](ctx, agent).detail
+    STAGES["package"](ctx, agent)
+    assert "published" in " ".join(ctx.logs)
 
 
 def test_competing_manifest_with_different_content_fails(monkeypatch):
@@ -1470,11 +1539,12 @@ def test_repair_restores_a_missing_required_object_instead_of_saying_verified(mo
     del objs[f"{PREFIX}SKILL.md"]
     fake = _S3(objs)
     ctx, agent = _pinned_preset(monkeypatch, fake)
-    result = STAGES["package"](ctx, agent)
+    STAGES["package"](ctx, agent)
     assert fake.objects[f"{PREFIX}SKILL.md"] == snap.files["SKILL.md"]
     assert [p["Key"] for p in fake.puts] == [f"{PREFIX}SKILL.md"]
     assert fake.puts[0].get("IfNoneMatch") == "*"
-    assert "repaired" in result.detail and "verified" not in result.detail
+    log_text = " ".join(ctx.logs)
+    assert "repaired" in log_text and "verified" not in log_text
 
 
 @pytest.mark.parametrize("mutation", ["modified", "truncated"])
@@ -1488,10 +1558,10 @@ def test_repair_replaces_a_corrupt_object_only_against_its_etag(monkeypatch, mut
     )
     fake = _S3(objs)
     ctx, agent = _pinned_preset(monkeypatch, fake)
-    result = STAGES["package"](ctx, agent)
+    STAGES["package"](ctx, agent)
     put = fake.puts[-1]
     assert put["Key"] == f"{PREFIX}references/intake-options.md" and put["IfMatch"]
-    assert fake.objects[put["Key"]] == good and "repaired" in result.detail
+    assert fake.objects[put["Key"]] == good and "repaired" in " ".join(ctx.logs)
     # a corrupt object changed by someone else between read and repair is left alone
     fake2 = _S3(dict(objs))
     ticks = {"n": 0}
@@ -1509,64 +1579,34 @@ def test_repair_replaces_a_corrupt_object_only_against_its_etag(monkeypatch, mut
 # ---- (1) durable uninstall: exclusive claim, fenced strict teardown -----------------
 
 
-class _HarnessControl:
-    """Fake bedrock-agentcore-control. DeleteHarness answers DELETING; GetHarness walks a
-    scripted status sequence and finally raises ResourceNotFound (the only "gone").
-    Gateway targets: paginated one per page; delete/get behaviour scripted per test."""
+class _RuntimeControl:
+    """Fake bedrock-agentcore-control for the Runtime teardown step. DeleteAgentRuntime
+    is accepted; GetAgentRuntime walks a scripted status sequence and finally raises
+    ResourceNotFoundException (the only "gone") — the shape `uninstall._teardown_runtime`
+    polls, mirroring the pre-CN DeleteHarness/GetHarness loop its docstring describes.
+    `kb_target` has no CN implementation and is always skipped without any AWS call."""
 
     class exceptions:
         class ResourceNotFoundException(Exception):
             pass
 
-        class AccessDeniedException(Exception):
-            pass
-
-    def __init__(self, statuses=("DELETING", None), missing=False, targets=None,
-                 target_delete="ok", target_statuses=("DELETING", None)):
+    def __init__(self, statuses=("DELETING", None), missing=False):
         self.statuses = list(statuses)  # None ⇒ ResourceNotFound
         self.missing = missing
         self.calls: list[tuple] = []
-        self.targets = list(targets or [])  # [{name, targetId}]
-        self.target_delete = target_delete  # ok | denied | notfound
-        self.target_statuses = list(target_statuses)
-        self.target_calls: list[tuple] = []
 
-    def delete_harness(self, harnessId):
-        self.calls.append(("delete", harnessId))
+    def delete_agent_runtime(self, agentRuntimeId):
+        self.calls.append(("delete", agentRuntimeId))
         if self.missing:
-            raise self.exceptions.ResourceNotFoundException(harnessId)
-        return {"harness": {"harnessId": harnessId, "status": "DELETING"}}
+            raise self.exceptions.ResourceNotFoundException(agentRuntimeId)
+        return {}
 
-    def get_harness(self, harnessId):
-        self.calls.append(("get", harnessId))
+    def get_agent_runtime(self, agentRuntimeId):
+        self.calls.append(("get", agentRuntimeId))
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         if status is None:
-            raise self.exceptions.ResourceNotFoundException(harnessId)
-        return {"harness": {"harnessId": harnessId, "status": status}}
-
-    def list_gateway_targets(self, gatewayIdentifier, maxResults=100, nextToken=None):
-        self.target_calls.append(("list", nextToken))
-        i = int(nextToken or 0)
-        page = {"items": self.targets[i:i + 1]}
-        if i + 1 < len(self.targets):
-            page["nextToken"] = str(i + 1)
-        return page
-
-    def delete_gateway_target(self, gatewayIdentifier, targetId):
-        self.target_calls.append(("delete", targetId))
-        if self.target_delete == "denied":
-            raise self.exceptions.AccessDeniedException("AccessDenied: target remains")
-        if self.target_delete == "notfound":
-            raise self.exceptions.ResourceNotFoundException(targetId)
-        return {"targetId": targetId, "status": "DELETING"}
-
-    def get_gateway_target(self, gatewayIdentifier, targetId):
-        self.target_calls.append(("get", targetId))
-        status = (self.target_statuses.pop(0) if len(self.target_statuses) > 1
-                  else self.target_statuses[0])
-        if status is None:
-            raise self.exceptions.ResourceNotFoundException(targetId)
-        return {"targetId": targetId, "status": status}
+            raise self.exceptions.ResourceNotFoundException(agentRuntimeId)
+        return {"agentRuntimeId": agentRuntimeId, "status": status}
 
 
 class _Iam:
@@ -1601,9 +1641,34 @@ class _Iam:
         return {}
 
 
+class _DeniedListIam(_Iam):
+    """IAM as the hub's EC2 ops role saw it live (N10v2-bug8): ListRolePolicies is
+    denied, and DeleteRole answers DeleteConflict while an inline policy remains."""
+
+    def __init__(self, roles, attached: list[str]):
+        super().__init__(roles)
+        self.attached = list(attached)
+        self.policy_deletes: list[str] = []
+
+    def list_role_policies(self, RoleName):
+        raise RuntimeError("AccessDenied: iam:ListRolePolicies on resource: role " + RoleName)
+
+    def delete_role_policy(self, RoleName, PolicyName):
+        self.policy_deletes.append(PolicyName)
+        if PolicyName not in self.attached:
+            raise type("NoSuchEntityException", (Exception,), {})(PolicyName)
+        self.attached.remove(PolicyName)
+        return {}
+
+    def delete_role(self, RoleName):
+        if self.attached:
+            raise RuntimeError("DeleteConflict: Cannot delete entity, must delete policies first")
+        return super().delete_role(RoleName)
+
+
 def _owned_role(agent_id: str) -> dict:
     name = agent_iam.role_name_for(ARCHITECT.name, agent_id)
-    return {name: {"Arn": f"arn:aws:iam::111122223333:role/{name}",
+    return {name: {"Arn": f"arn:aws-cn:iam::111122223333:role/{name}",
                    "Tags": [{"Key": agent_iam.MANAGED_TAG_KEY, "Value": agent_id}]}}
 
 
@@ -1612,8 +1677,8 @@ def _strict_stubs(monkeypatch, control=None, role_ok=True, iam=None, agent_id=No
     clients are fakes. The lock directory is a fresh temp dir per test."""
     import tempfile
 
-    control = control or _HarnessControl()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
+    control = control or _RuntimeControl()
+    monkeypatch.setattr(zip_runtime, "control_client", lambda _ws: control)
     monkeypatch.setattr(uninstall_module, "_sleep", lambda _s: None)
     monkeypatch.setattr(uninstall_module, "LOCK_DIR",
                         pathlib.Path(tempfile.mkdtemp(prefix="se038-locks-")))
@@ -1632,7 +1697,7 @@ def _strict_stubs(monkeypatch, control=None, role_ok=True, iam=None, agent_id=No
 def _active_preset(client) -> str:
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     return agent_id
 
 
@@ -1670,46 +1735,175 @@ def test_uninstall_claims_identity_and_only_a_verified_teardown_releases_it(clie
     db.close()
 
     uninstall_module.execute_uninstall_job(body["job_id"])
-    # DeleteHarness accepted (DELETING) → polled until ResourceNotFound → role deleted
+    # DeleteAgentRuntime accepted → polled until ResourceNotFound → role deleted
     assert control.calls[0] == ("delete", "h1") and control.calls[-1] == ("get", "h1")
     assert role_calls == [agent_iam.role_name_for(ARCHITECT.name, agent_id)]
     assert _agent(agent_id).status == "deleted"
     job = _job(body["job_id"])
     assert job.status == "succeeded" and job.payload["aws_resource_deleted"] is True
     assert {k: v["state"] for k, v in job.payload["progress"].items()} == {
-        "kb_target": "done", "harness": "done", "role": "done"}
+        "kb_target": "done", "harness": "done", "role": "done", "registry": "done"}
     assert job.payload["progress"]["harness"]["resource_id"] == "h1"
+    assert job.payload["progress"]["kb_target"]["detail"] == "skipped: not managed in this build"
     assert _status(client)["status"] == "not_installed"
     assert client.post(INSTALL, json={}).json()["agent"]["id"] != agent_id
 
 
-@pytest.mark.parametrize("scenario", ["delete_failed", "timeout", "role_false", "kb_target"])
+def _preset_registry_records(agent_id: str):
+    """A local registry holding what an installed preset leaves there: its A2A record
+    (linked from the agent row) and its protected AGENT_SKILLS record (mapping row)."""
+    from app.models.ledger import SystemSkillRecord
+    from app.services import registry_backend as reg
+    from app.services.registry_local import LocalRegistryBackend, registry_id_for
+    from app.services.workspace import context_for_workspace
+
+    backend = LocalRegistryBackend()
+    reg.set_backend(backend)
+    ws = context_for_workspace(DEFAULT_WORKSPACE_ID)
+    card = reg.build_a2a_card(
+        name=ARCHITECT.name, description="d",
+        arn="arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1", method="harness",
+        workspace=ws,
+    )
+    a2a, _ = backend.upsert_record(
+        ws, name=ARCHITECT.name, description="Launchpad agent", descriptor_type="A2A",
+        descriptors=reg.build_a2a_descriptors(card),
+    )
+    skill, _ = backend.upsert_record(
+        ws, name=ARCHITECT.name, description="methodology", descriptor_type="AGENT_SKILLS",
+        descriptors=reg.build_skills_descriptors(
+            skill_md="# skill", definition={"name": ARCHITECT.name, "version": "1.5.9",
+                                            "files": []},
+        ),
+    )
+    db = SessionLocal()
+    db.get(Agent, agent_id).registry_record_id = a2a["recordId"]
+    db.add(SystemSkillRecord(
+        workspace_id=DEFAULT_WORKSPACE_ID, preset_key=KEY, skill_name=ARCHITECT.name,
+        registry_id=registry_id_for(ws), record_id=skill["recordId"], client_token="tok",
+        status="registered", release_version="1.5.9",
+    ))
+    db.commit()
+    db.close()
+    return backend, ws, a2a["recordId"], skill["recordId"]
+
+
+def _record_exists(backend, ws, record_id: str) -> bool:
+    try:
+        backend.get_record(ws, record_id)
+    except Exception as exc:  # noqa: BLE001
+        assert getattr(exc, "status_code", None) == 404, exc
+        return False
+    return True
+
+
+def _mapping_rows() -> int:
+    from app.models.ledger import SystemSkillRecord
+
+    db = SessionLocal()
+    try:
+        return db.query(SystemSkillRecord).filter(SystemSkillRecord.preset_key == KEY).count()
+    finally:
+        db.close()
+
+
+def test_uninstall_deletes_the_presets_registry_records(client, monkeypatch):
+    """N10v3-bug6 / N11-r4-bug1: the uninstall removed runtime + role but left the A2A
+    record and the protected AGENT_SKILLS record (403 for every ordinary delete). The
+    `registry` step now deletes both and the mapping row; `skill_registration` reads
+    back empty."""
+    agent_id = _active_preset(client)
+    backend, ws, a2a_id, skill_id = _preset_registry_records(agent_id)
+    _strict_stubs(monkeypatch, agent_id=agent_id)
+    # the protected record is refused on the ordinary path right up to the uninstall
+    assert client.delete(f"/api/registry/records/{skill_id}").status_code == 403
+    assert _mapping_rows() == 1
+
+    body = client.delete(f"/api/system-agents/{KEY}").json()
+    uninstall_module.execute_uninstall_job(body["job_id"])
+
+    job = _job(body["job_id"])
+    assert job.status == "succeeded", job.error
+    progress = job.payload["progress"]
+    assert progress["registry"]["state"] == "done"
+    assert progress["registry"]["resource_id"] == a2a_id
+    assert a2a_id in progress["registry"]["detail"] and skill_id in progress["registry"]["detail"]
+    assert job.payload["teardown"] == {
+        "removed": ["harness", "role", "registry"], "skipped": ["kb_target"], "failed": []}
+    assert not _record_exists(backend, ws, a2a_id)
+    assert not _record_exists(backend, ws, skill_id)
+    assert _mapping_rows() == 0
+    assert _agent(agent_id).status == "deleted"
+    status = _status(client)
+    assert status["status"] == "not_installed" and status["skill_registration"] is None
+
+
+def test_uninstall_registry_step_is_idempotent_and_retryable(client, monkeypatch):
+    """Records already gone → the step still completes; a registry error fails the job at
+    `registry` with runtime + role carried as done, and the retry finishes the teardown."""
+    agent_id = _active_preset(client)
+    backend, ws, a2a_id, skill_id = _preset_registry_records(agent_id)
+    control, _roles = _strict_stubs(monkeypatch, agent_id=agent_id)
+    backend.delete_record(ws, a2a_id)  # someone removed the A2A record out of band
+    real_delete = backend.delete_record
+    calls = {"n": 0}
+
+    def flaky_delete(workspace, record_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ThrottlingException: slow down")
+        return real_delete(workspace, record_id)
+
+    monkeypatch.setattr(backend, "delete_record", flaky_delete)
+
+    body = client.delete(f"/api/system-agents/{KEY}").json()
+    uninstall_module.execute_uninstall_job(body["job_id"])
+    job = _job(body["job_id"])
+    assert job.status == "failed" and "registry: RuntimeError: Throttling" in job.error
+    assert job.payload["progress"]["harness"]["state"] == "done"
+    assert job.payload["progress"]["role"]["state"] == "done"
+    assert job.payload["progress"]["registry"]["state"] == "failed"
+    assert job.payload["teardown"]["failed"] == ["registry"]
+    assert _agent(agent_id).status == "uninstalling"
+    assert _record_exists(backend, ws, skill_id) and _mapping_rows() == 1
+    op = _status(client)["operation"]
+    assert op["retryable"] is True and op["failed"] == ["registry"]
+
+    runtime_calls = len(control.calls)
+    retry = client.delete(f"/api/system-agents/{KEY}").json()
+    assert retry["attempt"] == 2 and retry["job_id"] != body["job_id"]
+    uninstall_module.execute_uninstall_job(retry["job_id"])
+    job2 = _job(retry["job_id"])
+    assert job2.status == "succeeded", job2.error
+    assert len(control.calls) == runtime_calls  # runtime + role carried, not re-deleted
+    assert "already gone" in job2.payload["progress"]["registry"]["detail"]  # the A2A one
+    assert not _record_exists(backend, ws, skill_id) and _mapping_rows() == 0
+    assert _agent(agent_id).status == "deleted"
+
+
+def test_uninstall_without_a_registry_backend_skips_the_registry_step(client, monkeypatch):
+    agent_id = _active_preset(client)
+    _strict_stubs(monkeypatch, agent_id=agent_id)
+    body = client.delete(f"/api/system-agents/{KEY}").json()
+    uninstall_module.execute_uninstall_job(body["job_id"])
+    job = _job(body["job_id"])
+    assert job.status == "succeeded", job.error
+    assert job.payload["progress"]["registry"]["detail"].startswith("skipped")
+    assert job.payload["teardown"]["skipped"] == ["kb_target", "registry"]
+
+
+@pytest.mark.parametrize("scenario", ["timeout", "role_false"])
 def test_teardown_that_does_not_finish_stays_uninstalling_and_retryable(
     client, monkeypatch, scenario
 ):
-    """Host reproduction: an accepted DeleteHarness (DELETING) is not a deletion, and
-    an ignored IAM False is not a cleanup — none of these may mark the row deleted."""
+    """Host reproduction: an accepted DeleteAgentRuntime is not a deletion, and an
+    ignored IAM False is not a cleanup — neither may mark the row deleted."""
     agent_id = _active_preset(client)
-    target_name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
-    if scenario == "delete_failed":
-        control, _ = _strict_stubs(monkeypatch, _HarnessControl(["DELETING", "DELETE_FAILED"]),
-                                   agent_id=agent_id)
-    elif scenario == "timeout":
-        control, _ = _strict_stubs(monkeypatch, _HarnessControl(["DELETING"]), agent_id=agent_id)
-        monkeypatch.setattr(uninstall_module, "HARNESS_GONE_TIMEOUT_S", 0)
-    elif scenario == "role_false":
-        control, _ = _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
+    if scenario == "timeout":
+        control, _ = _strict_stubs(monkeypatch, _RuntimeControl(["DELETING"]), agent_id=agent_id)
+        monkeypatch.setattr(uninstall_module, "RUNTIME_GONE_TIMEOUT_S", 0)
     else:
-        # the ACTUAL nested path: DeleteGatewayTarget answers AccessDenied (the legacy
-        # helper would swallow this and report success)
-        control, _ = _strict_stubs(
-            monkeypatch,
-            _HarnessControl(targets=[{"name": "other", "targetId": "t-other"},
-                                     {"name": target_name, "targetId": "t-old"}],
-                            target_delete="denied"),
-            agent_id=agent_id,
-        )
-        _mark_ready(resources={**READY_RESOURCES, "kb_gateway_id": "gw-1"})
+        control, _ = _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     uninstall_module.execute_uninstall_job(job_id)
     row = _agent(agent_id)
@@ -1717,42 +1911,59 @@ def test_teardown_that_does_not_finish_stays_uninstalling_and_retryable(
     job = _job(job_id)
     assert job.status == "failed"
     progress = job.payload["progress"]
-    if scenario == "kb_target":
-        assert progress["kb_target"]["state"] == "failed" and "harness" not in progress
-        assert progress["kb_target"]["target_id"] == "t-old"  # pinned before the delete
-        assert "AccessDenied" in progress["kb_target"]["detail"]
-        assert control.target_calls[:3] == [("list", None), ("list", "1"), ("delete", "t-old")]
-        assert control.calls == []  # nothing later ran
-    elif scenario == "role_false":
+    if scenario == "role_false":
         assert progress["harness"]["state"] == "done" and progress["role"]["state"] == "failed"
     else:
         assert progress["harness"]["state"] == "failed" and "role" not in progress
     status = _status(client)
     assert status["status"] == "uninstalling" and status["operation"]["retryable"] is True
     assert status["can_uninstall"] is True and status["can_repair"] is False
+    # N10v2-bug8: the failed job says what it did remove and where it stopped
+    if scenario == "role_false":
+        assert status["operation"]["removed"] == ["harness"]
+        assert status["operation"]["failed"] == ["role"]
+    else:
+        assert status["operation"]["removed"] == []
+        assert status["operation"]["failed"] == ["harness"]
+    assert status["operation"]["skipped"] == ["kb_target"]
+    assert job.payload["teardown"]["failed"] == status["operation"]["failed"]
     assert client.post(INSTALL, json={}).json()["code"] == "system_agent.uninstalling"
-    # the retry carries verified steps forward, reuses the PINNED target id (no name
-    # lookup), and finishes cleanly
-    monkeypatch.setattr(uninstall_module, "HARNESS_GONE_TIMEOUT_S", 90)
-    control2, _ = _strict_stubs(monkeypatch, _HarnessControl(missing=True), agent_id=agent_id)
+    # the retry carries verified steps forward and finishes cleanly
+    monkeypatch.setattr(uninstall_module, "RUNTIME_GONE_TIMEOUT_S", 90)
+    control2, _ = _strict_stubs(monkeypatch, _RuntimeControl(missing=True), agent_id=agent_id)
     retry = client.delete(f"/api/system-agents/{KEY}").json()
     assert retry["started"] is True and retry["attempt"] == 2
     carried = _job(retry["job_id"]).payload.get("progress", {})
     assert all(v["state"] in ("done", "pinned") for v in carried.values())
-    if scenario == "kb_target":
-        # nothing was verified done, but the pinned target identity IS carried
-        assert set(carried) == {"kb_target"}
-        assert carried["kb_target"]["target_id"] == "t-old"
-        assert carried["kb_target"]["gateway_id"] == "gw-1"
-        assert carried["kb_target"]["state"] == "pinned"
     uninstall_module.execute_uninstall_job(retry["job_id"])
     assert _agent(agent_id).status == "deleted" and _job(retry["job_id"]).status == "succeeded"
     if scenario == "role_false":
         assert ("delete", "h1") not in control2.calls  # harness step carried (same id)
-    if scenario == "kb_target":
-        # the retry deleted the PINNED target and never resolved a name again
-        assert ("delete", "t-old") in control2.target_calls
-        assert all(c[0] != "list" for c in control2.target_calls)
+
+
+def test_uninstall_survives_a_denied_policy_listing_by_deleting_the_known_names(
+    client, monkeypatch
+):
+    """N10v2-bug8 (live 2026-10-10): `iam:ListRolePolicies` denied → DeleteConflict →
+    the architect preset stuck in `uninstalling`, its role (inline policy
+    launchpad-caps-…) leaked. The two platform policy names are deterministic, so a
+    denied listing falls back to them and the uninstall completes."""
+    agent_id = _active_preset(client)
+    caps = agent_iam.capability_policy_name(ARCHITECT.name)
+    iam = _DeniedListIam(_owned_role(agent_id), attached=[caps])
+    _control, role_calls = _strict_stubs(monkeypatch, iam=iam, agent_id=agent_id)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)
+
+    assert caps in iam.policy_deletes
+    assert agent_iam.fs_policy_name(ARCHITECT.name) in iam.policy_deletes  # absent → ignored
+    assert role_calls == [agent_iam.role_name_for(ARCHITECT.name, agent_id)]
+    assert _agent(agent_id).status == "deleted"
+    job = _job(job_id)
+    assert job.status == "succeeded"
+    assert job.payload["teardown"] == {
+        "removed": ["harness", "role"], "skipped": ["kb_target", "registry"], "failed": []}
+    assert _status(client)["status"] == "not_installed"
 
 
 def test_simultaneous_uninstall_requests_share_one_owner_job(client, monkeypatch):
@@ -1838,7 +2049,7 @@ def test_duplicate_worker_invocations_run_exactly_once(client, monkeypatch):
     assert _job(job_id).status == "succeeded"
     # a second worker racing on a QUEUED job loses the CAS and does nothing
     agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    _set_status(agent_id2, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h2")
     job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     db = SessionLocal()
     db.get(Job, job2).status = "running"  # the first worker already claimed it
@@ -1871,19 +2082,9 @@ def test_stale_attempt_cannot_finish_after_a_newer_attempt_was_queued(client, mo
 
 def test_late_worker_after_reinstall_never_touches_the_replacement(client, monkeypatch):
     """Reviewer scenario: a worker paused mid-run resumes after the preset was torn
-    down and reinstalled — it must not resolve the new install's KB target by name."""
+    down and reinstalled — it must not touch the new install's resources."""
     agent_id = _active_preset(client)
-    db = SessionLocal()
-    row = db.get(Agent, agent_id)
-    row.spec = {**row.spec, "knowledge_bases": [KB_REF]}
-    db.commit()
-    db.close()
-    _mark_ready(resources={**READY_RESOURCES, "kb_gateway_id": "gw-1"})
-    target_name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
-    control, role_calls = _strict_stubs(
-        monkeypatch, _HarnessControl(targets=[{"name": target_name, "targetId": "NEW-TARGET"}]),
-        agent_id=agent_id,
-    )
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
 
     # pause the (stale) worker right after it claimed the job, before any cloud step
@@ -1898,14 +2099,14 @@ def test_late_worker_after_reinstall_never_touches_the_replacement(client, monke
                 other.execute(update(Job).where(Job.id == jid).values(status="succeeded"))
                 other.execute(update(Agent).where(Agent.id == agent_id).values(status="deleted"))
                 other.commit()
-            res = client.post(INSTALL, json={"knowledge_bases": [KB_REF]})
+            res = client.post(INSTALL, json={})
             assert res.status_code == 202 and res.json()["agent"]["id"] != agent_id
             paused["new"] = res.json()["agent"]["id"]
         return real_fence(db_, jid)
 
     monkeypatch.setattr(uninstall_module, "_fence", fence_then_replace)
     uninstall_module.execute_uninstall_job(job_id)
-    assert control.target_calls == [] and control.calls == [] and role_calls == []
+    assert control.calls == [] and role_calls == []
     assert _agent(paused["new"]).status == "deploying"  # the replacement is untouched
     assert _job(job_id).status == "succeeded"  # the other worker's result stands
 
@@ -1921,13 +2122,13 @@ def test_crash_before_and_after_the_cloud_step_resumes_through_pending_jobs(clie
                         lambda jid: resumed.append(("deploy", jid)) or threading.Thread())
     assert job_id in pipeline_module.resume_pending_jobs() and ("uninstall", job_id) in resumed
     assert _status(client)["status"] == "uninstalling"  # a crash never leaks not_installed
-    # crash after DeleteHarness was accepted: the job is left `running`; the resume
-    # worker adopts it, finds the harness already gone and completes idempotently
+    # crash after DeleteAgentRuntime was accepted: the job is left `running`; the resume
+    # worker adopts it, finds the runtime already gone and completes idempotently
     db = SessionLocal()
     db.get(Job, job_id).status = "running"
     db.commit()
     db.close()
-    _strict_stubs(monkeypatch, _HarnessControl(missing=True), agent_id=agent_id)
+    _strict_stubs(monkeypatch, _RuntimeControl(missing=True), agent_id=agent_id)
     uninstall_module.execute_uninstall_job(job_id)  # a non-resume worker must not adopt it
     assert _agent(agent_id).status == "uninstalling"
     uninstall_module.execute_uninstall_job(job_id, resume=True)
@@ -1961,7 +2162,7 @@ def test_uninstall_waits_for_a_running_deploy_and_repair_waits_for_uninstall(cli
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
     assert client.delete(f"/api/system-agents/{KEY}").json()["code"] == "agent.deploy_in_progress"
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     stale = SessionLocal()
     stale_agent = stale.get(Agent, agent_id)  # loaded while still active
     _strict_stubs(monkeypatch)
@@ -2010,7 +2211,7 @@ def test_resumed_job_fails_closed_at_entry_on_bad_pin_or_wrong_release_uri(
     db.commit()
     db.close()
     control = _Control()
-    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
+    monkeypatch.setattr(zip_runtime, "control_client", lambda _ws: control)
     for name in ("provision", "register"):
         monkeypatch.setitem(STAGES, name, lambda c, a: pytest.fail("a stage ran on a bad pin"))
     pipeline_module.execute_deploy_job(ctx.job_id)  # the real deploy stage is wired
@@ -2101,68 +2302,9 @@ def test_final_verification_covers_the_manifest_and_wrong_type_json(monkeypatch)
         assert fake2.puts == []
 
 
-# ---- (5) KB-mode least privilege ---------------------------------------------------
-
-
-def test_preset_kb_mode_grants_exactly_the_devguide_oauth_statements():
-    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
-        knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
-    ctx = agent_iam.role_context(ws_ctx(READY_RESOURCES))
-    doc = agent_iam.policy_document(spec, ctx, system_preset=True)
-    by_sid = {s["Sid"]: s for s in doc["Statement"]}
-    assert set(by_sid) == {
-        "BedrockModels", "AgentCoreOAuth2TokenVaultDefault", "AgentCoreOAuth2TokenVaultPerProvider",
-        "AgentCoreOAuth2Secret", "SkillBundleObjects", "SkillBundleList", "Telemetry",
-        "TelemetryTracing",
-    }
-    base = "arn:aws:bedrock-agentcore:us-west-2:111122223333"
-    token_action = "bedrock-agentcore:GetResourceOauth2Token"
-    assert by_sid["AgentCoreOAuth2TokenVaultDefault"]["Action"] == token_action
-    assert by_sid["AgentCoreOAuth2TokenVaultPerProvider"]["Action"] == token_action
-    assert by_sid["AgentCoreOAuth2TokenVaultDefault"]["Resource"] == [
-        f"{base}:token-vault/default",
-        f"{base}:workload-identity-directory/default",
-        f"{base}:workload-identity-directory/default/workload-identity/"
-        "harness_aws_agent_solution_architect-*",
-    ]
-    assert by_sid["AgentCoreOAuth2TokenVaultPerProvider"]["Resource"] == OAUTH_PROVIDER
-    assert by_sid["AgentCoreOAuth2Secret"]["Resource"] == (
-        "arn:aws:secretsmanager:us-west-2:111122223333:secret:"
-        "bedrock-agentcore-identity!default/oauth2/launchpad-gw-m2m-*"
-    )
-    actions = {a for s in doc["Statement"]
-               for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])}
-    for forbidden in ("bedrock-agentcore:GetResourceApiKey",
-                      "bedrock-agentcore:GetWorkloadAccessToken",
-                      "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
-                      "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
-                      "bedrock:Retrieve", "bedrock:AgenticRetrieveStream",
-                      "bedrock:GetKnowledgeBase"):
-        assert forbidden not in actions, forbidden
-    resources = " ".join(str(s["Resource"]) for s in doc["Statement"])
-    assert "bedrock-agentcore-identity!*" not in resources  # no family-wide secret
-    assert "apikey" not in resources
-    # ordinary agents with a KB keep their historical policy shape
-    plain = AgentSpec(name="plain", method="harness", system_prompt="x", knowledge_bases=[KB_REF])
-    plain_sids = {s["Sid"] for s in agent_iam.policy_document(plain, ctx)["Statement"]}
-    assert {"AgentCoreWorkloadIdentity", "IdentityVaultSecrets", "ManagedKbRetrieval",
-            "ManagedKbAgenticRetrieval"} <= plain_sids
-
-
-def test_preset_kb_mode_requires_the_workspace_oauth_provider(client):
-    ctx = agent_iam.role_context(ws_ctx({k: v for k, v in READY_RESOURCES.items()
-                                         if k != "oauth_provider_arn"}))
-    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
-        knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
-    with pytest.raises(ValueError, match="oauth_provider_arn"):
-        agent_iam.policy_document(spec, ctx, system_preset=True)
-    _mark_ready(resources={k: v for k, v in READY_RESOURCES.items() if k != "oauth_provider_arn"})
-    res = client.post(INSTALL, json={"knowledge_bases": [KB_REF]})
-    assert res.status_code == 409 and res.json()["code"] == "system_agent.workspace_not_ready"
-    assert res.json()["detail"]["requirements"][0]["code"] == "missing_oauth_provider"
-    assert _rows() == []
-    # a docs-only install (no KB) does not need the provider at all
-    assert client.post(INSTALL, json={}).status_code == 202
+# ---- (5) KB-mode least privilege: reworked above as test_preset_kb_mode_grants_the_
+# direct_kb_tool_statements_no_oauth / test_preset_kb_mode_requires_a_registered_
+# knowledge_backend (Step 0 — the KB-gateway OAuth path has no CN implementation) ----
 
 
 def test_ensure_role_applies_the_preset_policy_for_system_rows():
@@ -2170,7 +2312,7 @@ def test_ensure_role_applies_the_preset_policy_for_system_rows():
 
     class _Iam:
         def create_role(self, **kw):
-            return {"Role": {"Arn": f"arn:aws:iam::111122223333:role/{kw['RoleName']}"}}
+            return {"Role": {"Arn": f"arn:aws-cn:iam::111122223333:role/{kw['RoleName']}"}}
 
         def put_role_policy(self, **kw):
             captured[kw["PolicyName"]] = json.loads(kw["PolicyDocument"])
@@ -2182,104 +2324,13 @@ def test_ensure_role_applies_the_preset_policy_for_system_rows():
         knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
     agent = Agent(id="c" * 32, name=ARCHITECT.name, method="harness", system_key=KEY,
                   spec=spec.model_dump())
-    agent_iam.ensure_role(_Iam(), agent, spec, agent_iam.role_context(ws_ctx(READY_RESOURCES)))
+    agent_iam.ensure_role(_Iam(), agent, spec, agent_iam.role_context(_rt_ctx()))
     sids = {s["Sid"] for s in captured[f"launchpad-caps-{ARCHITECT.name}"]["Statement"]}
-    assert "AgentCoreOAuth2TokenVaultPerProvider" in sids and "ManagedKbRetrieval" not in sids
+    assert "AgentCoreWorkloadIdentity" in sids and "ManagedKbRetrieval" not in sids
 
 
-# ---- pass 5: strict KB cleanup, exclusive resume, historical role ownership ----------
-
-
-def _kb_preset(client, monkeypatch, control) -> str:
-    agent_id = _active_preset(client)
-    _mark_ready(resources={**READY_RESOURCES, "kb_gateway_id": "gw-1"})
-    _strict_stubs(monkeypatch, control, agent_id=agent_id)
-    return agent_id
-
-
-def test_kb_target_on_page_two_is_found_pinned_deleted_and_read_back_gone(client, monkeypatch):
-    name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
-    control = _HarnessControl(targets=[{"name": "a", "targetId": "t-a"},
-                                       {"name": "b", "targetId": "t-b"},
-                                       {"name": name, "targetId": "t-mine"}],
-                              target_statuses=["DELETING", "DELETING", None])
-    agent_id = _kb_preset(client, monkeypatch, control)
-    # the DESIRED spec says no KB (a failed detach-repair rewrote it) — the historical
-    # target must still be found and removed
-    db = SessionLocal()
-    row = db.get(Agent, agent_id)
-    row.spec = {**row.spec, "knowledge_bases": []}
-    db.commit()
-    db.close()
-    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
-    uninstall_module.execute_uninstall_job(job_id)
-    calls = control.target_calls
-    assert calls[:3] == [("list", None), ("list", "1"), ("list", "2")]  # every page
-    assert ("delete", "t-mine") in calls and calls.count(("get", "t-mine")) == 3
-    progress = _job(job_id).payload["progress"]["kb_target"]
-    assert progress["state"] == "done" and progress["target_id"] == "t-mine"
-    assert "ResourceNotFound" in progress["detail"]
-    assert _agent(agent_id).status == "deleted"
-
-
-def test_kb_target_delete_notfound_is_done_and_pending_forever_is_a_timeout(client, monkeypatch):
-    name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
-    control = _HarnessControl(targets=[{"name": name, "targetId": "t1"}], target_delete="notfound")
-    agent_id = _kb_preset(client, monkeypatch, control)
-    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
-    uninstall_module.execute_uninstall_job(job_id)
-    detail = _job(job_id).payload["progress"]["kb_target"]["detail"]
-    assert detail == "agentic target t1 already gone"
-    assert _agent(agent_id).status == "deleted"
-    # a target that never leaves DELETING is a bounded, retryable failure
-    agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
-    control2 = _HarnessControl(targets=[{"name": name, "targetId": "t2"}],
-                               target_statuses=["DELETING"])
-    _strict_stubs(monkeypatch, control2, agent_id=agent_id2)
-    monkeypatch.setattr(uninstall_module, "TARGET_GONE_TIMEOUT_S", 0)
-    job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
-    uninstall_module.execute_uninstall_job(job2)
-    assert _job(job2).status == "failed" and "TimeoutError" in _job(job2).error
-    assert _job(job2).payload["progress"]["kb_target"]["target_id"] == "t2"
-    assert _agent(agent_id2).status == "uninstalling" and control2.calls == []
-
-
-def test_kb_retry_after_access_denied_uses_the_pinned_id_not_a_fresh_lookup(client, monkeypatch):
-    name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
-    control = _HarnessControl(targets=[{"name": name, "targetId": "t-old"}], target_delete="denied")
-    agent_id = _kb_preset(client, monkeypatch, control)
-    first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
-    uninstall_module.execute_uninstall_job(first)
-    assert _job(first).status == "failed" and _agent(agent_id).status == "uninstalling"
-    # a fresh name lookup would now resolve a DIFFERENT target (a replacement carrying
-    # the same name); the ORDINARY retry request must carry the pinned identity itself
-    control2 = _HarnessControl(targets=[{"name": name, "targetId": "t-other"}], missing=True)
-    _strict_stubs(monkeypatch, control2, agent_id=agent_id)
-    retry = client.delete(f"/api/system-agents/{KEY}").json()
-    assert retry["started"] is True and retry["attempt"] == 2
-    carried = _job(retry["job_id"]).payload["progress"]["kb_target"]
-    assert carried["target_id"] == "t-old" and carried["gateway_id"] == "gw-1"
-    assert carried["state"] == "pinned"  # identity carried, completion NOT
-    uninstall_module.execute_uninstall_job(retry["job_id"])
-    assert ("delete", "t-old") in control2.target_calls
-    assert ("delete", "t-other") not in control2.target_calls
-    assert all(c[0] != "list" for c in control2.target_calls)
-    assert _agent(agent_id).status == "deleted"
-
-
-def test_kb_target_with_gateway_missing_from_resources_is_retryable(client, monkeypatch):
-    agent_id = _active_preset(client)
-    db = SessionLocal()
-    row = db.get(Agent, agent_id)
-    row.spec = {**row.spec, "knowledge_bases": [KB_REF]}
-    db.commit()
-    db.close()
-    control, _ = _strict_stubs(monkeypatch, agent_id=agent_id)  # resources lack kb_gateway_id
-    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
-    uninstall_module.execute_uninstall_job(job_id)
-    assert _job(job_id).status == "failed" and "kb_gateway_id" in _job(job_id).error
-    assert control.calls == [] and _agent(agent_id).status == "uninstalling"
+# ---- pass 5: exclusive resume, historical role ownership (kb_target has no CN
+# implementation and is always skipped without any AWS call — see uninstall._STEPS)
 
 
 def test_two_resume_workers_only_one_runs_and_a_live_holder_blocks_adoption(client, monkeypatch):
@@ -2291,16 +2342,16 @@ def test_two_resume_workers_only_one_runs_and_a_live_holder_blocks_adoption(clie
     db.commit()
     db.close()
     barrier = threading.Barrier(2, timeout=10)
-    real_delete = control.delete_harness
+    real_delete = control.delete_agent_runtime
 
-    def slow_delete(harnessId):
+    def slow_delete(agentRuntimeId):
         try:
             barrier.wait()  # hold the winner inside its first cloud step
         except threading.BrokenBarrierError:
             pass
-        return real_delete(harnessId)
+        return real_delete(agentRuntimeId)
 
-    control.delete_harness = slow_delete
+    control.delete_agent_runtime = slow_delete
     outcomes: list[str] = []
 
     def resume_worker():
@@ -2323,7 +2374,7 @@ def test_two_resume_workers_only_one_runs_and_a_live_holder_blocks_adoption(clie
     assert _agent(agent_id).status == "deleted" and _job(job_id).status == "succeeded"
     # an externally held lock (a live worker in another process) blocks adoption …
     agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    _set_status(agent_id2, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h2")
     control2, role_calls2 = _strict_stubs(monkeypatch, agent_id=agent_id2)
     job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     holder = uninstall_module._acquire_lock(agent_id2)
@@ -2354,7 +2405,7 @@ def test_role_cleanup_uses_installed_ownership_not_the_current_toggle(client, mo
 def test_role_that_is_not_this_installations_is_never_deleted(client, monkeypatch):
     agent_id = _active_preset(client)
     name = agent_iam.role_name_for(ARCHITECT.name, agent_id)
-    foreign = _Iam({name: {"Arn": f"arn:aws:iam::111122223333:role/{name}",
+    foreign = _Iam({name: {"Arn": f"arn:aws-cn:iam::111122223333:role/{name}",
                            "Tags": [{"Key": agent_iam.MANAGED_TAG_KEY, "Value": "someone-else"}]}})
     control, _ = _strict_stubs(monkeypatch, iam=foreign)
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
@@ -2378,7 +2429,8 @@ def test_carried_progress_is_only_trusted_for_the_same_resource_id(client, monke
     first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     uninstall_module.execute_uninstall_job(first)
     assert _job(first).payload["progress"]["harness"]["resource_id"] == "h1"
-    _set_status(agent_id, "uninstalling", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h9")
+    _set_status(agent_id, "uninstalling",
+               "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h9")
     control2, _ = _strict_stubs(monkeypatch, agent_id=agent_id)
     retry = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     assert _job(retry).payload["progress"]["harness"]["resource_id"] == "h1"  # carried …
@@ -2461,7 +2513,7 @@ def test_queued_retry_that_times_out_stays_queued_and_the_next_request_relaunche
     assert _job(job_id).status == "succeeded" and _agent(agent_id).status == "deleted"
     # a RUNNING job is never relaunched by a repeated request
     agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    _set_status(agent_id2, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h2")
     launched.clear()
     job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     db = SessionLocal()
@@ -2654,8 +2706,7 @@ def test_concurrent_callers_coalesce_on_one_worker(client, monkeypatch):
 # SE-040: inference defaults + administrator-editable settings
 # ---------------------------------------------------------------------------
 
-ASTRA = "global.openai.gpt-6-astra"
-OPUS = "global.anthropic.claude-opus-5"
+KIMI = "global.moonshotai.kimi-k3"  # the only other allowed model id (spec C3)
 
 
 def _spec_of(agent_id: str) -> dict:
@@ -2679,51 +2730,33 @@ def _rewrite_spec(agent_id: str, **changes) -> None:
         db.close()
 
 
-def test_architect_defaults_are_gpt6_astra_64k_output_high_effort():
+def test_architect_defaults_are_glm_64k_output_no_reasoning_effort():
+    """R14: the preset stays on the CN catalog default (GLM 5.3) — no OpenAI model
+    is in ALLOWED_MODEL_IDS, so reasoning_effort is never set."""
     spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
-    assert (spec.model_id, spec.model_source) == (ASTRA, "bedrock")
-    assert spec.max_tokens == 65536 and spec.reasoning_effort == "high"
+    assert (spec.model_id, spec.model_source) == (DEFAULT_MODEL_ID, "bedrock")
+    assert spec.max_tokens == 65536 and spec.reasoning_effort is None
     # the loop limits are separate knobs
     assert (spec.max_iterations, spec.timeout_seconds) == (100, 900)
-    params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
-    model = params["model"]["bedrockModelConfig"]
-    assert model == {
-        "modelId": ASTRA,
-        "apiFormat": "converse_stream",
-        "maxTokens": 65536,  # per model call — not InvokeHarness.maxTokens
-        "additionalParams": {"additionalModelRequestFields": {"reasoning": {"effort": "high"}}},
-    }
-    assert "maxTokens" not in params and params["maxIterations"] == 100
-    # UpdateHarness carries the identical model block (the live preset is updated in place)
-    update = hc.wrap_params_for_update(params)
-    assert update["model"] == params["model"]
+    bundle = harness_local.render_harness_bundle(spec, _rt_ctx())
+    load = bundle.files["model/load.py"]
+    assert f'MODEL_ID = "{DEFAULT_MODEL_ID}"' in load and "MODEL_MAX_TOKENS = 65536" in load
     # a bare InstallOptions() is the catalogue default too (model/prompt/limits)
     bare = presets.build_spec(ARCHITECT, BUCKET, InstallOptions())
-    assert (bare.model_id, bare.system_prompt) == (ASTRA, ARCHITECT.system_prompt)
+    assert (bare.model_id, bare.system_prompt) == (DEFAULT_MODEL_ID, ARCHITECT.system_prompt)
     # retention clarification: memory-disabled ≠ nothing retained
     assert "never tell a customer that nothing is retained" in spec.system_prompt
     assert "CloudWatch" in spec.system_prompt
 
 
-def test_ordinary_specs_send_exactly_the_request_they_always_did():
-    stored = {"name": "plain-harness", "method": "harness", "system_prompt": "hi",
-              "model_id": DEFAULT_MODEL_ID}
-    spec = AgentSpec(**stored)
-    assert spec.max_tokens is None and spec.reasoning_effort is None
-    model = build_create_params(spec, "arn:aws:iam::111:role/x", None)["model"]
-    assert model == {"bedrockModelConfig": {"modelId": DEFAULT_MODEL_ID,
-                                            "apiFormat": "converse_stream"}}
-
-
 @pytest.mark.parametrize("over", [
-    {"reasoning_effort": "high"},  # Claude on Converse: the knob would leak
-    {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
-    {"model_id": ASTRA, "method": "zip_runtime", "reasoning_effort": "high"},
+    {"reasoning_effort": "high"},  # no OpenAI model in ALLOWED_MODEL_IDS: always refused
+    {"model_id": KIMI, "reasoning_effort": "high"},
+    {"model_id": DEFAULT_MODEL_ID, "method": "zip_runtime", "reasoning_effort": "high"},
     {"method": "zip_runtime", "max_tokens": 4096},
     {"max_tokens": 0},
     {"max_tokens": presets.AgentSpec.model_fields["max_tokens"].metadata[1].le + 1},
-    {"model_id": ASTRA, "reasoning_effort": "extreme"},
-    {"model_id": ASTRA, "reasoning_effort": "none"},
+    {"model_id": "global.anthropic.claude-opus-5"},  # not in ALLOWED_MODEL_IDS
 ])
 def test_inference_knobs_reject_unsupported_pairings(over):
     base = {"name": "knobs", "method": "harness", "system_prompt": "hi"}
@@ -2731,67 +2764,60 @@ def test_inference_knobs_reject_unsupported_pairings(over):
         AgentSpec(**{**base, **over})
 
 
-def test_inference_knobs_accept_openai_on_native_bedrock():
-    spec = AgentSpec(name="knobs", method="harness", system_prompt="hi", model_id=ASTRA,
-                     max_tokens=65536, reasoning_effort="high")
-    assert spec.reasoning_effort == "high"
-    # max_tokens alone is fine for any harness model
-    assert AgentSpec(name="knobs", method="harness", system_prompt="hi",
-                     max_tokens=8192).max_tokens == 8192
+def test_inference_knobs_accept_max_tokens_on_either_allowed_model():
+    # reasoning_effort can never be set in this CN build (no OpenAI model id allowed)
+    for model_id in (DEFAULT_MODEL_ID, KIMI):
+        spec = AgentSpec(name="knobs", method="harness", system_prompt="hi",
+                         model_id=model_id, max_tokens=8192)
+        assert spec.max_tokens == 8192 and spec.reasoning_effort is None
 
 
-def test_execution_role_authorizes_the_global_openai_profile_on_the_dedicated_role():
+def test_execution_role_authorizes_the_global_bedrock_api_key_exchange():
     spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
-    ctx = agent_iam.role_context(ws_ctx(READY_RESOURCES))
+    ctx = agent_iam.role_context(_rt_ctx())
     doc = agent_iam.policy_document(spec, ctx)
-    models = next(s for s in doc["Statement"] if s["Sid"] == "BedrockModels")
-    assert f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{ASTRA}" in (
-        models["Resource"]
-    )
-    assert "arn:aws:bedrock:*::foundation-model/openai.gpt-6-astra" in models["Resource"]
-    assert "arn:aws:bedrock:*::foundation-model/*" not in models["Resource"]
+    api_key = next(s for s in doc["Statement"] if s["Sid"] == "ModelCredentialApiKey")
+    # N-R6: the grant covers the `launchpad-*` provider family (Bedrock, SiliconFlow, …)
+    assert spec.model_credential.startswith("launchpad-")
+    assert ctx.arn("bedrock-agentcore", "token-vault/default/apikeycredentialprovider/"
+                  "launchpad-*") in api_key["Resource"]
     # the preset still deploys on its own role, never the shared one
     settings = get_settings()
     with pytest.raises(RuntimeError):
         service.require_dedicated_role(
             Agent(name=ARCHITECT.name, method="harness", system_key=KEY),
-            READY_RESOURCES["execution_role_arn"], ws_ctx(READY_RESOURCES), settings,
+            READY_RESOURCES["execution_role_arn"], _rt_ctx(), settings,
         )
 
 
 def test_status_exposes_stored_settings_and_build_defaults(client):
     _mark_ready()
     before = _status(client)
-    assert before["settings"] == {} and before["defaults"]["model_id"] == ASTRA
+    assert before["settings"] == {} and before["defaults"]["model_id"] == DEFAULT_MODEL_ID
     assert before["defaults"]["max_tokens"] == 65536
-    assert before["defaults"]["reasoning_effort"] == "high"
+    assert before["defaults"]["reasoning_effort"] is None
     assert before["editable_fields"] == list(presets.EDITABLE_FIELDS)
     assert before["can_configure"] is False  # nothing to configure yet
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     status = _status(client)
     assert status["settings"] == {**status["defaults"], "knowledge_bases": []}
     assert status["settings"]["system_prompt"] == ARCHITECT.system_prompt
     assert status["can_configure"] is True
-    assert status["model_id"] == ASTRA  # legacy top-level members still agree
+    assert status["model_id"] == DEFAULT_MODEL_ID  # legacy top-level members still agree
 
 
-def test_new_install_sends_64k_and_high_effort_and_a_resume_regenerates_them(client):
+def test_new_install_sends_64k_and_a_resume_regenerates_them(client):
     _mark_ready()
     res = client.post(INSTALL, json={})
     assert res.status_code == 202
     spec = AgentSpec(**res.json()["agent"]["spec"])
-    params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
-    model = params["model"]["bedrockModelConfig"]
-    assert model["maxTokens"] == 65536 and model["modelId"] == ASTRA
-    assert model["additionalParams"]["additionalModelRequestFields"]["reasoning"] == {
-        "effort": "high"
-    }
+    bundle = harness_local.render_harness_bundle(spec, _rt_ctx())
+    assert "MODEL_MAX_TOKENS = 65536" in bundle.files["model/load.py"]
     # the ledger round-trip is lossless: a resumed job rebuilds the same request
     stored = AgentSpec(**_spec_of(res.json()["agent"]["id"]))
-    assert build_create_params(stored, "arn:aws:iam::111:role/x", None)["model"] == (
-        params["model"]
-    )
+    again = harness_local.render_harness_bundle(stored, _rt_ctx())
+    assert again.files["model/load.py"] == bundle.files["model/load.py"]
 
 
 def test_old_spec_is_untouched_until_an_explicit_edit_and_partial_edits_preserve(client):
@@ -2801,7 +2827,7 @@ def test_old_spec_is_untouched_until_an_explicit_edit_and_partial_edits_preserve
     old_prompt = "You are the previous build's architect prompt."
     _rewrite_spec(agent_id, model_id=DEFAULT_MODEL_ID, max_tokens=None,
                   reasoning_effort=None, system_prompt=old_prompt)
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     legacy = _spec_of(agent_id)
 
     # a read changes nothing; a bodiless repair is a no-op on an unchanged release
@@ -2839,7 +2865,7 @@ def test_old_spec_is_untouched_until_an_explicit_edit_and_partial_edits_preserve
     })
     assert reset.status_code == 202, reset.text
     restored = _spec_of(agent_id)
-    assert restored["model_id"] == ASTRA and restored["reasoning_effort"] == "high"
+    assert restored["model_id"] == DEFAULT_MODEL_ID and restored["reasoning_effort"] is None
     assert restored["system_prompt"] == ARCHITECT.system_prompt
     assert restored["max_tokens"] == 65536 and restored["max_iterations"] == 12
     # the protected part of the spec never moved
@@ -2847,10 +2873,13 @@ def test_old_spec_is_untouched_until_an_explicit_edit_and_partial_edits_preserve
         assert restored[key] == legacy[key], key
 
 
-def test_stored_prompt_override_survives_repair_kb_edit_and_bundle_pin(client):
+def test_stored_prompt_override_survives_repair_kb_edit_and_bundle_pin(client, monkeypatch):
+    from app.services import knowledge_backend
+
+    monkeypatch.setattr(knowledge_backend, "_backend", object())
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     custom = "Custom architect prompt written by the administrator."
     res = client.post(INSTALL, json={"system_prompt": custom, "timeout_seconds": 1200})
     assert res.status_code == 202
@@ -2864,11 +2893,11 @@ def test_stored_prompt_override_survives_repair_kb_edit_and_bundle_pin(client):
         assert res.status_code == 202, (body, res.text)
         spec = _spec_of(agent_id)
         assert spec["system_prompt"] == custom and spec["timeout_seconds"] == 1200, body
-        assert spec["model_id"] == ASTRA and spec["max_tokens"] == 65536, body
+        assert spec["model_id"] == DEFAULT_MODEL_ID and spec["max_tokens"] == 65536, body
         # every repair still pins the content-addressed release and passes the job-entry guard
         job = _job(res.json()["job_id"])
         agent = _agent(agent_id)
-        service.assert_job_release_pinned(job.payload, agent, ws_ctx(READY_RESOURCES))
+        service.assert_job_release_pinned(job.payload, agent, _rt_ctx())
     assert _spec_of(agent_id)["knowledge_bases"] == []
 
 
@@ -2900,13 +2929,13 @@ def test_stored_prompt_override_survives_repair_kb_edit_and_bundle_pin(client):
     {"clear": ["max_tokens"], "max_tokens": 5},
     {"clear": ["max_tokens"], "reset": ["max_tokens"]},
     # a valid shape that is an unsupported pairing
-    {"model_id": OPUS},
+    {"model_id": "global.anthropic.claude-opus-5"},  # not in ALLOWED_MODEL_IDS
     {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle"},
 ])
 def test_invalid_edits_fail_before_any_job_or_spec_change(client, body):
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     before, jobs = _spec_of(agent_id), _job_count()
     res = client.post(INSTALL, json=body)
     assert res.status_code == 422, (body, res.text)
@@ -2915,17 +2944,14 @@ def test_invalid_edits_fail_before_any_job_or_spec_change(client, body):
     assert _status(client)["status"] == "active"
 
 
-def test_switching_to_claude_needs_an_explicit_effort_reset(client):
+def test_switching_between_the_two_allowed_models_keeps_other_settings(client):
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
-    # ``reset`` returns the knob to the catalogue default (high), which Claude refuses
-    still = client.post(INSTALL, json={"model_id": OPUS, "reset": ["reasoning_effort"]})
-    assert still.status_code == 422 and still.json()["code"] == "system_agent.invalid_options"
-    res = client.post(INSTALL, json={"model_id": OPUS, "clear": ["reasoning_effort"]})
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
+    res = client.post(INSTALL, json={"model_id": KIMI})
     assert res.status_code == 202, res.text
     spec = _spec_of(agent_id)
-    assert spec["model_id"] == OPUS and spec["reasoning_effort"] is None
+    assert spec["model_id"] == KIMI and spec["reasoning_effort"] is None
     assert spec["max_tokens"] == 65536  # unrelated members untouched
     # clearing max_tokens sends no ceiling at all (the provider default applies again)
     _set_status(agent_id, "active")
@@ -2933,9 +2959,14 @@ def test_switching_to_claude_needs_an_explicit_effort_reset(client):
     assert cleared.status_code == 202 and _spec_of(agent_id)["max_tokens"] is None
     _set_status(agent_id, "active")
     spec = _spec_of(agent_id)
-    params = build_create_params(AgentSpec(**spec), "arn:aws:iam::111:role/x", None)
-    assert "additionalParams" not in params["model"]["bedrockModelConfig"]
-    assert "maxTokens" not in params["model"]["bedrockModelConfig"]
+    bundle = harness_local.render_harness_bundle(AgentSpec(**spec), _rt_ctx())
+    assert f'MODEL_ID = "{KIMI}"' in bundle.files["model/load.py"]
+    # the model-aware platform default (N10-bug4: Kimi/GLM → 16384), not a flat 4096
+    assert "MODEL_MAX_TOKENS = 16384" in bundle.files["model/load.py"]
+    # resetting the model returns to the catalogue default
+    _set_status(agent_id, "active")
+    reset = client.post(INSTALL, json={"reset": ["model_id"]})
+    assert reset.status_code == 202 and _spec_of(agent_id)["model_id"] == DEFAULT_MODEL_ID
 
 
 def test_edit_while_deploying_is_refused_but_a_bodiless_repair_coalesces(client):
@@ -2951,7 +2982,7 @@ def test_edit_while_deploying_is_refused_but_a_bodiless_repair_coalesces(client)
     assert refused.json()["detail"]["job_id"] == job_id
     assert _spec_of(agent_id)["max_tokens"] == 65536 and _job_count() == 1
     # a settled row accepts the same edit
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     accepted = client.post(INSTALL, json={"max_tokens": 1000})
     assert accepted.status_code == 202 and _spec_of(agent_id)["max_tokens"] == 1000
     # uninstalling refuses the edit too (existing semantics)
@@ -2966,7 +2997,7 @@ def test_concurrent_edits_never_lose_an_accepted_update_silently(client):
     id — never a 2xx whose job silently ignores its values."""
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     before = _job_count()
     s1, s2 = SessionLocal(), SessionLocal()
     try:
@@ -2995,11 +3026,12 @@ def test_member_sees_settings_but_cannot_edit_them_even_with_deploy_permission(g
     admin, member = gated
     _mark_ready()
     agent_id = admin.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     perms = member.get("/api/auth/status").json()["permissions"]
     assert "agents.deploy" in perms  # the member holds the ordinary deploy right
     seen = _status(member)
-    assert seen["settings"]["model_id"] == ASTRA and seen["settings"]["max_tokens"] == 65536
+    assert seen["settings"]["model_id"] == DEFAULT_MODEL_ID
+    assert seen["settings"]["max_tokens"] == 65536
     assert seen["can_configure"] is False and seen["can_repair"] is False
     for body in ({"max_tokens": 1000}, {"system_prompt": "mine"}, {"reset": ["model_id"]}):
         res = member.post(INSTALL, json=body)
@@ -3010,7 +3042,6 @@ def test_member_sees_settings_but_cannot_edit_them_even_with_deploy_permission(g
     assert _status(member)["settings"]["max_tokens"] == 1000
     # and the admin edit grants no generic lifecycle bypass
     assert admin.delete(f"/api/agents/{agent_id}").status_code == 403
-    assert admin.post(f"/api/agents/{agent_id}/convert").status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -3054,7 +3085,7 @@ def test_delayed_partial_edit_cannot_revert_a_completed_concurrent_edit(client, 
     1234) or be refused — never accepted with the timeout reverted to 900."""
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     resolved, release = _pause_before_claim(monkeypatch, "A pending prompt")
     outcome: dict = {}
 
@@ -3086,7 +3117,7 @@ def test_delayed_edit_while_the_other_is_still_deploying_is_refused_not_reverted
     spec is untouched (no silent coalescing onto a job carrying other values)."""
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     resolved, release = _pause_before_claim(monkeypatch, "A pending prompt")
     outcome: dict = {}
 
@@ -3194,7 +3225,7 @@ def test_two_identical_or_bodiless_first_installs_still_coalesce(client, monkeyp
 def test_two_explicit_edits_on_an_active_row_refuse_the_loser_honestly(client, monkeypatch):
     _mark_ready()
     agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    _set_status(agent_id, "active", "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/h1")
     results = _race_two(client, [{"max_tokens": 1111}, {"max_tokens": 2222}], monkeypatch)
     assert sorted(r.status_code for r in results) == [202, 409], [r.text for r in results]
     winner = next(r for r in results if r.status_code == 202)
@@ -3202,3 +3233,484 @@ def test_two_explicit_edits_on_an_active_row_refuse_the_loser_honestly(client, m
     assert loser.json()["detail"]["job_id"] == winner.json()["job_id"]
     assert _spec_of(agent_id)["max_tokens"] == winner.json()["agent"]["spec"]["max_tokens"]
     assert _job_count() == 2
+
+
+# ── D21 (M1-d): preset snapshot catalog version + the Settings warning ──
+@pytest.mark.siliconflow
+def test_preset_status_exposes_the_catalog_version_and_the_behind_warning(client):
+    from app.models.ledger import Deployment
+    from app.schemas.agent import catalog_version
+    from app.services import model_registry
+
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    db = SessionLocal()
+    try:
+        current = model_registry.stamp(db)
+        st = _status(client)
+        # the deploy job is stubbed in this suite (no generate stage ran) → no pin yet, and
+        # a row without a pin never raises the banner
+        assert st["catalog_version"] == {"installed": None, "current": catalog_version()}
+        assert service.catalog_snapshot_warnings(db) == []
+        dep = (db.query(Deployment).filter(Deployment.agent_id == agent_id)
+               .order_by(Deployment.started_at.desc()).first())
+        dep.catalog_version = current  # what the generate stage writes (test_catalog_hint)
+        db.commit()
+        st = _status(client)
+        assert st["catalog_version"] == {"installed": current, "current": catalog_version()}
+        assert service.catalog_snapshot_warnings(db) == []
+        # D21-obs5: a credential registration (what every bootstrap's `model_providers`
+        # stage used to journal) is audit-only — it must not make the preset look behind
+        from datetime import UTC, datetime
+
+        from app.models.model_registry import ModelProvider
+        from app.services import model_credential
+
+        sf = db.query(ModelProvider).filter_by(name="siliconflow").one()
+        model_credential.record_registered_key(
+            db, sf, version=2, modified_at=datetime(2026, 10, 14, 12, 0, tzinfo=UTC),
+            created=False, rotated=True, actor="bootstrap")
+        assert model_registry.list_changes(db, limit=1)[0].operation == "provider.credential"
+        assert model_registry.stamp(db) == current == catalog_version()
+        assert service.catalog_snapshot_warnings(db) == []
+        assert _status(client)["catalog_version"] == {"installed": current,
+                                                      "current": current}
+        # D21-obs6: provider / model probe rows (what two admin Probe clicks journal) are
+        # audit-only as well — the preset must not look behind after them
+        from app.models.model_registry import Model
+
+        kimi = db.query(Model).filter_by(model_id="global.moonshotai.kimi-k3").one()
+        model_registry._journal(db, "provider.probe", "admin", sf.id,
+                                {"probe": {"state": "never"}}, {"probe": {"state": "ok"}})
+        model_registry._journal(db, "model.probe", "admin", kimi.id,
+                                {"tools": True}, {"tools": True})
+        db.commit()
+        assert [c.operation for c in model_registry.list_changes(db, limit=2)] == [
+            "model.probe", "provider.probe"]
+        assert model_registry.stamp(db) == current == catalog_version()
+        assert service.catalog_snapshot_warnings(db) == []
+        assert _status(client)["catalog_version"] == {"installed": current,
+                                                      "current": current}
+        dep.catalog_version = current - 1
+        db.commit()
+        st = _status(client)
+        assert st["catalog_version"]["installed"] == current - 1
+        [warning] = service.catalog_snapshot_warnings(db)
+        assert warning["code"] == "preset_snapshot_behind"
+        assert warning["detail"]["installed"] == current - 1
+        assert warning["detail"]["current"] == current and warning["detail"]["preset_key"] == KEY
+        assert f"v{current - 1}" in warning["message"] and f"v{current}" in warning["message"]
+        # N17-obs208: the message names the real console path (there is no "System agents" page)
+        assert warning["message"].endswith(
+            "open New agent → System presets and repair the snapshot")
+        assert "System agents" not in warning["message"]
+        # the producer is what `model_registry.warnings` appends (installed by create_app)
+        model_registry.add_warning_producer(service.catalog_snapshot_warnings)
+        codes = [w["code"] for w in model_registry.warnings(db)]
+        assert codes.count("preset_snapshot_behind") == 1
+        # a not-installed preset projects None / current
+        rows = {p["key"]: p for p in client.get("/api/system-agents").json()["presets"]}
+        others = [p for k, p in rows.items() if k != KEY]
+        assert all(p["catalog_version"] == {"installed": None, "current": catalog_version()}
+                   for p in others)
+    finally:
+        db.close()
+
+
+def test_status_current_and_catalog_behind_read_one_source_in_a_stale_process(
+    client, no_real_deploy
+):
+    """N17-obs281 (design simplification C1): `catalog_version.current` on the status read and
+    the `(installed, current)` of `catalog_behind` (banner, `snapshot_behind`, the repair
+    decision) come from ONE source, `service.current_catalog_version` (the ledger stamp). Before,
+    `current` was the in-process snapshot, so a process whose snapshot lagged the ledger (a
+    second process wrote; the 30 s refresher not run yet) answered "current v<N-1>" next to
+    `snapshot_behind: true` — model-registry.md §9 says the behind signals never disagree."""
+    from app.models.ledger import Deployment
+    from app.schemas import model_catalog
+    from app.schemas.agent import catalog_version
+    from app.services import model_registry
+
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    db = SessionLocal()
+    try:
+        current = model_registry.stamp(db)
+        dep = (db.query(Deployment).filter(Deployment.agent_id == agent_id)
+               .order_by(Deployment.started_at.desc(), Deployment.id.desc()).first())
+        dep.catalog_version = current - 1
+        db.commit()
+        # this process's snapshot lags the ledger by one version (the second-process shape)
+        fresh = model_catalog.current()
+        model_catalog.publish(model_catalog.Catalog(
+            version=current - 1, providers=fresh.providers, models=fresh.models,
+            workspace_disabled=fresh.workspace_disabled, revision=fresh.revision - 1))
+        assert int(catalog_version()) == current - 1
+        st = _status(client)
+        assert st["catalog_version"] == {"installed": current - 1, "current": current}
+        assert st["snapshot_behind"] is True
+        assert service.catalog_behind(db, db.get(Agent, agent_id)) == (current - 1, current)
+        assert service.current_catalog_version(db) == current
+        [warning] = service.catalog_snapshot_warnings(db)
+        assert warning["detail"]["current"] == st["catalog_version"]["current"]
+    finally:
+        model_registry.refresh(db)
+        db.close()
+
+
+def test_repair_republishes_when_the_pinned_catalog_is_behind_the_stamp(
+    client, no_real_deploy
+):
+    """N17-obs234: a bodiless install / repair of an ACTIVE preset whose latest deployment
+    pinned an OLDER model catalog than the ledger's is a re-publish (202, job, `changed`),
+    not the "already current" no-op — no `force` needed; `snapshot_behind` on the status
+    read is the same verdict. An equal or newer pin with an unchanged spec stays a no-op."""
+    from app.models.ledger import Deployment
+    from app.services import model_registry
+
+    def latest_deployment(agent_id: str) -> Deployment:
+        return (db.query(Deployment).filter(Deployment.agent_id == agent_id)
+                .order_by(Deployment.started_at.desc(), Deployment.id.desc()).first())
+
+    _mark_ready()
+    first = client.post(INSTALL, json={}).json()
+    agent_id, first_job = first["agent"]["id"], first["job_id"]
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    db = SessionLocal()
+    try:
+        current = model_registry.stamp(db)
+        # no pin yet (the stubbed job ran no generate stage): never behind, a no-op
+        assert _status(client)["snapshot_behind"] is False
+        same = client.post(INSTALL, json={})
+        assert same.status_code == 200 and same.json()["changed"] is False
+        assert same.json()["preset"]["snapshot_behind"] is False and _job_count() == 1
+
+        # pinned at the current stamp → equal → still a no-op
+        dep = latest_deployment(agent_id)
+        dep.catalog_version = current
+        db.commit()
+        assert _status(client)["snapshot_behind"] is False
+        assert client.post(INSTALL, json={}).status_code == 200 and _job_count() == 1
+
+        # a NEWER pin (another process published) is not behind either
+        dep.catalog_version = current + 1
+        db.commit()
+        assert _status(client)["snapshot_behind"] is False
+        assert client.post(INSTALL, json={}).status_code == 200 and _job_count() == 1
+
+        # behind: the live default-workspace shape (installed v10, stamp v20)
+        dep.catalog_version = current - 1
+        db.commit()
+        st = _status(client)
+        assert st["snapshot_behind"] is True and st["status"] == "active"
+        assert st["catalog_version"]["installed"] == current - 1
+        assert [w["detail"]["agent_id"] for w in service.catalog_snapshot_warnings(db)] == [
+            agent_id]
+        repaired = client.post(INSTALL, json={})  # the card's "Repair snapshot": no force
+        assert repaired.status_code == 202, repaired.text
+        body = repaired.json()
+        assert body["changed"] is True and body["created"] is False
+        assert body["job_id"] not in (None, first_job) and _job_count() == 2
+        assert body["job_id"] in no_real_deploy  # the claim winner launched it
+        assert body["preset"]["status"] == "deploying"
+        job = db.get(Job, body["job_id"])
+        reason = f"catalog snapshot behind v{current - 1} < v{current}"
+        assert job.payload["mode"] == "update"
+        assert job.payload["repair_reason"] == reason and job.payload["note"] == reason
+        assert "preset_bundle" in job.payload  # the release pin still rides along
+        db.expire_all()
+        assert db.get(Agent, agent_id).status == "deploying"
+        # repeated clicks while the repair runs coalesce onto the same job
+        again = client.post(INSTALL, json={})
+        assert again.status_code == 202 and again.json()["job_id"] == body["job_id"]
+        assert again.json()["changed"] is False and _job_count() == 2
+
+        # the repair's own deployment carries no pin yet (stubbed job) → the verdict clears
+        _set_status(agent_id, "active", RUNTIME_ARN)
+        db.expire_all()
+        assert latest_deployment(agent_id).id == body["deployment_id"]
+        assert _status(client)["snapshot_behind"] is False
+        assert service.catalog_snapshot_warnings(db) == []
+        settled = client.post(INSTALL, json={})
+        assert settled.status_code == 200 and settled.json()["changed"] is False
+        assert _job_count() == 2
+    finally:
+        db.close()
+
+
+def test_warning_producers_are_fail_soft(client):
+    from app.services import model_registry
+
+    def boom(db):
+        raise RuntimeError("ledger locked")
+
+    model_registry.add_warning_producer(boom)
+    db = SessionLocal()
+    try:
+        assert isinstance(model_registry.warnings(db), list)  # no raise
+    finally:
+        db.close()
+
+
+# ── N16-obs111a: a canary still naming the preset blocks the uninstall ────────────────────
+
+
+def test_uninstall_is_409_agent_in_use_while_a_canary_names_the_preset(client):
+    """The create path refuses presets as canary arms (`system-managed`), so only a legacy row
+    can name one — and it must still block: the uninstall would tear down the Runtime the
+    canary routes to (same orphan shape as N16-obs111)."""
+    from app.optimization.models import RuntimeCanary
+
+    agent_id = _active_preset(client)
+    db = SessionLocal()
+    try:
+        row = RuntimeCanary(
+            name="legacy", workspace_id=DEFAULT_WORKSPACE_ID, status="running", stage="traffic",
+            champion_agent_id="someone-else", champion_agent_name="x",
+            challenger_agent_id=agent_id, challenger_agent_name="preset",
+        )
+        db.add(row)
+        db.commit()
+        canary_id = row.id
+    finally:
+        db.close()
+
+    res = client.delete(f"/api/system-agents/{KEY}")
+    assert res.status_code == 409, res.text
+    assert res.json()["code"] == "agent.in_use"
+    assert [c["id"] for c in res.json()["detail"]["canaries"]] == [canary_id]
+    assert _rows(system_key=KEY)[0].status == "active"  # the claim was never taken
+    assert _job_count() == 1  # the install job only — no uninstall job queued
+
+    db = SessionLocal()
+    try:
+        db.get(RuntimeCanary, canary_id).status = "cleaned"
+        db.commit()
+    finally:
+        db.close()
+    assert client.delete(f"/api/system-agents/{KEY}").status_code == 202
+
+
+# ---------------------------------------------------------------------------
+# N17-obs202 (user ruling 2026-10-22): presets FOLLOW the model-defaults page
+# ---------------------------------------------------------------------------
+
+
+def _set_role(name: str, model_id: str | None) -> None:
+    """Move (or reset) a platform model role the way the console's Model roles tab does."""
+    from app.services import model_roles
+
+    db = SessionLocal()
+    try:
+        if model_id is None:
+            model_roles.clear_override(db, name, "ops")
+        else:
+            model_roles.set_override(db, name, model_id, "ops")
+    finally:
+        db.close()
+
+
+def _job_payload(job_id: str) -> dict:
+    db = SessionLocal()
+    try:
+        return dict(db.get(Job, job_id).payload or {})
+    finally:
+        db.close()
+
+
+def test_preset_model_follows_the_agent_default_role_and_the_constant_only_when_unset(
+    monkeypatch,
+):
+    from app.schemas.agent import agent_default_model_id
+
+    # the role is the catalog default today → the resolved model is the constant
+    assert ARCHITECT.model_id is None and presets.EVAL_WORKER.model_id is None
+    assert ARCHITECT.resolved_model_id() == agent_default_model_id() == DEFAULT_MODEL_ID
+    spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
+    assert spec.model_id == DEFAULT_MODEL_ID
+    # the administrator moves the role on the model-defaults page → resolved per call
+    _set_role("agent_default", KIMI)
+    assert ARCHITECT.resolved_model_id() == KIMI
+    assert presets.build_spec(ARCHITECT, BUCKET, InstallOptions()).model_id == KIMI
+    assert presets.build_spec(presets.EVAL_WORKER, BUCKET, InstallOptions()).model_id == KIMI
+    assert presets.default_settings(ARCHITECT)["model_id"] == KIMI
+    # an explicit option still wins over the role
+    assert presets.build_spec(ARCHITECT, BUCKET, InstallOptions(model_id=DEFAULT_MODEL_ID)) \
+        .model_id == DEFAULT_MODEL_ID
+    # a blank role (defensive: Settings refuses one, but the helper never returns "")
+    monkeypatch.setattr(get_settings(), "agent_default_model_id", "")
+    assert agent_default_model_id() == DEFAULT_MODEL_ID
+    assert ARCHITECT.resolved_model_id() == DEFAULT_MODEL_ID
+
+
+def test_install_takes_the_role_model_and_the_status_says_it_follows_the_default(client):
+    _mark_ready()
+    _set_role("agent_default", KIMI)
+    before = _status(client)
+    assert before["defaults"]["model_id"] == KIMI  # what an install would take, live
+    assert before["model_origin"] is None and before["default_changed"] is False
+    res = client.post(INSTALL, json={})
+    assert res.status_code == 202, res.text
+    agent_id = res.json()["agent"]["id"]
+    assert _spec_of(agent_id)["model_id"] == KIMI
+    assert _agent(agent_id).preset_model_pinned is False
+    assert res.json()["preset"]["model_origin"] == "default"
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    status = _status(client)
+    assert (status["model_id"], status["model_origin"]) == (KIMI, "default")
+    assert status["default_changed"] is False
+    assert status["settings"]["model_id"] == KIMI == status["defaults"]["model_id"]
+
+
+def test_role_change_after_install_flags_default_changed_and_repair_applies_it(client):
+    _mark_ready()
+    first = client.post(INSTALL, json={}).json()
+    agent_id, first_job = first["agent"]["id"], first["job_id"]
+    assert _spec_of(agent_id)["model_id"] == DEFAULT_MODEL_ID
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    # nothing moved: a bodiless repair is a no-op and the card shows no note
+    same = client.post(INSTALL, json={})
+    assert same.status_code == 200 and same.json()["changed"] is False
+    assert _status(client)["default_changed"] is False
+
+    # the administrator moves the agent default on the model-defaults page
+    _set_role("agent_default", KIMI)
+    status = _status(client)
+    assert status["default_changed"] is True and status["model_origin"] == "default"
+    assert status["model_id"] == DEFAULT_MODEL_ID  # the installed spec, not the role
+    assert status["defaults"]["model_id"] == KIMI  # what a repair applies
+    assert status["can_repair"] is True and status["snapshot_behind"] is False
+
+    # the same "Repair" click as N17-obs234: bodiless, the SERVER re-publishes
+    repaired = client.post(INSTALL, json={})
+    assert repaired.status_code == 202 and repaired.json()["changed"] is True, repaired.text
+    assert repaired.json()["job_id"] != first_job and _job_count() == 2
+    payload = _job_payload(repaired.json()["job_id"])
+    assert payload["mode"] == "update"
+    assert payload["repair_reason"] == f"model default changed {DEFAULT_MODEL_ID} -> {KIMI}"
+    assert _spec_of(agent_id)["model_id"] == KIMI
+    assert _agent(agent_id).preset_model_pinned is False  # still following the role
+    assert repaired.json()["preset"]["default_changed"] is False
+    _set_status(agent_id, "active")
+    after = _status(client)
+    assert (after["model_id"], after["model_origin"], after["default_changed"]) == (
+        KIMI, "default", False)
+    # and the preset stays current until the role moves again
+    assert client.post(INSTALL, json={}).status_code == 200
+    _set_role("agent_default", None)  # reset to the built-in default
+    assert _status(client)["default_changed"] is True
+    assert client.post(INSTALL, json={}).status_code == 202
+    assert _spec_of(agent_id)["model_id"] == DEFAULT_MODEL_ID
+
+
+def test_admin_override_wins_and_is_kept_on_repair_when_the_role_moves(client):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    # the 配置 edit pins the model explicitly
+    pinned = client.post(INSTALL, json={"model_id": KIMI})
+    assert pinned.status_code == 202 and _spec_of(agent_id)["model_id"] == KIMI
+    assert _agent(agent_id).preset_model_pinned is True
+    assert pinned.json()["preset"]["model_origin"] == "override"
+    _set_status(agent_id, "active")
+    status = _status(client)
+    assert status["model_origin"] == "override" and status["default_changed"] is False
+
+    # the role moves to the OTHER model: an override never follows and never flags
+    _set_role("agent_default", KIMI)
+    _set_role("agent_default", None)
+    assert _status(client)["default_changed"] is False
+    kept = client.post(INSTALL, json={})
+    assert kept.status_code == 200 and kept.json()["changed"] is False
+    assert kept.json()["preset"]["model_id"] == KIMI
+    assert kept.json()["preset"]["model_origin"] == "override"
+    # an edit of ANOTHER member keeps the pin too
+    other = client.post(INSTALL, json={"max_iterations": 50})
+    assert other.status_code == 202 and _spec_of(agent_id)["model_id"] == KIMI
+    assert _agent(agent_id).preset_model_pinned is True
+    _set_status(agent_id, "active")
+
+    # `reset: ["model_id"]` returns the row to following the role (the role is the
+    # constant again now, so the model changes back and the spec is re-published)
+    reset = client.post(INSTALL, json={"reset": ["model_id"]})
+    assert reset.status_code == 202, reset.text
+    assert _spec_of(agent_id)["model_id"] == DEFAULT_MODEL_ID
+    assert _agent(agent_id).preset_model_pinned is False
+    assert reset.json()["preset"]["model_origin"] == "default"
+    _set_status(agent_id, "active")
+    _set_role("agent_default", KIMI)
+    assert _status(client)["default_changed"] is True  # follows again
+
+
+def test_legacy_rows_without_the_pin_flag_are_classified_by_the_old_constant(client):
+    """A row written before `preset_model_pinned` existed could only be the constant (the
+    one default then) or an administrator's explicit other model."""
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    db = SessionLocal()
+    try:
+        db.get(Agent, agent_id).preset_model_pinned = None
+        db.commit()
+    finally:
+        db.close()
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    assert service.model_pinned(_agent(agent_id)) is False
+    assert _status(client)["model_origin"] == "default"
+    _set_role("agent_default", KIMI)
+    assert _status(client)["default_changed"] is True
+    _set_role("agent_default", None)
+    _rewrite_spec(agent_id, model_id=KIMI)  # the only way a legacy row carried Kimi
+    assert service.model_pinned(_agent(agent_id)) is True
+    status = _status(client)
+    assert status["model_origin"] == "override" and status["default_changed"] is False
+    assert client.post(INSTALL, json={}).status_code == 200  # nothing to re-publish
+
+
+def test_architect_plan_judges_follow_the_judge_role():
+    from app.assistant import evaluation_plan as plan
+    from app.schemas.agent import judge_default_model_id
+
+    assert plan.default_judge_model() == judge_default_model_id() == DEFAULT_MODEL_ID
+    judge_entry = {"kind": "judge", "key": "quality", "title": "Quality judge",
+                   "name": "quality_judge",
+                   "instructions": "Rate the answer against the rubric."}
+    derived_entry = {"kind": "derived", "key": "helpful", "title": "Helpfulness",
+                     "name": "helpful", "base_evaluator_id": "Builtin.Helpfulness"}
+    judge, derived = plan.JudgeEvaluator(**judge_entry), plan.DerivedEvaluator(**derived_entry)
+    assert judge.model_id == derived.model_id == DEFAULT_MODEL_ID
+    _set_role("judge", KIMI)  # the model-defaults page, no restart
+    assert plan.default_judge_model() == KIMI
+    judge, derived = plan.JudgeEvaluator(**judge_entry), plan.DerivedEvaluator(**derived_entry)
+    assert judge.model_id == derived.model_id == KIMI
+    # an entry naming its own judge keeps it
+    explicit = plan.JudgeEvaluator(**judge_entry, model_id=DEFAULT_MODEL_ID)
+    assert explicit.model_id == DEFAULT_MODEL_ID
+
+
+def test_a_process_without_the_role_snapshot_still_resolves_the_ledger_roles(client):
+    """rev-r25 F1 on N17-obs202: the bootstrap CLI (`make bootstrap` → `install_preset(
+    EVAL_WORKER, None)`) never calls `model_roles.load_overrides`; before the fix it resolved
+    `agent_default` to env / built-in and re-published a role-following preset on GLM."""
+    from app.services import model_roles
+
+    _mark_ready()
+    _set_role("agent_default", KIMI)
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    assert _spec_of(agent_id)["model_id"] == KIMI
+    _set_status(agent_id, "active", RUNTIME_ARN)
+    model_roles.reset_overrides()  # = a fresh process: snapshot empty, ledger row present
+    assert ARCHITECT.resolved_model_id() == DEFAULT_MODEL_ID  # what the CLI used to see
+    db = SessionLocal()
+    try:
+        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        outcome = service.install_preset(db, row, ARCHITECT, None)
+        assert outcome.changed is False and _spec_of(agent_id)["model_id"] == KIMI
+        assert _job_count() == 1  # no re-publish
+        assert ARCHITECT.resolved_model_id() == KIMI  # the ledger's override is loaded now
+        # the status read judges `default_changed` on the ledger's roles too
+        model_roles.reset_overrides()
+        assert _status(client)["default_changed"] is False
+    finally:
+        db.close()

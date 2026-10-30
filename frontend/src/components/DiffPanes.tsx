@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 /** One aligned row of the split view: a replacement pairs the k-th removed
  * line with the k-th added line; the shorter side pads with `null`. */
@@ -70,6 +71,7 @@ export function DiffPanes({
   beforeLabel: string;
   afterLabel: string;
 }) {
+  const { t } = useTranslation();
   const changed = before.trim() !== after.trim();
   const rows = useMemo(() => {
     const b = (before || "").split("\n");
@@ -122,7 +124,7 @@ export function DiffPanes({
           }}
         >
           <span>{afterLabel}</span>
-          {changed && <span>CHANGED</span>}
+          {changed && <span>{t("expPage.changedLabel")}</span>}
         </span>
       </div>
       <div

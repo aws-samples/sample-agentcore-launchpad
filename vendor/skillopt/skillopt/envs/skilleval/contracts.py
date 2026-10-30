@@ -17,7 +17,7 @@ CHECK_FIELDS = {
     "visual": ("rubric",),
 }
 
-_RUNTIME_ROOTS = {".agents", ".claude", ".codex", ".git", "task.md"}
+_RUNTIME_ROOTS = {".agents", ".opencode", ".git", "task.md"}  # LAUNCHPAD PATCH (D16)
 _WINDOWS_ROOT_RE = re.compile(r"^[A-Za-z]:")
 
 

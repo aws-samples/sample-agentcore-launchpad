@@ -3,16 +3,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { KbJobsStaleHint } from "../../../components/KbJobsStaleHint";
 import { api, ApiError, errorMessage, v2KnowledgeApi } from "../../../lib/api";
 import {
+  attachedAgentCount,
   type DataSource,
+  jobFoundNoFiles,
   jobRunning,
+  jobStatsSummary,
   KB_DESCRIPTION_MAX,
+  kbHoldsNoFiles,
   kbInFlight,
+  kbNeverChanged,
   type KnowledgeBaseDetail,
+  uploadOutcomeKey,
+  type UploadSyncJob,
 } from "../../../lib/knowledgeBases";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Alert,
   Button,
@@ -39,6 +48,9 @@ const POLL_MS = 5000;
 /** ~3.5 min at the 5 s poll: how long an ACTIVE KB without a source waits for the
  *  backend completion thread before only the manual repair is offered. */
 const SOURCE_WAIT_TICKS = 40;
+/** How many polls keep going for a job the upload reported before it shows up in the
+ *  detail's (10 s cached) job list — past that the ordinary in-flight rule decides. */
+const TRACKED_JOB_TICKS = 6;
 /** Codes meaning the linked id does not resolve in this workspace. */
 const GONE_CODES = new Set(["kb.not_found", "aws.not_found", "aws.validation", "aws.access_denied", "http.404"]);
 
@@ -53,7 +65,10 @@ function AddSourceModal({
   kbId: string;
   open: boolean;
   onClose: () => void;
-  onDone: () => void;
+  /** `job` is the sync the upload started (null for an `existing` source or when none
+   *  started); `created` is the upload source the server created because the KB had none
+   *  (N17-obs242), else null. */
+  onDone: (job: UploadSyncJob | null, created: DataSource | null) => void;
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
@@ -75,16 +90,24 @@ function AddSourceModal({
     setFieldError(null);
     setBusy(true);
     try {
+      let job: UploadSyncJob | null = null;
+      let created: DataSource | null = null;
       if (draft.mode === "upload") {
-        // files land in the KB's artifacts-bucket prefix, i.e. its upload source
-        await v2KnowledgeApi.uploadFiles(kbId, draft.files);
-        toast("success", t("knowledge.detail.sources.uploadedFiles", { n: draft.files.length }));
+        // files land in the KB's artifacts-bucket prefix, i.e. its upload source — which
+        // the server creates when the KB has none (N17-obs242); the server starts the
+        // ingestion once every put landed (N17-obs204)
+        const out = await v2KnowledgeApi.uploadFiles(kbId, draft.files);
+        job = out.job ?? null;
+        created = out.data_source ?? null;
+        if (created) toast("success", t("knowledge.detail.sources.autoCreated"));
+        // the files are stored either way — the text says whether a sync still has to be run
+        toast("success", t(uploadOutcomeKey(job), { n: draft.files.length }));
       } else {
         await v2KnowledgeApi.addSource(kbId, sourceBody(draft));
         toast("success", t("knowledge.detail.sources.added"));
       }
       setDraft(emptySource());
-      onDone();
+      onDone(job, created);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -202,9 +225,15 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
   const [editDesc, setEditDesc] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [repairing, setRepairing] = useState(false);
+  const repairBusy = useRef(false);
   const [removeDs, setRemoveDs] = useState<DataSource | null>(null);
+  const [rebuildDs, setRebuildDs] = useState<DataSource | null>(null);
   const [removing, setRemoving] = useState(false);
   const del = useKbDelete(() => setParams({}));
+  // N17-obs530: mutations (delete, data sources, upload, full rebuild, description) are the
+  // creator's or an administrator's — server rule `routers/knowledge._require_owner`, 403
+  // `auth.forbidden`; a member who only SEES the KB keeps 立即同步 and 检索测试
+  const mayMutate = useMayMutate();
 
   // attached agents are names; resolve them to V2 agent detail links
   const agents = useLoad(() => api.listAgents(), "agents");
@@ -231,11 +260,32 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
   // Create-flow automation guards (each step at most once per mount).
   const autoSynced = useRef<Set<string>>(new Set());
   const sourceWaitTicks = useRef(0);
+  // The job an upload reported (N17-obs204): polled like a manual sync until the detail
+  // shows it finished, or for a few ticks if the cached job list has not caught up.
+  const trackedJob = useRef<{ jobId: string; ticks: number } | null>(null);
+  const trackJob = useCallback((job: UploadSyncJob | null) => {
+    trackedJob.current = job ? { jobId: job.job_id, ticks: 0 } : null;
+  }, []);
+  const trackedJobPending = useCallback((d: KnowledgeBaseDetail): boolean => {
+    const tracked = trackedJob.current;
+    if (!tracked) return false;
+    const seen = d.data_sources.flatMap((ds) => ds.ingestion_jobs ?? []).find((j) => j.job_id === tracked.jobId);
+    if (seen) {
+      if (jobRunning(seen, true)) return true;
+      trackedJob.current = null;
+      return false;
+    }
+    tracked.ticks += 1;
+    if (tracked.ticks > TRACKED_JOB_TICKS) trackedJob.current = null;
+    return trackedJob.current !== null;
+  }, []);
 
   // A slow create has its data source finished by a backend thread: keep polling
-  // for a bounded window so it appears on its own; past that, offer the repair.
+  // for a bounded window so it appears on its own; past that, offer the repair. A KB whose
+  // row changed since creation (its last source was removed) is not waiting for anything —
+  // no polling there (N17-obs243).
   const awaitingBackendSource = useCallback((d: KnowledgeBaseDetail): boolean => {
-    if (String(d.status).toUpperCase() !== "ACTIVE" || d.data_sources.length > 0) {
+    if (String(d.status).toUpperCase() !== "ACTIVE" || d.data_sources.length > 0 || !kbNeverChanged(d)) {
       sourceWaitTicks.current = 0;
       return false;
     }
@@ -243,14 +293,16 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
     return sourceWaitTicks.current <= SOURCE_WAIT_TICKS;
   }, []);
 
-  // The first ingestion starts automatically once a data source is AVAILABLE
-  // and has no jobs yet.
+  // The first ingestion starts automatically once a data source is AVAILABLE, has no
+  // jobs yet AND holds at least one object (N17-obs204: an empty prefix is never synced
+  // on the page's initiative — the upload's own server-side sync covers the files).
   const autoFirstSync = useCallback(
     async (d: KnowledgeBaseDetail): Promise<boolean> => {
       let fired = false;
       for (const ds of d.data_sources) {
         if (
           ds.status.toUpperCase() === "AVAILABLE" &&
+          ds.has_objects === true &&
           (ds.ingestion_jobs ?? []).length === 0 &&
           !autoSynced.current.has(ds.ds_id)
         ) {
@@ -278,44 +330,62 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
       const d = await loadDetail();
       if (cancelled || !d) return;
       const pending = awaitingBackendSource(d);
+      const tracked = trackedJobPending(d);
       const synced = await autoFirstSync(d);
       if (cancelled) return;
-      if (kbInFlight(d) || pending || synced) timer = window.setTimeout(() => void tick(), POLL_MS);
+      if (kbInFlight(d) || pending || tracked || synced) timer = window.setTimeout(() => void tick(), POLL_MS);
     };
     void tick();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [loadDetail, refreshKey, awaitingBackendSource, autoFirstSync]);
+  }, [loadDetail, refreshKey, awaitingBackendSource, autoFirstSync, trackedJobPending]);
 
   const sources = useMemo(() => kb?.data_sources ?? [], [kb]);
   const current = sources.find((ds) => ds.ds_id === selected) ?? sources[0] ?? null;
 
-  const sync = async (ds: DataSource) => {
+  // N17-obs272: `full` = the forced rebuild behind its confirm dialog; same gate as a sync
+  const sync = async (ds: DataSource, full = false) => {
     setSyncing(ds.ds_id);
     try {
-      await v2KnowledgeApi.sync(id, ds.ds_id);
-      toast("success", t("knowledge.detail.sources.syncStarted"));
+      await (full ? v2KnowledgeApi.sync(id, ds.ds_id, { full: true }) : v2KnowledgeApi.sync(id, ds.ds_id));
+      toast("success", t(full ? "knowledge.detail.sources.fullRebuildStarted" : "knowledge.detail.sources.syncStarted"));
+      setRebuildDs(null);
       refresh();
     } catch (err) {
-      toast("error", t("knowledge.detail.sources.syncFailed", { msg: errorMessage(err) }));
+      if (err instanceof ApiError && err.code === "kb.sync_in_progress") {
+        // N17-obs275: a job of this source is running — no second full rebuild; show it
+        toast("error", t("knowledge.detail.sources.syncRunning"));
+        setRebuildDs(null);
+        refresh();
+      } else {
+        toast("error", t("knowledge.detail.sources.syncFailed", { msg: errorMessage(err) }));
+      }
     } finally {
       setSyncing(null);
     }
   };
 
-  // Idempotent server-side, so a stray click cannot create a second source.
+  // `POST …/data-sources {mode: "upload"}` is idempotent per KB (N17-obs243): a KB that
+  // already has an upload source answers it (200, `created: false`) instead of appending,
+  // so a repeated click cannot pile up empty sources. The button also stays disabled from
+  // the click until the refetched detail has landed (the banner then goes away), not just
+  // while the POST is in flight; the ref closes the window before the disabled re-render.
   const repair = async () => {
+    if (repairBusy.current) return;
+    repairBusy.current = true;
     setRepairing(true);
     try {
-      await v2KnowledgeApi.addSource(id, { mode: "upload" });
-      toast("success", t("knowledge.detail.sources.autoCreated"));
+      const out = await v2KnowledgeApi.addSource(id, { mode: "upload" });
+      if (out.created !== false) toast("success", t("knowledge.detail.sources.autoCreated"));
       sourceWaitTicks.current = 0;
+      await loadDetail();
       refresh();
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
+      repairBusy.current = false;
       setRepairing(false);
     }
   };
@@ -347,8 +417,14 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
   }
   if (!kb) return <Spin />;
 
+  const owner = mayMutate(kb);
   const provisioning = kb.status === "CREATING";
-  const missingSource = !provisioning && kb.status === "ACTIVE" && sources.length === 0;
+  const noSource = !provisioning && kb.status === "ACTIVE" && sources.length === 0;
+  // N17-obs243: the repair banner is only for a KB still in its creation window (it never
+  // had a source); one whose last source was removed gets a neutral pointer to the upload,
+  // which creates the upload source itself (N17-obs242).
+  const missingSource = noSource && kbNeverChanged(kb);
+  const removedLastSource = noSource && !missingSource;
 
   const sourceColumns: Column<DataSource>[] = [
     {
@@ -371,13 +447,31 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
       title: t("v2.knowledge.colLastSync"),
       render: (ds) => {
         const job = ds.ingestion_jobs?.[0];
-        return job ? (
+        return (
           <>
-            <ResourceTag status={job.status} />
-            <span className="sub">{fmtTime(job.started_at)}</span>
+            {job ? (
+              <>
+                <ResourceTag status={job.status} />
+                <span className="sub">{fmtTime(job.started_at)}</span>
+                {/* N17-obs244: a COMPLETE job over an empty prefix is not "ingested" */}
+                {jobFoundNoFiles(job) ? (
+                  <span className="sub v2-muted" data-testid="v2-kb-last-sync-empty">
+                    {t("v2.knowledge.lastSyncPrefixEmpty", { tag: t("v2.knowledge.jobPrefixEmpty") })}
+                  </span>
+                ) : (
+                  // N17-obs271: 「扫描 4 · 新索引 1 · 未变化 3 · 失败 0」
+                  jobStatsSummary(t, job.statistics) && (
+                    <span className="sub v2-muted" data-testid="v2-kb-last-sync-summary">
+                      {jobStatsSummary(t, job.statistics)}
+                    </span>
+                  )
+                )}
+              </>
+            ) : (
+              <span className="v2-muted">—</span>
+            )}
+            <KbJobsStaleHint degraded={ds.jobs_degraded} className="sub v2-muted" />
           </>
-        ) : (
-          <span className="v2-muted">—</span>
         );
       },
     },
@@ -404,10 +498,30 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
             >
               {syncing === ds.ds_id ? t("knowledge.detail.sources.syncing") : t("knowledge.detail.sources.syncNow")}
             </LinkButton>
+            {/* N17-obs272: the secondary full rebuild — same availability as the sync;
+                N17-obs530: creator-or-admin, like the remove */}
+            {owner && (
+              <LinkButton
+                disabled={!available || running || syncing === ds.ds_id}
+                title={
+                  !available
+                    ? t("knowledge.detail.sources.syncNotReady")
+                    : running
+                      ? t("knowledge.detail.sources.syncRunning")
+                      : t("knowledge.detail.sources.fullRebuildTitle")
+                }
+                onClick={() => setRebuildDs(ds)}
+                testId="v2-kb-full-rebuild"
+              >
+                {t("knowledge.detail.sources.fullRebuild")}
+              </LinkButton>
+            )}
             <LinkButton onClick={() => setSelected(ds.ds_id)}>{t("knowledge.detail.sources.documents")}</LinkButton>
-            <LinkButton danger onClick={() => setRemoveDs(ds)} testId="v2-kb-ds-remove">
-              {t("knowledge.detail.sources.removeSource")}
-            </LinkButton>
+            {owner && (
+              <LinkButton danger onClick={() => setRemoveDs(ds)} testId="v2-kb-ds-remove">
+                {t("knowledge.detail.sources.removeSource")}
+              </LinkButton>
+            )}
           </div>
         );
       },
@@ -427,16 +541,23 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         end={
           <>
             <Button onClick={refresh}>{t("v2.common.refresh")}</Button>
-            <Button kind="danger" disabled={kb.status === "DELETING"} onClick={() => del.ask(kb)} testId="v2-kb-delete">
-              {t("v2.common.delete")}
-            </Button>
-            <Button kind="primary" onClick={() => setShowAdd(true)} testId="v2-kb-add">
-              <Plus size={14} aria-hidden="true" />
-              {t("knowledge.detail.sources.add")}
-            </Button>
+            {owner && (
+              <>
+                <Button kind="danger" disabled={kb.status === "DELETING"} onClick={() => del.ask(kb)} testId="v2-kb-delete">
+                  {t("v2.common.delete")}
+                </Button>
+                <Button kind="primary" onClick={() => setShowAdd(true)} testId="v2-kb-add">
+                  <Plus size={14} aria-hidden="true" />
+                  {t("knowledge.detail.sources.add")}
+                </Button>
+              </>
+            )}
           </>
         }
       />
+      {!owner && (
+        <Alert data-testid="v2-kb-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(kb) })}</Alert>
+      )}
       {error && <Alert tone="warn">{error}</Alert>}
       {kb.failure_reasons && kb.failure_reasons.length > 0 && (
         <Alert tone="error">{kb.failure_reasons.join("; ")}</Alert>
@@ -446,12 +567,19 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         <Alert
           tone="warn"
           action={
-            <Button size="sm" disabled={repairing} onClick={() => void repair()} testId="v2-kb-repair">
-              {repairing ? t("knowledge.detail.sources.adding") : t("knowledge.detail.sources.repairSource")}
-            </Button>
+            owner ? (
+              <Button size="sm" disabled={repairing} onClick={() => void repair()} testId="v2-kb-repair">
+                {repairing ? t("knowledge.detail.sources.adding") : t("knowledge.detail.sources.repairSource")}
+              </Button>
+            ) : undefined
           }
         >
           <span data-testid="v2-kb-missing-source">{t("knowledge.detail.sources.missingSource")}</span>
+        </Alert>
+      )}
+      {removedLastSource && (
+        <Alert>
+          <span data-testid="v2-kb-no-source">{t("knowledge.detail.sources.noSourceUpload")}</span>
         </Alert>
       )}
 
@@ -463,6 +591,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
             { label: t("knowledge.cols.status"), value: <KbStatusTag status={kb.status} /> },
             { label: t("knowledge.cols.dataSources"), value: <span className="mono">{sources.length}</span> },
             { label: t("v2.common.createdAt"), value: fmtTime(kb.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(kb) },
             { label: t("knowledge.detail.overview.updated"), value: fmtTime(kb.updated_at) },
             { label: t("knowledge.detail.overview.arn"), value: kb.arn ? <span className="mono">{kb.arn}</span> : "—" },
             {
@@ -470,9 +599,11 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
               value: (
                 <span className="v2-knowledge-desc">
                   {kb.description || <span className="v2-muted">{t("knowledge.detail.overview.noDescription")}</span>}
-                  <LinkButton onClick={() => setEditDesc(true)} testId="v2-kb-desc-edit">
-                    {t("v2.common.edit")}
-                  </LinkButton>
+                  {owner && (
+                    <LinkButton onClick={() => setEditDesc(true)} testId="v2-kb-desc-edit">
+                      {t("v2.common.edit")}
+                    </LinkButton>
+                  )}
                 </span>
               ),
             },
@@ -490,7 +621,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         }
         testId="v2-kb-agents"
       >
-        {kb.attached_agents.length === 0 ? (
+        {attachedAgentCount(kb) === 0 ? (
           <span className="v2-muted">{t("knowledge.detail.agents.empty")}</span>
         ) : (
           <div className="v2-tags">
@@ -506,6 +637,13 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
                 </Tag>
               );
             })}
+            {attachedAgentCount(kb) > kb.attached_agents.length && (
+              <Tag tone="outline">
+                {t("v2.knowledge.attachedHidden", {
+                  n: attachedAgentCount(kb) - kb.attached_agents.length,
+                })}
+              </Tag>
+            )}
           </div>
         )}
         <p className="v2-muted v2-knowledge-hint">{t("v2.knowledge.attachHint")}</p>
@@ -545,15 +683,18 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
           )}
         </>
       ) : (
-        <KbRetrieve kbId={kb.kb_id} active={kb.status === "ACTIVE"} />
+        <KbRetrieve kbId={kb.kb_id} active={kb.status === "ACTIVE"} noFiles={kbHoldsNoFiles(sources)} />
       )}
 
       <AddSourceModal
         kbId={kb.kb_id}
         open={showAdd}
         onClose={() => setShowAdd(false)}
-        onDone={() => {
+        onDone={(job, created) => {
           setShowAdd(false);
+          // the refetch lists the source the upload created (with its first job); show it
+          if (created) setSelected(created.ds_id);
+          trackJob(job);
           refresh();
         }}
       />
@@ -569,9 +710,28 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         />
       )}
       <Confirm
+        open={rebuildDs !== null}
+        title={t("knowledge.detail.sources.fullRebuildConfirmTitle", { name: rebuildDs?.name ?? "" })}
+        body={<div data-testid="v2-kb-full-rebuild-body">{t("knowledge.detail.sources.fullRebuildConfirmBody")}</div>}
+        confirmLabel={t("knowledge.detail.sources.fullRebuild")}
+        busy={rebuildDs !== null && syncing === rebuildDs.ds_id}
+        onConfirm={() => {
+          if (rebuildDs) void sync(rebuildDs, true);
+        }}
+        onClose={() => setRebuildDs(null)}
+      />
+      <Confirm
         open={removeDs !== null}
         title={t("knowledge.detail.sources.removeTitle")}
-        body={t("knowledge.detail.sources.removeBody", { name: removeDs?.name ?? "" })}
+        body={
+          <div className="v2-stack">
+            <div>{t("knowledge.detail.sources.removeBody", { name: removeDs?.name ?? "" })}</div>
+            {/* N17-obs242: an upload source is recreated by the next upload — say so */}
+            {removeDs?.mode === "upload" && (
+              <div data-testid="v2-kb-ds-remove-note">{t("knowledge.detail.sources.removeUploadNote")}</div>
+            )}
+          </div>
+        }
         confirmLabel={t("knowledge.detail.sources.removeSource")}
         danger
         busy={removing}

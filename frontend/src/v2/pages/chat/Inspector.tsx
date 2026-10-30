@@ -1,4 +1,5 @@
-import { Copy, ExternalLink, KeyRound, Plus, RefreshCw } from "lucide-react";
+import { copyBrowserText } from "../../../lib/browser-compat";
+import { Copy, ExternalLink, KeyRound, Plus } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -13,23 +14,14 @@ import type { AgentMemoryState } from "../../../lib/chat";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Kpi, LinkButton, SubTabs, Tag } from "../../ui";
 import { classicMemoryToV2 } from "../memory/classicUrl";
-import { classicObservabilityToV2 } from "../observability/classicUrl";
+import { apiKeyMeta, apiKeyOffboardedNote } from "./apiKeys";
+import { TracePanel } from "./TracePanel";
 
 export type InspectorTab = "trace" | "memory" | "api";
 
-const SPAN_COLOR: Record<string, string> = {
-  model: "#1664ff",
-  tool: "#00b42a",
-  memory: "#ff7d00",
-  policy: "#722ed1",
-  runtime: "#86909c",
-  other: "#c9cdd4",
-};
-
 async function copy(text: string, toast: ReturnType<typeof useV2Toast>, done: string) {
   try {
-    await navigator.clipboard.writeText(text);
-    toast("success", done);
+    if (await copyBrowserText(text)) toast("success", done);
   } catch (err) {
     toast("error", errorMessage(err));
   }
@@ -40,22 +32,28 @@ export function Inspector({
   tab,
   onTab,
   agentId,
+  agentName,
   sessionId,
-  trace,
-  traceBusy,
-  onLoadTrace,
   memory,
   memoryState,
+  trace,
+  traceBusy,
+  traceError,
+  onLoadTrace,
 }: {
   tab: InspectorTab;
   onTab: (tab: InspectorTab) => void;
   agentId: string;
+  /** Recorded as the new key's label (N-SCN-obs4) — keys stay workspace-wide. */
+  agentName?: string;
   sessionId: string | null;
-  trace: ChatTraceInfo | null;
-  traceBusy: boolean;
-  onLoadTrace: () => void;
   memory: ChatMemorySummary | null;
   memoryState: AgentMemoryState;
+  /** `GET /api/traces/{session_id}` for the current session, null until loaded. */
+  trace: ChatTraceInfo | null;
+  traceBusy: boolean;
+  traceError?: string | null;
+  onLoadTrace: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -73,95 +71,12 @@ export function Inspector({
       </div>
       <div className="v2-chat-inspector-body">
         {tab === "trace" && (
-          <TracePanel sessionId={sessionId} trace={trace} busy={traceBusy} onLoad={onLoadTrace} />
+          <TracePanel sessionId={sessionId} trace={trace} busy={traceBusy} error={traceError} onLoad={onLoadTrace} />
         )}
         {tab === "memory" && <MemoryPanel sessionId={sessionId} memory={memory} memoryState={memoryState} />}
-        {tab === "api" && <ApiPanel agentId={agentId} sessionId={sessionId} />}
+        {tab === "api" && <ApiPanel agentId={agentId} agentName={agentName} sessionId={sessionId} />}
       </div>
     </>
-  );
-}
-
-function TracePanel({
-  sessionId,
-  trace,
-  busy,
-  onLoad,
-}: {
-  sessionId: string | null;
-  trace: ChatTraceInfo | null;
-  busy: boolean;
-  onLoad: () => void;
-}) {
-  const { t } = useTranslation();
-  const spans = trace?.spans.slice(0, 12) ?? [];
-  const total = Math.max(...spans.map((s) => (s.start_ms ?? 0) + (s.duration_ms ?? 0)), 1);
-  return (
-    <div className="v2-stack" data-testid="trace-panel">
-      <div className="v2-row">
-        <Button size="sm" disabled={!sessionId || busy} onClick={onLoad} testId="trace-load">
-          <RefreshCw size={13} aria-hidden="true" />
-          {busy ? t("v2.common.loading") : t("v2.chat.traceLoad")}
-        </Button>
-        {sessionId && (
-          <a
-            className="v2-chat-extlink"
-            href={classicObservabilityToV2(`?session=${encodeURIComponent(sessionId)}`)}
-            target="_blank"
-            rel="noreferrer"
-            data-testid="open-in-obs"
-          >
-            {t("v2.chat.openInObs")}
-            <ExternalLink size={12} aria-hidden="true" />
-          </a>
-        )}
-        {trace?.cloudwatch_url && (
-          <a className="v2-chat-extlink" href={trace.cloudwatch_url} target="_blank" rel="noreferrer">
-            CloudWatch
-            <ExternalLink size={12} aria-hidden="true" />
-          </a>
-        )}
-      </div>
-      {sessionId && <div className="v2-muted mono v2-chat-sid">session {sessionId}</div>}
-      {trace && trace.span_count > 0 ? (
-        <>
-          <div data-testid="trace-rows">
-            {spans.map((span, i) => (
-              <div className="v2-span" key={i}>
-                <span className="name" title={span.name}>
-                  {span.name}
-                </span>
-                <span className="track">
-                  <span
-                    style={{
-                      left: `${((span.start_ms ?? 0) / total) * 100}%`,
-                      width: `${Math.max(((span.duration_ms ?? 0) / total) * 100, 0.8)}%`,
-                      background: SPAN_COLOR[span.category] ?? SPAN_COLOR.other,
-                    }}
-                  />
-                </span>
-                <span className="dur">{Math.round(span.duration_ms ?? 0)}ms</span>
-              </div>
-            ))}
-          </div>
-          {trace.span_count > spans.length && (
-            <div className="v2-muted">{t("v2.chat.traceMore", { count: trace.span_count - spans.length })}</div>
-          )}
-          <div className="v2-chat-legend">
-            {(["model", "tool", "memory", "policy", "runtime"] as const).map((cat) => (
-              <span key={cat}>
-                <i style={{ background: SPAN_COLOR[cat] }} />
-                {t(`v2.chat.spanCat.${cat}`)}
-              </span>
-            ))}
-          </div>
-        </>
-      ) : (
-        <div className="v2-chat-rail-empty">
-          {sessionId ? (trace ? t("v2.chat.traceEmpty") : t("v2.chat.traceIdle")) : t("v2.chat.tracePlaceholder")}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -215,7 +130,7 @@ function MemoryPanel({
   );
 }
 
-function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string | null }) {
+function ApiPanel({ agentId, agentName, sessionId }: { agentId: string; agentName?: string; sessionId: string | null }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const keys = useLoad(() => chatApi.apiKeys(), "apikeys");
@@ -233,7 +148,9 @@ function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string |
   const create = async () => {
     setCreating(true);
     try {
-      setNewKey(await chatApi.createApiKey(`console-${rows.length + 1}`));
+      // The label records which agent's page minted the key (workspace-wide
+      // keys outlive agents, N-SCN-obs4) — display only, `/v1` ignores it.
+      setNewKey(await chatApi.createApiKey(`console-${rows.length + 1}`, agentName));
       keys.reload();
     } catch (err) {
       toast("error", errorMessage(err));
@@ -301,7 +218,20 @@ function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string |
           <span className="v2-chat-key-name">
             <span>{key.name}</span>
             <span className="mono v2-muted">{key.prefix}</span>
+            <span className="v2-muted" data-testid="api-key-meta">
+              {apiKeyMeta(t, key)}
+            </span>
           </span>
+          {key.label && (
+            <Tag tone="outline" title={t("v2.chat.keyLabelHint", { label: key.label })} testId="api-key-label">
+              {key.label}
+            </Tag>
+          )}
+          {key.creator_offboarded && (
+            <Tag tone="orange" title={apiKeyOffboardedNote(t, key) ?? undefined}>
+              {t("v2.chat.keyCreatorOffboarded")}
+            </Tag>
+          )}
           <Tag tone={key.enabled ? "green" : "gray"}>
             {key.enabled ? t("v2.chat.keyEnabled") : t("v2.chat.keyDisabled")}
           </Tag>

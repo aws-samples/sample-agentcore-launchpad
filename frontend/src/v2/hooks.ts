@@ -1,6 +1,6 @@
 import { type ComponentType, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-import { errorMessage } from "../lib/api";
+import { errorMessage, withSignal } from "../lib/api";
 
 export type ToastFn = (tone: "success" | "error", text: string) => void;
 
@@ -41,7 +41,10 @@ export interface Loaded<T> {
  * that arrives after a newer request started is dropped, so a slow first load
  * can never overwrite a fresher one.
  */
-export function useLoad<T>(fetcher: () => Promise<T>, key: string): Loaded<T> {
+/** `fetcher` runs inside `withSignal(signal, …)` (N17-obs476): the reads it starts are aborted
+ *  — restart-window retries included — when the page unmounts or `key` / `reload` re-reads;
+ *  it also receives the signal for a read it starts after an `await`. */
+export function useLoad<T>(fetcher: (signal: AbortSignal) => Promise<T>, key: string): Loaded<T> {
   const [state, setState] = useState<{ data: T | null; error: string | null; loading: boolean }>({
     data: null,
     error: null,
@@ -52,9 +55,9 @@ export function useLoad<T>(fetcher: () => Promise<T>, key: string): Loaded<T> {
   fetcherRef.current = fetcher;
   useEffect(() => {
     let live = true;
+    const ctl = new AbortController();
     setState((prev) => ({ ...prev, loading: true, error: null }));
-    fetcherRef
-      .current()
+    withSignal(ctl.signal, () => fetcherRef.current(ctl.signal))
       .then((data) => {
         if (live) setState({ data, error: null, loading: false });
       })
@@ -63,6 +66,7 @@ export function useLoad<T>(fetcher: () => Promise<T>, key: string): Loaded<T> {
       });
     return () => {
       live = false;
+      ctl.abort();
     };
   }, [key, nonce]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);

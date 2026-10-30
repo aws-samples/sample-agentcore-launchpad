@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_error/v1",
+  "title": "I4 / I5 error body (HTTP 400 / 401 / 409 / 503)",
+  "type": "object",
+  "properties": {
+    "code": {"enum": ["session_invalidated", "history_lost", "set_mismatch", "bad_request", "unauthorized", "unavailable"]},
+    "message": {"type": "string"},
+    "have": {"type": "string"}
+  },
+  "required": ["code"],
+  "additionalProperties": false
+}

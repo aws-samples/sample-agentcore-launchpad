@@ -2,9 +2,16 @@ import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, v2KnowledgeApi } from "../../../lib/api";
-import { type DataSource, formatBytes, humanizeStat, type KBDocument } from "../../../lib/knowledgeBases";
+import {
+  type DataSource,
+  formatBytes,
+  type KBDocument,
+  numericStats,
+  STAT_TITLE_KEYS,
+  statLabel,
+} from "../../../lib/knowledgeBases";
 import { fmtTime } from "../../format";
-import { Alert, Button, type Column, Segmented, Spin, Table } from "../../ui";
+import { Alert, Button, type Column, Segmented, Spin, Table, Tag } from "../../ui";
 import { ResourceTag } from "./common";
 
 const DOC_PAGE_SIZE = 50;
@@ -54,7 +61,12 @@ function Documents({ kbId, dsId, lead }: { kbId: string; dsId: string; lead: Rea
       title: t("knowledge.detail.sources.docStatus"),
       render: (d) => (
         <>
-          <ResourceTag status={d.status} title={d.status_reason ?? undefined} />
+          {/* N17-obs274: a document between its first and last ingestion slice */}
+          <ResourceTag
+            status={d.status}
+            title={d.status_reason ?? undefined}
+            label={d.status === "INDEXING" ? t("v2.knowledge.docIndexing") : undefined}
+          />
           {d.status_reason && <span className="sub">{d.status_reason}</span>}
         </>
       ),
@@ -121,11 +133,17 @@ function Jobs({ source, lead }: { source: DataSource; lead: ReactNode }) {
             key: "stats",
             title: t("v2.knowledge.jobStats"),
             render: (j) =>
-              j.statistics && Object.keys(j.statistics).length ? (
+              j.statistics?.prefix_empty ? (
+                // N17-obs204: the job listed nothing to ingest — say so instead of 0/0/0
+                <Tag tone="outline" title={t("v2.knowledge.jobPrefixEmptyTitle")} testId="v2-kb-job-prefix-empty">
+                  {t("v2.knowledge.jobPrefixEmpty")}
+                </Tag>
+              ) : j.statistics && numericStats(j.statistics).length ? (
                 <dl className="v2-knowledge-stats">
-                  {Object.entries(j.statistics).map(([k, v]) => (
-                    <div key={k}>
-                      <dt>{humanizeStat(k)}</dt>
+                  {/* N17-obs271: the console's own labels (未变化 / 已移除 …), not raw keys */}
+                  {numericStats(j.statistics).map(([k, v]) => (
+                    <div key={k} title={STAT_TITLE_KEYS[k] ? t(STAT_TITLE_KEYS[k]) : undefined} data-testid={`v2-kb-job-stat-${k}`}>
+                      <dt>{statLabel(t, k)}</dt>
                       <dd>{v}</dd>
                     </div>
                   ))}

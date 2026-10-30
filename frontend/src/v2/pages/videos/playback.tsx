@@ -1,6 +1,7 @@
 import { Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { zonedDate } from "../../../lib/timestamps";
 import { type LibraryVideo, type VideoLocale, videoTimestamp } from "../../../lib/videos";
 
 /** Title, duration/date and the collapsed introduction under the player. */
@@ -11,7 +12,7 @@ export function VideoSummary({ video, locale }: { video: LibraryVideo; locale: V
       <h2 className="v2-videos-title">{video.title[locale]}</h2>
       <div className="v2-videos-meta">
         <span>{t("videos.duration", { duration: videoTimestamp(video.durationSeconds) })}</span>
-        <span>{t("videos.published", { date: video.publishedAt.slice(0, 10) })}</span>
+        <span>{t("videos.published", { date: zonedDate(video.publishedAt) || video.publishedAt })}</span>
       </div>
       <details className="v2-videos-summary">
         <summary>{t("videos.summary")}</summary>

@@ -9,7 +9,9 @@ import app.routers.registry as registry_router
 import app.services.registry_console as console_mod
 from app.core.errors import AppError
 from app.services import aws_clients
+from app.services import registry_backend as reg
 from app.services import skill_ingest as si
+from app.services.registry_local import LocalRegistryBackend
 from tests.conftest import ws_ctx
 
 WS = ws_ctx({"artifacts_bucket": "bkt"})
@@ -31,6 +33,23 @@ class FakeS3:
     def delete_object(self, Bucket, Key):  # noqa: N803 (boto3 kwarg names)
         self.deleted.append(Key)
 
+    def delete_objects(self, Bucket, Delete, **kw):  # noqa: N803 — boto kwargs
+        for obj in Delete.get("Objects", []):
+            self.delete_object(Bucket=Bucket, Key=obj["Key"])
+        return {"Deleted": [{"Key": o["Key"]} for o in Delete.get("Objects", [])]}
+
+    def get_paginator(self, op):
+        """N17-obs269: the post-upload prune lists the prefix — what is uploaded and not
+        deleted."""
+        assert op == "list_objects_v2"
+        live = [k for k in self.uploaded if k not in self.deleted]
+
+        class _Pages:
+            def paginate(self, Bucket, Prefix):  # noqa: N803
+                yield {"Contents": [{"Key": k} for k in live if k.startswith(Prefix)]}
+
+        return _Pages()
+
 
 def _multifile_zip() -> bytes:
     buf = io.BytesIO()
@@ -41,20 +60,11 @@ def _multifile_zip() -> bytes:
     return buf.getvalue()
 
 
-def _patch_aws(monkeypatch, fake_s3, *, existing=None, upsert=None):
-    monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: object())
-    monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
+def _patch_aws(monkeypatch, fake_s3) -> LocalRegistryBackend:
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
-    monkeypatch.setattr(console_mod.reg, "find_record", lambda *a, **k: existing)
-    if upsert is None:
-        def upsert(client, rid, *, name, description, descriptor_type, descriptors):
-            _patch_aws.captured = {"name": name, "descriptors": descriptors}
-            return {"recordId": "r1", "name": name}, True
-    monkeypatch.setattr(console_mod.reg, "upsert_record", upsert)
-    monkeypatch.setattr(
-        console_mod.reg, "wait_record_settled",
-        lambda c, r, rid: {"recordId": rid, "name": "meeting-summarizer", "status": "DRAFT"},
-    )
+    backend = LocalRegistryBackend()
+    reg.set_backend(backend)
+    return backend
 
 
 def test_register_skill_bundle_uploads_all_files_and_stamps_source(monkeypatch):
@@ -72,7 +82,7 @@ def test_register_skill_bundle_uploads_all_files_and_stamps_source(monkeypatch):
         "skills/meeting-summarizer/scripts/helper.py",
     ]
     definition = json.loads(
-        _patch_aws.captured["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
     )
     assert definition["files"] == ["SKILL.md", "references/doc.md", "scripts/helper.py"]
     assert definition["path"] == "s3://bkt/skills/meeting-summarizer/"
@@ -80,13 +90,16 @@ def test_register_skill_bundle_uploads_all_files_and_stamps_source(monkeypatch):
     assert definition["source"]["imported_at"].endswith("Z")
 
 
-def test_register_skill_bundle_cleans_up_on_record_failure(monkeypatch):
+def test_register_skill_bundle_uploads_nothing_on_record_failure(monkeypatch):
+    """N17-obs265: the record is claimed BEFORE the upload — a failed record write leaves
+    no S3 object at all (formerly: upload first, then delete the orphans)."""
     fake = FakeS3()
+    backend = _patch_aws(monkeypatch, fake)
 
     def boom(*a, **k):
         raise RuntimeError("registry down")
 
-    _patch_aws(monkeypatch, fake, upsert=boom)
+    monkeypatch.setattr(backend, "upsert_record", boom)
     bundle = si.bundle_from_zip(_multifile_zip())
     try:
         try:
@@ -96,9 +109,34 @@ def test_register_skill_bundle_cleans_up_on_record_failure(monkeypatch):
             pass
     finally:
         bundle.close()
-    # every uploaded object was removed — no orphan S3 prefix left behind
+    assert fake.uploaded == [] and fake.deleted == []
+
+
+def test_register_skill_bundle_cleans_up_on_upload_failure(monkeypatch):
+    """A mid-batch upload failure after the claim: every uploaded object is deleted and
+    the claimed record is dropped (no orphan prefix, no record pointing at missing files)."""
+    fake = FakeS3()
+    backend = _patch_aws(monkeypatch, fake)
+    real_upload = fake.upload_file
+
+    def flaky(src, bucket, key):
+        if len(fake.uploaded) == 2:
+            raise RuntimeError("S3 down")
+        real_upload(src, bucket, key)
+
+    fake.upload_file = flaky
+    bundle = si.bundle_from_zip(_multifile_zip())
+    try:
+        try:
+            console_mod.register_skill_bundle(bundle, WS)
+            raise AssertionError("expected failure")
+        except RuntimeError:
+            pass
+    finally:
+        bundle.close()
+    assert len(fake.uploaded) == 2
     assert sorted(fake.deleted) == sorted(fake.uploaded)
-    assert len(fake.deleted) == 3
+    assert backend.find_record(WS, "meeting-summarizer", "AGENT_SKILLS") is None
 
 
 def test_register_skill_bundle_rejects_bad_name(monkeypatch):
@@ -140,9 +178,9 @@ def test_inline_register_skill_stamps_inline_source(monkeypatch):
     """Legacy paste path still works and now records source.kind == inline."""
     fake = FakeS3()
     _patch_aws(monkeypatch, fake)
-    console_mod.register_skill(WS, "meeting-summarizer", "", SKILL_MD)
+    record = console_mod.register_skill(WS, "meeting-summarizer", "", SKILL_MD)
     definition = json.loads(
-        _patch_aws.captured["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
     )
     assert definition["source"]["kind"] == "inline"
     assert definition["files"] == ["SKILL.md"]
@@ -183,12 +221,12 @@ def test_inspect_then_import_happy_path(client, monkeypatch):
     assert seen["name_override"] == "my-skill"
     assert seen["files"] == ["SKILL.md", "references/doc.md", "scripts/helper.py"]
 
-    # staging is consumed after import → second import is 410
+    # staging is consumed after import → second import is 404 (unknown id)
     again = client.post("/api/registry/skills/import", json={
         "staging_id": sid, "selections": [{"index": 0}],
     })
-    assert again.status_code == 410
-    assert again.json()["code"] == "registry.staging_expired"
+    assert again.status_code == 404
+    assert again.json()["code"] == "registry.staging_not_found"
 
 
 def test_inspect_rejects_non_zip(client):
@@ -224,11 +262,12 @@ def test_inspect_rejects_zip_without_skill_md(client):
     assert res.status_code == 422
 
 
-def test_import_unknown_staging_id_410(client):
+def test_import_unknown_staging_id_404(client):
     res = client.post("/api/registry/skills/import", json={
         "staging_id": "does-not-exist", "selections": [{"index": 0}],
     })
-    assert res.status_code == 410
+    assert res.status_code == 404
+    assert res.json()["code"] == "registry.staging_not_found"
 
 
 def test_import_name_conflict_reported_per_item(client, monkeypatch):
@@ -263,4 +302,47 @@ def test_import_expired_staging_swept(client, monkeypatch):
     imp = client.post("/api/registry/skills/import", json={
         "staging_id": sid, "selections": [{"index": 0}],
     })
-    assert imp.status_code == 410
+    assert imp.status_code == 404
+    assert imp.json()["code"] == "registry.staging_not_found"
+
+
+# ---------- fix round 1: staging ownership (workspace + principal) ----------
+
+def test_import_cross_workspace_staging_is_404_and_not_consumed(client, monkeypatch):
+    def must_not_register(bundle, _ws, *, name_override=None, description_override=None):
+        raise AssertionError("must not reach the registration pipeline")
+
+    monkeypatch.setattr(registry_router.console, "register_skill_bundle", must_not_register)
+    inspect = client.post(
+        "/api/registry/skills/inspect",
+        files={"file": ("bundle.zip", _multifile_zip(), "application/zip")},
+    )
+    sid = inspect.json()["staging_id"]
+    # simulates "staged in workspace A, imported from workspace B": the entry
+    # inspect_skill stamped is tampered to another workspace's id
+    registry_router._staging[sid]["workspace_id"] = "another-workspace"
+    res = client.post("/api/registry/skills/import", json={
+        "staging_id": sid, "selections": [{"index": 0}],
+    })
+    assert res.status_code == 404
+    assert res.json()["code"] == "registry.staging_not_found"
+    assert sid in registry_router._staging  # not consumed/dropped
+
+
+def test_import_cross_principal_staging_is_404_and_not_consumed(client, monkeypatch):
+    def must_not_register(bundle, _ws, *, name_override=None, description_override=None):
+        raise AssertionError("must not reach the registration pipeline")
+
+    monkeypatch.setattr(registry_router.console, "register_skill_bundle", must_not_register)
+    inspect = client.post(
+        "/api/registry/skills/inspect",
+        files={"file": ("bundle.zip", _multifile_zip(), "application/zip")},
+    )
+    sid = inspect.json()["staging_id"]
+    registry_router._staging[sid]["owner_principal"] = "someone-else"
+    res = client.post("/api/registry/skills/import", json={
+        "staging_id": sid, "selections": [{"index": 0}],
+    })
+    assert res.status_code == 404
+    assert res.json()["code"] == "registry.staging_not_found"
+    assert sid in registry_router._staging  # not consumed/dropped

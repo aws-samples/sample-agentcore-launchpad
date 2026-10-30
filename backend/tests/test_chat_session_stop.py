@@ -22,7 +22,7 @@ def make_agent(method="zip_runtime", name="stop-agent", spec=None, workspace=Non
     agent = Agent(
         workspace_id=workspace or DEFAULT_WORKSPACE_ID,
         name=name, method=method, status="active",
-        arn=RUNTIME_ARN if method != "harness" else RUNTIME_ARN.replace("runtime/", "harness/"),
+        arn=RUNTIME_ARN,
         spec=spec or {"name": name},
     )
     db.add(agent)
@@ -154,7 +154,9 @@ def test_stop_session_retryable_conflict_surfaces_as_409_envelope(client, monkey
     assert _row(agent_id, sid).ended_at is None  # not ended: the row says so
 
 
-def test_stop_session_harness_agent_is_unsupported(client, monkeypatch):
+def test_stop_session_harness_agent_stops_like_every_runtime(client, monkeypatch):
+    """A self-built harness is Runtime-backed exactly like zip_runtime — it
+    joins RUNTIME_SESSION_METHODS and stops the same way."""
     agent_id = make_agent(method="harness", name="stop-harness-agent")
     sid = start_session(client, monkeypatch, agent_id)
     plane = StopDataPlane()
@@ -162,13 +164,11 @@ def test_stop_session_harness_agent_is_unsupported(client, monkeypatch):
 
     res = client.post(f"/api/chat/{agent_id}/sessions/{sid}/stop")
 
-    assert res.status_code == 409
+    assert res.status_code == 200
     body = res.json()
-    assert body["code"] == "chat.session_stop_unsupported"
-    assert body["detail"]["reason_code"] == "harness"
-    assert body["message"]
-    assert plane.calls == []
-    assert _row(agent_id, sid).ended_at is None
+    assert body["ended"] is True and body["already_ended"] is False
+    assert plane.calls == [{"agentRuntimeArn": RUNTIME_ARN, "runtimeSessionId": sid}]
+    assert _row(agent_id, sid).ended_at is not None
 
 
 def test_stop_session_discovered_harness_is_unsupported(client, monkeypatch):
@@ -235,14 +235,35 @@ def test_stop_session_unknown_session_id_is_404(client, monkeypatch):
     assert res.status_code == 404 and plane.calls == []
 
 
-def test_stop_session_then_new_turn_clears_ended_at(client, monkeypatch):
-    """A prompt posted under an ended id starts a fresh runtime session with that
-    id, so the rail must stop calling it ended."""
+def test_stop_session_then_new_turn_is_refused_and_keeps_ended_at(client, monkeypatch):
+    """N16-obs79 (explorer F-CHAT-3): a prompt posted under an ENDED id used to re-open
+    the session silently (fresh runtime session, ``ended_at`` cleared) while the console
+    opens a new session (AC-E04-08). The API now refuses with 409 ``chat.session_ended``
+    before any runtime call, the marker stays, and a prompt without an id still works."""
     agent_id = make_agent(name="stop-revive-agent")
     sid = start_session(client, monkeypatch, agent_id)
     monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: StopDataPlane())
-    client.post(f"/api/chat/{agent_id}/sessions/{sid}/stop")
+    ended_at = client.post(f"/api/chat/{agent_id}/sessions/{sid}/stop").json()["ended_at"]
     assert _row(agent_id, sid).ended_at is not None
-    client.post(f"/api/chat/{agent_id}", json={"prompt": "again", "session_id": sid})
-    assert _row(agent_id, sid).ended_at is None
-    assert client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"][0]["ended_at"] is None
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        chat_service, "invoke_agent_events",
+        lambda a, p, session_id=None, actor_id="river", **_kw: (
+            invoked.append(session_id) or _delta_events("ok")),
+    )
+
+    res = client.post(f"/api/chat/{agent_id}", json={"prompt": "again", "session_id": sid})
+
+    assert res.status_code == 409, res.text
+    body = res.json()
+    assert body["code"] == "chat.session_ended"
+    assert body["detail"] == {"session_id": sid, "ended_at": ended_at}
+    assert invoked == []  # refused before the stream / any runtime call
+    assert _row(agent_id, sid).ended_at is not None
+    listed = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]
+    assert [s["ended_at"] is not None for s in listed if s["session_id"] == sid] == [True]
+    # the console's way: the next prompt without an id opens a NEW session
+    fresh = client.post(f"/api/chat/{agent_id}", json={"prompt": "again"})
+    assert fresh.status_code == 200
+    assert invoked and invoked[-1] != sid
+    assert len(client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]) == 2

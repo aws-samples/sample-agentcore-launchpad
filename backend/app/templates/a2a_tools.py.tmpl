@@ -1,0 +1,158 @@
+"""Launchpad A2A client tools (N11 r3-C, N10v2-bug5) — ask another Launchpad agent.
+
+Rendered from one source for both generated Strands ZIP entrypoints (inlined) and
+converted/self-built Harness bundles (`launchpad_a2a_tools.py` beside main.py). Each
+mounted APPROVED A2A registry record becomes one `ask_<agent>` tool. The peer is an
+AgentCore Runtime with AWS_IAM inbound auth (D9), so the call goes through the data-plane
+API `bedrock-agentcore:InvokeAgentRuntime` signed with THIS runtime's execution role —
+boto3's default session, the same funnel pattern the memory library uses — carrying the
+standard A2A JSON-RPC `message/send` envelope the platform's own invoke path sends
+(`services/agentcore/runtime.py::invoke_a2a_text`). `strands_tools.a2a_client` (0.8.3) is
+NOT used: it speaks raw HTTP A2A at a card URL and cannot SigV4-sign an AgentCore call.
+
+Session continuity: the peer owns its conversation state per `runtimeSessionId`. The id
+is derived once per (consumer session, peer) — `a2a_bind_session(session_id, actor_id)` is
+called by the Strands entrypoint per turn; a Harness falls back to the Runtime-injected
+session (`BedrockAgentCoreContext.get_session_id()`), then to a per-process id.
+
+Every peer invoke carries `runtimeUserId` (N10v3-bug5 live correction): it is what makes
+the PEER's Runtime inject a workload access token into the request, and that token is the
+only way a runtime-linked workload identity reaches its Global Bedrock key — the peer
+cannot self-mint one. The consumer's actor id (else its session) is the user id, bounded
+to the API's 1–1024 characters.
+"""
+
+import hashlib
+import json
+import os
+import uuid
+
+import boto3
+from strands import tool
+
+MOUNTED_AGENTS: list[dict[str, str]] = __LAUNCHPAD_MOUNTED_AGENTS__
+_A2A_STATE: dict[str, object] = {}
+
+
+def a2a_bind_session(session_id: str, actor_id: str = "") -> None:
+    """Bind the consumer's session + actor for this turn (the Strands entrypoint calls it)."""
+    _A2A_STATE["session"] = str(session_id or "")
+    _A2A_STATE["actor"] = str(actor_id or "")
+
+
+def _a2a_client():
+    client = _A2A_STATE.get("client")
+    if client is None:
+        client = boto3.client(
+            "bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "cn-northwest-1")
+        )
+        _A2A_STATE["client"] = client
+    return client
+
+
+def _a2a_consumer_session() -> str:
+    bound = _A2A_STATE.get("session")
+    if bound:
+        return str(bound)
+    try:
+        from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
+
+        injected = BedrockAgentCoreContext.get_session_id()
+    except Exception:
+        injected = None
+    if injected:
+        return str(injected)
+    fallback = _A2A_STATE.get("process_session")
+    if not fallback:
+        fallback = uuid.uuid4().hex
+        _A2A_STATE["process_session"] = fallback
+    return str(fallback)
+
+
+def _a2a_runtime_user_id() -> str:
+    """``runtimeUserId`` for every peer invoke — the consumer's actor, else its session;
+    never empty, at most 1024 characters."""
+    user = str(_A2A_STATE.get("actor") or "") or _a2a_consumer_session()
+    return (user or "default")[:1024]
+
+
+def _a2a_session_id(runtime_arn: str) -> str:
+    """Stable per (consumer session, peer) and ≥ 33 chars (the Runtime's floor)."""
+    seed = f"{_a2a_consumer_session()}|{runtime_arn}".encode()
+    return hashlib.sha256(seed).hexdigest()
+
+
+def _a2a_reply_text(result: dict) -> str:
+    """Task replies carry the final text in artifacts[].parts[] (history is streaming
+    fragments and must never be joined); Message replies carry parts directly."""
+    parts: list = []
+    if result.get("kind") == "message" or ("parts" in result and "artifacts" not in result):
+        parts = result.get("parts") or []
+    else:
+        for artifact in result.get("artifacts") or []:
+            parts.extend(artifact.get("parts") or [])
+        if not parts:
+            # a Task asking for input / authorization replies through status.message
+            state, status_text = _a2a_status_text(result)
+            if state in ("input-required", "auth-required") and status_text:
+                return status_text
+    return "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+
+
+def _a2a_status_text(result: dict) -> tuple:
+    status = result.get("status") if isinstance(result.get("status"), dict) else {}
+    state = str(status.get("state") or "")
+    message = status.get("message") if isinstance(status.get("message"), dict) else {}
+    text = "".join(
+        p.get("text", "") for p in (message.get("parts") or []) if isinstance(p, dict)
+    ).strip()
+    return state, text
+
+
+def a2a_ask(peer: dict[str, str], message: str) -> str:
+    """One A2A `message/send` to `peer` through InvokeAgentRuntime; errors are returned
+    as text so the model can tell the user instead of the turn failing."""
+    session_id = _a2a_session_id(peer["runtime_arn"])
+    envelope = {
+        "jsonrpc": "2.0",
+        "id": uuid.uuid4().hex,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": uuid.uuid4().hex,
+                "contextId": session_id,
+                "parts": [{"kind": "text", "text": str(message)}],
+            }
+        },
+    }
+    try:
+        response = _a2a_client().invoke_agent_runtime(
+            agentRuntimeArn=peer["runtime_arn"],
+            runtimeSessionId=session_id,
+            runtimeUserId=_a2a_runtime_user_id(),
+            payload=json.dumps(envelope).encode("utf-8"),
+        )
+        body = json.loads(response["response"].read())
+    except Exception as exc:  # the peer is another team's deployment: never crash the turn
+        return f"[a2a error] {peer['name']}: {type(exc).__name__}: {exc}"
+    if isinstance(body, dict) and body.get("error"):
+        err = body["error"]
+        return f"[a2a error] {peer['name']}: A2A {err.get('code', '?')}: {err.get('message', '')}"
+    result = body.get("result") if isinstance(body, dict) else None
+    result = result if isinstance(result, dict) else {}
+    text = _a2a_reply_text(result)
+    if text:
+        return text
+    # N10v3-bug5: a failed Task has no artifacts — relay its status.message so the model
+    # can tell the user WHY, instead of "returned no text" on every attempt.
+    state, reason = _a2a_status_text(result)
+    if state and state not in ("completed", "submitted", "working", "input-required",
+                               "auth-required"):
+        return f"[a2a error] {peer['name']}: task {state}: {reason or 'no reason given'}"
+    return f"[a2a] {peer['name']} returned no text"
+
+
+__LAUNCHPAD_A2A_TOOL_FUNCTIONS__
+
+A2A_TOOLS = [__LAUNCHPAD_A2A_TOOL_NAMES__]

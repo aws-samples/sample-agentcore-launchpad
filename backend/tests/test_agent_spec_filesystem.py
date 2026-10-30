@@ -9,7 +9,7 @@ S3_AP = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc/access-point/
 EFS_AP = "arn:aws:elasticfilesystem:us-west-2:111122223333:access-point/fsap-0123"
 VPC = {"subnets": ["subnet-a"], "security_groups": ["sg-a"]}
 
-BASE = {"name": "fs-agent", "method": "container", "system_prompt": "hi"}
+BASE = {"name": "fs-agent", "method": "zip_runtime", "system_prompt": "hi"}
 
 
 def test_default_is_session_storage_on():

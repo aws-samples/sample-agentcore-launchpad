@@ -78,6 +78,17 @@ zip -r hello-container.zip hello-container/  # container_source：Dockerfile 构
   在镜像里自行安装；或把依赖直接打进 zip 并关闭「解析 requirements.txt」
   （`install_requirements=false`）。
 
+### 让 Agent 产生遥测（trace 与评估）
+
+追踪视图和评估都依赖 ADOT 的 `opentelemetry-instrument` 启动器。打包阶段会检查构建好的
+产物：只要 `aws-opentelemetry-distro`（连同启动器）装进了产物根目录，运行时就以
+`opentelemetry-instrument <入口文件>` 启动。装进来的方式可以是在 `requirements.txt`
+里写上 `aws-opentelemetry-distro>=0.10,<1` 并保持「解析 requirements.txt」开启，也可以是
+直接打进 zip。否则运行时以普通的 `python <入口文件>` 启动（启动器缺失会导致启动失败），
+部署照常完成，但会给出「no telemetry: observability and evaluation unavailable」提示：
+这个 Agent 没有 trace，也无法评估。只写在 `pyproject.toml` 里不会生效，因为平台只安装
+`requirements.txt`。
+
 ## 13.3 Dockerfile 构建（container_source）
 
 同一向导，构件类型选 **Dockerfile 构建**，上传 `hello-container.zip`。

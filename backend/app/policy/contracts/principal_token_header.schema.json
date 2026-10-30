@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/principal_token_header/v1",
+  "title": "I1 principal token: JWS protected header",
+  "type": "object",
+  "properties": {
+    "alg": {"const": "ES256"},
+    "kid": {"type": "string", "minLength": 1, "maxLength": 128},
+    "typ": {"const": "lp-principal+jws"}
+  },
+  "required": ["alg", "kid", "typ"],
+  "additionalProperties": false
+}

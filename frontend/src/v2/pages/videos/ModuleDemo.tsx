@@ -19,7 +19,9 @@ import { useVideoPlayback } from "./useVideoPlayback";
 import "./videos.css";
 
 const LIBRARY_PATH = "/v2/videos";
-const MANAGEMENT_PATH = "/v2/video-management";
+/** the administrator's 管理 tab of the library (`/v2/videos?view=manage`) */
+const inManagement = (pathname: string, search: string) =>
+  pathname === LIBRARY_PATH && new URLSearchParams(search).get("view") === "manage";
 
 const CatalogContext = createContext<VideoCatalog | null>(null);
 
@@ -30,13 +32,14 @@ const CatalogContext = createContext<VideoCatalog | null>(null);
  */
 export function ModuleDemoProvider({ children }: { children: ReactNode }) {
   const { data, reload } = useVideoCatalog();
-  const { pathname } = useLocation();
-  const previous = useRef(pathname);
+  const { pathname, search } = useLocation();
+  const managing = inManagement(pathname, search);
+  const previous = useRef(managing);
   useEffect(() => {
     // leaving video management: pick up what the admin just published or withdrew
-    if (previous.current === MANAGEMENT_PATH && pathname !== MANAGEMENT_PATH) reload();
-    previous.current = pathname;
-  }, [pathname, reload]);
+    if (previous.current && !managing) reload();
+    previous.current = managing;
+  }, [managing, reload]);
   return (
     <CatalogContext.Provider value={data}>
       <PageHeaderAsideContext.Provider value={ModuleDemoButton}>{children}</PageHeaderAsideContext.Provider>

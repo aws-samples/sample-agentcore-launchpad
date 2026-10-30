@@ -1,0 +1,309 @@
+# Lifecycle graph — Architect proposal (E02). Round 16, channel A, r16-o.
+graph: architect_proposal
+module: E02
+entity: Architect conversation (`assistant_conversations`) and its proposal revisions
+initial: no_proposal
+
+contracts:
+  ARCH_PROPOSAL:
+    doc: docs/architecture.md
+    section: "Architect assistant › Proposal submission, validation and revisions"
+    quote: >-
+      **Proposal submission, validation and revisions.** A proposal is checked when it is recorded
+      against everything the member will later meet: shape, catalog references … A later revision is a
+      **change**: `{base_revision, operations}` … It no longer offers another creation approval in
+      that conversation — and the server enforces it (N16-obs40): once a revision was approved and
+      minted an Agent, `approve` refuses every later draft with
+  API_EDIT:
+    doc: docs/api.md
+    section: "Console Architect Assistant API › PUT …/proposal"
+    quote: >-
+      body `{content}` (the proposal allowlist; unknown outer members → 422) → `{proposal}` — a
+      **new** revision (`source: member`, unique monotonic number), never a mutation; invalid content
+      is stored as `invalid` with `validation_errors`, never corrected
+  API_REJECT:
+    doc: docs/api.md
+    section: "Console Architect Assistant API › POST …/proposal/reject"
+    quote: >-
+      body `{revision}` → `{proposal}` with `status: rejected` (non-executable); a conditional
+      transition — `409 assistant.proposal_stale` for a non-current revision, `409
+      assistant.proposal_already_approved` (`detail.approval`) when the revision was executed
+      meanwhile
+  API_APPROVE:
+    doc: docs/api.md
+    section: "Console Architect Assistant API › POST …/proposal/approve"
+    quote: >-
+      body `{revision, content_hash}` → `202 {proposal, agent, job_id, deployment_id, started: true}`
+      when this call claimed the revision … started: false` with the recorded outcome for a repeated,
+      concurrent or historical (already approved, even if newer revisions exist) request … Refusals,
+      all before any write: … `409 assistant.proposal_stale` (unknown revision / hash differs /
+      changed while approving), `409 assistant.proposal_not_approvable` (invalid, rejected,
+      superseded), `409 assistant.already_approved` (`detail.agent_id`, `revision`, `job_id`,
+      `agent_name`, `agent_status`
+  ARCH_LOCK:
+    doc: docs/architecture.md
+    section: "Architect assistant › resource lock"
+    quote: >-
+      this holds even after that Agent was deleted — a second agent needs a new conversation (or a
+      CLEAR of this one). Preparation saves/imports and resource-changing proposal edits return `409
+      assistant.resources_locked`
+  AT_10:
+    doc: docs/cn/interfaces/assistant-turns.md
+    section: "10. CLEAR"
+    quote: >-
+      blockers → `409 assistant.conversation_busy` … A transcript-only conversation is deleted inline
+      (`200 deleted: true`); anything else pins the ownership evidence (Agent / canary / Dataset ids,
+      unioned with the previous attempt's) on a `purge_assistant_conversation` job claimed through
+      `assistant_conversations.purge_job_id` (one live job per conversation; a repeated DELETE returns
+      it) and answers `202 {job_id}`. … ledger | `_delete_rows` (operations, plans, proposals,
+      messages, **turn events**, conversation)
+  T61_E02:
+    doc: docs/cn/interfaces/testing.md
+    section: "6.1 Model tests — the assistant row"
+    quote: >-
+      CLEAR: ledger-only → inline 200, live deploy job → 409 `conversation_busy`, else 202 + job;
+      afterwards no conversation row of any kind, Agent `deleted`, canary `cleaned`, repeated DELETE
+      404, nothing left to resume
+  API_CLEAR:
+    doc: docs/api.md
+    section: "Console Architect Assistant API › DELETE …/conversations/{conversation_id}"
+    quote: >-
+      A transcript-only conversation is deleted inline: `200 {deleted: true, conversation_id,
+      operations_cleaned: [], datasets: [], agents: [], canaries: []}`. Anything else is a durable
+      clear job: `202 {deleted: false, job_id, status, … — poll `GET /api/jobs/{job_id}`
+
+nodes:
+  - id: no_proposal
+  - id: draft
+  - id: invalid
+  - id: rejected
+  - id: approved
+  - id: approved_newer
+  - id: deployed
+  - id: cleared
+    terminal: true
+
+edges:
+  - id: propose
+    from: no_proposal
+    to: draft
+    via: a user turn whose reply carries a valid proposal block (stubbed architect)
+    expect: {revision: 1, status: draft}
+    cites: [ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-send]}
+  - id: discuss
+    from: no_proposal
+    to: no_proposal
+    via: a prose-only user turn (no block) writes nothing but the transcript
+    expect: {proposals: 0, messages: +2}
+    cites: [ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-send]}
+  - id: propose_invalid
+    from: no_proposal
+    to: invalid
+    via: a user turn whose block fails validation (unknown tool reference)
+    expect: {revision: 1, status: invalid, validation_errors: ">0"}
+    cites: [ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-send]}
+  - id: edit_valid
+    from: draft
+    to: draft
+    via: PUT …/proposal with a changed summary
+    expect: {status: 200, new_revision: true, previous: superseded, differential: "stored row == proposal.validate(submission)"}
+    cites: [API_EDIT, ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-edit, v2-assistant-edit-save]}
+  - id: edit_invalid
+    from: draft
+    to: invalid
+    via: 'PUT …/proposal with `tools: "not-a-list"`'
+    expect: {status: 200, new_revision: true, revision_status: invalid}
+    cites: [API_EDIT]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-edit, v2-assistant-edit-save]}
+  - id: repair_invalid
+    from: invalid
+    to: draft
+    via: PUT …/proposal with valid content
+    expect: {status: 200, new_revision: true, revision_status: draft}
+    cites: [API_EDIT]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-edit, v2-assistant-edit-save]}
+  - id: approve_invalid
+    from: invalid
+    to: invalid
+    kind: refusal
+    via: POST …/proposal/approve naming the invalid revision
+    expect: {status: 409, code: assistant.proposal_not_approvable}
+    cites: [API_APPROVE]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-approve]}
+  - id: reject_invalid
+    from: invalid
+    to: rejected
+    via: POST …/proposal/reject naming the invalid revision
+    expect: {status: 200, revision_status: rejected}
+    cites: [API_REJECT]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-reject]}
+  - id: reject_draft
+    from: draft
+    to: rejected
+    via: POST …/proposal/reject naming the current draft
+    expect: {status: 200, revision_status: rejected}
+    cites: [API_REJECT]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-reject]}
+  - id: reject_stale
+    from: draft
+    to: draft
+    kind: refusal
+    via: POST …/proposal/reject naming an older (superseded) revision
+    expect: {status: 409, code: assistant.proposal_stale}
+    cites: [API_REJECT]
+    ui: null
+  - id: approve_rejected
+    from: rejected
+    to: rejected
+    kind: refusal
+    via: POST …/proposal/approve naming the rejected revision
+    expect: {status: 409, code: assistant.proposal_not_approvable}
+    cites: [API_APPROVE]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-approve]}
+  - id: repropose_after_reject
+    from: rejected
+    to: draft
+    via: another user turn with a valid block
+    expect: {new_revision: true, revision_status: draft}
+    cites: [ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-send]}
+  - id: approve_wrong_hash
+    from: draft
+    to: draft
+    kind: refusal
+    via: POST …/proposal/approve with a hash that differs
+    expect: {status: 409, code: assistant.proposal_stale}
+    cites: [API_APPROVE]
+    ui: null
+  - id: approve_superseded
+    from: draft
+    to: draft
+    kind: refusal
+    via: POST …/proposal/approve naming the previous (superseded) revision
+    expect: {status: 409, code: assistant.proposal_not_approvable}
+    cites: [API_APPROVE]
+    ui: null
+  - id: approve
+    from: draft
+    to: approved
+    via: POST …/proposal/approve {revision, content_hash}
+    expect: {status: 202, started: true, agent_rows: +1, deploy_jobs: +1}
+    cites: [API_APPROVE]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-approve, v2-confirm-ok]}
+  - id: approve_again
+    from: approved
+    to: approved
+    via: the same POST …/proposal/approve repeated
+    expect: {status: 200, started: false, same_job_id: true, agent_rows: +0}
+    cites: [API_APPROVE]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-approve]}
+  - id: reject_approved
+    from: approved
+    to: approved
+    kind: refusal
+    via: POST …/proposal/reject naming the approved revision while it is the newest revision
+    expect: {status: 409, code: assistant.proposal_already_approved}
+    cites: [API_REJECT]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-reject]}
+  - id: edit_resources_after_approval
+    from: approved
+    to: approved
+    kind: refusal
+    via: PUT …/proposal that changes `tools`
+    expect: {status: 409, code: assistant.resources_locked}
+    cites: [ARCH_LOCK]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-edit, v2-assistant-edit-save]}
+  - id: new_draft_after_approval
+    from: approved
+    to: approved_newer
+    via: another user turn with a valid block under another name (a later draft exists next to the approved revision)
+    expect: {new_revision: true, revision_status: draft}
+    cites: [ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-send]}
+  - id: approve_newer_draft
+    from: approved_newer
+    to: approved_newer
+    kind: refusal
+    via: POST …/proposal/approve naming the later draft
+    expect: {status: 409, code: assistant.already_approved, agent_rows: +0}
+    cites: [API_APPROVE, ARCH_PROPOSAL]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-approve]}
+  - id: reject_approved_stale
+    from: approved_newer
+    to: approved_newer
+    kind: refusal
+    via: POST …/proposal/reject naming the approved revision while a later draft exists (the route checks currency first)
+    expect: {status: 409, code: assistant.proposal_stale}
+    cites: [API_REJECT]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-proposal-reject]}
+  - id: clear_while_deploying_newer
+    from: approved_newer
+    to: approved_newer
+    kind: refusal
+    via: DELETE …/conversations/{id} while the deploy job is live
+    expect: {status: 409, code: assistant.conversation_busy, blockers: [job]}
+    cites: [AT_10]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-clear, v2-confirm-ok]}
+  - id: deploy_completes_newer
+    from: approved_newer
+    to: deployed
+    via: the recorded deploy job settles (Agent active, job succeeded)
+    expect: {agent_status: active}
+    cites: [API_APPROVE]
+    ui: null
+  - id: clear_while_deploying
+    from: approved
+    to: approved
+    kind: refusal
+    via: DELETE …/conversations/{id} while the deploy job is live
+    expect: {status: 409, code: assistant.conversation_busy, blockers: [job]}
+    cites: [AT_10]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-clear, v2-confirm-ok]}
+  - id: deploy_completes
+    from: approved
+    to: deployed
+    via: the recorded deploy job settles (Agent active, job succeeded)
+    expect: {agent_status: active}
+    cites: [API_APPROVE]
+    ui: null
+  - id: clear_transcript_only
+    from: no_proposal
+    to: cleared
+    via: DELETE …/conversations/{id} with no Agent
+    expect: {status: 200, deleted: true, rows: 0}
+    cites: [AT_10, API_CLEAR]
+    ui: {page: /v2/assistant, view: null, controls: ['v2-assistant-clear-{id}', v2-confirm-ok]}
+  - id: clear_draft_only
+    from: draft
+    to: cleared
+    via: DELETE …/conversations/{id} with proposals but no Agent
+    expect: {status: 200, deleted: true, rows: 0}
+    cites: [AT_10, API_CLEAR]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-clear, v2-confirm-ok]}
+  - id: clear_deployed
+    from: deployed
+    to: cleared
+    via: DELETE …/conversations/{id} → 202 job → wait
+    expect: {status: 202, job_status: succeeded, agent_status: deleted, rows: 0}
+    cites: [AT_10, API_CLEAR]
+    ui: {page: /v2/assistant, view: detail, controls: [v2-assistant-clear, v2-confirm-ok]}
+  - id: clear_again
+    from: cleared
+    to: cleared
+    kind: refusal
+    via: DELETE …/conversations/{id} once more
+    expect: {status: 404, code: assistant.conversation_not_found}
+    cites: [AT_10]
+    ui: null
+  - id: detail_after_clear
+    from: cleared
+    to: cleared
+    kind: refusal
+    via: GET …/conversations/{id}
+    expect: {status: 404, code: assistant.conversation_not_found}
+    cites: [AT_10]
+    ui: null

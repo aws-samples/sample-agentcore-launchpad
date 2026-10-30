@@ -1,23 +1,20 @@
 """Shared knowledge-base support for the code-generating deploy methods.
 
-The Strands ZIP fast path and the Claude Agent SDK container both mount managed
-KBs through the *direct* channel: retrieval tools baked into the generated code
-that call the ``bedrock-agent-runtime`` data plane with the runtime execution
-role. Two tools, deliberately both exposed:
+Knowledge bases are self-hosted on the workspace's OpenSearch domain (N6: one k-NN
+index per KB, Titan v2 embeddings — Bedrock Knowledge Bases do not exist in the CN
+partition). Generated Strands agents and converted Harness bundles mount them through
+the *direct* channel: retrieval tools baked into the generated code that query the KB's
+index with the runtime execution role, embedding the question with the same Global
+Bedrock API key the agent's model uses. Two tools, deliberately both exposed (ruling
+R10 — k-NN only, no FM query planner):
 
-- ``kb_search`` → ``Retrieve``: one similarity search, ~1s, no FM call.
-- ``kb_deep_search`` → ``AgenticRetrieveStream``: an FM-driven planning loop that
-  decomposes the question, searches every mounted KB (possibly over several
-  rounds, possibly expanding to whole documents) and returns a cited answer plus
-  its sources. Seconds, and one FM call per planning round.
+- ``kb_search``: one k-NN similarity search per mounted KB, ``KB_RESULTS`` wide.
+- ``kb_deep_search``: a wider multi-query k-NN pass — the whole question plus up to
+  three clause-split sub-queries, 2× ``KB_RESULTS``, de-duplicated by
+  ``(doc_uri, chunk_index)`` — for comparisons and evidence spread across documents.
 
-Both templates derive their KB literal, tool descriptions and system-prompt
-section from here so the two methods cannot drift apart.
-
-The managed Harness (方式B) uses a different channel — ``launchpad-kb-gw``
-attached as an ``agentcore_gateway`` tool — and therefore has its own prompt
-builder in ``app/deployer/harness.py::_kb_prompt`` naming the gateway tools
-(``…___Retrieve`` / ``…___AgenticRetrieveStream``).
+Both templates derive their KB literal, tool descriptions and system-prompt section
+from here so the two methods cannot drift apart. Contract: docs/cn/interfaces/kb-runtime.md.
 """
 
 from pathlib import Path
@@ -31,10 +28,6 @@ KB_TOOL_NAME = "kb_search"
 KB_DEEP_TOOL_NAME = "kb_deep_search"
 KB_MCP_SERVER = "launchpad_kb"
 KB_RESULTS = 8
-# maxAgentIteration for the agentic planner — AWS guidance is 3 for a single KB
-# and 4–5 across several (more retrievers → more sub-queries worth planning).
-KB_DEEP_ITERATIONS_SINGLE = 3
-KB_DEEP_ITERATIONS_MULTI = 5
 DIRECT_KB_TEMPLATE = Path(__file__).with_name("direct_kb_tools.py.tmpl")
 
 
@@ -65,14 +58,6 @@ def render_direct_kb_source(kbs: list[dict[str, str]]) -> str:
         DIRECT_KB_TEMPLATE.read_text(encoding="utf-8")
         .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
         .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))
-        .replace(
-            "__LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__",
-            repr(KB_DEEP_ITERATIONS_SINGLE),
-        )
-        .replace(
-            "__LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__",
-            repr(KB_DEEP_ITERATIONS_MULTI),
-        )
     )
 
 
@@ -90,8 +75,8 @@ def kb_tool_description(kbs: list[dict[str, str]]) -> str:
     if not kbs:
         return ""
     return (
-        "Search the mounted managed knowledge bases with a single similarity "
-        f"search and return the matching passages with their source. Mounted: "
+        "Search the mounted knowledge bases with one k-NN similarity search over "
+        "their indexed passages and return the matches with their source. Mounted: "
         f"{_kb_names(kbs)}. Fast and cheap — prefer it for a single fact you can "
         "name. Leave kb_id empty to search all of them; pass one kb_id to target "
         "a single knowledge base."
@@ -99,17 +84,15 @@ def kb_tool_description(kbs: list[dict[str, str]]) -> str:
 
 
 def kb_deep_tool_description(kbs: list[dict[str, str]]) -> str:
-    """One-line description for the agentic (multi-step) retrieval tool."""
+    """One-line description for the wider multi-query retrieval tool."""
     if not kbs:
         return ""
     return (
-        "Deep-search the mounted managed knowledge bases: a planning loop "
-        "decomposes the question into sub-queries, searches across the knowledge "
-        f"bases over several rounds (pulling whole documents when a passage is "
-        f"not enough) and returns a cited answer plus the supporting passages. "
-        f"Mounted: {_kb_names(kbs)}. Slower and more expensive than kb_search — "
-        "prefer it for comparisons, exhaustive lists, summaries, or when the "
-        "evidence is spread across documents. Leave kb_id empty to search all of "
+        "Deep-search the mounted knowledge bases: a multi-query k-NN pass (the "
+        "question plus its clauses, a wider result set, de-duplicated) that returns "
+        f"the best-scoring passages with their sources. Mounted: {_kb_names(kbs)}. "
+        "Slower than kb_search — prefer it for comparisons, exhaustive lists or "
+        "evidence spread across documents. Leave kb_id empty to search all of "
         "them; pass one kb_id to target a single knowledge base."
     )
 
@@ -117,8 +100,7 @@ def kb_deep_tool_description(kbs: list[dict[str, str]]) -> str:
 def kb_prompt_section(kbs: list[dict[str, str]]) -> str:
     """'## Knowledge bases' block appended to the generated system prompt.
 
-    Same intent as the harness section, but names the two direct-retrieve tools
-    (and steers between them) instead of the gateway's MCP tools. Returns ''
+    Names the two direct-retrieve tools and steers between them. Returns ''
     when nothing is mounted so KB-less specs render unchanged.
     """
     if not kbs:
@@ -128,10 +110,11 @@ def kb_prompt_section(kbs: list[dict[str, str]]) -> str:
         "## Knowledge bases",
         "Two retrieval tools are mounted for you. Never answer from memory when a "
         "question touches the content below.",
-        f"- `{KB_DEEP_TOOL_NAME}` — plans sub-queries, searches across every mounted "
-        "knowledge base over several rounds, and returns a cited answer with its "
-        "sources. Prefer it for comparisons, exhaustive lists, summaries, and "
-        "anything whose evidence is spread across documents. Slower, costs more.",
+        f"- `{KB_DEEP_TOOL_NAME}` — runs several similarity searches (the question "
+        "plus its clauses) across every mounted knowledge base and returns the "
+        "best-scoring passages with their sources, de-duplicated. Prefer it for "
+        "comparisons, exhaustive lists, and anything whose evidence is spread "
+        "across documents. Slower.",
         f"- `{KB_TOOL_NAME}` — one similarity search. Prefer it for a single fact "
         "you can name.",
         "Mounted knowledge bases:",

@@ -1,0 +1,52 @@
+{
+  "audit_decision_line": {
+    "launchpad.policy.decision": {
+      "decision_id": "3f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "source": "gateway",
+      "stage": "final",
+      "ws": "default",
+      "agent_id": "ag_hrhelp01",
+      "principal": {
+        "kind": "user",
+        "id": "hr-intern"
+      },
+      "action": "hr-database___create_payout",
+      "decision": "deny",
+      "mode": "enforce",
+      "policy_ids": [
+        "pol_payoutadm"
+      ],
+      "determining": [
+        "pol_payoutadm:v2"
+      ],
+      "stage_a": "allow",
+      "stage_bt": "deny",
+      "session_psid": "7ac775f9a1a629c68602a56592539e9ff041037cc3bbfaa3aa3d6fc6143b2414-v3-g0",
+      "event_seq": 1042,
+      "store_epoch": "e3",
+      "input_keys": [
+        "amount",
+        "employee_id"
+      ],
+      "reason": "Policy evaluation denied due to pol_payoutadm",
+      "latency_ms": 6.1,
+      "ts": "2026-10-26T14:00:01Z"
+    }
+  },
+  "audit_engine_line": {
+    "launchpad.policy.engine": {
+      "ws": "default",
+      "event_seq": 1042,
+      "ts_ns": 1793022001000000000,
+      "session": "5f2b6c1d9e8a7b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4",
+      "action": "hr-database___create_payout",
+      "kind": "request",
+      "verdict": "deny",
+      "determining": [
+        "pol_payoutadm:v2"
+      ],
+      "store_epoch": "e3",
+      "policy_set_version": "ps-17"
+    }
+  }
+}

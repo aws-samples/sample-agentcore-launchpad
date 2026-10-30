@@ -40,7 +40,7 @@ export function TrainWizard({ status }: { status: SkillLabStatus | null }) {
   const [epochs, setEpochs] = useState(1);
   const [learningRate, setLearningRate] = useState(4);
   const [gateMetric, setGateMetric] = useState<SkillLabGateMetric>("soft");
-  const [backend, setBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
+  const [backend, setBackend] = useState<SkillLabTargetBackend>("opencode_exec");
   const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");

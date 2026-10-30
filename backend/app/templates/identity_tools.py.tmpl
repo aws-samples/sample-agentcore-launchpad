@@ -76,7 +76,7 @@ def _id_host_only(url: str) -> str:
 def _id_client():
     from bedrock_agentcore.services.identity import IdentityClient
 
-    return IdentityClient(os.environ.get("AWS_REGION", "us-west-2"))
+    return IdentityClient(os.environ.get("AWS_REGION", "cn-northwest-1"))
 
 
 def identity_workload_token() -> str | None:

@@ -10,21 +10,8 @@ model:
   reasoning_effort: medium
   rewrite_reasoning_effort: ""
   rewrite_max_completion_tokens: 64000
-  codex_exec_path: codex
-  codex_exec_sandbox: workspace-write
-  codex_exec_profile: ""
-  codex_exec_full_auto: false
-  codex_exec_reasoning_effort: none
-  codex_exec_use_sdk: auto
-  codex_exec_network_access: false
-  codex_exec_web_search: false
-  codex_exec_approval_policy: never
-  claude_code_exec_path: claude
-  claude_code_exec_profile: ""
-  claude_code_exec_use_sdk: auto
-  claude_code_exec_effort: medium
-  claude_code_exec_max_thinking_tokens: 16384
-  codex_trace_to_optimizer: true
+  opencode_exec_path: opencode
+  opencode_exec_effort: medium
   azure_openai_endpoint: ""           # e.g. "https://your-resource.openai.azure.com/"
   azure_openai_api_version: "2024-12-01-preview"
   azure_openai_api_key: ""       # Fill locally if you do not export OPENAI_API_KEY

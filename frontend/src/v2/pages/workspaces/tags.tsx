@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import type { WorkspaceBootstrapStatus } from "../../../lib/api";
+import type { ResourceVisibility, WorkspaceBootstrapStatus } from "../../../lib/api";
 import { Tag } from "../../ui";
 import { STATUS_TONE } from "./status";
 
@@ -21,4 +21,14 @@ export function HubTag() {
 export function ExternalTag() {
   const { t } = useTranslation();
   return <Tag tone="blue">{t("v2.workspaces.external")}</Tag>;
+}
+
+/** Member visibility; `isolated` stands out, `shared` (the default) stays quiet. */
+export function VisibilityTag({ mode }: { mode: ResourceVisibility }) {
+  const { t } = useTranslation();
+  return (
+    <Tag tone={mode === "isolated" ? "orange" : "gray"} testId={`v2-ws-visibility-tag-${mode}`}>
+      {t(`v2.workspaces.visibility.${mode}`)}
+    </Tag>
+  );
 }

@@ -8,6 +8,7 @@ import { Btn } from "./Btn";
 import { Chip, type ChipTone } from "./Chip";
 import { LoadError } from "./LoadError";
 import { Panel } from "./Panel";
+import { formatInZone, parseTimestamp } from "../lib/timestamps";
 
 /**
  * VERSIONS & ENDPOINTS — the read-only AWS view of one agent's Runtime or
@@ -37,8 +38,8 @@ function statusTone(status: string | null): ChipTone {
 
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+  const d = parseTimestamp(iso); // N17-obs461
+  return d ? formatInZone(d) : iso; // N17-obs463: the display zone
 }
 
 export function VersionsPanel({ agentId }: { agentId: string }) {
@@ -76,7 +77,7 @@ export function VersionsPanel({ agentId }: { agentId: string }) {
         title={t("create.versions.title")}
         sub={
           data
-            ? `${t(data.kind === "harness" ? "create.versions.kindHarness" : "create.versions.kindRuntime")} · ${data.resource_id}`
+            ? `${t("create.versions.kindRuntime")} · ${data.resource_id}`
             : t("create.versions.sub")
         }
         end={

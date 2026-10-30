@@ -4,8 +4,9 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJobInfo } from "../../../lib/api";
 import { isLiveJob, jobSkillName } from "../../../lib/skillLab";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Button,
   Card,
@@ -29,6 +30,7 @@ export function TaskgenList() {
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [pending, setPending] = useState<SkillLabJobInfo | null>(null);
+  const mayMutate = useMayMutate(); // creator-or-admin on cancel (r13-g)
   const [busy, setBusy] = useState(false);
 
   const rows = useMemo(() => {
@@ -86,11 +88,12 @@ export function TaskgenList() {
           <span className="mono ellipsis" style={{ maxWidth: 220 }}>
             {job.params.model ?? "—"}
           </span>
-          <span className="sub mono">{job.params.target_backend ?? "claude_code_exec"}</span>
+          <span className="sub mono">{job.params.target_backend ?? "opencode_exec"}</span>
         </>
       ),
     },
     { key: "status", title: t("skillLab.eval.col.status"), render: (job) => <JobStatusTag job={job} /> },
+    { key: "creator", title: t("v2.common.creator"), render: (job) => creatorLabel(job) },
     { key: "created", title: t("skillLab.eval.col.created"), className: "nowrap", render: (job) => fmtTime(job.created_at) },
     {
       key: "ops",
@@ -99,7 +102,7 @@ export function TaskgenList() {
       render: (job) => (
         <div className="v2-actions">
           <LinkButton onClick={() => open(job)}>{t("v2.common.view")}</LinkButton>
-          {isLiveJob(job) && (
+          {mayMutate(job) && isLiveJob(job) && (
             <LinkButton danger disabled={busy} onClick={() => setPending(job)}>
               {t("skillLab.taskgen.job.cancel")}
             </LinkButton>

@@ -1,4 +1,4 @@
-"""Observability service — tree building, cost, cache TTL, mapper, transcript, API."""
+"""Observability service — tree building, cache TTL, mapper, transcript, API."""
 
 import json
 
@@ -7,13 +7,52 @@ import pytest
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.models.ledger import Agent, ChatMessage, ChatSession
+from app.services import memory_backend
 from app.services import observability as obs
 
 from .conftest import ws_ctx
 
+
+class _FakeMemoryBackend:
+    """Just enough of the ``MemoryBackend`` Protocol for the transcript reads. Tests
+    swap the three callables (raw-list stubs, as the pre-Protocol tests did) and the
+    adapter wraps them in the Protocol's page shapes."""
+
+    def __init__(self):
+        self.actor_ids = lambda *a, **k: []
+        self.events = lambda *a, **k: []
+        self.records = lambda *a, **k: []
+
+    def list_actors(self, workspace, next_token=None, max_results=None):
+        return {"items": [{"actor_id": a} for a in self.actor_ids(workspace)], "next_token": None}
+
+    def list_events(self, workspace, actor_id, session_id, include_payloads=True,
+                    next_token=None, max_results=None):
+        return {"items": list(self.events(workspace, actor_id, session_id, max_results)),
+                "next_token": None}
+
+    def list_records(self, workspace, namespace, strategy_id=None, next_token=None,
+                     max_results=None):
+        return {"items": list(self.records(workspace, namespace, max_results=max_results)),
+                "next_token": None}
+
+
+_FAKE = _FakeMemoryBackend()
+
+
+@pytest.fixture(autouse=True)
+def _memory_backend(client):
+    # Depends on `client` so this fixture's `set_backend(_FAKE)` runs AFTER
+    # `create_app()` (inside `client`) registers the real self-hosted backend
+    # (N6) — otherwise autouse fixtures set up before explicitly-requested ones
+    # of the same scope and `create_app()` would clobber the fake right back.
+    global _FAKE
+    _FAKE = _FakeMemoryBackend()
+    memory_backend.set_backend(_FAKE)
+    yield _FAKE
+    memory_backend.set_backend(None)
+
 BASE_NS = 1_700_000_000_000_000_000
-PRICES = {"sonnet-4-6": {"input": 3.0, "output": 15.0},
-          "nemotron-nano": {"input": 0.2, "output": 0.6}}
 
 
 def _span(span_id, parent, name, start_ms, end_ms, kind="INTERNAL", attrs=None, status="OK"):
@@ -77,6 +116,17 @@ NATIVE_SPANS = [
 
 
 # trace with runtime-log-group resources + gen_ai message events attached
+# N17-obs307: ADOT's botocore spans carry the caller's STS access-key id
+FAKE_STS_KEY_ID = "ASIAEXAMPLE00000TEST"
+CREDENTIAL_SPANS = [
+    _span("root4", None, "POST /invocations", 0, 10, kind="SERVER",
+          attrs={"session.id": "s" * 64}),
+    _span("s3", "root4", "S3.GetObject", 2, 4, kind="CLIENT",
+          attrs={"rpc.service": "S3", "aws.auth.account.access_key": FAKE_STS_KEY_ID,
+                 "aws.auth.region": "cn-northwest-1",
+                 "http.url": f"https://b.s3/k?X-Amz-Credential={FAKE_STS_KEY_ID}%2F2026"}),
+]
+
 MSG_SPANS = [
     {**_span("root3", None, "POST /invocations", 0, 10, kind="SERVER"),
      "resource": {"attributes": {
@@ -112,7 +162,7 @@ def fresh_cache():
 
 
 def test_span_tree_nesting_and_offsets():
-    tree = obs.build_span_tree(TREE_SPANS, prices=PRICES)
+    tree = obs.build_span_tree(TREE_SPANS)
     assert tree["duration_ms"] == 10.0
     root = tree["tree"][0]
     assert root["name"] == "POST /invocations" and root["depth"] == 0
@@ -122,7 +172,7 @@ def test_span_tree_nesting_and_offsets():
     assert llm["depth"] == 2 and llm["category"] == "llm"
     assert llm["start_offset_ms"] == 3.0 and llm["duration_ms"] == 4.0
     assert llm["offset_pct"] == 30.0 and llm["width_pct"] == 40.0
-    assert llm["est_cost_usd"] == pytest.approx(0.0045)
+    assert "est_cost_usd" not in llm  # R13: no USD estimates on spans
     # flat rows keep raw attributes; tree nodes do not carry them
     flat_llm = next(s for s in tree["spans"] if s["span_id"] == "llm")
     assert flat_llm["attributes"]["session.id"] == "s" * 64
@@ -136,17 +186,18 @@ def test_span_tree_orphan_becomes_root():
 
 
 def test_native_claude_span_tree_uses_openinference_attributes():
-    tree = obs.build_span_tree(NATIVE_SPANS, prices=PRICES)
+    tree = obs.build_span_tree(NATIVE_SPANS)
     root = tree["tree"][0]
     assert root["category"] == "agent"
     assert root["model"] == "global.anthropic.claude-sonnet-4-6"
+    # N17-obs439: OpenInference's prompt count (700) includes its cache breakdown, so the
+    # uncached input is 700 - 100 - 10
     assert root["tokens"] == {
-        "input": 700.0,
+        "input": 590.0,
         "output": 42.0,
         "cache_read": 100.0,
         "cache_write": 10.0,
     }
-    assert root["est_cost_usd"] is not None
     tool = root["children"][0]
     assert tool["category"] == "tool"
     assert tool["tool_name"] == "calculator"
@@ -265,8 +316,10 @@ def test_trace_meta_counts_native_agent_root_as_token_call():
     db.close()
     meta = result["meta"]
     assert meta["llm_count"] == 1
+    # N17-obs439: total = uncached input + output + cache read + cache write — for an
+    # OpenInference span still its prompt (700) + completion (42)
     assert meta["tokens"] == {
-        "input": 700,
+        "input": 590,
         "output": 42,
         "cache_read": 100,
         "cache_write": 10,
@@ -303,6 +356,39 @@ def test_global_span_queries_cover_legacy_and_unified_groups():
         assert "ispresent(startTimeUnixNano)" in query
     assert "aws/spans" in obs.SPANS_SOURCE
     assert "/aws/bedrock-agentcore/runtimes/" in obs.SPANS_SOURCE
+
+
+def test_spans_source_narrows_to_spans_only(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LAUNCHPAD_OBSERVABILITY_SPANS_SOURCE", "spans")
+    get_settings.cache_clear()
+    try:
+        query = obs.q_trace_aggregates()
+        assert "aws/spans" in query
+        assert "/aws/bedrock-agentcore/runtimes/" not in query
+    finally:
+        get_settings.cache_clear()
+
+
+def test_spans_source_narrows_to_runtime_logs_only(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LAUNCHPAD_OBSERVABILITY_SPANS_SOURCE", "runtime_logs")
+    get_settings.cache_clear()
+    try:
+        query = obs.q_session_aggregates()
+        assert "/aws/bedrock-agentcore/runtimes/" in query
+        assert "'aws/spans'" not in query
+    finally:
+        get_settings.cache_clear()
+
+
+def test_spans_source_default_both_matches_the_public_constant():
+    # Default settings must keep every pre-existing assertion against the
+    # module-level SPANS_SOURCE constant true (test_observability.py already has
+    # several `query.strip().startswith(obs.SPANS_SOURCE)` checks elsewhere).
+    assert obs.q_dashboard_totals().strip().startswith(obs.SPANS_SOURCE)
 
 
 def test_span_aggregates_preserve_string_metadata_with_latest():
@@ -379,27 +465,31 @@ def test_trace_detail_attaches_span_messages(client, mocked_aws):
     assert root["messages"] is None
 
 
-# ── cost estimator ──────────────────────────────────────────────────────────
+
+def test_trace_detail_masks_credential_attributes(client, mocked_aws):
+    """N17-obs307: the access-key id never leaves the API — the key stays, its value
+    reads `[redacted]`, a key id inside another value is masked in place."""
+    res = client.get(f"/api/observability/traces/{'e' * 32}")
+    assert res.status_code == 200
+    assert FAKE_STS_KEY_ID not in res.text
+    s3 = next(s for s in res.json()["spans"] if s["span_id"] == "s3")
+    assert s3["attributes"]["aws.auth.account.access_key"] == "[redacted]"
+    assert s3["attributes"]["http.url"] == (
+        "https://b.s3/k?X-Amz-Credential=[redacted]%2F2026")
+    assert s3["attributes"]["aws.auth.region"] == "cn-northwest-1"
+    assert s3["attributes"]["rpc.service"] == "S3"
+    # masking runs before the cache: a cached read is masked too
+    again = client.get(f"/api/observability/traces/{'e' * 32}")
+    assert FAKE_STS_KEY_ID not in again.text
 
 
-def test_cost_known_and_unknown_model():
-    known = obs.estimate_cost("global.anthropic.claude-sonnet-4-6", 1_000_000, 100_000,
-                              prices=PRICES)
-    assert known == pytest.approx(3.0 + 1.5)
-    assert obs.estimate_cost("mystery-model-9000", 500, 50, prices=PRICES) is None
-    assert obs.estimate_cost(None, 500, 50, prices=PRICES) is None
-
-
-def test_cost_cache_tokens_use_default_factors():
-    cost = obs.estimate_cost("claude-sonnet-4-6", 0, 0, cache_read=1_000_000,
-                             cache_write=1_000_000, prices=PRICES)
-    assert cost == pytest.approx(3.0 * 0.1 + 3.0 * 1.25)
-
-
-def test_match_price_prefers_longest_key():
-    prices = {"sonnet": {"input": 1.0, "output": 1.0},
-              "sonnet-4-6": {"input": 3.0, "output": 15.0}}
-    assert obs.match_price("global.anthropic.claude-sonnet-4-6", prices)["input"] == 3.0
+def test_build_span_tree_masks_credential_attributes():
+    tree = obs.build_span_tree(CREDENTIAL_SPANS)
+    s3 = next(s for s in tree["spans"] if s["span_id"] == "s3")
+    assert s3["attributes"]["aws.auth.account.access_key"] == "[redacted]"
+    assert FAKE_STS_KEY_ID not in json.dumps(tree)
+    # the caller's span list is not mutated (raw spans still feed service / log groups)
+    assert CREDENTIAL_SPANS[1]["attributes"]["aws.auth.account.access_key"] == FAKE_STS_KEY_ID
 
 
 # ── fakes ───────────────────────────────────────────────────────────────────
@@ -499,6 +589,8 @@ def _fake_logs():
         # span query for the same trace id
         f'filter traceId = "{"d" * 32}"\n| fields @message, spanId': [
             {"@message": json.dumps(MSG_EVENT)}],
+        f'filter traceId = "{"e" * 32}"': [
+            {"@message": json.dumps({**s, "traceId": "e" * 32})} for s in CREDENTIAL_SPANS],
         f'filter traceId = "{"d" * 32}"': [
             {"@message": json.dumps({**s, "traceId": "d" * 32})} for s in MSG_SPANS],
         "fields @message": [{"@message": json.dumps(s)} for s in TREE_SPANS],
@@ -601,8 +693,8 @@ def test_agent_mapper_prefers_active_over_deleted():
 
 
 def test_transcript_no_ledger_row_and_no_memory_is_unavailable(monkeypatch):
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
     db = SessionLocal()
     result = obs.session_transcript(db, "external-session-id-123", ws_ctx())
     db.close()
@@ -619,7 +711,7 @@ def test_transcript_memory_error_degrades(monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("memory down")
 
-    monkeypatch.setattr(obs.memory, "list_events", boom)
+    monkeypatch.setattr(_FAKE, "events", boom)
     result = obs.session_transcript(db, "s" * 64, ws_ctx())
     db.close()
     assert result["available"] is False and result["reason"] == "memory_unavailable"
@@ -639,8 +731,8 @@ def test_transcript_orders_turns(monkeypatch):
             {"conversational": {"role": "USER", "content": {"text": "first q"}}},
             {"conversational": {"role": "ASSISTANT", "content": {"text": "first a"}}}]},
     ]
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: events)
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [{"id": 1}])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: events)
+    monkeypatch.setattr(_FAKE, "records", lambda *a, **k: [{"id": 1}])
     result = obs.session_transcript(db, "s" * 64, ws_ctx())
     db.close()
     assert result["available"] is True and result["agent_name"] == "hr-assistant"
@@ -694,8 +786,8 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
     )
     db.commit()
     monkeypatch.setattr(
-        obs.memory,
-        "list_events",
+        _FAKE,
+        "events",
         lambda *a, **k: [
             {
                 "eventTimestamp": "2026-07-10T01:00:00",
@@ -716,7 +808,7 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
             }
         ],
     )
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "records", lambda *a, **k: [])
 
     result = obs.session_transcript(db, session_id, ws_ctx())
     db.close()
@@ -728,44 +820,6 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
         "latest question",
         "latest answer",
     ]
-
-
-def test_transcript_falls_back_to_eval_run_session(monkeypatch):
-    """Eval-run sessions have no chat ledger row; the transcript comes from the
-    BARE "default" actor the eval invoker passed to the runtime."""
-    from app.evaluation.models import EvalRun
-
-    agent_id = _seed_agent()
-    sid = "e" * 64
-    db = SessionLocal()
-    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
-                  agent_name="hr-assistant", mode="evaluators",
-                  evaluators=[], status="completed", session_ids=[sid])
-    db.add(run)
-    db.commit()
-    run_id = run.id
-
-    seen: dict = {}
-
-    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
-        seen["actor"] = actor_id
-        envelope = json.dumps(
-            {"message": {"role": "user", "content": [{"text": "PTO balance?"}]}}
-        )
-        return [{"eventTimestamp": "2026-07-13T01:00:00", "payload": [
-            {"conversational": {"role": "USER", "content": {"text": envelope}}},
-            {"conversational": {"role": "ASSISTANT", "content": {"text": "15 days"}}},
-        ]}]
-
-    monkeypatch.setattr(obs.memory, "list_events", fake_events)
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
-    result = obs.session_transcript(db, sid, ws_ctx())
-    db.close()
-    assert result["available"] is True
-    assert result["source"] == "eval" and result["run_id"] == run_id
-    assert result["actor_id"] == "default" and seen["actor"] == "default"
-    assert result["agent_name"] == "hr-assistant"
-    assert [t["text"] for t in result["turns"]] == ["PTO balance?", "15 days"]
 
 
 # ── transcript: sessions in NO platform ledger (gateway traffic, /v1 callers) ─
@@ -795,8 +849,8 @@ def test_transcript_external_session_reads_bare_default_actor(monkeypatch):
     still resolve."""
     agent_id = _seed_agent()
     fake_events, probed = _events_for({"default": ["second q", "first q"]})
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", fake_events)
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
     result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent)
@@ -815,8 +869,8 @@ def test_transcript_external_session_prefers_agent_scoped_actor(monkeypatch):
     agent_id = _seed_agent()
     scoped = f"{agent_id}__api"
     fake_events, probed = _events_for({scoped: ["hi from api"], "default": ["nope"]})
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [scoped])
-    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [scoped])
+    monkeypatch.setattr(_FAKE, "events", fake_events)
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
     result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent)
@@ -825,28 +879,171 @@ def test_transcript_external_session_prefers_agent_scoped_actor(monkeypatch):
     assert [t["text"] for t in result["turns"]] == ["hi from api"]
 
 
-def test_transcript_external_session_labels_owning_experiment(monkeypatch):
-    from app.optimization.models import Experiment
+def test_transcript_external_session_falls_back_to_content_logs(monkeypatch):
+    """Nothing in Memory (an agent with memory disabled): with the session's
+    start known, the traced agent's runtime content logs carry the turns."""
+    from datetime import UTC, datetime
+
+    db = SessionLocal()
+    agent = db.get(Agent, _seed_agent())
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
+    monkeypatch.setattr(obs, "_eval_content_log_group", lambda ag, ws: f"/logs/{ag.id}")
+    seen: list = []
+
+    def fake_logs_turns(log_group, session_id, started_at, workspace):
+        seen.append((log_group, session_id, started_at))
+        return [{"role": "USER", "text": "q", "at": "t"},
+                {"role": "ASSISTANT", "text": "a", "at": "t"}]
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
+    # no start → no scan: the window would be guesswork
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
+        "available": False, "reason": "not_platform_session"}
+    start = datetime(2026, 10, 15, 6, 22, 56, tzinfo=UTC)
+    result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent, started_at=start)
+    assert seen == [(f"/logs/{agent.id}", EXTERNAL_SID, start)]
+    assert (result["available"], result["origin"], result["source"]) == (True, "logs", "external")
+    assert result["actor_id"] is None and result["agent_id"] == agent.id
+    assert [t["text"] for t in result["turns"]] == ["q", "a"]
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("logs down")
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", broken)
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent, started_at=start) == {
+        "available": False, "reason": "not_platform_session"}
+    db.close()
+
+
+REPLAY_SID = "4e1c3f0a-replay-0001-scenario-hr-golden-00000001"
+
+
+def _seed_replay_run(agent_id, session_id=REPLAY_SID, created_by=None, workspace_id=None):
+    """A dataset-replay run that minted `session_id` for one scenario (N17-obs432)."""
+    from datetime import UTC, datetime
+
+    from app.evaluation.models import EvalRun
+
+    db = SessionLocal()
+    run = EvalRun(workspace_id=workspace_id or DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                  agent_name="hr-assistant", dataset_id="ds0000000001",
+                  dataset_name="hr-eval-demo-golden", status="completed",
+                  session_ids=[session_id, "other-replayed-session-0002"],
+                  scenario_map={session_id: {"scenario_id": "s1", "input": "q"},
+                                "other-replayed-session-0002": {"scenario_id": "s2"}},
+                  created_by=created_by,
+                  created_at=datetime(2026, 10, 25, 6, 56, 49, tzinfo=UTC))
+    db.add(run)
+    db.commit()
+    run_id = run.id
+    db.close()
+    return run_id
+
+
+def test_transcript_replay_session_reads_content_logs_from_the_run(monkeypatch):
+    """N17-obs432: a dataset-replay session (agent memory off, no chat ledger row, no start
+    time from the caller) is the platform's own — the run that replayed it names the agent
+    and the content-log start, and the transcript is the agent's own content records."""
+    from datetime import UTC, datetime
 
     agent_id = _seed_agent()
+    run_id = _seed_replay_run(agent_id)
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])  # memory disabled
+    monkeypatch.setattr(obs, "_eval_content_log_group", lambda ag, ws: f"/logs/{ag.id}")
+    seen: list = []
+
+    def fake_logs_turns(log_group, session_id, started_at, workspace):
+        seen.append((log_group, session_id, started_at))
+        return [{"role": "USER", "text": "年假几天？", "at": "t"},
+                {"role": "ASSISTANT", "text": "按工龄计算", "at": "t"}]
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
     db = SessionLocal()
-    experiment = Experiment(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        name="EXP-hr-assistant", agent_id=agent_id, agent_name="hr-assistant",
-        artifacts={"traffic": {"session_ids": ["other-sid", EXTERNAL_SID]}},
-    )
-    db.add(experiment)
-    db.commit()
-    exp_id, exp_name = experiment.id, experiment.name
-    fake_events, _ = _events_for({"default": ["prompt from traffic"]})
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_events", fake_events)
-    result = obs.session_transcript(
-        db, EXTERNAL_SID, ws_ctx(), agent=db.get(Agent, agent_id)
-    )
+    # neither the agent nor the start is given — the drawer sends only the session id
+    result = obs.session_transcript(db, REPLAY_SID, ws_ctx())
+    started = seen[0][2]
+    assert seen == [(f"/logs/{agent_id}", REPLAY_SID, started)]
+    assert started.replace(tzinfo=UTC) == datetime(2026, 10, 25, 6, 56, 49, tzinfo=UTC)
+    assert (result["available"], result["origin"], result["source"]) == (True, "logs", "eval")
+    assert result["run_id"] == run_id and result["agent_id"] == agent_id
+    assert [(t["role"], t["text"]) for t in result["turns"]] == [
+        ("USER", "年假几天？"), ("ASSISTANT", "按工龄计算")]
+    # a caller-supplied start (the session's first span) is kept
+    early = datetime(2026, 10, 25, 6, 50, tzinfo=UTC)
+    obs.session_transcript(db, REPLAY_SID, ws_ctx(), started_at=early)
+    assert seen[-1][2] == early
+    # the run's agent wins over a caller's attribution: it is the agent the run drove
+    other = db.get(Agent, _seed_agent(name="other", resource_id="other-1"))
+    obs.session_transcript(db, REPLAY_SID, ws_ctx(), agent=other)
+    assert seen[-1][0] == f"/logs/{agent_id}"
     db.close()
-    assert result["source"] == "experiment"
-    assert result["experiment_id"] == exp_id and result["experiment_name"] == exp_name
+
+
+def test_transcript_replay_lookup_claims_only_replayed_sessions(monkeypatch):
+    """A session no run replayed stays unavailable: an id only listed in a run's
+    session_ids (an explicit-session run evaluates someone else's session) or replayed by
+    another workspace's run is not the platform's to show; a hidden run is not used."""
+    from app.services.visibility import Viewer
+
+    agent_id = _seed_agent()
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
+    monkeypatch.setattr(obs, "_eval_content_log_group", lambda ag, ws: f"/logs/{ag.id}")
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", lambda *a, **k: [
+        {"role": "USER", "text": "q", "at": "t"}])
+    db = SessionLocal()
+    from app.evaluation.models import EvalRun
+
+    db.add(EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id, agent_name="x",
+                   session_ids=[EXTERNAL_SID], scenario_map=None))
+    db.commit()
+    _seed_replay_run(agent_id, session_id="foreign-replayed-session-01",
+                     workspace_id="other-ws")
+    for sid in (EXTERNAL_SID, "foreign-replayed-session-01",
+                # a LIKE wildcard in the id never matches another session
+                REPLAY_SID.replace("-", "_")):
+        assert obs.session_transcript(db, sid, ws_ctx()) == {
+            "available": False, "reason": "not_platform_session"}, sid
+    # the run's own visibility gate: a viewer the run is hidden from reads it as before
+    _seed_replay_run(agent_id, created_by="some-member")
+    hidden_from = Viewer(user_id="another", filters=True)
+    assert obs.session_transcript(db, REPLAY_SID, ws_ctx(), viewer=hidden_from) == {
+        "available": False, "reason": "not_platform_session"}
+    assert obs.session_transcript(db, REPLAY_SID, ws_ctx())["available"] is True
+    db.close()
+
+
+def test_transcript_external_session_reads_content_logs_without_a_memory_backend(monkeypatch):
+    """CN: no memory backend registered is not the end — the content logs still answer."""
+    from datetime import UTC, datetime
+
+    db = SessionLocal()
+    agent = db.get(Agent, _seed_agent())
+    memory_backend.set_backend(None)
+    monkeypatch.setattr(obs, "_eval_content_log_group", lambda ag, ws: f"/logs/{ag.id}")
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", lambda *a, **k: [
+        {"role": "USER", "text": "q", "at": "t"}])
+    start = datetime(2026, 10, 15, 6, 22, 56, tzinfo=UTC)
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
+        "available": False, "reason": "memory backend not registered"}
+    result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent, started_at=start)
+    assert (result["available"], result["origin"]) == (True, "logs")
+    db.close()
+
+
+def test_eval_content_log_group_is_the_runtime_group():
+    db = SessionLocal()
+    agent = db.get(Agent, _seed_agent())
+    assert obs._eval_content_log_group(agent, ws_ctx()) == (
+        f"{obs.RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-DEFAULT")
+    agent.method = "discovered_runtime"
+    assert obs._eval_content_log_group(agent, ws_ctx()) is None
+    agent.method = "zip_runtime"
+    agent.resource_id = None
+    assert obs._eval_content_log_group(agent, ws_ctx()) is None
+    db.close()
 
 
 def test_transcript_external_probe_error_degrades(monkeypatch):
@@ -860,14 +1057,14 @@ def test_transcript_external_probe_error_degrades(monkeypatch):
     agent = db.get(Agent, agent_id)
 
     # ListActors fails (agent known, so the scoped-actor lookup runs)
-    monkeypatch.setattr(obs.memory, "list_actor_ids", boom)
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "actor_ids", boom)
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
     assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
         "available": False, "reason": "not_platform_session"}
 
     # ListEvents fails
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_events", boom)
+    monkeypatch.setattr(_FAKE, "actor_ids", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", boom)
     assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
         "available": False, "reason": "not_platform_session"}
     db.close()
@@ -878,8 +1075,9 @@ def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
     agent_id = _seed_agent()
     seen: dict = {}
 
-    def fake_transcript(db, session_id, workspace, agent=None):
+    def fake_transcript(db, session_id, workspace, agent=None, started_at=None, **_):
         seen["agent_id"] = agent.id if agent is not None else None
+        seen["started_at"] = started_at
         return {"available": False, "reason": "not_platform_session"}
 
     monkeypatch.setattr(obs, "session_transcript", fake_transcript)
@@ -887,6 +1085,8 @@ def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
     result = obs.get_session("s" * 64, "24h", db, ws_ctx(), logs=_fake_logs())
     db.close()
     assert seen["agent_id"] == agent_id  # resolved from AGG_ROW's service name
+    # the session's first span anchors a content-log fallback
+    assert seen["started_at"].isoformat() == result["summary"]["first"]
     assert result["transcript"]["available"] is False
 
 
@@ -922,220 +1122,6 @@ def test_q_root_spans_rejects_bad_trace_ids():
         obs.q_root_spans(['"] or 1=1'])
 
 
-def _content_record(trace_id, ts_ns, body, session_id="e" * 64):
-    return json.dumps({
-        "scope": {"name": "strands.telemetry.tracer"},
-        "timeUnixNano": ts_ns,
-        "traceId": trace_id,
-        "attributes": {"event.name": "strands.telemetry.tracer", "session.id": session_id},
-        "body": body,
-    })
-
-
-class FakeLogsClient:
-    """filter_log_events stub with one-page pagination."""
-
-    def __init__(self, pages):
-        self.pages = pages
-        self.calls = []
-
-    def filter_log_events(self, **kwargs):
-        self.calls.append(kwargs)
-        page = self.pages[min(len(self.calls) - 1, len(self.pages) - 1)]
-        out = {"events": [{"message": m} for m in page]}
-        if len(self.calls) < len(self.pages):
-            out["nextToken"] = f"tok-{len(self.calls)}"
-        return out
-
-
-def test_eval_turns_from_content_logs_groups_by_trace():
-    sid = "e" * 64
-    # invocation 2 arrives first in the log page — ordering must follow time
-    page1 = [
-        _content_record("trace-2", 2_000, {
-            "input": {"messages": [
-                {"content": {"content": '[{"text": "Q2?"}]'}, "role": "user"}]},
-            "output": {"messages": [
-                {"content": {"message": "A2", "finish_reason": "end_turn"},
-                 "role": "assistant"}]},
-        }),
-    ]
-    page2 = [
-        # model-level record: toolUse output (no text) + user input
-        _content_record("trace-1", 1_000, {
-            "input": {"messages": [
-                {"content": {"content": '[{"text": "Q1?"}]'}, "role": "user"}]},
-            "output": {"messages": [
-                {"content": {"message": '[{"toolUse": {"name": "calc"}}]',
-                             "finish_reason": "tool_use"}, "role": "assistant"}]},
-        }),
-        # agent-level record: plain-string system + final end_turn answer
-        _content_record("trace-1", 1_500, {
-            "input": {"messages": [
-                {"content": "system prompt", "role": "system"},
-                {"content": {"content": '[{"text": "Q1?"}]'}, "role": "user"},
-                {"content": {"content": '[{"toolResult": {"status": "ok"}}]'},
-                 "role": "tool"}]},
-            "output": {"messages": [
-                {"content": {"message": "A1", "finish_reason": "end_turn"},
-                 "role": "assistant"}]},
-        }),
-        json.dumps({"attributes": {"session.id": "other"}, "body": {}}),  # filtered out
-        "not json at all",  # skipped
-    ]
-    logs = FakeLogsClient([page1, page2])
-    turns = obs.eval_turns_from_content_logs("/lg", sid, None, ws_ctx(), logs=logs)
-    assert [(t["role"], t["text"]) for t in turns] == [
-        ("USER", "Q1?"), ("ASSISTANT", "A1"),
-        ("USER", "Q2?"), ("ASSISTANT", "A2"),
-    ]
-    assert logs.calls[0]["filterPattern"] == f'"{sid}"'
-    assert "startTime" in logs.calls[0]  # load-bearing: scan is oldest-first
-
-
-def test_eval_turns_from_content_logs_accepts_native_claude_event():
-    sid = "n" * 64
-    record = json.dumps(
-        {
-            "scope": {
-                "name": "openinference.instrumentation.claude_agent_sdk"
-            },
-            "timeUnixNano": 2_000,
-            "traceId": "native-trace",
-            "attributes": {"session.id": sid},
-            "body": {
-                "input": {
-                    "messages": [{"role": "user", "content": "Native question"}]
-                },
-                "output": {
-                    "messages": [{"role": "assistant", "content": "Native answer"}]
-                },
-            },
-        }
-    )
-    logs = FakeLogsClient([[record]])
-
-    turns = obs.eval_turns_from_content_logs(
-        "/native-runtime", sid, None, ws_ctx(), logs=logs
-    )
-
-    assert [(turn["role"], turn["text"]) for turn in turns] == [
-        ("USER", "Native question"),
-        ("ASSISTANT", "Native answer"),
-    ]
-
-
-@pytest.mark.parametrize("method", ["zip_runtime", "container"])
-def test_transcript_eval_falls_back_to_content_logs(monkeypatch, method):
-    """Runtime-backed agents write no memory events — the transcript is rebuilt
-    from the runtime's OTEL content logs. Insights re-runs reuse session ids,
-    so the CREATOR run (oldest match) anchors the log window and run_id."""
-    from datetime import datetime
-
-    from app.evaluation.models import EvalRun
-
-    agent_id = _seed_agent(method=method)
-    sid = "f" * 64
-    db = SessionLocal()
-    creator = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
-                      agent_name="hr-assistant", mode="evaluators",
-                      evaluators=[], status="completed", session_ids=[sid],
-                      created_at=datetime(2026, 7, 11, 1, 0, 0))
-    insights = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
-                       agent_name="hr-assistant", mode="insights",
-                       evaluators=[], status="completed", session_ids=[sid],
-                       created_at=datetime(2026, 7, 11, 3, 0, 0))
-    db.add_all([creator, insights])
-    db.commit()
-    creator_id = creator.id
-
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
-    seen: dict = {}
-
-    def fake_logs_turns(log_group, session_id, started_at, logs=None):
-        seen.update(log_group=log_group, started_at=started_at)
-        return [{"role": "USER", "text": "hi", "at": "t"}]
-
-    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
-    result = obs.session_transcript(db, sid, ws_ctx())
-    db.close()
-    assert result["available"] is True and result["origin"] == "logs"
-    assert result["run_id"] == creator_id  # not the insights re-run
-    assert seen["started_at"] == datetime(2026, 7, 11, 1, 0, 0)
-    assert "-DEFAULT" in seen["log_group"]
-    assert [t["text"] for t in result["turns"]] == ["hi"]
-
-
-def _seed_eval_run(agent_id, sid):
-    from datetime import datetime
-
-    from app.evaluation.models import EvalRun
-
-    db = SessionLocal()
-    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
-                  agent_name="hr-assistant", mode="evaluators", evaluators=[],
-                  status="completed", session_ids=[sid],
-                  created_at=datetime(2026, 10, 1, 13, 11, 25))
-    db.add(run)
-    db.commit()
-    db.close()
-
-
-def test_transcript_eval_harness_reads_backing_runtime_logs(monkeypatch):
-    """A harness with memory disabled writes no events — its eval turns live in
-    the hidden BACKING runtime's log group (id != harnessId), which
-    resolve_telemetry discovers."""
-    from app.evaluation import service as eval_service
-
-    agent_id = _seed_agent(method="harness")
-    sid = "9" * 64
-    _seed_eval_run(agent_id, sid)
-    backing = "/aws/bedrock-agentcore/runtimes/harness_hr_assistant-9whgxVAoEz-DEFAULT"
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
-    monkeypatch.setattr(
-        eval_service, "resolve_telemetry",
-        lambda agent, ws, logs_client=None: ("harness_hr_assistant.DEFAULT", backing),
-    )
-    seen: dict = {}
-
-    def fake_logs_turns(log_group, session_id, started_at, logs=None):
-        seen["log_group"] = log_group
-        return [{"role": "USER", "text": "how many days?", "at": "t"},
-                {"role": "ASSISTANT", "text": "3.5", "at": "t"}]
-
-    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
-    db = SessionLocal()
-    result = obs.session_transcript(db, sid, ws_ctx())
-    db.close()
-    assert seen["log_group"] == backing
-    assert result["origin"] == "logs"
-    assert [t["text"] for t in result["turns"]] == ["how many days?", "3.5"]
-
-
-def test_transcript_eval_harness_without_telemetry_degrades(monkeypatch):
-    from app.core.errors import AppError
-    from app.evaluation import service as eval_service
-
-    agent_id = _seed_agent(method="harness")
-    sid = "8" * 64
-    _seed_eval_run(agent_id, sid)
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
-
-    def no_group(agent, ws, logs_client=None):
-        raise AppError("eval.harness_no_telemetry", "none yet", status_code=400)
-
-    def must_not_scan(*args, **kwargs):
-        raise AssertionError("no log group — nothing to scan")
-
-    monkeypatch.setattr(eval_service, "resolve_telemetry", no_group)
-    monkeypatch.setattr(obs, "eval_turns_from_content_logs", must_not_scan)
-    db = SessionLocal()
-    result = obs.session_transcript(db, sid, ws_ctx())
-    db.close()
-    assert result["available"] is True and result["turns"] == []
-
-
 def test_transcript_decodes_harness_envelopes(monkeypatch):
     agent_id = _seed_agent()
     db = SessionLocal()
@@ -1156,8 +1142,8 @@ def test_transcript_decodes_harness_envelopes(monkeypatch):
             {"conversational": {"role": "ASSISTANT", "content": {"text": "plain text"}}},
         ]},
     ]
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: events)
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: events)
+    monkeypatch.setattr(_FAKE, "records", lambda *a, **k: [])
     result = obs.session_transcript(db, "s" * 64, ws_ctx())
     db.close()
     assert [t["text"] for t in result["turns"]] == [
@@ -1199,7 +1185,7 @@ def test_dashboard_endpoint_shape(client, mocked_aws):
     assert tiles["error_rate"] == 0.2
     assert tiles["latency"] == {"p50_ms": 3100.0, "p95_ms": 11800.0}
     assert tiles["tokens"]["input"] == 386_000 and tiles["tokens"]["output"] == 26_000
-    assert tiles["tokens"]["est_cost_usd"] == pytest.approx(1.548)
+    assert "est_cost_usd" not in tiles["tokens"] and "prices_meta" not in body
     assert body["series"][0]["traces"] == 5
     assert body["tokens_by_model"][0]["model"] == "global.anthropic.claude-sonnet-4-6"
     assert body["top_tools"][0]["success_rate"] == pytest.approx(88.9)
@@ -1250,7 +1236,7 @@ def test_traces_endpoint_rows_and_filters(client, mocked_aws):
     assert row["root_operation"] == "POST /invocations"
     assert row["duration_ms"] == 3200.0
     assert row["tokens"]["total"] == 1862
-    assert row["est_cost_usd"] == pytest.approx(0.005994)
+    assert "est_cost_usd" not in row
     assert row["status"] == "ok"
     filtered = client.get("/api/observability/traces?status=error").json()
     assert filtered["count"] == 0
@@ -1276,8 +1262,8 @@ def test_sessions_endpoints(client, mocked_aws, monkeypatch):
                        session_id="s" * 64, actor_id="river"))
     db.commit()
     db.close()
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "records", lambda *a, **k: [])
 
     listing = client.get("/api/observability/sessions?range=24h")
     assert listing.status_code == 200
@@ -1310,8 +1296,8 @@ def test_validation_rejects_bad_inputs(client):
 def test_session_routes_accept_composite_external_ids(client, mocked_aws, monkeypatch):
     # `#` must survive the URL (percent-encoded by the console) and the router
     # pattern; the detail route then runs the normal session build.
-    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "records", lambda *a, **k: [])
     sid = "01KKRNGA47RK9XD3ZKDWX1R5WD#feishu#oc_115a912b912ff5efb7895263ccc1ea70"
     encoded = sid.replace("#", "%23")
     detail = client.get(f"/api/observability/sessions/{encoded}")
@@ -1325,9 +1311,11 @@ def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, mon
     agent_id attributes an unclaimed session, a foreign workspace's id is dropped."""
     agent_id = _seed_agent()
     seen: list = []
+    starts: list = []
 
-    def fake_transcript(db, session_id, workspace, agent=None):
+    def fake_transcript(db, session_id, workspace, agent=None, started_at=None, **_):
         seen.append(agent.id if agent is not None else None)
+        starts.append(started_at)
         return {"available": True, "turns": [{"role": "USER", "text": "hi", "at": "t"}]}
 
     monkeypatch.setattr(obs, "session_transcript", fake_transcript)
@@ -1349,69 +1337,120 @@ def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, mon
     client.get(f"{url}?agent_id={foreign_id}")
     client.get(url)
     assert seen == [agent_id, None, None]
+    client.get(f"{url}?since=2026-10-15T06:22:56%2B00:00")
+    assert [str(s) if s else None for s in starts] == [
+        None, None, None, "2026-10-15 06:22:56+00:00"]
     assert client.get(f"{url}?agent_id=bad$id").status_code == 422
+    assert client.get(f"{url}?since=yesterday").status_code == 422
 
 
-# ── SCORE NOW: on-demand session scoring via the data-plane Evaluate API ────
+# ── session previews (task wizard's trajectory picker) ──────────────────────
+
+
+def test_transcript_preview_is_first_input_and_last_output():
+    turns = [
+        {"role": "USER", "text": "  first question  "},
+        {"role": "ASSISTANT", "text": "first answer"},
+        {"role": "USER", "text": "follow-up"},
+        {"role": "ASSISTANT", "text": "x" * 900},
+    ]
+    row = obs.transcript_preview("s" * 64, {"available": True, "turns": turns})
+    assert row == {
+        "session_id": "s" * 64, "available": True, "reason": None,
+        "input": "first question", "output": "x" * obs.PREVIEW_TEXT_CAP, "user_turns": 2,
+    }
+    # an unanswered question still previews; nothing said at all does not
+    asked = obs.transcript_preview("q" * 64, {"available": True, "turns": turns[:1]})
+    assert (asked["available"], asked["input"], asked["output"]) == (True, "first question", None)
+    empty = obs.transcript_preview("e" * 64, {"available": True, "turns": []})
+    assert (empty["available"], empty["reason"], empty["user_turns"]) == (False, "no_turns", 0)
+    gone = obs.transcript_preview("g" * 64, {"available": False, "reason": "not_platform_session"})
+    assert (gone["available"], gone["reason"], gone["input"]) == (
+        False, "not_platform_session", None)
+
+
+def test_session_transcripts_skip_long_term_reads_and_degrade_per_session(monkeypatch):
+    agent_id = _seed_agent()
+    db = SessionLocal()
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="s" * 64, actor_id="river"))
+    db.add_all([
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                    session_id="s" * 64, role="user", text="hello"),
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                    session_id="s" * 64, role="agent", text="hi there"),
+    ])
+    db.commit()
+    db.close()
+
+    def no_long_term(*args, **kwargs):
+        raise AssertionError("a preview must not read long-term records")
+
+    seen_agents: list = []
+
+    def list_actor_ids(workspace, *a, **k):
+        seen_agents.append(workspace.id)
+        raise RuntimeError("memory down")
+
+    monkeypatch.setattr(_FAKE, "events", lambda *a, **k: [])
+    monkeypatch.setattr(_FAKE, "records", no_long_term)
+    monkeypatch.setattr(_FAKE, "actor_ids", list_actor_ids)
+    out = obs.session_transcripts({"s" * 64: None, "x" * 64: None}, ws_ctx(), agent_id)
+    assert list(out) == ["s" * 64, "x" * 64]
+    chat = out["s" * 64]
+    assert chat["origin"] == "ledger" and chat["long_term_records"] is None
+    assert [t["text"] for t in chat["turns"]] == ["hello", "hi there"]
+    # an unclaimed session is probed under the given agent; its failure stays its own
+    assert out["x" * 64] == {"available": False, "reason": "not_platform_session"}
+    assert seen_agents == [ws_ctx().id]  # the scoped-actor probe ran once, for "x"
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("ledger locked")
+
+    monkeypatch.setattr(obs, "session_transcript", boom)
+    assert obs.session_transcripts({"s" * 64: None}, ws_ctx()) == {
+        "s" * 64: {"available": False, "reason": "read_failed"}}
+    assert obs.session_transcripts({}, ws_ctx()) == {}
+
+
+def test_session_previews_endpoint_reads_one_page(client, mocked_aws, monkeypatch):
+    from datetime import UTC, datetime
+
+    agent_id = _seed_agent()
+    calls: list = []
+
+    def fake_transcripts(sessions, workspace, agent_id=None, **_):
+        calls.append((dict(sessions), agent_id))
+        return {sid: {"available": True, "turns": [
+            {"role": "USER", "text": f"q-{sid[:2]}"},
+            {"role": "ASSISTANT", "text": f"a-{sid[:2]}"}]} for sid in sessions}
+
+    monkeypatch.setattr(obs, "session_transcripts", fake_transcripts)
+    url = "/api/observability/session-previews"
+    a, b = "a" * 40, "b#feishu#oc_1"
+    res = client.post(url, json={"agent_id": agent_id, "sessions": [
+        {"session_id": a, "first": "2026-10-15T06:22:56+00:00"},
+        {"session_id": b}, {"session_id": a}]})
+    assert res.status_code == 200, res.text
+    previews = res.json()["previews"]
+    assert [(p["session_id"], p["input"], p["output"]) for p in previews] == [
+        (a, "q-aa", "a-aa"), (b, "q-b#", "a-b#")]
+    # de-duplicated, one batch, each session's start handed on
+    assert calls == [({a: datetime(2026, 10, 15, 6, 22, 56, tzinfo=UTC), b: None}, agent_id)]
+    assert mocked_aws.start_calls == 0  # no Logs Insights query
+
+    assert client.post(url, json={"sessions": []}).status_code == 422
+    assert client.post(url, json={"sessions": [{"session_id": 'bad"id-123'}]}).status_code == 422
+    too_many = [{"session_id": f"sess-{i:04d}"} for i in range(obs.MAX_PREVIEW_SESSIONS + 1)]
+    assert client.post(url, json={"sessions": too_many}).status_code == 422
+    assert client.post(url, json={"sessions": [{"session_id": a}],
+                                  "agent_id": "bad$id"}).status_code == 422
+
+
+# ── session spans query (shared shape with the trace/session views) ────────
 
 
 SCORE_SESSION = "s" * 64
-SCORE_SPANS = [{**s, "attributes": {**s["attributes"], "session.id": SCORE_SESSION},
-                "scope": {"name": "strands.telemetry"}} for s in TREE_SPANS]
-
-
-def _score_result(evaluator_id, **overrides):
-    return {
-        "evaluatorArn": "arn:aws:bedrock-agentcore:us-west-2:111122223333:evaluator/"
-        + evaluator_id,
-        "evaluatorId": evaluator_id,
-        "evaluatorName": evaluator_id.split(".")[-1],
-        "value": 0.8,
-        "label": "Helpful",
-        "explanation": "The agent answered the question directly.",
-        "context": {"spanContext": {"sessionId": SCORE_SESSION, "traceId": "a" * 32}},
-        "tokenUsage": {"inputTokens": 1200, "outputTokens": 80, "totalTokens": 1280},
-        **overrides,
-    }
-
-
-class FakeDataPlane:
-    """`bedrock-agentcore` data-plane stub: records Evaluate calls, answers canned."""
-
-    def __init__(self, results_by_evaluator=None, raise_code=None):
-        self.results_by_evaluator = results_by_evaluator or {}
-        self.raise_code = raise_code
-        self.calls = []
-
-    def evaluate(self, **kwargs):
-        self.calls.append(kwargs)
-        if self.raise_code:
-            from botocore.exceptions import ClientError
-
-            raise ClientError(
-                {"Error": {"Code": self.raise_code, "Message": "unsupported span format"}},
-                "Evaluate",
-            )
-        evaluator_id = kwargs["evaluatorId"]
-        return {"evaluationResults": self.results_by_evaluator.get(
-            evaluator_id, [_score_result(evaluator_id)])}
-
-
-def _score_logs(rows):
-    # the session query is the only one these tests run; route it by the
-    # session filter so a different query would surface as an empty result
-    return FakeLogs({f'attributes.session.id = "{SCORE_SESSION}"': rows})
-
-
-@pytest.fixture
-def score_stack(monkeypatch):
-    def install(rows, data=None):
-        fake_logs = _score_logs(rows)
-        fake_data = data or FakeDataPlane()
-        monkeypatch.setattr(obs, "logs_client", lambda _ws=None: fake_logs)
-        monkeypatch.setattr(obs, "data_client", lambda _ws=None: fake_data)
-        return fake_logs, fake_data
-    return install
 
 
 def test_session_spans_query_is_the_on_demand_guide_shape():
@@ -1423,125 +1462,3 @@ def test_session_spans_query_is_the_on_demand_guide_shape():
     assert f"limit {obs.SESSION_SPANS_LIMIT}" in q
     with pytest.raises(AppError):
         obs.q_session_spans('bad"id')
-
-
-def test_score_now_parses_messages_and_calls_evaluate_per_evaluator(client, score_stack):
-    rows = [{"@message": json.dumps(s)} for s in SCORE_SPANS]
-    rows.insert(1, {"@message": "2026-09-06 stdout line that is not JSON"})
-    rows.append({"@message": json.dumps(["a", "list", "not", "a", "span"])})
-    fake_logs, fake_data = score_stack(rows)
-
-    res = client.post(
-        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
-        json={"evaluator_ids": ["Builtin.Helpfulness", "Builtin.Correctness"],
-              "range": "7d"},
-    )
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["session_id"] == SCORE_SESSION and body["range"] == "7d"
-    assert body["span_count"] == len(SCORE_SPANS)  # non-JSON + non-object rows skipped
-    # one Logs Insights query over a 7d window, one Evaluate call per evaluator
-    assert fake_logs.start_calls == 1
-    start, end = fake_logs.start_kwargs[0]["startTime"], fake_logs.start_kwargs[0]["endTime"]
-    assert end - start == 7 * 24 * 3600
-    assert [c["evaluatorId"] for c in fake_data.calls] == [
-        "Builtin.Helpfulness", "Builtin.Correctness"]
-    assert fake_data.calls[0]["evaluationInput"] == {"sessionSpans": SCORE_SPANS}
-    assert "evaluationTarget" not in fake_data.calls[0]  # session-level only
-    assert len(body["results"]) == 2
-    row = body["results"][0]
-    assert row["evaluator_id"] == "Builtin.Helpfulness"
-    assert row["evaluator_name"] == "Helpfulness"
-    assert row["value"] == 0.8 and row["label"] == "Helpful"
-    assert row["explanation"].startswith("The agent answered")
-    assert row["token_usage"] == {"input": 1200, "output": 80, "total": 1280}
-    assert row["span_context"]["sessionId"] == SCORE_SESSION
-    assert row["error_code"] is None and row["error_message"] is None
-
-
-def test_score_now_without_spans_is_409_with_readiness_hint(client, score_stack):
-    _, fake_data = score_stack([])
-    res = client.post(
-        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
-        json={"evaluator_ids": ["Builtin.Helpfulness"]},
-    )
-    assert res.status_code == 409
-    body = res.json()
-    assert body["code"] == "observability.session_spans_missing"
-    assert "minutes" in body["detail"]["hint"]
-    assert body["detail"]["range"] == "24h"  # default window
-    assert fake_data.calls == []  # never reaches Evaluate
-
-
-def test_score_now_partial_failure_is_an_error_row_not_an_exception(client, score_stack):
-    failing = _score_result("Builtin.Faithfulness", value=None, label=None,
-                            explanation=None, tokenUsage=None,
-                            errorCode="ValidationException",
-                            errorMessage="no tool spans to judge")
-    failing = {k: v for k, v in failing.items() if v is not None}
-    _, fake_data = score_stack(
-        [{"@message": json.dumps(s)} for s in SCORE_SPANS],
-        data=FakeDataPlane({"Builtin.Faithfulness": [failing], "Builtin.NoResult": []}),
-    )
-    res = client.post(
-        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
-        json={"evaluator_ids": ["Builtin.Helpfulness", "Builtin.Faithfulness",
-                                "Builtin.NoResult", "Builtin.Helpfulness"]},
-    )
-    assert res.status_code == 200, res.text
-    rows = res.json()["results"]
-    # duplicate id collapsed → 3 evaluators scored, in request order
-    assert [c["evaluatorId"] for c in fake_data.calls] == [
-        "Builtin.Helpfulness", "Builtin.Faithfulness", "Builtin.NoResult"]
-    assert [r["evaluator_id"] for r in rows] == [
-        "Builtin.Helpfulness", "Builtin.Faithfulness", "Builtin.NoResult"]
-    ok, failed, empty = rows
-    assert ok["error_code"] is None and ok["value"] == 0.8
-    assert failed["error_code"] == "ValidationException"
-    assert failed["error_message"] == "no tool spans to judge"
-    assert failed["value"] is None and failed["label"] is None
-    assert failed["token_usage"] is None
-    # an evaluator answering with zero results still gets a row the UI can show
-    assert empty["error_code"] == "NoResult" and empty["value"] is None
-
-
-def test_score_now_rejects_bad_bodies(client, score_stack):
-    _, fake_data = score_stack([{"@message": json.dumps(s)} for s in SCORE_SPANS])
-    url = f"/api/observability/sessions/{SCORE_SESSION}/evaluate"
-    too_many = client.post(url, json={"evaluator_ids": [f"Builtin.E{i}" for i in range(6)]})
-    assert too_many.status_code == 422
-    assert too_many.json()["code"] == "validation.invalid_request"
-    assert client.post(url, json={"evaluator_ids": []}).status_code == 422
-    assert client.post(url, json={"evaluator_ids": ["Builtin.Helpfulness"],
-                                  "range": "99h"}).status_code == 422
-    assert client.post(url, json={"evaluator_ids": ['bad"id']}).status_code == 422
-    assert client.post("/api/observability/sessions/ab/evaluate",
-                       json={"evaluator_ids": ["Builtin.Helpfulness"]}).status_code == 422
-    assert fake_data.calls == []
-
-
-def test_score_now_aws_validation_error_maps_to_4xx_envelope(client, score_stack):
-    score_stack([{"@message": json.dumps(s)} for s in SCORE_SPANS],
-                data=FakeDataPlane(raise_code="ValidationException"))
-    res = client.post(
-        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
-        json={"evaluator_ids": ["Builtin.Helpfulness"]},
-    )
-    assert res.status_code == 400
-    body = res.json()
-    assert body["code"] == "aws.validation"
-    assert "unsupported span format" in body["message"]
-    assert "An error occurred" not in body["message"]
-
-
-def test_evaluate_session_spans_wrapper_shape():
-    from app.services.agentcore import evaluation as ace
-
-    fake = FakeDataPlane()
-    out = ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness",
-                                     spans=SCORE_SPANS)
-    assert fake.calls == [{"evaluatorId": "Builtin.Helpfulness",
-                           "evaluationInput": {"sessionSpans": SCORE_SPANS}}]
-    assert out[0]["evaluatorId"] == "Builtin.Helpfulness"
-    with pytest.raises(ValueError):
-        ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness", spans=[])

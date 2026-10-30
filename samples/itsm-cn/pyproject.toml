@@ -1,0 +1,27 @@
+[project]
+name = "launchpad-itsm-cn-lab"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+  "boto3>=1.42",
+  "requests>=2.32",
+  "beautifulsoup4>=4.12",
+  "markdown-it-py>=3",
+  "pillow>=11",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded HTML/CSS, shell programs and Cedar retain their copyable source lines.
+"scripts/build_manual.py" = ["E501"]
+"scripts/deploy_tools.py" = ["E501"]
+"scripts/prepare_policy.py" = ["E501"]
+# Synthetic Chinese teaching text and the human-readable test summary.
+"lab-assets/service.py" = ["E501"]
+"scripts/test_business.py" = ["E501"]

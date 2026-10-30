@@ -178,6 +178,11 @@ export function UserList() {
                 </LinkButton>
               </>
             )}
+            {u.locked_until ? (
+              <LinkButton disabled={busy} onClick={() => actions.unlock(u)} testId={`v2-users-unlock-${u.username}`}>
+                {t("v2.users.action.unlock")}
+              </LinkButton>
+            ) : null}
             <LinkButton danger disabled={busy} onClick={() => actions.ask("delete", u)} testId={`v2-users-delete-${u.username}`}>
               {t("v2.users.action.delete")}
             </LinkButton>

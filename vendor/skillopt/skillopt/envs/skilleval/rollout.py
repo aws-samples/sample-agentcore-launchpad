@@ -2,9 +2,9 @@
 
 Each task gets an isolated work_dir seeded with the skill document (via
 ``prepare_workspace``, which writes ``.agents/skills/skillopt-target/SKILL.md``)
-plus any task-declared files, then the configured exec backend drives the
-agent: ``run_claude_code_exec`` for ``claude_code_exec`` (default) or
-``run_codex_exec`` when the target backend is ``codex_exec``.
+plus any task-declared files, then the exec backend drives the agent:
+``run_opencode_exec`` (the OpenCode CLI; LAUNCHPAD PATCH D16, the only exec
+backend).
 Failures are isolated per task: one crashing task never aborts the batch, and
 rollout adds no retry of its own (the exec harness owns retries).
 """
@@ -23,14 +23,14 @@ from skillopt.envs.skilleval.artifacts import (
     build_manifest,
     diff_manifests,
 )
+from skillopt.model.agentcore_runner import AgentCoreRunnerError
 from skillopt.model.backend_config import get_target_backend
 from skillopt.model.codex_harness import (
     extract_exec_failure,
     extract_exec_usage,
     prepare_workspace,
-    run_claude_code_exec,
-    run_codex_exec,
 )
+from skillopt.model.opencode_backend import OPENCODE_BACKEND, run_opencode_exec
 
 GUIDE_PROMPT = (
     "Read `.agents/skills/skillopt-target/SKILL.md` first and follow it while "
@@ -119,7 +119,7 @@ def _rollout_one(
     skill_docs: dict[str, str] | None = None,
     runtime_skills: list[RuntimeSkill] | None = None,
 ) -> dict:
-    # absolute: codex exec receives work_dir both as cwd and as `-C`, so a
+    # absolute: the exec CLI receives work_dir as its project dir (cwd), so a
     # relative path would be resolved twice and fail with ENOENT
     work_dir = os.path.abspath(os.path.join(out_root, "rollouts", item["id"]))
     result = {
@@ -168,26 +168,17 @@ def _rollout_one(
         try:
             # Artifact-producing tasks are the norm in skill evaluation: allow
             # file edits (the default exec prompt injects "Do not modify
-            # files.") and extend the read-only default tool set accordingly.
-            # codex_exec gets the same freedom through its workspace-write
-            # sandbox default.
-            backend = "codex_exec" if get_target_backend() == "codex_exec" else "claude_code_exec"
-            if backend == "codex_exec":
-                response, raw = run_codex_exec(
-                    work_dir=work_dir,
-                    prompt=PLUGIN_GUIDE_PROMPT if runtime_skills else GUIDE_PROMPT,
-                    model=model,
-                    timeout=timeout,
-                )
-            else:
-                response, raw = run_claude_code_exec(
-                    work_dir=work_dir,
-                    prompt=PLUGIN_GUIDE_PROMPT if runtime_skills else GUIDE_PROMPT,
-                    model=model,
-                    timeout=timeout,
-                    allowed_tools="Read,Bash,Write,Edit,Glob,Grep",
-                    allow_file_edits=True,
-                )
+            # files.").
+            backend = get_target_backend()
+            if backend != OPENCODE_BACKEND:
+                raise ValueError(f"Unsupported exec backend for rollout: {backend!r}")
+            response, raw = run_opencode_exec(
+                work_dir=work_dir,
+                prompt=PLUGIN_GUIDE_PROMPT if runtime_skills else GUIDE_PROMPT,
+                model=model,
+                timeout=timeout,
+                allow_file_edits=True,
+            )
             result["response"] = response
             usage = extract_exec_usage(raw)
             if usage is not None:
@@ -199,6 +190,14 @@ def _rollout_one(
                     if detail
                     else f"{backend} returned an empty response after all attempts"
                 )
+        except AgentCoreRunnerError as exc:
+            # The platform's exec infrastructure (remote worker invoke / S3 transport /
+            # model-key resolution) failed before the task ran: an invalid row, excluded
+            # from scoring like an artifact-collection failure — never a zero (N10v3-bug3).
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            result["error_traceback"] = traceback.format_exc(limit=5)
+            result["error_type"] = "infrastructure"
+            result["score_valid"] = False
         except Exception as exc:  # noqa: BLE001 — isolate target failures
             result["error"] = f"{type(exc).__name__}: {exc}"
             result["error_traceback"] = traceback.format_exc(limit=5)

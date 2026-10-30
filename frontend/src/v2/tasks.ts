@@ -1,10 +1,11 @@
 import type { TFunction } from "i18next";
 
 import { api, type OnlineEvalConfigRow } from "../lib/api";
-import type { EvaluationRunInfo, LogSource } from "../lib/evaluation";
+import type { EvaluationRunInfo, LogSource, RunHiddenRefs } from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
-import { insightLabel, modeOf } from "./online";
+import { configName, insightLabel, modeOf } from "./online";
 import type { TagTone } from "./ui";
+import { compareTimesDesc } from "../lib/timestamps";
 
 /**
  * One "evaluation task" of the V2 console. Two backend resources present as
@@ -29,8 +30,11 @@ export interface V2Task {
   name: string;
   description: string;
   agentId: string | null;
-  /** the agent's name — for a CloudWatch-source run, the telemetry service name */
+  /** the agent's name — for a CloudWatch-source run, the telemetry service name; "" when
+   *  `hidden.agent` (render `agentLabel`, never this string) */
   agentName: string;
+  /** N15-obs8: referenced rows the viewer may not see (their names arrive null) */
+  hidden: RunHiddenRefs;
   /** set when the task evaluates CloudWatch telemetry with no platform agent */
   logSource: LogSource | null;
   mode: TaskMode;
@@ -42,6 +46,8 @@ export interface V2Task {
   status: TaskStatus;
   createdAt: string | null;
   updatedAt: string | null;
+  /** username recorded when the run / online config was created; null when unknown */
+  createdByName: string | null;
   run?: EvaluationRunInfo;
   online?: OnlineEvalConfigRow;
 }
@@ -70,15 +76,20 @@ function runStatus(run: EvaluationRunInfo): TaskStatus {
   }
 }
 
+const NO_HIDDEN: RunHiddenRefs = { agent: false, dataset: false };
+
 export function taskFromRun(run: EvaluationRunInfo): V2Task {
   const { source, detail } = runSource(run);
+  const hidden = { ...NO_HIDDEN, ...(run.hidden ?? {}) };
+  const agentName = run.agent_name ?? "";
   return {
     kind: "run",
     id: run.id,
-    name: run.name || `${run.agent_name} · ${detail || run.id}`,
+    name: run.name || `${agentName || run.id} · ${detail || run.id}`,
     description: run.description ?? "",
     agentId: run.agent_id || null,
-    agentName: run.agent_name,
+    agentName,
+    hidden,
     logSource: run.log_source ?? null,
     mode: run.mode === "insights" ? "insights" : "evaluators",
     evaluators: run.evaluators,
@@ -87,6 +98,7 @@ export function taskFromRun(run: EvaluationRunInfo): V2Task {
     status: runStatus(run),
     createdAt: run.created_at ?? null,
     updatedAt: run.updated_at ?? run.created_at ?? null,
+    createdByName: run.created_by_name ?? null,
     run,
   };
 }
@@ -102,11 +114,12 @@ export function taskFromOnline(row: OnlineEvalConfigRow): V2Task {
   return {
     kind: "online",
     id: row.config_id,
-    name: row.description?.trim() || row.name || row.config_id,
+    name: configName(row),  // N17-obs441: one rule with the online pages
     description: row.description ?? "",
     agentId: row.agent_id,
     logSource: null,
     agentName: row.agent_name ?? row.matched_agent?.name ?? "—",
+    hidden: NO_HIDDEN,
     mode: modeOf(row) === "insights" ? "insights" : "evaluators",
     evaluators: modeOf(row) === "insights" ? row.insights : row.evaluators,
     source: "live",
@@ -114,6 +127,7 @@ export function taskFromOnline(row: OnlineEvalConfigRow): V2Task {
     status: onlineStatus(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,
+    createdByName: row.created_by_name ?? null,
     online: row,
   };
 }
@@ -132,8 +146,15 @@ export function statusLabel(t: TFunction, status: TaskStatus): string {
   return t(`v2.taskStatus.${status}`);
 }
 
-export function sourceLabel(t: TFunction, task: Pick<V2Task, "source" | "sourceDetail">): string {
-  return t(`v2.taskSource.${task.source}`, { detail: task.sourceDetail });
+export function sourceLabel(t: TFunction, task: Pick<V2Task, "source" | "sourceDetail"> & Partial<Pick<V2Task, "hidden">>): string {
+  // N15-obs8: a dataset the viewer may not see arrives nameless — the placeholder, never a crash
+  const detail = task.hidden?.dataset && (task.source === "dataset" || task.source === "cloud") ? t("v2.common.hiddenRef") : task.sourceDetail;
+  return t(`v2.taskSource.${task.source}`, { detail });
+}
+
+/** The agent column / row: the placeholder when the viewer may not see the agent (N15-obs8). */
+export function agentLabel(t: TFunction, task: Pick<V2Task, "agentName"> & Partial<Pick<V2Task, "hidden">>): string {
+  return task.hidden?.agent ? t("v2.common.hiddenRef") : task.agentName;
 }
 
 /** Display name of one of a task's `evaluators` entries (an insight type in insights mode). */
@@ -153,7 +174,8 @@ export function evaluatorSummary(
 }
 
 export function sortTasks(tasks: V2Task[]): V2Task[] {
-  return [...tasks].sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
+  // N17-obs461: by instant — runs carry naive ledger times, other tasks offset ones
+  return [...tasks].sort((a, b) => compareTimesDesc(a.createdAt, b.createdAt));
 }
 
 /** Every operator task of the workspace: batch runs (scored and insights) +
@@ -169,4 +191,17 @@ export async function loadTasks(): Promise<V2Task[]> {
     ...runs.runs.map(taskFromRun),
     ...online.configs.filter((c) => c.owner === "agent" && c.mode === "scores").map(taskFromOnline),
   ]);
+}
+
+/** N17-obs437: an evaluator that reads ground truth (`requires_ground_truth`: the trajectory
+ *  matchers, a custom judge whose rubric reads `{assertions}` / `{expected_response}` /
+ *  `{expected_tool_trajectory}` or an alias, a managed code evaluator with reference rules)
+ *  cannot score a target that carries none: continuous (online) evaluation, or a run over
+ *  sessions / a time window / logs — only a dataset scope brings references. */
+export function needsAbsentGroundTruth(
+  evaluator: { requires_ground_truth?: boolean },
+  strategy: "history" | "continuous",
+  source: string,
+): boolean {
+  return !!evaluator.requires_ground_truth && (strategy === "continuous" || source !== "dataset");
 }

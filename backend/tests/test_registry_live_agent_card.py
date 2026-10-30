@@ -12,12 +12,12 @@ from botocore.exceptions import ClientError
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
+from app.services import registry_backend as reg
 from app.services import registry_console as console
-from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
-from tests.conftest import set_default_resources
+from app.services.registry_local import LocalRegistryBackend
+from tests.conftest import set_default_resources, ws_ctx
 
-RECORD_ID = "r-a2a-1"
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/aurora-1"
 STORED_CARD = {
     "protocolVersion": "0.3.0",
@@ -32,20 +32,12 @@ STORED_CARD = {
 }
 
 
-def _record(card: dict | None = STORED_CARD) -> dict:
-    descriptors = reg.build_a2a_descriptors(card) if card is not None else {}
-    return {
-        "recordId": RECORD_ID, "name": "aurora-faq-a2a", "descriptorType": "A2A",
-        "status": "APPROVED", "recordVersion": "1.0.0-a2a", "descriptors": descriptors,
-    }
-
-
 def _mk_agent(**kw) -> str:
     db = SessionLocal()
     agent = Agent(**{
         "workspace_id": DEFAULT_WORKSPACE_ID, "name": "aurora-faq-a2a",
         "method": "zip_runtime", "status": "active", "arn": RUNTIME_ARN,
-        "registry_record_id": RECORD_ID, "spec": {"protocol": "a2a"}, **kw,
+        "spec": {"protocol": "a2a"}, **kw,
     })
     db.add(agent)
     db.commit()
@@ -93,11 +85,17 @@ class DataPlane:
 
 @pytest.fixture
 def plane(monkeypatch):
-    """Wire a stub data plane + stub registry read; tests reconfigure `plane`."""
-    set_default_resources({"registry_id": "reg-1"})
+    """Wire a stub data plane + a real A2A record on the local backend."""
+    set_default_resources({"registry_id": "local-default"})
+    backend = LocalRegistryBackend()
+    reg.set_backend(backend)
+    record, _ = backend.upsert_record(
+        ws_ctx(), name="aurora-faq-a2a", description="d", descriptor_type="A2A",
+        descriptors=reg.build_a2a_descriptors(STORED_CARD),
+    )
     stub = DataPlane(dict(STORED_CARD))
     monkeypatch.setattr(console, "data_client", lambda _ws: stub)
-    monkeypatch.setattr(console, "console_get", lambda _ws, rid: _record())
+    stub.record_id = record["recordId"]
     return stub
 
 
@@ -149,19 +147,20 @@ def test_agent_card_diff_lists_fields_and_skill_ids_on_both_sides():
 
 
 def test_stored_a2a_card_tolerates_missing_or_broken_descriptor():
-    assert reg.stored_a2a_card(_record(card=None)) == {}
-    broken = _record()
+    assert reg.stored_a2a_card({"descriptors": {}}) == {}
+    broken = {"descriptors": reg.build_a2a_descriptors(STORED_CARD)}
     broken["descriptors"]["a2a"]["agentCard"]["inlineContent"] = "{not json"
     assert reg.stored_a2a_card(broken) == {}
-    assert reg.stored_a2a_card(_record())["name"] == "aurora-faq-a2a"
+    good = {"descriptors": reg.build_a2a_descriptors(STORED_CARD)}
+    assert reg.stored_a2a_card(good)["name"] == "aurora-faq-a2a"
 
 
 # ---- route ------------------------------------------------------------------
 
 def test_live_agent_card_reads_the_ledger_arn_and_diffs(client, plane):
-    agent_id = _mk_agent()
+    agent_id = _mk_agent(registry_record_id=plane.record_id)
     plane.card = {**STORED_CARD, "skills": [{"id": "faq"}, {"id": "escalate"}]}
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["agent_id"] == agent_id and body["runtime_arn"] == RUNTIME_ARN
@@ -175,9 +174,9 @@ def test_live_agent_card_reads_the_ledger_arn_and_diffs(client, plane):
 
 
 def test_live_agent_card_identical_and_session_cleanup(client, plane):
-    _mk_agent()
+    _mk_agent(registry_record_id=plane.record_id)
     plane.session_id = "s" * 33
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 200, res.text
     assert res.json()["diff"] == {"identical": True, "fields": [],
                                   "skills_only_in_live": [], "skills_only_in_record": []}
@@ -185,24 +184,24 @@ def test_live_agent_card_identical_and_session_cleanup(client, plane):
 
 
 def test_live_agent_card_stop_failure_does_not_fail_the_request(client, plane):
-    _mk_agent()
+    _mk_agent(registry_record_id=plane.record_id)
     plane.session_id = "s" * 33
     plane.stop_error = "ResourceNotFoundException"
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 200, res.text
     assert res.json()["card"]["name"] == "aurora-faq-a2a"
 
 
 def test_live_agent_card_refuses_record_without_ledger_agent(client, plane):
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 404
     assert res.json()["code"] == "registry.record_not_deployed"
     assert plane.get_calls == []
 
 
 def test_live_agent_card_refuses_http_agent(client, plane):
-    _mk_agent(spec={"protocol": "http"})
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    _mk_agent(registry_record_id=plane.record_id, spec={"protocol": "http"})
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 409
     assert res.json()["code"] == "registry.record_not_a2a"
     assert plane.get_calls == []
@@ -210,37 +209,53 @@ def test_live_agent_card_refuses_http_agent(client, plane):
 
 @pytest.mark.parametrize("status", ["deploying", "failed", "draft"])
 def test_live_agent_card_refuses_agent_not_active(client, plane, status):
-    _mk_agent(status=status)
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    _mk_agent(registry_record_id=plane.record_id, status=status)
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 409
     assert res.json()["code"] == "registry.agent_not_ready"
     assert plane.get_calls == []
 
 
 def test_live_agent_card_ignores_deleted_and_foreign_agents(client, plane):
-    _mk_agent(status="deleted")
-    _mk_agent(workspace_id="acct-usw1")
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    _mk_agent(registry_record_id=plane.record_id, status="deleted")
+    _mk_agent(registry_record_id=plane.record_id, workspace_id="acct-usw1")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 404
     assert res.json()["code"] == "registry.record_not_deployed"
     assert plane.get_calls == []
 
 
+def test_live_agent_card_refuses_a_record_id_from_another_workspace(client, plane):
+    """The ledger agent lookup is scoped to the caller's workspace, but a crafted
+    ``registry_record_id`` naming a record from a DIFFERENT workspace must still 404 —
+    the backend's own workspace scoping is the hard boundary, not just the agent query."""
+    foreign_record, _ = reg.get_backend().upsert_record(
+        ws_ctx(id="acct-usw1"), name="other-ws-agent", description="d",
+        descriptor_type="A2A", descriptors=reg.build_a2a_descriptors(STORED_CARD),
+    )
+    # The agent lives in the caller's (default) workspace but names the foreign record.
+    _mk_agent(registry_record_id=foreign_record["recordId"])
+    res = client.get(f"/api/registry/records/{foreign_record['recordId']}/live-agent-card")
+    assert res.status_code == 404
+    assert res.json()["code"] == "registry.record_not_found"
+    assert plane.get_calls == []
+
+
 def test_live_agent_card_maps_data_plane_client_error_to_envelope(client, plane):
-    _mk_agent()
+    _mk_agent(registry_record_id=plane.record_id)
     plane.error_code = "ResourceNotFoundException"
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 404
     assert res.json()["code"] == "aws.not_found"
     plane.error_code = "AccessDeniedException"
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 403 and res.json()["code"] == "aws.access_denied"
 
 
 def test_live_agent_card_unmapped_runtime_error_is_502_not_500(client, plane):
-    _mk_agent()
+    _mk_agent(registry_record_id=plane.record_id)
     plane.error_code = "RuntimeClientError"  # in the GetAgentCard error list, not the map
-    res = client.get(f"/api/registry/records/{RECORD_ID}/live-agent-card")
+    res = client.get(f"/api/registry/records/{plane.record_id}/live-agent-card")
     assert res.status_code == 502
     body = res.json()
     assert body["code"] == "registry.live_card_failed"

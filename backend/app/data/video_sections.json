@@ -18,7 +18,7 @@
     {"id": "observability", "categoryId": "run", "title": {"en": "Observability", "zh-CN": "可观测"}, "path": "/v2/observability"},
     {"id": "memory", "categoryId": "run", "title": {"en": "Memory", "zh-CN": "记忆"}, "path": "/v2/memory"},
     {"id": "governance", "categoryId": "run", "title": {"en": "Governance", "zh-CN": "治理"}, "path": "/v2/governance"},
-    {"id": "my-connections", "categoryId": "run", "title": {"en": "My authorizations", "zh-CN": "我的授权"}, "path": "/v2/my-connections"},
+    {"id": "policy", "categoryId": "run", "title": {"en": "Policy", "zh-CN": "策略"}, "path": "/v2/policy"},
     {"id": "eval-data", "categoryId": "eval", "title": {"en": "Data Center", "zh-CN": "数据中心"}, "path": "/v2/eval/data"},
     {"id": "eval-tasks", "categoryId": "eval", "title": {"en": "Evaluation Tasks", "zh-CN": "评估任务"}, "path": "/v2/eval/tasks"},
     {"id": "eval-insights", "categoryId": "eval", "title": {"en": "Evaluation overview", "zh-CN": "评估总览"}, "path": "/v2/eval/insights"},
@@ -30,6 +30,7 @@
     {"id": "workspaces", "categoryId": "admin", "title": {"en": "Workspaces", "zh-CN": "工作区"}, "path": "/v2/workspaces"},
     {"id": "connections", "categoryId": "admin", "title": {"en": "Outbound credentials", "zh-CN": "出站凭证"}, "path": "/v2/connections"},
     {"id": "announcements", "categoryId": "admin", "title": {"en": "Announcements", "zh-CN": "公告管理"}, "path": "/v2/announcements"},
+    {"id": "model-providers", "categoryId": "admin", "title": {"en": "Model Providers", "zh-CN": "模型提供方"}, "path": "/v2/settings/model-providers"},
     {"id": "videos", "categoryId": "learn", "title": {"en": "Video introductions", "zh-CN": "视频介绍"}, "path": "/v2/videos"},
     {"id": "video-management", "categoryId": "admin", "title": {"en": "Video management", "zh-CN": "视频管理"}, "path": "/v2/video-management"}
   ]

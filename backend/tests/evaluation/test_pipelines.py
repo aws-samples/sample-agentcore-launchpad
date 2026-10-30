@@ -60,7 +60,16 @@ def fake_sessions(monkeypatch):
 
     monkeypatch.setattr(pipeline_routers.observability, "get_session", get_session)
     monkeypatch.setattr(pipeline_routers.observability, "list_sessions", list_sessions)
+    monkeypatch.setattr(pipeline_routers, "_spawn", lambda fn: fn())  # run inline
     return calls
+
+
+def _run(client, pid):
+    """Start a run (inline under `fake_sessions`) and read its outcome back."""
+    res = client.post(f"/api/eval/pipelines/{pid}/run")
+    assert res.status_code == 202, res.text
+    assert res.json()["status"] == "running"  # the request never waits for the run
+    return client.get(f"/api/eval/pipelines/{pid}").json()
 
 
 def _dataset(items, kind):
@@ -173,7 +182,7 @@ def test_pipeline_crud_and_runs_append_once(client, fake_sessions):
     assert res.json()["status"] == "idle"
     assert [p["id"] for p in client.get("/api/eval/pipelines").json()["pipelines"]] == [pid]
 
-    first = client.post(f"/api/eval/pipelines/{pid}/run").json()
+    first = _run(client, pid)
     assert first["status"] == "succeeded", first["last_run"]
     run = first["last_run"]
     assert (run["scanned"], run["matched"], run["added"]) == (4, 3, 2)
@@ -181,7 +190,7 @@ def test_pipeline_crud_and_runs_append_once(client, fake_sessions):
     # the first run created the dataset; the pipeline now targets it
     assert first["config"]["output"] == {"dataset_id": dataset_id}
 
-    second = client.post(f"/api/eval/pipelines/{pid}/run").json()
+    second = _run(client, pid)
     assert second["status"] == "succeeded"
     assert second["last_run"]["added"] == 0 and second["last_run"]["dataset_id"] == dataset_id
     db = SessionLocal()
@@ -216,6 +225,113 @@ def test_pipeline_run_failure_is_recorded(client, fake_sessions, monkeypatch):
         raise RuntimeError("logs unavailable")
 
     monkeypatch.setattr(pipeline_routers.observability, "list_sessions", boom)
-    out = client.post(f"/api/eval/pipelines/{pid}/run").json()
+    out = _run(client, pid)
     assert out["status"] == "failed"
     assert "logs unavailable" in out["last_run"]["error"]
+
+
+def test_from_sessions_reads_spans_concurrently_and_keeps_the_request_order(client, monkeypatch):
+    """N-SCN-obs10: the per-session span reads run on a 4-worker pool and the items still
+    follow the request's session order whatever order the reads finished in. Concurrency is
+    asserted STRUCTURALLY (N17-obs241): the fake reader records the peak number of in-flight
+    calls and the pool threads it ran on — never an absolute wall-clock budget, which failed
+    at 1.24 s under a host load of ~10 while passing serially at 1.05 s (r17-pf gate)."""
+    import threading
+    import time as _time
+
+    ids = [f"sess-{i:08d}-conc" for i in range(6)]
+    seen_threads: set[str] = set()
+    in_flight = {"now": 0, "peak": 0}
+    lock = threading.Lock()
+    gate = threading.Barrier(2, timeout=10)  # proves two reads are in flight AT ONCE
+
+    def get_session(session_id, range_key, db, workspace, force=False, logs=None):
+        with lock:
+            in_flight["now"] += 1
+            in_flight["peak"] = max(in_flight["peak"], in_flight["now"])
+            seen_threads.add(threading.current_thread().name)
+        if ids.index(session_id) < 2:
+            gate.wait()  # the first two reads can only pass together — sequential reads would
+            # block here for the whole timeout
+        # later sessions answer sooner, so a naive "as completed" order would be reversed
+        _time.sleep(0.05 - 0.005 * ids.index(session_id))
+        with lock:
+            in_flight["now"] -= 1
+        return {
+            "session_id": session_id,
+            "summary": {"agent": "hr-bot"},
+            "transcript": {"available": True, "turns": [
+                {"role": "user", "text": f"question {session_id}", "at": "t1"},
+                {"role": "assistant", "text": f"answer {session_id}", "at": "t2"},
+            ]},
+        }
+
+    monkeypatch.setattr(pipeline_routers.observability, "get_session", get_session)
+    res = client.post("/api/eval/datasets/from-sessions", json={
+        "session_ids": ids, "name": "conc", "range": "24h"})
+
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert not gate.broken  # both barrier parties arrived: two reads overlapped
+    assert 2 <= in_flight["peak"] <= pipeline_routers.FROM_SESSIONS_WORKERS, in_flight
+    assert len(seen_threads) >= 2  # more than one pool thread served the reads
+    assert all(name.startswith("from-sessions") for name in seen_threads)
+    items = body["dataset"]["items"]
+    assert [it["metadata"]["session_id"] for it in items] == ids  # the request's order
+    assert [it["turns"][0]["input"] for it in items] == [f"question {s}" for s in ids]
+    assert body["added"] == 6 and body["skipped"] == []
+    timing = body["timing"]
+    assert timing["sessions"] == 6 and timing["read"] == 6 and timing["workers"] == 4
+    assert timing["elapsed_ms"] > 0  # reported, never bounded by an absolute second count
+
+
+def test_from_sessions_single_session_reads_inline_and_reports_one_worker(client, fake_sessions):
+    res = client.post("/api/eval/datasets/from-sessions", json={
+        "session_ids": [SID_A], "name": "one"})
+    assert res.status_code == 201, res.text
+    assert res.json()["timing"]["workers"] == 1 and res.json()["timing"]["sessions"] == 1
+    assert fake_sessions["get"] == [SID_A]
+
+
+def test_pipeline_run_is_background_and_refuses_overlap(client, fake_sessions, monkeypatch):
+    pid = client.post("/api/eval/pipelines", json={
+        "name": "p", "output": {"dataset_name": "d"},
+    }).json()["id"]
+    started = []
+    monkeypatch.setattr(pipeline_routers, "_spawn", started.append)  # never runs
+    res = client.post(f"/api/eval/pipelines/{pid}/run")
+    assert res.status_code == 202 and res.json()["status"] == "running"
+    assert len(started) == 1 and fake_sessions["get"] == []
+    # still live: reads keep it running, a second run and an edit are refused
+    assert client.get(f"/api/eval/pipelines/{pid}").json()["status"] == "running"
+    assert client.post(f"/api/eval/pipelines/{pid}/run").status_code == 409
+    assert client.put(f"/api/eval/pipelines/{pid}", json={
+        "name": "p", "output": {"dataset_name": "d"}}).status_code == 409
+    started[0]()  # the thread finishes
+    out = client.get(f"/api/eval/pipelines/{pid}").json()
+    assert out["status"] == "succeeded" and out["last_run"]["added"] == 2
+
+
+def test_pipeline_orphaned_run_is_reaped(client, fake_sessions, monkeypatch):
+    pid = client.post("/api/eval/pipelines", json={
+        "name": "p", "output": {"dataset_name": "d"},
+    }).json()["id"]
+    monkeypatch.setattr(pipeline_routers, "_spawn", lambda fn: None)
+    client.post(f"/api/eval/pipelines/{pid}/run")
+    pipeline_routers._live_runs.discard(pid)  # its thread died with the old process
+    [row] = client.get("/api/eval/pipelines").json()["pipelines"]
+    assert row["status"] == "failed" and "interrupted" in row["last_run"]["error"]
+    monkeypatch.setattr(pipeline_routers, "_spawn", lambda fn: fn())
+    assert _run(client, pid)["status"] == "succeeded"
+
+
+def test_pipeline_deleted_mid_run_records_nothing(client, fake_sessions, monkeypatch):
+    pid = client.post("/api/eval/pipelines", json={
+        "name": "p", "output": {"dataset_name": "d"},
+    }).json()["id"]
+    started = []
+    monkeypatch.setattr(pipeline_routers, "_spawn", started.append)
+    client.post(f"/api/eval/pipelines/{pid}/run")
+    assert client.delete(f"/api/eval/pipelines/{pid}").json() == {"deleted": True}
+    started[0]()  # must not raise on the vanished row
+    assert pid not in pipeline_routers._live_runs

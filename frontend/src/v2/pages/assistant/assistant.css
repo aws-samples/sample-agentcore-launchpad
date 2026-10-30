@@ -46,6 +46,8 @@
   border: 1px solid var(--v2-line); border-radius: 6px; font-size: 12.5px; background: #fff;
 }
 .v2 .v2-assistant-tool .args { flex-basis: 100%; color: var(--v2-ink-3); font-family: var(--v2-mono); font-size: 12px; word-break: break-all; }
+/* N17-obs468: whether the turn produced a revision, under its last row */
+.v2 .v2-assistant-turn-rev { margin: -6px 0 14px 74px; font-size: 12px; }
 .v2 .v2-assistant-composer { border-top: 1px solid var(--v2-line); margin-top: 12px; padding-top: 12px; }
 .v2 .v2-assistant-composer .v2-textarea { min-height: 96px; }
 .v2 .v2-assistant-composer .bar { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; margin-top: 8px; }
@@ -122,6 +124,19 @@
 .v2 .v2-assistant-sub-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 10px; background: var(--v2-fill); border-radius: 6px; }
 .v2 .v2-assistant-sub-row .err { flex-basis: 100%; color: var(--v2-danger); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
 .v2 .v2-assistant-sub-row .err.warn { color: var(--v2-warning); }
+.v2 .v2-assistant-sub-row .err.info { color: var(--v2-primary); }
+/* step 2's run history (RunHistory.tsx): one scorecard benchmark, read run by run */
+.v2 .v2-assistant-runs { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.v2 .v2-assistant-runs-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; font-size: 12.5px; }
+.v2 .v2-assistant-runs-kpi { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.v2 .v2-assistant-runs-kpi .v2-score { font-size: 20px; }
+.v2 .v2-assistant-runs .v2-sc-caption { margin: 0; }
+.v2 .v2-assistant-run-score { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.v2 .v2-assistant-rerun { display: inline-flex; align-items: center; gap: 4px; }
+.v2 .v2-assistant-breakdown > summary { font-size: 13px; }
+.v2 .v2-assistant-breakdown > .v2-sc-caption { margin: 4px 0 6px; }
+/* evaluators down, a few versions across: as wide as its columns, not the step */
+.v2 .v2-assistant-breakdown .v2-table { width: auto; min-width: min(100%, 420px); }
 
 @media (max-width: 1100px) {
   .v2 .v2-assistant-adlc-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -129,5 +144,5 @@
 @media (max-width: 960px) {
   .v2 .v2-assistant-steps, .v2 .v2-assistant-adlc-flow { grid-template-columns: 1fr; }
   .v2 .v2-assistant-adlc-flow .v2-flow-step::after { display: none; }
-  .v2 .v2-assistant-tool { margin-left: 0; }
+  .v2 .v2-assistant-tool, .v2 .v2-assistant-turn-rev { margin-left: 0; }
 }

@@ -1,9 +1,12 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import type { DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
+import { jobPolicyCompileFailed } from "../lib/policy-job";
 import { Btn } from "./Btn";
 import { Chip } from "./Chip";
 import { Panel } from "./Panel";
+import { zonedClock } from "../lib/timestamps";
 
 type StageKey = "generate" | "package" | "provision" | "deploy" | "register";
 
@@ -25,13 +28,11 @@ export function LaunchSequence({
   deployment,
   job,
   agentStatus,
-  detailsMode,
   onRestart,
 }: {
   deployment: DeploymentInfo | null;
   job: JobInfo | null;
   agentStatus: string;
-  detailsMode: boolean;
   onRestart: () => void;
 }) {
   const { t } = useTranslation();
@@ -40,7 +41,7 @@ export function LaunchSequence({
     <div className="cfg-grid">
       <Panel
         brk
-        title={t(detailsMode ? "create.sequence.detailsTitle" : "create.sequence.title")}
+        title={t("create.sequence.title")}
         sub={job ? `job #${job.id.slice(0, 8)}` : undefined}
         end={
           agentStatus === "active" ? (
@@ -78,6 +79,21 @@ export function LaunchSequence({
             </div>
           </div>
         )}
+        {jobPolicyCompileFailed(job) && (
+          // D20 P1-b: a 409 policy.compile_failed stopped the deploy — the fix is in
+          // Governance → Policies, not in the agent
+          <div className="pbody" style={{ paddingTop: 0 }}>
+            <div className="note" style={{ borderColor: "var(--warn)" }} data-testid="job-policy-compile-failed">
+              <span className="i" style={{ color: "var(--warn)" }}>
+                [!]
+              </span>
+              <span>
+                {t("create.sequence.policyCompileFailedHint")}{" "}
+                <Link to="/governance?view=policies">{t("create.sequence.openPolicies")}</Link>
+              </span>
+            </div>
+          </div>
+        )}
       </Panel>
 
       <div>
@@ -100,7 +116,7 @@ export function LaunchSequence({
           >
             {(job?.events ?? []).map((e, i) => (
               <div key={i}>
-                <span className="cm">{e.ts.slice(11, 19)}</span>{" "}
+                <span className="cm">{zonedClock(e.ts)}</span>{" "}
                 <span className={e.level === "error" ? "k1" : "k2"}>{e.stage}</span> {e.msg}
               </div>
             ))}
@@ -111,7 +127,7 @@ export function LaunchSequence({
         <Panel>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <Btn onClick={onRestart}>
-              {t(detailsMode ? "create.sequence.backToList" : "create.sequence.newAgent")}
+              {t("create.sequence.newAgent")}
             </Btn>
           </div>
         </Panel>

@@ -189,26 +189,6 @@ def fmt_minibatch_trajectories(
                 f"{user_prompt}\n"
             )
 
-        if os.environ.get("REFLACT_CODEX_TRACE_TO_OPTIMIZER", "0") == "1":
-            codex_trace_summary = item.get("codex_trace_summary", "")
-            if not codex_trace_summary:
-                codex_trace_summary_path = os.path.join(prediction_dir, tid, "codex_trace_summary.txt")
-                if os.path.exists(codex_trace_summary_path):
-                    with open(codex_trace_summary_path) as f:
-                        codex_trace_summary = f.read()
-            if codex_trace_summary:
-                header += (
-                    f"\n#### Codex Trace Summary\n"
-                    f"{codex_trace_summary}\n"
-                )
-
-        codex_probe_trace_steps = str(item.get("codex_probe_trace_steps") or "").strip()
-        if codex_probe_trace_steps:
-            header += (
-                f"\n#### Codex Trace Steps\n"
-                f"{codex_probe_trace_steps}\n"
-            )
-
         preview = item.get("spreadsheet_preview", "")
         if not preview:
             preview_path = os.path.join(prediction_dir, tid, "spreadsheet_preview.txt")

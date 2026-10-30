@@ -24,8 +24,8 @@ export const orchestratorSubAgents: SampleFlow = {
       data: {
         label: 'Coordinator',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are an orchestrator agent that coordinates specialized agents to complete complex tasks.',
         maxTokens: 32000,
         streaming: false,
@@ -39,8 +39,8 @@ export const orchestratorSubAgents: SampleFlow = {
       data: {
         label: 'Research Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a research specialist. Gather relevant facts and background information for the given topic.',
         maxTokens: 32000,
         streaming: false,
@@ -53,8 +53,8 @@ export const orchestratorSubAgents: SampleFlow = {
       data: {
         label: 'Writer Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a writing specialist. Turn provided facts into clear, well-structured prose.',
         maxTokens: 32000,
         streaming: false,

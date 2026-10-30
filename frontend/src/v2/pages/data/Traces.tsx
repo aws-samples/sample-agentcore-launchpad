@@ -1,6 +1,7 @@
 import { DatabaseZap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { cacheHint, tokenSplit } from "../../judgeTokens";
 import { useSearchParams } from "react-router-dom";
 
 import { api, type ObsSpanNode, type ObsTraceRow, type V2Range } from "../../../lib/api";
@@ -22,6 +23,8 @@ import {
   Tag,
 } from "../../ui";
 import { AddToDatasetModal } from "./AddToDataset";
+import { awsStatusLabel } from "../../awsStatus";
+import { TelemetryScopeNote } from "../observability/TelemetryScopeNote";
 
 function asRange(value: string | null): V2Range {
   return (RANGES as string[]).includes(value ?? "") ? (value as V2Range) : "24h";
@@ -149,6 +152,7 @@ export function TracesTab() {
 
   return (
     <Card>
+      <TelemetryScopeNote />
       <div className="v2-toolbar">
         <FilterSelect
           label={t("v2.common.timeRange")}
@@ -281,14 +285,18 @@ export function TraceDetail({ traceId }: { traceId: string }) {
                 { label: t("v2.traces.llmCalls"), value: meta.llm_count },
                 {
                   label: "Tokens",
-                  value: t("v2.traces.tokensDetail", {
-                    total: fmtNumber(meta.tokens.total),
-                    input: fmtNumber(meta.tokens.input),
-                    output: fmtNumber(meta.tokens.output),
-                  }),
+                  // N17-obs439: input = the whole prompt (cache reads / writes included)
+                  value: (
+                    <span title={cacheHint(t, tokenSplit(meta.tokens), fmtNumber)} data-testid="v2-traces-tokens-detail">
+                      {t("v2.traces.tokensDetail", {
+                        total: fmtNumber(meta.tokens.total),
+                        input: fmtNumber(tokenSplit(meta.tokens).prompt),
+                        output: fmtNumber(meta.tokens.output),
+                      })}
+                    </span>
+                  ),
                 },
                 { label: t("v2.traces.colDuration"), value: fmtDuration(meta.duration_ms) },
-                { label: t("v2.traces.cost"), value: meta.est_cost_usd == null ? "—" : `$${meta.est_cost_usd.toFixed(4)}` },
                 { label: t("v2.traces.service"), value: meta.service ?? "—" },
               ]}
             />
@@ -319,7 +327,7 @@ export function TraceDetail({ traceId }: { traceId: string }) {
                   {span.tool_name ?? span.name}
                   {span.model && <span className="v2-muted"> · {span.model}</span>}
                 </span>
-                {span.status !== "ok" && span.status !== "UNSET" && <Tag tone="red">{span.status}</Tag>}
+                {span.status !== "ok" && span.status !== "UNSET" && <Tag tone="red" title={span.status}>{awsStatusLabel(t, span.status)}</Tag>}
                 <span className="track" aria-hidden="true">
                   <span style={{ left: `${span.offset_pct}%`, width: `${Math.max(span.width_pct, 0.5)}%` }} />
                 </span>

@@ -1,15 +1,18 @@
 import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage } from "../../../lib/api";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
+import { Score } from "../../ResultsView";
+import { runMean } from "../../scorecard";
 import {
   evaluatorSummary,
   loadTasks,
+  agentLabel,
   sourceLabel,
   STATUS_TONE,
   statusLabel,
@@ -19,6 +22,7 @@ import {
   type TaskStatus,
   type V2Task,
 } from "../../tasks";
+import { useMayMutate } from "../../ownership";
 import {
   Button,
   Card,
@@ -26,18 +30,24 @@ import {
   Confirm,
   FilterSelect,
   LinkButton,
-  PageHeader,
   Pager,
   SearchInput,
   Table,
   Tag,
 } from "../../ui";
+import { backState } from "./back";
+import { versionHint, versionShort } from "./scorecardText";
+import { useEvaluatorNames } from "../../useEvaluatorNames";
 
 type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
 
+/** 全部任务 (`?tab=all`): every evaluation task. The page header and the tabs belong to
+ *  `V2Tasks`; this renders the attention panel and the table under them. */
 export function TaskList() {
   const { t } = useTranslation();
+  useEvaluatorNames(); // N17-obs429: custom evaluators by name
   const [, setParams] = useSearchParams();
+  const location = useLocation();
   const toast = useV2Toast();
   const { can } = useAuth();
   const { data, loading, error, reload } = useLoad(loadTasks, "tasks");
@@ -63,10 +73,15 @@ export function TaskList() {
   }, [tasks, status, source, mode, agent, q]);
   const paged = usePaged(rows, 12);
   const mayRun = can("eval.run");
+  // N17-obs440: an online task's pause / resume / delete are creator-or-admin (server: obs426)
+  const mayMutate = useMayMutate();
+  const onlineLocked = (task: V2Task) => task.kind === "online" && !mayMutate(task.online);
 
   const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
-  const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id });
-  const copy = (task: V2Task) => setParams({ view: "new", from: `${task.kind}:${task.id}` });
+  // the detail / wizard's Back returns to this tab (`back.ts`)
+  const back = { state: backState(location.search) };
+  const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id }, back);
+  const copy = (task: V2Task) => setParams({ view: "new", from: `${task.kind}:${task.id}` }, back);
 
   const act = async () => {
     if (!pending) return;
@@ -98,39 +113,50 @@ export function TaskList() {
       render: (task) => (
         <>
           <LinkButton onClick={() => open(task)}>
-            <span className="ellipsis" style={{ maxWidth: 240 }} title={task.name}>{task.name}</span>
+            <span className="v2-fluid">
+              <span className="ellipsis" style={{ maxWidth: 240 }} title={task.name}>{task.name}</span>
+            </span>
           </LinkButton>
           <span className="sub mono">ID: {task.id}</span>
         </>
       ),
     },
     {
+      // the mode rides under the evaluators: with 平均分 the table stays within 8 columns
       key: "desc",
       title: t("v2.tasks.colEvaluators"),
       render: (task) => {
         const label = (id: string) => taskItemLabel(t, task, id);
         return (
-          <span className="ellipsis" style={{ maxWidth: 160 }} title={task.evaluators.map(label).join("、")}>
-            {evaluatorSummary(t, task.evaluators, label)}
-          </span>
+          <>
+            <span className="v2-fluid">
+              <span className="ellipsis" style={{ maxWidth: 160 }} title={task.evaluators.map(label).join("、")}>
+                {evaluatorSummary(t, task.evaluators, label)}
+              </span>
+            </span>
+            <span className="sub" data-testid={`v2-task-mode-${task.id}`}>
+              <Tag tone={task.mode === "insights" ? "blue" : "outline"}>{modeLabel(task.mode)}</Tag>
+            </span>
+          </>
         );
       },
-    },
-    {
-      key: "mode",
-      title: t("v2.tasks.mode"),
-      className: "nowrap",
-      render: (task) => <Tag tone={task.mode === "insights" ? "blue" : "outline"}>{modeLabel(task.mode)}</Tag>,
     },
     {
       key: "agent",
       title: t("v2.tasks.colAgent"),
       render: (task) => (
         <>
-          <span className={task.logSource ? "ellipsis mono" : "ellipsis"} style={{ maxWidth: 160 }} title={task.agentName}>
-            {task.agentName}
+          <span className="v2-fluid">
+            <span className={task.logSource ? "ellipsis mono" : "ellipsis"} style={{ maxWidth: 160 }} title={agentLabel(t, task)}>
+              {agentLabel(t, task)}
+            </span>
           </span>
           {task.logSource && <span className="sub">{t("v2.tasks.cw.short")}</span>}
+          {task.run?.snapshot && (
+            <span className="sub" title={versionHint(t, task.run.snapshot)} data-testid={`v2-task-version-${task.id}`}>
+              {t("v2.scorecard.versionLine", { version: versionShort(t, task.run.snapshot) })}
+            </span>
+          )}
         </>
       ),
     },
@@ -140,10 +166,19 @@ export function TaskList() {
       title: t("v2.tasks.colSourceStrategy"),
       render: (task) => (
         <>
-          <span className="ellipsis" style={{ maxWidth: 180 }} title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>
+          <span className="v2-fluid">
+            <span className="ellipsis" style={{ maxWidth: 180 }} title={sourceLabel(t, task)}>{sourceLabel(t, task)}</span>
+          </span>
           <span className="sub">{task.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")}</span>
         </>
       ),
+    },
+    {
+      // the run's own mean of its normalized evaluator means; none for insights / online
+      key: "avg",
+      title: t("v2.scorecard.col.avg"),
+      className: "nowrap",
+      render: (task) => <Score value={task.kind === "run" && task.mode === "evaluators" && task.run ? runMean(task.run) : null} />,
     },
     {
       key: "status",
@@ -158,6 +193,7 @@ export function TaskList() {
         <>
           {fmtTime(task.createdAt)}
           <span className="sub" title={t("v2.tasks.colUpdated")}>{fmtTime(task.updatedAt)}</span>
+          <span className="sub" title={t("v2.common.creator")}>{task.createdByName || "—"}</span>
         </>
       ),
     },
@@ -176,17 +212,17 @@ export function TaskList() {
               </LinkButton>
             )}
             {task.kind === "online" && task.status === "running" && (
-              <LinkButton onClick={() => setPending({ task, action: "pause" })}>{t("v2.tasks.pause")}</LinkButton>
+              <LinkButton disabled={onlineLocked(task)} title={onlineLocked(task) ? t("v2.common.creatorOnly") : undefined} onClick={() => setPending({ task, action: "pause" })}>{t("v2.tasks.pause")}</LinkButton>
             )}
             {task.kind === "online" && task.status === "paused" && (
-              <LinkButton disabled={!mayRun} onClick={() => setPending({ task, action: "resume" })}>
+              <LinkButton disabled={!mayRun || onlineLocked(task)} title={onlineLocked(task) ? t("v2.common.creatorOnly") : undefined} onClick={() => setPending({ task, action: "resume" })}>
                 {t("v2.tasks.resume")}
               </LinkButton>
             )}
             <LinkButton disabled={!mayRun} onClick={() => copy(task)}>
               {t("v2.tasks.copy")}
             </LinkButton>
-            <LinkButton danger disabled={(task.kind === "run" && (!mayRun || active))} onClick={() => setPending({ task, action: "delete" })}>
+            <LinkButton danger disabled={(task.kind === "run" && (!mayRun || active)) || onlineLocked(task)} title={onlineLocked(task) ? t("v2.common.creatorOnly") : undefined} onClick={() => setPending({ task, action: "delete" })}>
               {t("v2.common.delete")}
             </LinkButton>
           </div>
@@ -199,11 +235,10 @@ export function TaskList() {
 
   return (
     <>
-      <PageHeader title={t("v2.tasks.title")} desc={t("v2.tasks.desc")} />
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>
-          <Button kind="primary" disabled={!mayRun} title={mayRun ? undefined : t("v2.tasks.noPermission")} onClick={() => setParams({ view: "new" })} testId="v2-task-new">
+          <Button kind="primary" disabled={!mayRun} title={mayRun ? undefined : t("v2.tasks.noPermission")} onClick={() => setParams({ view: "new" }, back)} testId="v2-task-new">
             <Plus size={14} aria-hidden="true" />
             {t("v2.tasks.new")}
           </Button>

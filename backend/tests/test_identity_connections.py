@@ -14,6 +14,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, IdentityProvider, UserGrant
 from app.services import identity_providers as ip
 from app.services import oauth_sessions
+from app.services.creators import Creator
 
 VAULT = "arn:aws:bedrock-agentcore:us-west-2:111:token-vault/default"
 OAUTH_ARN = f"{VAULT}/oauth2credentialprovider/team-idp"
@@ -88,7 +89,7 @@ def _create_oauth(control, db, **over):
         "discovery_url": "https://idp.example/.well-known/openid-configuration",
         "scopes": ["crm/read"],
         "template": "custom_oidc",
-        "created_by": "admin",
+        "creator": Creator(user_id=None, name="admin"),
     } | over
     return ip.create_oauth2_connection(control, db, DEFAULT_WORKSPACE_ID, **kwargs)
 
@@ -99,14 +100,14 @@ def _create_oauth(control, db, **over):
 def test_list_merges_both_kinds_flags_system_external_and_missing(db):
     db.add(IdentityProvider(
         workspace_id=DEFAULT_WORKSPACE_ID, name="gone", kind="api_key", vendor="",
-        arn=f"{VAULT}/apikeycredentialprovider/gone", created_by="admin",
+        arn=f"{VAULT}/apikeycredentialprovider/gone", created_by_name="admin",
     ))
     db.commit()
     control = make_control(
         oauth=[
             {"name": "launchpad-gw-m2m", "credentialProviderVendor": "CustomOauth2",
              "credentialProviderArn": f"{VAULT}/oauth2credentialprovider/launchpad-gw-m2m"},
-            {"name": "outside", "credentialProviderVendor": "GithubOauth2",
+            {"name": "outside", "credentialProviderVendor": "OktaOauth2",
              "credentialProviderArn": f"{VAULT}/oauth2credentialprovider/outside"},
         ],
         api=[{"name": "team-key", "credentialProviderArn": APIKEY_ARN}],
@@ -117,7 +118,7 @@ def test_list_merges_both_kinds_flags_system_external_and_missing(db):
     assert items[("oauth2", "launchpad-gw-m2m")]["system"] is True
     assert items[("oauth2", "launchpad-gw-m2m")]["source"] == "system"
     assert items[("oauth2", "outside")]["source"] == "external"
-    assert items[("oauth2", "outside")]["vendor"] == "GithubOauth2"
+    assert items[("oauth2", "outside")]["vendor"] == "OktaOauth2"
     assert items[("api_key", "team-key")]["status"] == "ready"
     gone = items[("api_key", "gone")]
     assert gone["status"] == "missing" and gone["source"] == "launchpad"
@@ -178,7 +179,7 @@ def test_create_oauth2_passes_secret_through_and_never_persists_it(db, caplog):
     assert row.scopes == ["crm/read"] and row.template == "custom_oidc"
 
 
-def test_create_oauth2_explicit_endpoints_and_vendor_shapes(db):
+def test_create_oauth2_explicit_endpoints(db):
     control = make_control()
     _create_oauth(
         control, db, discovery_url=None, issuer="https://idp.example",
@@ -194,19 +195,16 @@ def test_create_oauth2_explicit_endpoints_and_vendor_shapes(db):
         "tokenEndpoint": "https://idp.example/token",
     }}
 
-    github = make_control()
-    _create_oauth(github, db, name="gh", vendor="GithubOauth2", discovery_url=None)
-    assert github.create_oauth2_credential_provider.call_args.kwargs[
-        "oauth2ProviderConfigInput"
-    ] == {"githubOauth2ProviderConfig": {"clientId": "cid", "clientSecret": SECRET}}
-
 
 @pytest.mark.parametrize(
     ("over", "code"),
     [
         ({"vendor": "OktaOauth2"}, "identity.unsupported_vendor"),
         ({"discovery_url": None}, "identity.missing_endpoints"),
-        ({"vendor": "GoogleOauth2"}, "identity.endpoints_custom_only"),
+        # SlackOauth2 is any still-offered non-Custom vendor here — the case tests
+        # the generic "endpoints apply to CustomOauth2 only" dispatch, not Slack
+        # itself (GoogleOauth2, the vendor this case used before, is gone — N3 R5).
+        ({"vendor": "SlackOauth2"}, "identity.endpoints_custom_only"),
     ],
 )
 def test_create_oauth2_shape_errors_are_422_before_any_aws_call(db, over, code):
@@ -238,15 +236,16 @@ def test_aws_conflict_maps_to_connection_exists(db):
 def test_stale_audit_row_is_replaced_on_recreate(db):
     db.add(IdentityProvider(
         workspace_id=DEFAULT_WORKSPACE_ID, name="team-key", kind="api_key", vendor="",
-        arn="arn:old", created_by="someone",
+        arn="arn:old", created_by_name="someone",
     ))
     db.commit()
     control = make_control()
     ip.create_api_key_connection(
-        control, db, DEFAULT_WORKSPACE_ID, name="team-key", api_key=API_KEY, created_by="admin"
+        control, db, DEFAULT_WORKSPACE_ID, name="team-key", api_key=API_KEY,
+        creator=Creator(user_id=None, name="admin"),
     )
     rows = db.query(IdentityProvider).filter_by(name="team-key").all()
-    assert len(rows) == 1 and rows[0].arn == APIKEY_ARN and rows[0].created_by == "admin"
+    assert len(rows) == 1 and rows[0].arn == APIKEY_ARN and rows[0].created_by_name == "admin"
 
 
 # ── service: get / delete ────────────────────────────────────────────────────
@@ -356,6 +355,85 @@ def test_delete_refuses_a_provider_recorded_only_by_another_workspace(db):
     control.delete_oauth2_credential_provider.assert_not_called()
 
 
+def _agent_pinned_to(db, credential: str, *, name: str = "pinned", status: str = "active") -> Agent:
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID, name=name, method="zip_runtime", status=status,
+        spec={"name": name, "model_id": "global.zai.glm-5.3", "model_credential": credential},
+    )
+    db.add(agent)
+    db.commit()
+    return agent
+
+
+# N13-obs22 (E08 §7, lead ruling 2026-10-18): a provider that is an agent's model credential
+# or a model registry provider's credential is `409 identity.in_use`, checked after the tool /
+# target reference guard and BEFORE the external rule.
+def test_delete_refuses_a_model_credential_pinned_by_an_agent(db):
+    control = make_control()
+    ip.create_api_key_connection(control, db, DEFAULT_WORKSPACE_ID, name="team-key",
+                                 api_key=API_KEY)
+    control.list_api_key_credential_providers.return_value = {
+        "credentialProviders": [{"name": "team-key"}]
+    }
+    agent = _agent_pinned_to(db, "team-key")
+    _agent_pinned_to(db, "team-key", name="gone", status="deleted")  # deleted rows don't count
+    _agent_pinned_to(db, "other-key", name="elsewhere")
+    with pytest.raises(AppError) as err:
+        ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "api_key", "team-key")
+    assert (err.value.code, err.value.status_code) == ("identity.in_use", 409)
+    assert err.value.detail == {
+        "referenced_by": [{"type": "agent", "id": agent.id, "name": "pinned"}],
+        "total": 1, "truncated": False,
+    }
+    control.delete_api_key_credential_provider.assert_not_called()
+    assert db.query(IdentityProvider).count() == 1  # the audit row stays too
+    # repoint the agent → the delete goes through
+    agent.spec = {**agent.spec, "model_credential": "other-key"}
+    db.commit()
+    ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "api_key", "team-key")
+    control.delete_api_key_credential_provider.assert_called_once_with(name="team-key")
+
+
+def test_delete_refuses_launchpad_global_bedrock_as_the_registry_credential(db):
+    """The shared Global Bedrock key (NC-E08-05): external to Launchpad AND the model
+    registry's `bedrock` provider credential — in_use wins over external_connection, with
+    nothing sent to the vault."""
+    from app.services import model_registry
+
+    model_registry.ensure_seeded(db)
+    control = make_control(api=[{"name": "launchpad-global-bedrock"}])
+    with pytest.raises(AppError) as err:
+        ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "api_key",
+                             "launchpad-global-bedrock")
+    assert (err.value.code, err.value.status_code) == ("identity.in_use", 409)
+    refs = err.value.detail["referenced_by"]
+    assert any(r["type"] == "model_provider" and r["name"] == "bedrock" for r in refs)
+    assert err.value.detail["total"] == len(refs) >= 1
+    control.delete_api_key_credential_provider.assert_not_called()
+    control.delete_oauth2_credential_provider.assert_not_called()
+
+
+def test_an_external_provider_nobody_pins_is_still_external_connection(db):
+    control = make_control(api=[{"name": "theirs"}])
+    _agent_pinned_to(db, "launchpad-global-bedrock")
+    with pytest.raises(AppError) as err:
+        ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "api_key", "theirs")
+    assert err.value.code == "identity.external_connection"
+
+
+def test_in_use_referencing_ids_are_bounded_and_the_total_is_real(db):
+    control = make_control(api=[{"name": "shared-key"}])
+    for i in range(ip.MODEL_CREDENTIAL_REFS_MAX + 5):
+        _agent_pinned_to(db, "shared-key", name=f"agent-{i:02d}")
+    with pytest.raises(AppError) as err:
+        ip.delete_connection(control, db, DEFAULT_WORKSPACE_ID, "api_key", "shared-key")
+    assert err.value.code == "identity.in_use"
+    detail = err.value.detail
+    assert len(detail["referenced_by"]) == ip.MODEL_CREDENTIAL_REFS_MAX == 20
+    assert detail["total"] == ip.MODEL_CREDENTIAL_REFS_MAX + 5 and detail["truncated"] is True
+    assert [r["name"] for r in detail["referenced_by"]][:2] == ["agent-00", "agent-01"]
+
+
 def test_delete_cleans_up_a_ledger_row_whose_provider_is_gone(db):
     control = make_control()
     _create_oauth(control, db)  # recorded, then deleted from the vault out-of-band
@@ -381,7 +459,7 @@ def control(monkeypatch):
 
 def test_router_create_list_get_delete_round_trip(client, control):
     created = client.post("/api/identity/connections/oauth2", json={
-        "name": "team-idp", "vendor": "CustomOauth2", "template": "cognito",
+        "name": "team-idp", "vendor": "CustomOauth2", "template": "custom_oidc",
         "client_id": "cid", "client_secret": SECRET,
         "discovery_url": "https://idp.example/.well-known/openid-configuration",
         "scopes": [" crm/read ", ""],
@@ -389,7 +467,7 @@ def test_router_create_list_get_delete_round_trip(client, control):
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["callback_url"] == CALLBACK and body["scopes"] == ["crm/read"]
-    assert body["template"] == "cognito"
+    assert body["template"] == "custom_oidc"
     assert SECRET not in created.text
 
     key = client.post("/api/identity/connections/api-key", json={
@@ -428,7 +506,7 @@ def test_router_create_list_get_delete_round_trip(client, control):
 def test_router_templates_cover_every_offered_vendor(client, control):
     templates = client.get("/api/identity/connections/templates").json()["templates"]
     ids = {t["id"] for t in templates}
-    assert {"cognito", "custom_oidc", "custom_endpoints", "github", "api_key"} <= ids
+    assert {"custom_oidc", "custom_endpoints", "slack", "api_key"} <= ids
     vendors = {t["vendor"] for t in templates if t["kind"] == "oauth2"}
     assert vendors <= set(ip.VENDOR_CONFIG_KEYS)
 
@@ -473,6 +551,29 @@ def test_router_delete_refuses_when_a_gateway_target_references_it(client, contr
     assert res.json()["detail"]["referenced_by"] == [
         {"type": "gateway_target", "id": "T1", "name": "facts"}
     ]
+
+
+def test_router_delete_of_a_pinned_model_credential_is_409_in_use(client, control):
+    key = client.post("/api/identity/connections/api-key", json={
+        "name": "team-key", "api_key": API_KEY,
+    })
+    assert key.status_code == 201
+    control.list_api_key_credential_providers.return_value = {
+        "credentialProviders": [{"name": "team-key"}]
+    }
+    db = SessionLocal()
+    agent = _agent_pinned_to(db, "team-key")
+    db.close()
+    res = client.delete("/api/identity/connections/api_key/team-key")
+    assert res.status_code == 409, res.text
+    body = res.json()
+    assert body["code"] == "identity.in_use"
+    assert body["detail"] == {
+        "referenced_by": [{"type": "agent", "id": agent.id, "name": "pinned"}],
+        "total": 1, "truncated": False,
+    }
+    control.delete_api_key_credential_provider.assert_not_called()
+    assert API_KEY not in res.text
 
 
 def test_router_list_survives_a_gateway_read_failure(client, control, monkeypatch):
@@ -569,3 +670,14 @@ def test_sensitive_field_names(name, sensitive):
     from app.core.errors import is_sensitive_field
 
     assert is_sensitive_field(name) is sensitive
+
+
+def test_vendor_table_has_no_china_unavailable_oauth_vendors():
+    from app.services.identity_providers import TEMPLATES, VENDOR_CONFIG_KEYS
+
+    assert "GoogleOauth2" not in VENDOR_CONFIG_KEYS
+    assert "GithubOauth2" not in VENDOR_CONFIG_KEYS
+    assert {t["vendor"] for t in TEMPLATES if t["vendor"]} == {
+        "CustomOauth2", "SlackOauth2", "SalesforceOauth2",
+        "MicrosoftOauth2", "AtlassianOauth2", "LinkedinOauth2",
+    }

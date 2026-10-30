@@ -1,0 +1,7 @@
+{
+  "schema": "launchpad.policy.gateway-pointer/1",
+  "gateway_id": "launchpad-gw-exampleid0",
+  "version": 7,
+  "key": "policy/gateway/launchpad-gw-exampleid0/v7.json",
+  "issued_at": "2026-10-26T14:00:00+00:00"
+}

@@ -35,21 +35,5 @@ def data_client(ctx: WorkspaceContext) -> Any:
     )
 
 
-def registry_control_client(ctx: WorkspaceContext) -> Any:
-    return ctx.client("agent-registry-control")
-
-
-def registry_data_client(ctx: WorkspaceContext) -> Any:
-    return ctx.client("agent-registry")
-
-
-def agent_client(ctx: WorkspaceContext) -> Any:
-    return ctx.client("bedrock-agent")
-
-
-def agent_runtime_client(ctx: WorkspaceContext) -> Any:
-    return ctx.client("bedrock-agent-runtime")
-
-
 def iam_client(ctx: WorkspaceContext) -> Any:
     return ctx.client("iam")

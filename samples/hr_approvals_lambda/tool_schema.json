@@ -1,0 +1,42 @@
+[
+  {
+    "name": "verify_identity",
+    "description": "Verify an employee's identity with the one-time code they were given. Call this before reading their employee record.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "employee_id": {"type": "string", "description": "Employee id, e.g. EMP-1024"},
+        "code": {"type": "string", "description": "The one-time code the employee provides"}
+      },
+      "required": ["employee_id", "code"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "employee_id": {"type": "string"},
+        "verified": {"type": "boolean"}
+      },
+      "required": ["employee_id", "verified"]
+    }
+  },
+  {
+    "name": "approve_payout",
+    "description": "Record a manager approval for a payout to an employee. A payout can only be created after an approval.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "employee_id": {"type": "string"},
+        "amount": {"type": "number", "description": "Payout amount in USD"}
+      },
+      "required": ["employee_id", "amount"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "approved": {"type": "boolean"},
+        "approval_id": {"type": "string"}
+      },
+      "required": ["approved", "approval_id"]
+    }
+  }
+]

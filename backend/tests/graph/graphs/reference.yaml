@@ -1,0 +1,292 @@
+# REFERENCE graph — cross-entity dependencies. Round 16, channel A, r16-o.
+#
+# One node per "who is pointing at whom" state; an edge is a delete / mutation attempted
+# while (or after) another entity references the row. Every edge cites the sentence that
+# names the guard; a dependency the contracts do not name is a `gap:` row.
+graph: reference
+module: E-all
+entity: references between agents, knowledge bases, memories, datasets, evaluators, runs and canaries
+initial: wired
+
+contracts:
+  API_KB_DELETE:
+    doc: docs/api.md
+    section: "Console Knowledge Bases API › DELETE"
+    quote: >-
+      `409 kb.has_attached_agents` while agents mount it; `force=true` strips it from every mounted
+      agent's spec first … hidden-by-visibility agents included, in one transaction … each stripped
+      agent is marked `kb_stale` … a strip is not a publish (no spec snapshot … the response adds
+      `stripped_agents: [{id, name}]` … `force` is an administrator's override (N17-obs4) … a member's
+      `?force=true` is `403 auth.forbidden` whether or not anything mounts the KB
+  API_MEMORY_RESOURCE_DELETE:
+    doc: docs/api.md
+    section: "Console Memory API › DELETE /api/memory/resources/{memory_id}"
+    quote: >-
+      `409 memory.default_protected` for the workspace default … `409 memory.in_use` (with the
+      agents) while a live agent's spec pins it; the managed registration is dropped
+  EE_22:
+    doc: docs/cn/interfaces/evaluation-engine.md
+    section: "22. Referential delete guards"
+    quote: >-
+      `evaluation/references.py` now answers **409 `dataset.in_use` / `evaluator.in_use`** with the
+      referencing rows … local dataset | an **ACTIVE** run replaying it … custom evaluator | an ACTIVE
+      run whose `evaluators` list it; an online config (any status — the scheduler resolves the
+      definition on every sweep; canary-owned configs included); a `running` canary whose choice
+      (`artifacts.online_evaluators` or `artifacts.setup.online_evaluators`) lists it | finished runs;
+      `cleaned` / `rolled_back` / `completed` canaries … finished runs (completed / failed / stopped):
+      a run keeps a **snapshot** … A **member's** `force` answers **403 `auth.forbidden`** whether or
+      not anything references the row
+  API_AGENT_ERRORS:
+    doc: docs/api.md
+    section: "Console Agents API — versions and endpoints › Error codes"
+    quote: >-
+      Error codes: `agent.not_found` (404, unknown id, another workspace's agent, **or a deleted
+      agent** — since N11 r3-A every `/api/agents/{id}*` and `/api/chat/{id}*` route answers a deleted
+      row exactly like `/v1` does, instead of `200 status: deleted` or `409 agent.not_active`
+  AGENTS_1_1:
+    doc: docs/cn/interfaces/agents.md
+    section: "1.1 A Runtime canary owns its agents until it is settled (N16-obs111)"
+    quote: >-
+      `DELETE /api/agents/{id}` is refused with `409 agent.in_use {canaries: [{id, name, status,
+      stage}]}` while a Runtime canary whose status is not terminal (`running`) names the agent as
+      champion or challenger — members and administrators alike, no `force`; `completed`,
+      `rolled_back` and `cleaned` canaries never block
+  AGENTS_1_3:
+    doc: docs/cn/interfaces/agents.md
+    section: "1.3 An ACTIVE evaluation run owns its agent until it is terminal (N17-obs18)"
+    quote: >-
+      `DELETE /api/agents/{id}` is refused
+      with the canary guard's envelope — `409 agent.in_use {canaries: [...], runs: [{id, name,
+      status}]}` — while an evaluation run naming the agent is ACTIVE … `completed` / `failed` / `stopped` runs never block … `canaries` and `runs` are both present on every refusal (either may be empty)
+  UO_8_AGENT_IN_USE:
+    doc: docs/cn/interfaces/users-and-ownership.md
+    section: "8. Step 3 — mutation ownership › referential guards on the agent itself"
+    quote: >-
+      `DELETE /api/agents/{id}` while a `running` Runtime canary names the agent → `409 agent.in_use
+      {canaries}` (no force for anyone; settle the canary — `cleanup`, `rollback` or `complete` —
+      then delete)
+  EE_23:
+    doc: docs/cn/interfaces/evaluation-engine.md
+    section: "23. Scorecards, compare, rerun"
+    quote: >-
+      the same gate as `POST /api/eval/runs` (a hidden agent → 400 `agent.not_active`, a hidden
+      dataset → 404)
+  API_CANARY_CREATE:
+    doc: docs/cn/acceptance/E13-canary.md
+    section: "3. Negative / boundary cases"
+    quote: >-
+      inactive or hidden agent → `400 canary.agent_not_active` … second canary on wb006 while one is
+      `running` | `409 canary.already_running`
+  API_NOT_FOUND:
+    doc: docs/api.md
+    section: "Workspaces API › What `isolated` changes"
+    quote: >-
+      A hidden resource answers the kind's **existing** not-found — `dataset.not_found`,
+      `run.not_found`, `pipeline.not_found`, `online_eval.not_found`, `evaluator.not_found` …
+      `memory.not_managed`
+  API_MEMORY_NOT_MANAGED:
+    doc: docs/api.md
+    section: "Console Memory API › Ownership"
+    quote: >-
+      Every per-id route answers `404 memory.not_managed` for any other id, before any AWS call
+  LEDGER_CP:
+    doc: docs/cn/interfaces/testing.md
+    section: "6.1 — ledger_invariants.scan_control_plane"
+    quote: >-
+      orphan assistant rows, canaries / assignments / owner-prefixed online configs naming a missing
+      Agent or canary, Skill Lab jobs naming a missing task set, a live purge job that is not its
+      conversation's claim, unknown statuses
+
+nodes:
+  - id: wired
+  - id: agent_gone
+  # N17-obs11 (r17-b, the N17-obs10 lesson applied): a successful delete of the referenced row
+  # is a state change — the repeat answers the kind's not-found — so each delete leaves its
+  # node instead of looping on it with the edge method branching on a `gone` flag.
+  - id: agent_gone_memory_gone
+  - id: run_done
+  - id: run_done_dataset_gone
+  - id: canary_done
+  - id: canary_done_evaluator_gone
+  # N17-obs31 (= N16-obs34, fixed in cn/r17-h): the forced KB delete leaves the agent wired to
+  # everything but the KB — a node of its own, so the KB's own 404 and the clean scan are edges
+  - id: kb_gone
+
+edges:
+  - id: kb_delete_mounted
+    from: wired
+    to: wired
+    kind: refusal
+    via: DELETE /api/knowledge-bases/{kb} while an active agent's spec mounts it
+    expect: {status: 409, code: kb.has_attached_agents, kb_kept: true}
+    cites: [API_KB_DELETE]
+    ui: {page: /v2/knowledge-bases, view: null, controls: [v2-confirm-ok]}
+  - id: kb_force_delete_strips
+    from: wired
+    to: kb_gone
+    via: DELETE /api/knowledge-bases/{kb}?force=true while an active agent's spec mounts it
+    expect: {status: 200, stripped: [agent], agent_spec_mounts: [], kb_stale: true, snapshot_rows: +0, scan: clean}
+    cites: [API_KB_DELETE]
+    ui: {page: /v2/knowledge-bases, view: null, controls: [v2-confirm-ok]}
+  - id: kb_force_delete_member
+    from: wired
+    to: wired
+    kind: refusal
+    via: a member's DELETE /api/knowledge-bases/{kb}?force=true while an active agent's spec mounts it
+    expect: {status: 403, code: auth.forbidden, agent_spec_mounts: [kb], kb_kept: true}
+    cites: [API_KB_DELETE]
+    ui: {page: /v2/knowledge-bases, view: null, controls: [v2-confirm-ok]}
+  - id: kb_delete_again
+    from: kb_gone
+    to: kb_gone
+    kind: refusal
+    via: DELETE /api/knowledge-bases/{kb} a second time
+    expect: {status: 404, code: kb.not_found}
+    cites: [API_NOT_FOUND]
+    ui: {page: /v2/knowledge-bases, view: null, controls: [v2-confirm-ok]}
+  - id: memory_delete_pinned
+    from: wired
+    to: wired
+    kind: refusal
+    via: DELETE /api/memory/resources/{memory_id} while a live agent's spec pins it
+    expect: {status: 409, code: memory.in_use, memory_kept: true}
+    cites: [API_MEMORY_RESOURCE_DELETE]
+    ui: {page: /v2/memory, view: resource, controls: [v2-memory-res-delete, v2-confirm-ok]}
+  - id: dataset_delete_active_run
+    from: wired
+    to: wired
+    kind: refusal
+    via: DELETE /api/eval/datasets/{ds} while a run replaying it is `evaluating`
+    expect: {status: 409, code: dataset.in_use, referrers: [run]}
+    cites: [EE_22]
+    ui: {page: /v2/eval/data, view: null, controls: [v2-confirm-ok]}
+  - id: dataset_force_member
+    from: wired
+    to: wired
+    kind: refusal
+    via: a member's DELETE …/datasets/{ds}?force=true
+    expect: {status: 403, code: auth.forbidden}
+    cites: [EE_22]
+    ui: null
+  - id: evaluator_delete_running_canary
+    from: wired
+    to: wired
+    kind: refusal
+    via: DELETE /api/eval/evaluators/{ev} while a `running` canary lists it
+    expect: {status: 409, code: evaluator.in_use, referrers: [canary]}
+    cites: [EE_22]
+    ui: {page: /v2/eval/evaluators, view: null, controls: [v2-confirm-ok]}
+  - id: agent_delete_with_running_canary
+    from: wired
+    to: wired
+    kind: refusal
+    via: DELETE /api/agents/{id} of the champion of a `running` canary (an `evaluating` run names it too)
+    expect: {status: 409, code: agent.in_use, canaries: [{id, name, status, stage}], runs: [{id, name, status}], agent_kept: active, canary_kept: running, scan: "no canary naming a missing / deleted Agent"}
+    cites: [AGENTS_1_1, AGENTS_1_3, UO_8_AGENT_IN_USE, LEDGER_CP]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: agent_delete_releases_kb
+    from: wired
+    to: agent_gone
+    via: DELETE /api/agents/{id} (no canary, no ACTIVE run), then DELETE /api/knowledge-bases/{kb}
+    expect: {agent_status: deleted, kb_delete_status: 200}
+    cites: [API_KB_DELETE]
+    ui: {page: /v2/knowledge-bases, view: null, controls: [v2-confirm-ok]}
+  - id: memory_delete_after_agent_gone
+    from: agent_gone
+    to: agent_gone_memory_gone
+    via: DELETE /api/memory/resources/{memory_id} once no live agent pins it
+    expect: {status: 200}
+    cites: [API_MEMORY_RESOURCE_DELETE]
+    ui: {page: /v2/memory, view: resource, controls: [v2-memory-res-delete, v2-confirm-ok]}
+  - id: memory_delete_again
+    from: agent_gone_memory_gone
+    to: agent_gone_memory_gone
+    kind: refusal
+    via: DELETE /api/memory/resources/{memory_id} a second time (the managed registration is gone)
+    expect: {status: 404, code: memory.not_managed}
+    cites: [API_MEMORY_RESOURCE_DELETE, API_MEMORY_NOT_MANAGED]
+    ui: {page: /v2/memory, view: resource, controls: [v2-memory-res-delete, v2-confirm-ok]}
+  - id: chat_agent_gone_memory_gone
+    from: agent_gone_memory_gone
+    to: agent_gone_memory_gone
+    kind: refusal
+    via: POST /api/chat/{deleted agent} once its memory store is gone too
+    expect: {status: 404, code: agent.not_found}
+    cites: [API_AGENT_ERRORS]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: chat_agent_gone
+    from: agent_gone
+    to: agent_gone
+    kind: refusal
+    via: POST /api/chat/{deleted agent}
+    expect: {status: 404, code: agent.not_found}
+    cites: [API_AGENT_ERRORS]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: run_create_agent_gone
+    from: agent_gone
+    to: agent_gone
+    kind: refusal
+    via: POST /api/eval/runs for the deleted agent
+    expect: {status: 400, code: agent.not_active}
+    cites: [EE_23]
+    ui: {page: /v2/eval/tasks, view: new, controls: [v2-task-submit]}
+  - id: canary_create_agent_gone
+    from: agent_gone
+    to: agent_gone
+    kind: refusal
+    via: POST /api/runtime-canaries for the deleted agent
+    expect: {status: 400, code: canary.agent_not_active}
+    cites: [API_CANARY_CREATE]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-create]}
+  - id: run_finishes
+    from: wired
+    to: run_done
+    via: the replaying run reaches `completed` (ledger)
+    expect: {run_status: completed}
+    cites: [EE_22]
+    ui: null
+  - id: dataset_delete_finished_run
+    from: run_done
+    to: run_done_dataset_gone
+    via: DELETE /api/eval/datasets/{ds} once the run finished
+    expect: {status: 200, run_dataset_name_kept: true}
+    cites: [EE_22]
+    ui: {page: /v2/eval/data, view: null, controls: [v2-confirm-ok]}
+  - id: dataset_delete_again
+    from: run_done_dataset_gone
+    to: run_done_dataset_gone
+    kind: refusal
+    via: DELETE /api/eval/datasets/{ds} a second time
+    expect: {status: 404, code: dataset.not_found, run_dataset_name_kept: true}
+    cites: [API_NOT_FOUND, EE_22]
+    ui: {page: /v2/eval/data, view: null, controls: [v2-confirm-ok]}
+  - id: canary_cleaned
+    from: wired
+    to: canary_done
+    via: the canary reaches `cleaned` (ledger)
+    expect: {canary_status: cleaned}
+    cites: [EE_22]
+    ui: null
+  - id: agent_delete_with_active_run
+    from: canary_done
+    to: canary_done
+    kind: refusal
+    via: DELETE /api/agents/{id} once the canary is cleaned but the replaying run is still `evaluating`
+    expect: {status: 409, code: agent.in_use, canaries: [], runs: [{id, name, status}], agent_kept: active, run_kept: evaluating}
+    cites: [AGENTS_1_3]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: evaluator_delete_cleaned_canary
+    from: canary_done
+    to: canary_done_evaluator_gone
+    via: DELETE /api/eval/evaluators/{ev} once the canary is cleaned
+    expect: {status: 200}
+    cites: [EE_22]
+    ui: {page: /v2/eval/evaluators, view: null, controls: [v2-confirm-ok]}
+  - id: evaluator_delete_again
+    from: canary_done_evaluator_gone
+    to: canary_done_evaluator_gone
+    kind: refusal
+    via: DELETE /api/eval/evaluators/{ev} a second time
+    expect: {status: 404, code: evaluator.not_found}
+    cites: [API_NOT_FOUND]
+    ui: {page: /v2/eval/evaluators, view: null, controls: [v2-confirm-ok]}

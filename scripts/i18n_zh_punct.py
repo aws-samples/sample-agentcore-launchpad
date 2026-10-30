@@ -12,7 +12,8 @@ Conversion rule — a half-width `,` `:` `;` `?` `!` `(` `)` is converted only
 when at least one neighbouring character is Chinese context: a CJK ideograph
 (U+4E00–U+9FFF), CJK / full-width punctuation (U+3000–U+303F, U+FF00–U+FFEF),
 or the Chinese-prose punctuation `——` `“ ”` `‘ ’` (not `…`, which is
-shared with Latin placeholders such as `arn:aws:…:…`). Brackets convert as a
+shared with Latin placeholders such as a redacted ARN's `service:region:…:resource`).
+Brackets convert as a
 pair: if either half of a matched `( … )` qualifies, both do, so
 `密码(LAUNCHPAD_AUTH_PASSWORD)——` becomes `密码（LAUNCHPAD_AUTH_PASSWORD）——`.
 

@@ -213,7 +213,6 @@ class TestRegistration:
         [
             ({"username": "ab"}, "auth.invalid_username", 400),
             ({"username": "bad name"}, "auth.invalid_username", 400),
-            ({"username": "OPERATOR"}, "auth.username_taken", 409),
             ({"email": "not-an-email"}, "auth.invalid_email", 400),
             ({"email": "someone@gmail.com"}, "auth.email_domain_blocked", 400),
             ({"email": "someone@mail.qq.com"}, "auth.email_domain_blocked", 400),
@@ -226,15 +225,47 @@ class TestRegistration:
         assert response.json()["code"] == code
 
     def test_duplicate_username_and_email_are_case_insensitive(self, anon):
-        assert register(anon).status_code == 201
+        """r12-g (A-2): under approval mode a collision answers EXACTLY like a real
+        pending registration and creates nothing, so the public form never says whether
+        a username / email (or the reserved admin name) is taken. The case-insensitive
+        matching itself is proven by the row count staying at one."""
+        first = register(anon)
+        assert first.status_code == 201
 
         taken = register(anon, username="QA-User", email="other@acme-corp.com")
-        assert taken.status_code == 409
-        assert taken.json()["code"] == "auth.username_taken"
+        assert taken.status_code == 201
+        expected = {**first.json(), "username": "QA-User", "email": "other@acme-corp.com"}
+        assert taken.json() == expected
 
         duplicate_email = register(anon, username="other", email="QA-USER@Acme-Corp.com")
-        assert duplicate_email.status_code == 409
-        assert duplicate_email.json()["code"] == "auth.email_taken"
+        assert duplicate_email.status_code == 201
+        assert duplicate_email.json()["status"] == "pending"
+
+        reserved = register(anon, username="OPERATOR", email="boss@acme-corp.com")
+        assert reserved.status_code == 201
+
+        db = SessionLocal()
+        try:
+            assert db.query(User).count() == 1
+            assert users_service.find_by_username(db, "other") is None
+        finally:
+            db.close()
+
+    def test_duplicates_are_one_uniform_409_under_instant_activation(self, monkeypatch, anon):
+        """Instant activation cannot fake a "ready" answer, so both collisions (and the
+        reserved admin name) share one code that names neither field."""
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL", "false")
+        get_settings.cache_clear()
+        assert register(anon).status_code == 201
+        for overrides in (
+            {"username": "QA-User", "email": "other@acme-corp.com"},
+            {"username": "other", "email": "QA-USER@Acme-Corp.com"},
+            {"username": "OPERATOR", "email": "boss@acme-corp.com"},
+        ):
+            response = register(anon, **overrides)
+            assert response.status_code == 409, response.text
+            assert response.json()["code"] == "auth.registration_rejected"
+            assert "username or email" in response.json()["message"]
 
     def test_registration_can_be_disabled_by_configuration(self, monkeypatch, anon):
         monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_ENABLED", "false")
@@ -511,3 +542,152 @@ class TestAdminUserApi:
         user_id = stored().id
         assert admin.delete(f"/api/users/{user_id}").status_code == 200
         assert admin.get("/api/users").json()["total"] == 0
+
+
+class TestDeleteCascadesAssistantConversations:
+    """N-ARCH-obs6: a deleted member's architect conversations must never become
+    rows nobody can reach. Ledger-only conversations are deleted with the account;
+    a conversation that deployed an Agent passes to the deleting administrator."""
+
+    def _seed(self, user_id: str) -> tuple[str, str]:
+        from app.models.assistant import AssistantConversation, AssistantMessage, AssistantProposal
+        from app.models.ledger import Agent
+
+        db = SessionLocal()
+        try:
+            plain = AssistantConversation(
+                workspace_id=DEFAULT_WORKSPACE_ID, owner=MEMBER["username"],
+                owner_principal=f"user:{user_id}", title="plain",
+            )
+            deployed = AssistantConversation(
+                workspace_id=DEFAULT_WORKSPACE_ID, owner=MEMBER["username"],
+                owner_principal=f"user:{user_id}", title="deployed",
+            )
+            agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="member-helpdesk",
+                          method="harness", status="active",
+                          created_by=user_id, created_by_name=MEMBER["username"],
+                          spec={"name": "member-helpdesk", "method": "harness",
+                                "system_prompt": "hi"})
+            db.add_all([plain, deployed, agent])
+            db.flush()
+            db.add(AssistantMessage(conversation_id=plain.id, role="user", text="hello"))
+            db.add(AssistantProposal(
+                conversation_id=deployed.id, workspace_id=DEFAULT_WORKSPACE_ID, revision=1,
+                source="model", content={"name": "member-helpdesk"}, content_hash="0" * 64,
+                status="approved", created_by=MEMBER["username"], agent_id=agent.id,
+            ))
+            db.commit()
+            return plain.id, deployed.id
+        finally:
+            db.close()
+
+    def test_delete_removes_ledger_only_conversations_and_hands_over_deployed_ones(
+        self, anon, admin
+    ):
+        from app.models.assistant import AssistantConversation, AssistantMessage
+
+        assert register(anon).status_code == 201
+        user_id = stored().id
+        plain_id, deployed_id = self._seed(user_id)
+        base = "/api/assistant/architect/conversations"
+        # before: principal-bound — the admin READS them (upstream #241, ported cn/r11-e:
+        # read_only while unshared) but cannot delete them (404, never 403)
+        for cid in (plain_id, deployed_id):
+            res = admin.get(f"{base}/{cid}")
+            assert res.status_code == 200 and res.json()["read_only"] is True
+            assert res.json()["mine"] is False
+            assert admin.delete(f"{base}/{cid}").status_code == 404
+
+        res = admin.delete(f"/api/users/{user_id}")
+        assert res.status_code == 200
+        # N-ARCH-obs6 (re-test): the response says what the cascade did, per conversation
+        assert res.json() == {"ok": True, "conversations": {
+            "deleted": [plain_id], "reassigned": [deployed_id]}}
+
+        db = SessionLocal()
+        try:
+            assert db.get(AssistantConversation, plain_id) is None
+            assert db.query(AssistantMessage).filter_by(conversation_id=plain_id).count() == 0
+            row = db.get(AssistantConversation, deployed_id)
+            assert row is not None
+            assert row.owner_principal == "config-admin" and row.owner == ADMIN["username"]
+            assert db.query(AssistantConversation).filter_by(
+                owner_principal=f"user:{user_id}").count() == 0
+        finally:
+            db.close()
+        # after: the admin OWNS the handed-over conversation (and could purge it)
+        res = admin.get(f"{base}/{deployed_id}")
+        assert res.status_code == 200, res.text
+        assert res.json()["mine"] is True and res.json()["read_only"] is False
+        assert admin.get(f"{base}/{plain_id}").status_code == 404
+
+    def test_a_fresh_member_conversation_is_deleted_with_the_account_and_the_404_is_that(
+        self, anon, admin
+    ):
+        """The round-5 re-test flow (arch-4c → arch-6): a member opens a conversation
+        (POST → 201, no turn yet), the admin deletes the member, then DELETEs the
+        conversation and gets 404 — which the report filed as "orphaned, N-ARCH-obs6
+        recurrence". The 404 is the cascade's outcome: the row was deleted with the
+        account (nothing beyond ledger rows), and the delete response now says so, so
+        the next run has the evidence without a database read."""
+        from app.models.assistant import AssistantConversation, AssistantMessage
+
+        assert register(anon).status_code == 201
+        user_id = stored().id
+        db = SessionLocal()
+        try:
+            fresh = AssistantConversation(
+                workspace_id=DEFAULT_WORKSPACE_ID, owner=MEMBER["username"],
+                owner_principal=f"user:{user_id}", title="New conversation",
+            )
+            talked = AssistantConversation(
+                workspace_id=DEFAULT_WORKSPACE_ID, owner=MEMBER["username"],
+                owner_principal=f"user:{user_id}", title="talked, nothing deployed",
+            )
+            db.add_all([fresh, talked])
+            db.flush()
+            db.add(AssistantMessage(conversation_id=talked.id, role="user", text="hi"))
+            db.add(AssistantMessage(conversation_id=talked.id, role="assistant", text="hello"))
+            db.commit()
+            fresh_id, talked_id = fresh.id, talked.id
+        finally:
+            db.close()
+        base = "/api/assistant/architect/conversations"
+        # principal-bound: the admin reads it (read_only, #241) but cannot delete it
+        res = admin.get(f"{base}/{fresh_id}")
+        assert res.status_code == 200 and res.json()["read_only"] is True
+        assert admin.delete(f"{base}/{fresh_id}").status_code == 404
+
+        res = admin.delete(f"/api/users/{user_id}")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True
+        assert sorted(body["conversations"]["deleted"]) == sorted([fresh_id, talked_id])
+        assert body["conversations"]["reassigned"] == []
+
+        # what the re-test then did — and why it is 404: the rows no longer exist
+        assert admin.delete(f"{base}/{fresh_id}").status_code == 404
+        assert admin.get(f"{base}/{talked_id}").status_code == 404
+        db = SessionLocal()
+        try:
+            assert db.get(AssistantConversation, fresh_id) is None
+            assert db.get(AssistantConversation, talked_id) is None
+            assert db.query(AssistantMessage).filter_by(conversation_id=talked_id).count() == 0
+            assert db.query(AssistantConversation).filter_by(
+                owner_principal=f"user:{user_id}").count() == 0
+        finally:
+            db.close()
+
+    def test_service_cascade_reports_what_it_did(self, anon, admin):
+        from app.assistant.purge import cascade_principal
+
+        assert register(anon).status_code == 201
+        user_id = stored().id
+        plain_id, deployed_id = self._seed(user_id)
+        db = SessionLocal()
+        try:
+            out = cascade_principal(db, f"user:{user_id}", successor="config-admin",
+                                    successor_name=ADMIN["username"])
+        finally:
+            db.close()
+        assert out == {"deleted": [plain_id], "reassigned": [deployed_id]}

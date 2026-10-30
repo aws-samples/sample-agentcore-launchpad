@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { KbJobsStaleHint } from "../../../components/KbJobsStaleHint";
 import { api, errorMessage } from "../../../lib/api";
 import {
   type AssistantKbDetail,
@@ -13,6 +14,8 @@ import {
   kbUploadSource,
 } from "../../../lib/assistant";
 import { Alert, Button, Descriptions, Drawer, Field, Tag } from "../../ui";
+import { awsStatusLabel } from "../../awsStatus";
+import { kbStatusLabel } from "../knowledge/status";
 
 const POLL_INTERVAL = 5000;
 const POLL_LIMIT = 180;
@@ -37,9 +40,12 @@ export function KnowledgeBaseCreateDrawer(props: KnowledgeBaseCreateProps) {
 
 /**
  * Create a managed KB from uploaded files without leaving the assistant: create →
- * upload → (one automatic) sync → poll the ingestion job until it settles. The
- * create endpoint has no idempotency token, so a lost create response is never
- * repeated blindly; a failed or ambiguous sync is retried only explicitly.
+ * upload (the server starts the ingestion sync once every file landed, N17-obs204, and
+ * the upload response names that job) → poll the ingestion job until it settles. The
+ * wizard starts a sync of its own only when the upload reported none (`job: null`);
+ * `startSync` otherwise stays the explicit retry. The create endpoint has no idempotency
+ * token, so a lost create response is never repeated blindly; a failed or ambiguous sync
+ * is retried only explicitly.
  */
 function KnowledgeBaseCreateWindow({ workspaceId, onCreated, onClose }: KnowledgeBaseCreateProps) {
   const { t } = useTranslation();
@@ -198,6 +204,16 @@ function KnowledgeBaseCreateWindow({ workspaceId, onCreated, onClose }: Knowledg
       const result = await api.uploadKnowledgeBaseFiles(id, files, workspaceId);
       if (!owner.active) return;
       if (result.keys.length !== files.length) throw new Error(t("assistantPreparation.kb.uploadIncomplete"));
+      if (result.job && typeof result.job.job_id === "string" && typeof result.job.status === "string") {
+        // the upload's own sync: track it instead of starting a second one; a coalesced job
+        // that started before the upload may not cover the files — the poll's completion
+        // check (scanned >= files) leaves the manual retry available in that case
+        autoSyncAttempted.current = true;
+        const started: AssistantKbJob = { job_id: result.job.job_id, status: result.job.status };
+        trackedJob.current = started;
+        setJob(started);
+        setSyncError(null);
+      }
       setUploaded(true);
       refresh();
     } catch (err) {
@@ -361,7 +377,7 @@ function KnowledgeBaseCreateWindow({ workspaceId, onCreated, onClose }: Knowledg
                 label: t("v2.assistant.kbResource"),
                 value: (
                   <span className="v2-stack" style={{ gap: 2 }}>
-                    <span>{t("assistantPreparation.kb.resourceStatus", { status: detail.status })}</span>
+                    <span>{t("assistantPreparation.kb.resourceStatus", { status: kbStatusLabel(t, detail.status) })}</span>
                     <span className="v2-muted">
                       {t(`assistantPreparation.kb.${detail.status === "ACTIVE" ? "mountable" : "notMountable"}`)}
                     </span>
@@ -380,7 +396,9 @@ function KnowledgeBaseCreateWindow({ workspaceId, onCreated, onClose }: Knowledg
                     <Tag tone={indexed ? "green" : ingestionLabel === "indexFailed" ? "red" : ingestionRunning ? "blue" : "gray"}>
                       {t(`assistantPreparation.kb.${ingestionLabel}`, { count: failedDocuments ?? 0 })}
                     </Tag>
-                    {source && <span className="v2-muted">{t("assistantPreparation.kb.sourceStatus", { status: source.status })}</span>}
+                    {source && <span className="v2-muted">{t("assistantPreparation.kb.sourceStatus", { status: awsStatusLabel(t, source.status) })}</span>}
+                    {/* N-SCN-obs11 follow-up: the detail could not refresh the jobs — the index state above is the last known one */}
+                    <KbJobsStaleHint degraded={source?.jobs_degraded ?? detail.jobs_degraded} className="v2-muted" />
                   </span>
                 ),
               },

@@ -33,7 +33,10 @@ class TestAuthDisabled:
             "authenticated": True,
             "registration_enabled": False,
             "registration_requires_approval": True,
+            # additive (N14-obs3): the policy the registration form hints from
+            "password_policy": {"mode": "strict", "min_length": 12},
             "username": None,
+            "user_id": None,
             "role": None,
             "email": None,
             "account_expires_at": None,
@@ -80,8 +83,10 @@ class TestAuthEnabled:
             "authenticated": False,
             "registration_enabled": True,
             "registration_requires_approval": True,
+            "password_policy": {"mode": "strict", "min_length": 12},
             # the configured identity is never disclosed before authentication
             "username": None,
+            "user_id": None,
             "role": None,
             "email": None,
             "account_expires_at": None,
@@ -179,6 +184,10 @@ class TestAuthEnabled:
         auth_client,
         monkeypatch,
     ):
+        """r12-g (A-3 + rev-r11 ruling): the cookie is signed with the random persisted
+        session secret, not the admin password — but it carries the admin's session
+        epoch (a digest of the configured password), so a rotation still ends every
+        admin session at once."""
         auth_client.post(
             "/api/auth/login",
             json={"username": "operator", "password": "s3cret-pass"},
@@ -186,6 +195,16 @@ class TestAuthEnabled:
         assert auth_client.get("/api/apikeys").status_code == 200
 
         monkeypatch.setenv("LAUNCHPAD_AUTH_PASSWORD", "rotated-password")
+        get_settings.cache_clear()
+        assert auth_client.get("/api/apikeys").status_code == 401
+
+    def test_session_secret_rotation_invalidates_session(self, auth_client, monkeypatch):
+        auth_client.post(
+            "/api/auth/login",
+            json={"username": "operator", "password": "s3cret-pass"},
+        )
+        assert auth_client.get("/api/apikeys").status_code == 200
+        monkeypatch.setenv("LAUNCHPAD_SESSION_SECRET", "rotated-secret-" + "x" * 48)
         get_settings.cache_clear()
         assert auth_client.get("/api/apikeys").status_code == 401
 

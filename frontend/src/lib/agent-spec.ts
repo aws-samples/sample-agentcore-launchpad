@@ -5,7 +5,6 @@
  * same per-method validation. Nothing here renders or talks to the network.
  */
 import type {
-  AgentSdk,
   AgentSpecInput,
   ByocArtifactKind,
   ConnectionKind,
@@ -15,23 +14,14 @@ import type {
   InboundAuth,
   Toolkit,
 } from "./api";
+import type { MethodCapabilities } from "./capabilities";
 import type { ModelSource, ReasoningEffort } from "./models";
 import {
-  CLAUDE_SDK_MODEL_SOURCE,
   DEFAULT_MODEL_SOURCE,
   defaultModelFor,
   SPEC_DEFAULT_MODEL_ID,
 } from "./models";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
-import {
-  choiceFromSpec,
-  EMPTY_JWT_FORM,
-  inboundAuthFromChoice,
-  inboundCapable,
-  type InboundChoice,
-  type JwtFormState,
-  jwtFormProblem,
-} from "./inbound-auth";
 import {
   DEFAULT_MAX_ITERATIONS,
   EFFORT_NONE,
@@ -40,12 +30,46 @@ import {
 } from "../pages/create/presetSettings";
 import type { EffortChoice } from "../pages/create/presetSettings";
 
-export type AgentMethod = "harness" | "zip_runtime" | "container" | "byoc";
+export type AgentMethod = "harness" | "zip_runtime" | "byoc";
 
 /** Same rule as the backend's `AgentSpec.name`. */
 export const AGENT_NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
 
+/**
+ * The AgentCore builtin tool configs the console knows how to label, in display order.
+ * Round 16: which of them (and which native tools, protocols, acting modes, artifact kinds)
+ * the CURRENT method accepts is no longer a frontend constant — it is read from
+ * `GET /api/capabilities.methods` (`optionOffered`); these lists only type the form and
+ * seed the checkboxes, and `lib/method-capabilities.test.ts` pins them to the backend's
+ * frozen declaration.
+ */
 export const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
+export type BuiltinTool = (typeof BUILTIN_TOOLS)[number];
+
+/** Keys of the list-valued fields of a method's declaration. */
+export type MethodOptionField = "builtin_tools" | "native_tools" | "protocols" | "byoc_kinds" | "tool_auth_modes" | "tool_types";
+
+/**
+ * Whether the wizard may offer `value` for `field` on `method`. `null` = the capabilities
+ * could not be read (older server / outage): offer everything and let the server's 422
+ * `agent.method_unsupported` decide — never a silent narrowing on a failed read. A method
+ * the server does not list is treated the same way.
+ */
+export function optionOffered(caps: MethodCapabilities | null, method: string, field: MethodOptionField, value: string): boolean {
+  const own = caps?.[method];
+  return !own || own[field].includes(value);
+}
+
+/** The boolean members (`memory`, `knowledge_bases`) of a method's declaration. */
+export function flagOffered(caps: MethodCapabilities | null, method: string, field: "memory" | "knowledge_bases"): boolean {
+  const own = caps?.[method];
+  return !own || own[field];
+}
+
+/** N15-obs16 special case of `optionOffered` (kept for the Harness tools card). */
+export function builtinOffered(name: string, method: AgentMethod, caps: MethodCapabilities | null): boolean {
+  return optionOffered(caps, method, "builtin_tools", name);
+}
 
 /** A multi-select toggle: add `value` if absent, remove it if present. */
 export function toggle<T>(list: T[], value: T): T[] {
@@ -103,40 +127,34 @@ export const promptWithToolkit = (prev: string, kitPrompt: string) =>
 // AgentCore mount-path contract: exactly one level under /mnt
 export const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
 export const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
-/** AgentCore allows at most two BYO mounts of each kind */
-export const MAX_MOUNTS_PER_KIND = 2;
-/** Methods whose spec carries `filesystem`: managed session storage on all three,
- *  BYO mounts (S3 Files / EFS — they need VPC networking) on the container only. */
-export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime", "container"];
-export const byoMountsAllowed = (method: AgentMethod) => method === "container";
+/** Methods whose spec carries `filesystem` (managed session storage only — BYO
+ *  S3/EFS mounts belonged to the removed Claude-Agent-SDK container method). */
+export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime"];
 
 export const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 export const skillNameFromPath = (path: string) =>
   path.replace(/\/+$/, "").split("/").pop() ?? path;
 
-// Which source a method starts on. Every method now starts on native Bedrock
-// (global inference profiles, Converse); harness and zip/Strands can still be
-// switched to Mantle. The container method is pinned — the Claude Agent SDK
-// cannot drive anything but Claude, so its model default is Claude-only too
-// (`defaultModelForMethod`).
+// Which source a method starts on. Every method starts on native Bedrock
+// (global inference profiles, Converse).
 export const MODEL_SOURCE_BY_METHOD: Record<AgentMethod, ModelSource> = {
   harness: DEFAULT_MODEL_SOURCE,
-  container: CLAUDE_SDK_MODEL_SOURCE,
   zip_runtime: DEFAULT_MODEL_SOURCE,
-  // BYOC deploys the member's own code, but spec.model_id still scopes the
-  // execution role's bedrock:InvokeModel and reaches the runtime as env MODEL_ID.
+  // BYOC deploys the member's own code, but spec.model_id still scopes which
+  // Global Bedrock model the Identity-fetched bearer key is used against, and
+  // reaches the runtime as env MODEL_ID.
   byoc: DEFAULT_MODEL_SOURCE,
 };
 
-// A2A zip agents render from a different template that has no Mantle branch, so
-// they stay on the Converse path regardless of the method default.
+// A2A zip agents render from a different template; they stay on the Converse
+// path regardless of the method default.
 export const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
 export const sourceForMethod = (m: AgentMethod): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
-/** The model a form seeds for `method` on `source` — Claude-only for the Claude Agent SDK. */
+/** The model a form seeds for `method` on `source`. */
 export const defaultModelForMethod = (method: AgentMethod, source: ModelSource = sourceForMethod(method)) =>
-  defaultModelFor(source, method === "container");
+  defaultModelFor(source);
 
 /** The source a method switch lands on: protocol survives a method switch, so
  *  re-entering zip_runtime with A2A still selected lands back on the pinned source. */
@@ -162,15 +180,6 @@ export const BYOC_DEFAULT_ENTRYPOINT = "main.py";
  *  first candidate (no candidates ⇒ keep what the member typed). */
 export const entrypointAfterUpload = (candidates: string[], current: string) =>
   candidates.length && !candidates.includes(current) ? candidates[0] : current;
-
-// The single member of the "Other Agent SDK" category (the container method).
-// Selected by default and, for now, the only selectable value.
-export const DEFAULT_AGENT_SDK: AgentSdk = "claude_agent_sdk";
-
-export interface MountRow {
-  arn: string;
-  path: string;
-}
 
 // agent-card skill editor row; tags edit as a comma-separated string
 export interface A2aSkillRow {
@@ -212,6 +221,21 @@ export const skillIds = (rows: A2aSkillRow[]): string[] => {
 };
 
 // APPROVED registry records the wizard offers for mounting.
+/** One APPROVED A2A registry record the wizard may mount (N10v2-bug5) — `GET
+ *  /api/registry/attachables` → `agents`. `runtime_arn` is set only when a live agent of
+ *  this workspace owns the record; the consumer's role is granted exactly that ARN. */
+export interface AttachableAgent {
+  name: string;
+  description: string;
+  record_id: string;
+  agent_id: string | null;
+  runtime_arn: string | null;
+  url: string | null;
+  skills: { id: string; name: string; description: string }[];
+  attachable: boolean;
+  attachability_reason: string | null;
+}
+
 export interface AttachableMcp {
   name: string;
   description: string;
@@ -274,7 +298,11 @@ export const CONNECTION_NAME_RE = /^[a-zA-Z0-9\-_]{1,128}$/;
 export const REST_TOOL_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 /** Acting modes a tool can use (`obo` runs on a Gateway target instead). `as_user` (3LO)
  *  takes an OAuth2 Connection only. */
+// Acting modes a tool-level Connection may use on the methods that render an identity
+// client (zip_runtime / byoc); the authoritative set is the method declaration
+// (`GET /api/capabilities.methods[m].tool_auth_modes`, pinned by lib/method-capabilities.test.ts).
 export const SUPPORTED_ACTING_MODES = ["as_agent", "as_user"] as const;
+export type ActingMode = (typeof SUPPORTED_ACTING_MODES)[number];
 export const DEFAULT_KEY_NAME = "Authorization";
 
 /** A tool's `auth` block as stored (current shape, or the earlier fork's
@@ -406,7 +434,6 @@ export interface AgentForm {
   name: string;
   modelId: string;
   modelSource: ModelSource;
-  agentSdk: AgentSdk;
   systemPrompt: string;
   // harness-only inference knobs; free text so a half-typed number is validated
   maxTokens: string;
@@ -419,6 +446,8 @@ export interface AgentForm {
   toolkits: Toolkit[];
   selectedGateway: string[];
   selectedMcp: string[];
+  /** APPROVED A2A records (other Launchpad agents) mounted as ask_<agent> tools (N10v2-bug5) */
+  selectedAgents: string[];
   selectedKbs: string[];
   skills: string[];
   /** harness expert override; null ⇒ derived from attachments / Skills / native tools */
@@ -427,15 +456,9 @@ export interface AgentForm {
   longTerm: boolean;
   /** "" ⇒ the workspace's shared default memory */
   memoryId: string;
-  /** container: LAUNCHPAD_MCP_SERVERS JSON */
-  mcpServers: string;
-  // container filesystem configuration
+  // managed session storage (harness / zip_runtime)
   sessionFs: boolean;
   sessionMount: string;
-  s3Mounts: MountRow[];
-  efsMounts: MountRow[];
-  vpcSubnets: string;
-  vpcSgs: string;
   // zip_runtime service protocol
   protocol: "http" | "a2a";
   a2aSkills: A2aSkillRow[];
@@ -447,6 +470,8 @@ export interface AgentForm {
   byocEntrypoint: string;
   byocPython: ByocPythonVersion;
   byocInstallReqs: boolean;
+  /** N17-obs465: the aws-cn trace exporter layer for a Node container agent (default on) */
+  byocCnTraceExporter: boolean;
   byocRawContract: boolean;
   /** every model the execution role will permit; [0] is the PRIMARY (= model_id) */
   byocModels: string[];
@@ -454,13 +479,8 @@ export interface AgentForm {
   byocDescription: string;
   /** zip_runtime (HTTP) / byoc: rest + mcp tools with their Connection auth */
   authTools: AuthToolRow[];
-  /**
-   * Inbound auth of an HTTP Runtime agent. Optional so a form that does not own
-   * it (the classic wizard) omits `inbound_auth` and a re-publish carries the
-   * stored pin; the V2 wizard always states it (`inherit` ⇒ `null`).
-   */
-  inbound?: InboundChoice;
-  inboundJwt?: JwtFormState;
+  /** D20 §4.2: agent-scoped policies this agent opts into (`spec.policy_ids`) */
+  policyIds: string[];
 }
 
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
@@ -469,7 +489,6 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   name: "",
   modelId: defaultModelForMethod(method),
   modelSource: sourceForMethod(method),
-  agentSdk: DEFAULT_AGENT_SDK,
   systemPrompt: "",
   maxTokens: "",
   reasoningEffort: EFFORT_NONE,
@@ -479,19 +498,15 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   toolkits: [],
   selectedGateway: [],
   selectedMcp: [],
+  selectedAgents: [],
   selectedKbs: [],
   skills: [],
   allowedTools: null,
   nativeTools: method === "harness" ? [...DEFAULT_HARNESS_NATIVE_TOOLS] : [],
   longTerm: true,
   memoryId: "",
-  mcpServers: "",
   sessionFs: true,
   sessionMount: DEFAULT_SESSION_MOUNT,
-  s3Mounts: [],
-  efsMounts: [],
-  vpcSubnets: "",
-  vpcSgs: "",
   protocol: "http",
   a2aSkills: [],
   byocKind: "code_zip",
@@ -500,20 +515,21 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   byocEntrypoint: BYOC_DEFAULT_ENTRYPOINT,
   byocPython: "PYTHON_3_13",
   byocInstallReqs: true,
+  byocCnTraceExporter: true,
   byocRawContract: false,
   byocModels: [defaultModelFor(sourceForMethod(method))],
   byocEnvRows: [],
   byocDescription: "",
   authTools: [],
-  inbound: "inherit",
-  inboundJwt: { ...EMPTY_JWT_FORM },
+  policyIds: [],
 });
 
 /** Spec fields read back when an existing agent is loaded into the form. */
 export interface StoredAgentSpec {
   model_id?: string;
   model_source?: ModelSource;
-  agent_sdk?: AgentSdk;
+  model_region?: string;
+  model_credential?: string;
   // harness-only inference knobs (absent on every spec written before they existed)
   max_tokens?: number | null;
   reasoning_effort?: ReasoningEffort | null;
@@ -533,19 +549,22 @@ export interface StoredAgentSpec {
   env?: Record<string, string>;
   filesystem?: {
     session_storage?: { mount_path?: string } | null;
-    s3_files?: { access_point_arn?: string; mount_path?: string }[];
-    efs?: { access_point_arn?: string; mount_path?: string }[];
   };
-  network?: { subnets?: string[]; security_groups?: string[] };
   byoc?: ByocConfigInput;
   inbound_auth?: InboundAuth | null;
+  policy_ids?: string[];
 }
 
 /** What a loaded agent contributes besides the form itself: the gateway configs and
  *  knowledge-base descriptors a re-publish must carry even if the live catalogs no
  *  longer list them, the custom (non-registry) Skill chips, and the stored upload. */
+/** a2a attachment configs of a loaded spec, by ref name — re-published verbatim when the
+ *  record no longer appears in the catalog (disabled / registry down) */
+export type StoredA2aConfig = Record<string, NonNullable<StoredTool["config"]>>;
+
 export interface StoredAgentExtras {
   storedGatewayConfig: StoredGatewayConfig;
+  storedA2aConfig: StoredA2aConfig;
   specKbs: KbRef[];
   customSkills: { name: string; path: string }[];
   byocUploadId: string | null;
@@ -555,7 +574,7 @@ export interface StoredAgentExtras {
  * An existing agent's stored spec as the form a re-publish starts from — the classic
  * wizard's `startEdit` mapping, so both consoles re-publish the same spec. Knobs come
  * back exactly as stored; a spec written before `model_source` existed is a Converse
- * agent (never Mantle), and one without `model_id` means the backend default.
+ * agent, and one without `model_id` means the backend default.
  */
 export function formFromStoredSpec(
   method: AgentMethod,
@@ -573,7 +592,6 @@ export function formFromStoredSpec(
     name,
     modelId: storedModel,
     modelSource: spec.model_source ?? "bedrock",
-    agentSdk: spec.agent_sdk ?? base.agentSdk,
     systemPrompt: spec.system_prompt ?? "",
     maxTokens: spec.max_tokens == null ? "" : String(spec.max_tokens),
     reasoningEffort: spec.reasoning_effort ?? EFFORT_NONE,
@@ -584,19 +602,15 @@ export function formFromStoredSpec(
     selectedGateway: gatewayTools.map((x) => x.name),
     // an mcp tool carrying auth is an Identity row, not a catalog pick
     selectedMcp: tools.filter((x) => x.type === "mcp" && !isAuthTool(x)).map((x) => x.name),
+    selectedAgents: tools.filter((x) => x.type === "a2a").map((x) => x.name),
     selectedKbs: (spec.knowledge_bases ?? []).map((k) => k.kb_id),
     skills: spec.skills ?? [],
     allowedTools: spec.allowed_tools ?? null,
     nativeTools: method === "harness" ? spec.native_tools ?? [] : [],
     longTerm: spec.memory?.long_term ?? true,
     memoryId: spec.memory?.memory_id ?? "",
-    mcpServers: spec.env?.LAUNCHPAD_MCP_SERVERS ?? "",
     sessionFs: fs ? fs.session_storage != null : true,
     sessionMount: fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT,
-    s3Mounts: (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
-    efsMounts: (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
-    vpcSubnets: (spec.network?.subnets ?? []).join(", "),
-    vpcSgs: (spec.network?.security_groups ?? []).join(", "),
     protocol: spec.protocol ?? "http",
     a2aSkills: (spec.a2a_skills ?? []).map((s) => ({
       name: s.name ?? "",
@@ -612,6 +626,7 @@ export function formFromStoredSpec(
       byocEntrypoint: spec.byoc.entrypoint ?? "main.py",
       byocPython: spec.byoc.python_version ?? "PYTHON_3_13",
       byocInstallReqs: spec.byoc.install_requirements ?? true,
+      byocCnTraceExporter: spec.byoc.cn_trace_exporter ?? true,
       byocRawContract: spec.byoc.invoke_contract === "raw",
       // a spec stored before allowed_models existed reads back as its one model
       byocModels: spec.byoc.allowed_models?.length ? spec.byoc.allowed_models : [storedModel],
@@ -620,9 +635,7 @@ export function formFromStoredSpec(
     });
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
-  const inbound = choiceFromSpec(spec.inbound_auth);
-  form.inbound = inbound.choice;
-  form.inboundJwt = inbound.form;
+  form.policyIds = Array.isArray(spec.policy_ids) ? spec.policy_ids.filter((id) => typeof id === "string") : [];
   const storedGatewayConfig: StoredGatewayConfig = Object.fromEntries(
     gatewayTools.flatMap((tool) =>
       tool.config?.record_id && tool.config.gateway_id
@@ -636,10 +649,18 @@ export function formFromStoredSpec(
         : [],
     ),
   );
+  const storedA2aConfig: StoredA2aConfig = Object.fromEntries(
+    tools.flatMap((tool) =>
+      tool.type === "a2a" && tool.config?.record_id && tool.config.runtime_arn
+        ? [[tool.name, tool.config]]
+        : [],
+    ),
+  );
   return {
     form,
     extras: {
       storedGatewayConfig,
+      storedA2aConfig,
       specKbs: spec.knowledge_bases ?? [],
       // custom (non-registry) skill paths get their chip name from the path tail
       customSkills: (spec.skills ?? [])
@@ -654,10 +675,38 @@ export function formFromStoredSpec(
 export interface AgentFormCatalogs {
   gatewayTargets: AttachableMcp[];
   remoteMcp: AttachableMcp[];
+  /** APPROVED A2A records of this workspace (N10v2-bug5) */
+  agents: AttachableAgent[];
   /** gateway configs carried by a loaded spec (re-publish of a gone record) */
   storedGatewayConfig: StoredGatewayConfig;
+  /** a2a configs carried by a loaded spec (same re-publish guarantee) */
+  storedA2aConfig?: StoredA2aConfig;
   kbInfo: (id: string) => KbRef;
 }
+
+// A2A attachments as ToolRefs (N10v2-bug5). The live catalog row wins (it carries the
+// current runtime ARN, card url and description); a pick the catalog no longer lists
+// re-publishes its stored config verbatim; a pick with neither is dropped rather than
+// sent half-formed — the backend would refuse it anyway (runtime_arn is mandatory).
+export const a2aToolRefs = (form: AgentForm, cat: AgentFormCatalogs) =>
+  form.selectedAgents.flatMap((n) => {
+    const live = cat.agents.find((a) => a.name === n);
+    if (live?.runtime_arn && live.attachable) {
+      return [{
+        type: "a2a",
+        name: n,
+        config: {
+          record_id: live.record_id,
+          runtime_arn: live.runtime_arn,
+          ...(live.agent_id ? { agent_id: live.agent_id } : {}),
+          ...(live.url ? { url: live.url } : {}),
+          ...(live.description ? { description: live.description } : {}),
+        },
+      }];
+    }
+    const stored = cat.storedA2aConfig?.[n];
+    return stored?.runtime_arn ? [{ type: "a2a", name: n, config: stored }] : [];
+  });
 
 // Gateway attachments as ToolRefs. Shared by the harness and zip_runtime
 // branches below: the harness service performs the token exchange declaratively,
@@ -689,25 +738,6 @@ export const byocEnv = (rows: EnvRow[]) =>
 
 export const byocModelList = (models: string[]) => models.map((m) => m.trim()).filter(Boolean);
 
-export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts">) =>
-  form.s3Mounts.length > 0 || form.efsMounts.length > 0;
-
-/**
- * `inbound_auth` as the form states it: nothing for a method that cannot carry a
- * JWT authorizer or a form that does not own the choice, `null` for inherit
- * (drops a stored pin), else the pin.
- */
-export function inboundAuthSpec(form: AgentForm): Pick<AgentSpecInput, "inbound_auth"> {
-  if (form.inbound === undefined || !inboundCapable(form.method, form.protocol)) return {};
-  return { inbound_auth: inboundAuthFromChoice(form.inbound, form.inboundJwt ?? EMPTY_JWT_FORM) ?? null };
-}
-
-/** The inbound choice's gate: a JWT pin needs a valid authorizer config. */
-export const inboundValid = (form: AgentForm) =>
-  form.inbound !== "jwt" ||
-  !inboundCapable(form.method, form.protocol) ||
-  jwtFormProblem(form.inboundJwt ?? EMPTY_JWT_FORM) === null;
-
 export function buildByocSpec(form: AgentForm): AgentSpecInput {
   const env = byocEnv(form.byocEnvRows);
   const models = byocModelList(form.byocModels);
@@ -715,9 +745,9 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
   return {
     name: form.name,
     method: "byoc",
-    // the execution role scopes bedrock:InvokeModel to exactly the allowed-models
-    // list; entry [0] is the primary the backend injects as env MODEL_ID (the whole
-    // list goes in as ALLOWED_MODEL_IDS; user env rows win for both)
+    // every entry is held to the catalog (model.not_allowed); entry [0] is the
+    // primary the backend injects as env MODEL_ID (the whole list goes in as
+    // ALLOWED_MODEL_IDS; user env rows win for both)
     model_id: models[0],
     model_source: form.modelSource,
     // spec.system_prompt is optional for byoc; the field doubles as a description
@@ -726,7 +756,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
     ...(Object.keys(env).length ? { env } : {}),
     // byoc tools are outbound-auth declarations for the member's own code
     ...(form.authTools.length ? { tools: authToolRefs(form.authTools) } : {}),
-    ...inboundAuthSpec(form),
+    ...(form.policyIds.length ? { policy_ids: form.policyIds } : {}),
     byoc: {
       artifact_kind: kind,
       ...(kind === "container_image"
@@ -738,7 +768,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
             python_version: form.byocPython,
             install_requirements: form.byocInstallReqs,
           }
-        : {}),
+        : { cn_trace_exporter: form.byocCnTraceExporter }),
       invoke_contract: form.byocRawContract ? "raw" : "launchpad_prompt",
       allowed_models: models,
     },
@@ -758,8 +788,6 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     method,
     model_id: form.modelId.trim(), // a pasted custom id may carry stray whitespace
     model_source: form.modelSource,
-    // container only — the other methods have no SDK choice to express
-    ...(method === "container" ? { agent_sdk: form.agentSdk } : {}),
     // harness-only inference knobs: sent only when set (and, for the effort, only
     // for a model/source pairing the backend accepts) — never for the other methods,
     // whose schema refuses them
@@ -777,14 +805,13 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
             ...form.tools.map((n) => ({ type: "builtin", name: n })),
             ...gatewayToolRefs(form, cat),
             ...mcpToolRefs(form, cat),
+            ...a2aToolRefs(form, cat),
           ]
-        : method === "container"
-          ? mcpToolRefs(form, cat)
-          : // An HTTP zip runtime calls the shared Gateway from generated client
-            // code; the A2A template carries no MCP client.
-            method === "zip_runtime" && protocol === "http"
-            ? [...gatewayToolRefs(form, cat), ...authToolRefs(form.authTools)]
-            : [],
+        : // An HTTP zip runtime calls the shared Gateway (and mounted A2A peers) from
+          // generated client code; the A2A server template carries neither client.
+          method === "zip_runtime" && protocol === "http"
+          ? [...gatewayToolRefs(form, cat), ...a2aToolRefs(form, cat), ...authToolRefs(form.authTools)]
+          : [],
     memory: {
       short_term: true,
       long_term: form.longTerm,
@@ -814,37 +841,13 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
       ? { toolkits: form.toolkits }
       : {}),
     ...(form.selectedKbs.length ? { knowledge_bases: form.selectedKbs.map(cat.kbInfo) } : {}),
-    ...((method === "harness" || method === "container" || method === "zip_runtime") &&
-    skills.length
-      ? { skills }
-      : {}),
+    ...((method === "harness" || method === "zip_runtime") && skills.length ? { skills } : {}),
     ...(method === "harness"
       ? { allowed_tools: form.allowedTools, native_tools: form.nativeTools }
       : {}),
-    ...inboundAuthSpec(form),
-    ...(method === "container" && form.mcpServers.trim()
-      ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
-      : {}),
-    ...(method === "harness" || method === "zip_runtime"
-      ? { filesystem: { session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null } }
-      : {}),
-    ...(method === "container"
-      ? {
-          filesystem: {
-            session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
-            s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-            efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-          },
-          ...(hasByoMounts(form)
-            ? {
-                network: {
-                  subnets: splitIds(form.vpcSubnets),
-                  security_groups: splitIds(form.vpcSgs),
-                },
-              }
-            : {}),
-        }
-      : {}),
+    filesystem: { session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null },
+    // D20: agent-scoped policies are additive and only sent when chosen
+    ...(form.policyIds.length ? { policy_ids: form.policyIds } : {}),
   } as AgentSpecInput;
 }
 
@@ -863,8 +866,12 @@ export const REPUBLISH_CARRIED_FIELDS = [
   "code",
   "code_bundle",
   "conversion_notes",
-  // the classic wizard has no inbound input; the V2 form states it (null ⇒ inherit)
+  // no form input constructs this (AWS_IAM-only build); carried so a legacy
+  // stored value round-trips rather than being silently dropped on re-publish
   "inbound_auth",
+  // workspace-level model defaults (R15): no form input, so a stored override survives a re-publish
+  "model_credential",
+  "model_region",
   "requirements",
   "source_harness",
   "studio_flow",
@@ -921,40 +928,23 @@ export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpec
 
 /* ── validation ─────────────────────────────────────────────────────────── */
 
-/** Filesystem problems, per input (all false/empty ⇒ valid). BYO rows only count
- *  where the method mounts them — rows a method switch left behind are not sent. */
+/** Filesystem problems, per input (all false/empty ⇒ valid). BYO S3/EFS mounts
+ *  belonged to the removed Claude-Agent-SDK container method; only the managed
+ *  session mount remains for harness / zip_runtime. */
 export interface FilesystemIssues {
   sessionMount: boolean;
-  /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
+  /** kept for shape stability with earlier BYO-mount rows; always empty now */
   rows: Record<string, { arn: boolean; path: boolean }>;
   duplicatePaths: boolean;
   vpc: boolean;
 }
 
 export function filesystemIssues(form: AgentForm): FilesystemIssues {
-  const byo = byoMountsAllowed(form.method);
-  const s3Mounts = byo ? form.s3Mounts : [];
-  const efsMounts = byo ? form.efsMounts : [];
-  const paths = [
-    ...(form.sessionFs ? [form.sessionMount] : []),
-    ...s3Mounts.map((m) => m.path),
-    ...efsMounts.map((m) => m.path),
-  ];
-  const rows: FilesystemIssues["rows"] = {};
-  for (const [kind, list] of [["s3", s3Mounts], ["efs", efsMounts]] as const) {
-    list.forEach((m, i) => {
-      const arn = m.arn.trim().length === 0;
-      const path = !MOUNT_RE.test(m.path);
-      if (arn || path) rows[`${kind}:${i}`] = { arn, path };
-    });
-  }
   return {
     sessionMount: form.sessionFs && !MOUNT_RE.test(form.sessionMount),
-    rows,
-    duplicatePaths: new Set(paths).size !== paths.length,
-    vpc:
-      hasByoMounts({ s3Mounts, efsMounts }) &&
-      (splitIds(form.vpcSubnets).length === 0 || splitIds(form.vpcSgs).length === 0),
+    rows: {},
+    duplicatePaths: false,
+    vpc: false,
   };
 }
 
@@ -1085,7 +1075,6 @@ export function agentFormValid(
   opts: { knobIssues: string[]; byocUploading: boolean; connections?: ConnectionRef[] | null },
 ): boolean {
   if (!authToolsValid(form, opts.connections)) return false;
-  if (!inboundValid(form)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
   }

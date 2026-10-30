@@ -1,0 +1,16 @@
+[package]
+name = "lp-dogwood"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Launchpad's Dogwood core: schema generation, compiled policy sets and two-stage decisions"
+
+[dependencies]
+dogwood-local-engine.workspace = true
+dogwood-language.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# the Cedar AST (statement effects); pinned to the version dogwood-language resolves
+cedar-policy = "=4.11.0"

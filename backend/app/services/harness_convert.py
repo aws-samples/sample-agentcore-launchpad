@@ -1,66 +1,34 @@
-"""Harness → runtime conversion: export via the agentcore CLI, graft the
-launchpad config-bundle contract, and materialize an AgentSpec code_bundle.
+"""Graft library for the self-built Harness (方式B, spec D1 / analysis §3.L).
 
-Why the graft is mandatory: the exported main.py bakes DEFAULT_SYSTEM_PROMPT
-as a constant and never reads get_config_bundle() — deployed as-is, config-
-bundle A/B experiments would no-op exactly as they do against the managed
-harness (the trap this feature exists to remove). A conversion whose graft
-anchors are missing FAILS instead of shipping a silently non-A/B-able agent.
-
-Shared-Gateway MCP **is** wired: the converted spec carries the source Harness's
-gateway ToolRefs (so the exec role keeps its AgentCore Identity grants and the
-invoke chain sends the `runtimeUserId` that makes a workload token exist),
-`discover_env` resolves the `GATEWAY_*_URL` the export reads, and
-`graft_gateway_softfail` wraps the export's module-scope client construction so a
-token failure degrades to "no gateway tools" instead of crashing the runtime at
-import. The KB gateway is still replaced rather than wired — conversion grafts
-direct `kb_search`/`kb_deep_search` tools, and wiring the KB gateway URL as well
-would give the runtime two duplicate retrieval surfaces.
+The `agentcore export` CLI's codegen for a Strands runtime agent is vendored under
+`templates/harness_runtime/` (contract: docs/cn/interfaces/harness-template.md).
+`deployer/harness_local.py` renders an AgentSpec into that code with the anchored,
+idempotent grafts below — the config-bundle contract, direct KB tools, native tools
+from the CLI's own template, the attachments contract, the SigV4 shared-Gateway client,
+soft-failing MCP construction, the platform actor, loop bounds and skill sources. A
+missing anchor FAILS the render (ConversionError) instead of shipping a runtime that
+reports active and silently lacks a contract.
 """
 
 import ast
 import fnmatch
-import json
-import os
 import re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
-from app.core.config import DATA_DIR
-from app.core.errors import AppError
-from app.harness_tool_access import NATIVE_HARNESS_TOOLS, selected_native_tools
-from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig, ToolRef
-from app.schemas.requirements import resolve_pins
-from app.services.workspace import WorkspaceContext
+from app.optimization.bundles import RUNTIME_BUNDLE_READER
+from app.services import aws_clients
 from app.templates.attachment_support import render_attachment_source
-from app.templates.kb_support import (
-    KB_DEEP_TOOL_NAME,
-    KB_TOOL_NAME,
-    kb_deep_tool_description,
-    kb_prompt_section,
-    kb_tool_description,
-    mounted_kb_refs,
-    render_direct_kb_source,
-)
+from app.templates.gateway_support import render_sigv4_transport as _render_sigv4_transport
 
-EXPORT_TIMEOUT_S = 120
-SCRATCH_PROJECT = "harnessexport"
-_SCRATCH_DIR = DATA_DIR / "harness-export"
-MANAGED_AGENTCORE_CLI = (
-    DATA_DIR / "agentcore-cli" / "node_modules" / ".bin" / "agentcore"
-)
-
-# deterministic codegen anchors of the pinned CLI (0.21.1)
+# deterministic codegen anchors of the pinned CLI (@aws/agentcore 1.0.0-preview.20 —
+# the version recorded in MANIFEST.md; anchors are deterministic across 0.21-1.0)
 _PROMPT_CONST_RE = re.compile(
     r'^DEFAULT_SYSTEM_PROMPT\s*=\s*(?:"""|\'\'\')', re.MULTILINE
 )
 _PROMPT_USE = "system_prompt=DEFAULT_SYSTEM_PROMPT"
 _RESOLVED_PROMPT_USE = "system_prompt=resolve_system_prompt()"
 _AGENT_APPLY_CALL = "_launchpad_apply_tool_descriptions(agent)"
-_ENV_KEY_RE = re.compile(r'os\.(?:environ\.get|getenv)\(\s*["\']([A-Z0-9_]+)["\']')
 _TOOLS_COLLECTION_RE = re.compile(r"^tools = \[\]\s*$", re.MULTILINE)
 
 GRAFT_START = "# <launchpad-config-bundle:v2>"
@@ -69,11 +37,11 @@ KB_GRAFT_START = "# <launchpad-direct-kb:v1>"
 KB_GRAFT_END = "# </launchpad-direct-kb:v1>"
 NATIVE_GRAFT_START = "# <launchpad-native-tools:v1>"
 NATIVE_GRAFT_END = "# </launchpad-native-tools:v1>"
-# The installed CLI's own codegen template: grafted native tools are the exact
+# The vendored CLI export's own codegen template: grafted native tools are the exact
 # implementation the export would have emitted.
 NATIVE_TOOL_TEMPLATE = (
-    DATA_DIR / "agentcore-cli" / "node_modules" / "@aws" / "agentcore" / "dist" / "assets"
-    / "python" / "http" / "strands" / "base" / "main.py"
+    Path(__file__).resolve().parents[1] / "templates" / "harness_runtime"
+    / "_cli" / "strands_base_main.py.hbs"
 )
 _NATIVE_TEMPLATE_FLAGS = {"shell": "hasShell", "file_operations": "hasFileOperations"}
 _NATIVE_TEMPLATE_IMPORTS = {"shell": "import subprocess", "file_operations": "import os"}
@@ -82,7 +50,7 @@ GW_SOFTFAIL_END = "# </launchpad-gateway-softfail:v1>"
 GW_LAZY_TOKEN_MARK = "_launchpad_lazy_gateway_transport"
 GW_NO_BUNDLE_CLIENT = "_LaunchpadMCPClient"
 _MCP_CLIENT_IMPORT = "from strands.tools.mcp.mcp_client import MCPClient\n"
-# A converted twin runs behind the experiment Gateway, which hands it the routed
+# A converted twin may be handed a routed
 # configuration bundle as OTel baggage. OTel's threading/asyncio instrumentation
 # carries that baggage onto the twin's own Gateway MCP calls, and launchpad-gw then
 # tries to resolve the (percent-encoded, truncated) bundle on tools/list and answers
@@ -132,9 +100,9 @@ GW_SIGV4_TRANSPORT = "_launchpad_sigv4_streamablehttp"
 # authorizes the caller's SigV4 signature as bedrock-agentcore:InvokeGateway — the
 # grant agent_iam already scopes to the spec's gateway ids. There is no token to mint,
 # so the rebuilt client signs every MCP request with the runtime role instead.
-_SIGV4_TRANSPORT_SOURCE = "\n\n" + (
-    Path(__file__).resolve().parents[1] / "templates" / "sigv4_gateway_transport.py.tmpl"
-).read_text(encoding="utf-8")
+# rendered without the principal carrier line (stream A3 threads it here in A3b) — the
+# graft is byte-identical to the template text it always was
+_SIGV4_TRANSPORT_SOURCE = "\n\n" + _render_sigv4_transport(principal_carrier=False)
 _GW_SIGV4_CLIENT_RE = re.compile(
     r"^(?P<indent>[ \t]*)return MCPClient\(lambda: " + GW_SIGV4_TRANSPORT + r"\(",
     re.MULTILINE,
@@ -187,16 +155,17 @@ def _bundle_graft(
     return f'''
 
 {GRAFT_START}
-from bedrock_agentcore.runtime.context import BedrockAgentCoreContext as _LPContext
+{RUNTIME_BUNDLE_READER}
 
 _LAUNCHPAD_DEFAULT_SYSTEM_PROMPT = {prompt_default}
 _LAUNCHPAD_DEFAULT_TOOL_DESCRIPTIONS = {tool_defaults}
 
 
 def _launchpad_config_bundle():
-    """Active Launchpad config bundle for this request ({{}} when none routed)."""
+    """Active Launchpad config bundle for this request ({{}} when none routed; CA-2)."""
     try:
-        return _LPContext.get_config_bundle() or {{}}
+        ref = _launchpad_bundle_ref()
+        return _launchpad_fetch_bundle(ref) if ref else {{}}
     except Exception:
         return {{}}
 
@@ -244,129 +213,6 @@ class ConversionError(Exception):
     pass
 
 
-def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    # Callers assemble argv from fixed CLI verbs; values never enter a shell.
-    return subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=EXPORT_TIMEOUT_S
-    )
-
-
-def resolve_agentcore_cli() -> str:
-    """Return the repository-managed CLI path or the stable API error boundary."""
-    if not MANAGED_AGENTCORE_CLI.is_file() or not os.access(
-        MANAGED_AGENTCORE_CLI, os.X_OK
-    ):
-        raise AppError(
-            "agent.convert_cli_missing",
-            "the managed AgentCore CLI is missing or unusable; run `make bootstrap` "
-            f"to install it at {MANAGED_AGENTCORE_CLI}",
-            status_code=502,
-        )
-    return str(MANAGED_AGENTCORE_CLI)
-
-
-def _run_agentcore(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    try:
-        return _run([resolve_agentcore_cli(), *args], cwd=cwd)
-    except subprocess.TimeoutExpired as exc:
-        raise ConversionError(
-            f"agentcore CLI timed out after {EXPORT_TIMEOUT_S} seconds"
-        ) from exc
-    except OSError as exc:
-        raise AppError(
-            "agent.convert_cli_missing",
-            "the managed AgentCore CLI is missing or unusable; run `make bootstrap`",
-            status_code=502,
-        ) from exc
-
-
-def _last_json(stdout: str) -> dict[str, Any]:
-    """The CLI prints the result object on one line, sometimes followed by
-    update notices — take the last parseable JSON line."""
-    for line in reversed([ln for ln in stdout.splitlines() if ln.strip()]):
-        try:
-            body = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(body, dict):
-            return body
-    raise ConversionError(f"agentcore CLI returned no JSON: {stdout[-300:]}")
-
-
-def ensure_scratch_project() -> Path:
-    """One reusable agentcore project dir — the CLI refuses to export
-    outside a project cwd."""
-    project = _SCRATCH_DIR / SCRATCH_PROJECT
-    if (project / "agentcore").exists() or (project / "agentcore.json").exists() \
-            or project.exists():
-        return project
-    _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-    proc = _run_agentcore(
-        ["create", "--project-name", SCRATCH_PROJECT, "--no-agent", "--json"],
-        cwd=_SCRATCH_DIR,
-    )
-    body = _last_json(proc.stdout)
-    if not body.get("success"):
-        raise ConversionError(f"scratch project creation failed: {body.get('error')}")
-    project_path = body.get("projectPath")
-    if not isinstance(project_path, str) or not project_path:
-        raise ConversionError("scratch project creation returned no projectPath")
-    return Path(project_path)
-
-
-def export_harness(harness_arn: str) -> dict[str, str]:
-    """Run the CLI export; return {relpath: content} for the generated project.
-
-    Exports into a **unique, immediately-discarded** target agent name. The CLI
-    derives `<harnessName>Agent` by default and refuses to overwrite it, so with
-    the default name the shared scratch project accumulates one directory per
-    harness and every *second* conversion of the same harness dies with
-    `A runtime agent named "…" already exists`. A per-call name also keeps two
-    concurrent conversions of different harnesses from tripping over each other's
-    export directory.
-
-    The generated tree is read into memory and is not an artifact of record — the
-    spec's `code_bundle` is — so it is removed once read.
-    """
-    project = ensure_scratch_project()
-    target = f"lpexport{uuid4().hex[:10]}Agent"
-    proc = _run_agentcore(
-        [
-            "export",
-            "harness",
-            "--arn",
-            harness_arn,
-            "--target-agent-name",
-            target,
-            "--build",
-            "CodeZip",
-            "--json",
-        ],
-        cwd=project,
-    )
-    body = _last_json(proc.stdout)
-    if not body.get("success"):
-        raise ConversionError(f"harness export failed: {body.get('error')}")
-    exported_path = body.get("agentPath")
-    if not isinstance(exported_path, str) or not exported_path:
-        raise ConversionError("harness export returned no agentPath")
-    agent_path = Path(exported_path)
-    files: dict[str, str] = {}
-    try:
-        for path in agent_path.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(agent_path).as_posix()
-            if rel.startswith(".") or rel.endswith((".md", ".gitignore")):
-                continue  # docs/git housekeeping — not runtime source
-            files[rel] = path.read_text(encoding="utf-8")
-    finally:
-        shutil.rmtree(agent_path, ignore_errors=True)
-    if "main.py" not in files:
-        raise ConversionError("export produced no main.py")
-    return files
-
-
 def has_config_bundle_graft(main_py: str) -> bool:
     """Whether source contains a Launchpad-owned prompt bundle contract."""
     return (
@@ -378,23 +224,48 @@ def has_config_bundle_graft(main_py: str) -> bool:
     )
 
 
+def _rewrite_prompt_constant_body(main_py: str, resolved: str) -> str:
+    """A1: the baked DEFAULT_SYSTEM_PROMPT body is only ever the fallback the
+    bundle graft falls back to — never a leftover template placeholder.
+
+    The vendored template bakes the constant's body as the literal placeholder
+    text __LAUNCHPAD_REFERENCE_PROMPT__; graft_config_bundle redirects the
+    *usage* site to resolve_system_prompt(), but left unrewritten the constant's
+    own body would still carry that placeholder into every render, tripping the
+    renderer's blanket unrendered-__LAUNCHPAD_-placeholder scan. Keeps the
+    original quote style (triple-double or triple-single) so _PROMPT_CONST_RE
+    still matches on a later re-graft.
+    """
+    match = _PROMPT_CONST_RE.search(main_py)
+    if match is None:
+        return main_py
+    quote = main_py[match.end() - 3 : match.end()]
+    body_start = match.end()
+    # The closing delimiter is the first UNESCAPED run of three quotes: a previously
+    # rewritten body may end in `\\"` (escaped quote), which `str.index` would mistake
+    # for the start of the delimiter and leave a stray quote behind on a re-graft.
+    body_end = body_start
+    while not main_py.startswith(quote, body_end):
+        if body_end >= len(main_py):
+            raise ConversionError(
+                "graft anchor invalid (A1): DEFAULT_SYSTEM_PROMPT constant is unterminated"
+            )
+        body_end += 2 if main_py[body_end] == "\\" else 1
+    # Uniform escaping: every backslash, then every quote character. The body then
+    # never contains the delimiter (nor can it end in one or in a bare backslash), so
+    # any run of quotes, a trailing quote and a trailing `\\"` all round-trip, and a
+    # later re-graft finds the closing delimiter at the right place.
+    escaped = resolved.replace("\\", "\\\\").replace(quote[0], "\\" + quote[0])
+    return main_py[:body_start] + escaped + main_py[body_end:]
+
+
 def graft_direct_kb_tools(main_py: str) -> str:
     """Register the materialized direct KB tools on an exported Harness."""
-    if KB_GRAFT_START in main_py and KB_GRAFT_END in main_py:
-        return main_py
-    match = _TOOLS_COLLECTION_RE.search(main_py)
-    if match is None:
-        raise ConversionError(
-            "direct KB graft anchor missing: tools = [] collection not found "
-            "(agentcore CLI codegen changed?)"
-        )
-    graft = f"""{KB_GRAFT_START}
-from launchpad_kb_tools import kb_deep_search, kb_search
-{KB_GRAFT_END}
-
-{match.group(0)}
-tools.extend([kb_search, kb_deep_search])"""
-    return main_py[:match.start()] + graft + main_py[match.end():]
+    return graft_tool_module(
+        main_py, start=KB_GRAFT_START, end=KB_GRAFT_END,
+        import_line="from launchpad_kb_tools import kb_deep_search, kb_search",
+        tool_names=["kb_search", "kb_deep_search"],
+    )
 
 
 def native_tool_block(template: str, name: str) -> str:
@@ -409,8 +280,8 @@ def native_tool_block(template: str, name: str) -> str:
                 break
             return body.rstrip()
     raise ConversionError(
-        f"native tool graft: no self-contained {name} block in the agentcore CLI template "
-        "(agentcore CLI codegen changed?)"
+        f"graft anchor missing (A2): no self-contained {name} block in the agentcore CLI "
+        "template (agentcore CLI codegen changed?)"
     )
 
 
@@ -429,7 +300,7 @@ def graft_native_tools(main_py: str, names: list[str], template: str) -> str:
     match = _TOOLS_COLLECTION_RE.search(main_py)
     if match is None:
         raise ConversionError(
-            "native tool graft anchor missing: tools = [] collection not found "
+            "graft anchor missing (A2): tools = [] collection not found "
             "(agentcore CLI codegen changed?)"
         )
     imports = "\n".join(
@@ -500,7 +371,7 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
 
     if len(matches) != 1:
         raise ConversionError(
-            "graft anchor missing: expected exactly one "
+            "graft anchor missing (A3): expected exactly one "
             "supported agent = get_or_create_agent(...) assignment "
             "(no arguments, _skill_plugins, session_id/user_id, "
             "or session_id/user_id/_skill_plugins) "
@@ -512,7 +383,7 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
     apply_follows = index + 1 < len(body) and _is_agent_apply(body[index + 1])
     if apply_calls and (not apply_follows or len(apply_calls) != 1):
         raise ConversionError(
-            "graft anchor invalid: expected the tool-description apply call "
+            "graft anchor invalid (A3): expected the tool-description apply call "
             "exactly once, immediately after the supported agent assignment"
         )
     return assignment, apply_follows
@@ -521,7 +392,7 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
 def _insert_agent_apply(main_py: str, assignment: ast.Assign) -> str:
     lines = main_py.splitlines(keepends=True)
     if assignment.end_lineno is None or assignment.end_col_offset is None:
-        raise ConversionError("graft anchor missing: agent assignment has no end position")
+        raise ConversionError("graft anchor missing (A3): agent assignment has no end position")
     source_line = lines[assignment.lineno - 1]
     end_line = lines[assignment.end_lineno - 1]
     if (
@@ -532,7 +403,7 @@ def _insert_agent_apply(main_py: str, assignment: ast.Assign) -> str:
         )
     ):
         raise ConversionError(
-            "graft anchor invalid: supported agent assignment must occupy "
+            "graft anchor invalid (A3): supported agent assignment must occupy "
             "its own statement line"
         )
     indent = source_line[: len(source_line) - len(source_line.lstrip())]
@@ -558,12 +429,12 @@ def graft_config_bundle(
     match = _PROMPT_CONST_RE.search(main_py)
     if match is None:
         raise ConversionError(
-            "graft anchor missing: DEFAULT_SYSTEM_PROMPT constant not found "
+            "graft anchor missing (A1): DEFAULT_SYSTEM_PROMPT constant not found "
             "(agentcore CLI codegen changed?)"
         )
     if _PROMPT_USE not in main_py and _RESOLVED_PROMPT_USE not in main_py:
         raise ConversionError(
-            "graft anchor missing: system_prompt=DEFAULT_SYSTEM_PROMPT "
+            "graft anchor missing (A1): system_prompt=DEFAULT_SYSTEM_PROMPT "
             "construction site not found (agentcore CLI codegen changed?)"
         )
     graft = _bundle_graft(default_system_prompt, tool_description_overrides)
@@ -580,6 +451,10 @@ def graft_config_bundle(
         grafted = main_py[:const_end] + graft + main_py[const_end:]
 
     grafted = grafted.replace(_PROMPT_USE, _RESOLVED_PROMPT_USE)
+    # Ruling (Task 1 review, step 0): the constant body is rewritten too — the usage
+    # site redirect alone leaves a vendored `__LAUNCHPAD_` placeholder sitting in the
+    # fallback value, which would ship in every render that never hits the bundle.
+    grafted = _rewrite_prompt_constant_body(grafted, default_system_prompt or "")
     assignment, apply_follows = _agent_assignment(grafted)
     if not apply_follows:
         grafted = _insert_agent_apply(grafted, assignment)
@@ -598,10 +473,10 @@ def graft_runtime_attachments(main_py: str) -> str:
     has_graft = ATTACHMENT_GRAFT_START in main_py or ATTACHMENT_GRAFT_END in main_py
     if has_graft:
         if main_py.count(helper) != 1 or main_py.count(_ATTACHMENT_INVOKE) != 1:
-            raise ConversionError("attachment graft invalid: partial or modified owned graft")
+            raise ConversionError("attachment graft invalid (A5): partial or modified owned graft")
         main_py = main_py.replace(helper, "", 1).replace(_ATTACHMENT_INVOKE, "", 1)
     if "LAUNCHPAD_ATTACHMENT_CONTRACT" in main_py or "_launchpad_attachment_messages" in main_py:
-        raise ConversionError("attachment graft invalid: unrecognized existing contract")
+        raise ConversionError("attachment graft invalid (A5): unrecognized existing contract")
     try:
         tree = ast.parse(main_py)
     except SyntaxError as exc:
@@ -611,13 +486,13 @@ def graft_runtime_attachments(main_py: str) -> str:
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "invoke"
     ]
     if len(invocations) != 1:
-        raise ConversionError("attachment graft anchor missing: one async invoke required")
+        raise ConversionError("attachment graft anchor missing (A5): one async invoke required")
     invoke = invocations[0]
     if (
         len(invoke.decorator_list) != 1
         or ast.unparse(invoke.decorator_list[0]) != "app.entrypoint"
     ):
-        raise ConversionError("attachment graft anchor missing: @app.entrypoint")
+        raise ConversionError("attachment graft anchor missing (A5): @app.entrypoint")
     assignments = [
         node for node in invoke.body
         if isinstance(node, ast.Assign)
@@ -641,389 +516,92 @@ def graft_runtime_attachments(main_py: str) -> str:
             for node in ast.walk(invoke)
         )
     ):
-        raise ConversionError("attachment graft anchor missing: prompt extraction / stream_async")
+        raise ConversionError(
+            "attachment graft anchor missing (A5): prompt extraction / stream_async"
+        )
     assignment = assignments[0]
     if streams[0].lineno <= assignment.lineno or any(
         isinstance(node, (ast.Yield, ast.YieldFrom)) and node.lineno < assignment.lineno
         for node in ast.walk(invoke)
     ):
-        raise ConversionError("attachment graft invalid: model events precede input adaptation")
+        raise ConversionError(
+            "attachment graft invalid (A5): model events precede input adaptation"
+        )
     lines = main_py.splitlines(keepends=True)
     if lines[assignment.lineno - 1].strip() != "prompt = _extract_prompt(payload)":
-        raise ConversionError("attachment graft invalid: extraction must occupy its own line")
+        raise ConversionError("attachment graft invalid (A5): extraction must occupy its own line")
     lines.insert(assignment.end_lineno, _ATTACHMENT_INVOKE)
     lines.insert(invoke.decorator_list[0].lineno - 1, helper)
     grafted = "".join(lines)
     if has_graft and grafted != previous:
-        raise ConversionError("attachment graft invalid: misplaced owned graft")
+        raise ConversionError("attachment graft invalid (A5): misplaced owned graft")
     return grafted
 
 
-def graft_mantle_attachment_model(model_py: str) -> str:
-    """Subclass the exported Responses model, retaining auth and other SDK overrides."""
-    marker = "# <launchpad-mantle-attachments:v1>"
-    helper = marker + "\n" + render_attachment_source() + "\n"
-    if marker in model_py:
-        if model_py.count(helper) != 1:
-            raise ConversionError("Mantle attachment graft invalid: modified helper")
-        model_py = model_py.replace(helper, "", 1)
-    try:
-        tree = ast.parse(model_py)
-    except SyntaxError as exc:
-        raise ConversionError("Mantle attachment graft anchor invalid Python") from exc
-    loads = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "load_model"]
-    if len(loads) != 1:
-        raise ConversionError("Mantle attachment graft anchor missing: load_model")
-    calls = [
-        node for node in ast.walk(loads[0])
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        and node.func.id in ("OpenAIResponsesModel", "MantleCompatResponsesModel")
-    ]
-    # On a second pass the class name is already inside the factory call.
-    adapted = [
-        node for node in ast.walk(loads[0])
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        and node.func.id == "_launchpad_mantle_model_class"
-        and len(node.args) == 1 and isinstance(node.args[0], ast.Name)
-        and node.args[0].id in ("OpenAIResponsesModel", "MantleCompatResponsesModel")
-    ]
-    if len(calls) + len(adapted) != 1:
-        raise ConversionError("Mantle attachment graft anchor missing: Responses model constructor")
-    if calls:
-        func = calls[0].func
-        lines = model_py.splitlines(keepends=True)
-        line = lines[func.lineno - 1]
-        lines[func.lineno - 1] = (
-            line[:func.col_offset] + f"_launchpad_mantle_model_class({func.id})"
-            + line[func.end_col_offset:]
-        )
-        model_py = "".join(lines)
-    lines = model_py.splitlines(keepends=True)
-    lines.insert(loads[0].lineno - 1, helper)
-    return "".join(lines)
+# ─── self-built Harness renderers (N7): actor, loop bounds, skill sources ────────
+ACTOR_RE = re.compile(
+    r"^(?P<indent>[ \t]*)user_id = getattr\(context, "
+    r"['\"]user_id['\"], ['\"]default-user['\"]\)[ \t]*$",
+    re.MULTILINE,
+)
+_ACTOR_LINE = (
+    'user_id = str(payload.get("actor_id") or '
+    'getattr(context, "user_id", "default-user"))'
+)
+SKILL_SOURCES_RE = re.compile(
+    r"^(?P<indent>[ \t]*)s3_skill_sources = \[[^\]]*\][ \t]*$", re.MULTILINE
+)
+LOOP_ITER_RE = re.compile(r"(ExecutionLimitsHook\(\s*max_iterations=)\d+(,)")
+LOOP_HOOK_TIMEOUT_RE = re.compile(r"^([ \t]*timeout_seconds=)\d+(,)[ \t]*$", re.MULTILINE)
+LOOP_INVOKE_TIMEOUT_RE = re.compile(r"^([ \t]*timeout_seconds = )\d+[ \t]*$", re.MULTILINE)
+BUILTIN_GRAFT_START = "# <launchpad-builtin-tools:v1>"
+BUILTIN_GRAFT_END = "# </launchpad-builtin-tools:v1>"
 
 
-def _gateway_url_for(key: str, resources: Any) -> str | None:
-    """The shared-Gateway URL a `GATEWAY_<id>_URL` env key is asking for.
-
-    The agentcore CLI bakes the gateway id into the key, upper-cased with
-    hyphens turned into underscores (live export:
-    `GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL` for
-    `launchpad-gw-a1b2c3d4e5`), so the key is matched back against the ids the
-    bootstrap config knows.
-
-    The KB gateway is deliberately NOT resolved here: conversion replaces the
-    Harness KB gateway with grafted direct-retrieval tools, so wiring its URL as
-    well would give the converted runtime two duplicate retrieval surfaces.
-    """
-    gateway_id = str(resources.get("gateway_id") or "")
-    gateway_url = str(resources.get("gateway_url") or "")
-    if not (gateway_id and gateway_url):
-        return None
-    return gateway_url if gateway_id.upper().replace("-", "_") in key else None
-
-
-def discover_env(
-    files: dict[str, str], workspace: WorkspaceContext
-) -> dict[str, str | None]:
-    """Env keys the exported code reads → wired value or None (degrades).
-
-    Both the launchpad memory id and the shared Gateway URL are wired. The
-    Gateway URL used to be withheld because the exported client crashes at
-    *import* when the URL is set and the M2M token fetch fails — that is real
-    (`mcp_client/client.py` calls `requires_access_token`, which raises inside a
-    container when no workload access token is present, from a module-scope
-    `mcp_clients += get_all_gateway_mcp_clients()`). Two changes make wiring it
-    safe rather than reworded:
-
-    - the converted spec now carries the source Harness's gateway ToolRefs, so the
-      exec role gets its identity grants and `runtimeUserId` is sent on invoke
-      (which is what makes a workload token exist at all); and
-    - `graft_gateway_softfail` wraps that module-scope call, so a token failure
-      degrades to "no gateway tools" instead of taking the runtime down.
-
-    The KB gateway's own `GATEWAY_*_URL` stays unset on purpose — conversion
-    replaces it with grafted direct-retrieval tools.
-    """
-    resources = workspace.resources
-    keys: set[str] = set()
-    for content in files.values():
-        keys.update(_ENV_KEY_RE.findall(content))
-    env: dict[str, str | None] = {}
-    for key in sorted(keys):
-        if key in ("AWS_REGION", "AWS_DEFAULT_REGION"):
-            continue  # runtime-provided
-        if key.startswith("MEMORY_MEMORY_") and resources.get("memory_id"):
-            env[key] = resources["memory_id"]
-        elif key.startswith("GATEWAY_") and key.endswith("_URL"):
-            env[key] = _gateway_url_for(key, resources)
-        else:
-            env[key] = None
-    return env
-
-
-def graft_lazy_gateway_token(client_py: str) -> str:
-    """Defer the export's outbound token fetch from import time to session-open time.
-
-    The exported ``mcp_client/client.py`` does::
-
-        token = _get_bearer_token_launchpad_gw()          # module scope!
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        return MCPClient(lambda: streamablehttp_client(url, headers=headers), ...)
-
-    and ``main.py`` calls ``get_all_gateway_mcp_clients()`` at module scope. So the
-    token is fetched before any request exists — and the workload access token the
-    M2M exchange needs is a **per-request** context value (the Runtime injects it as
-    a header). Measured on a live conversion: the SDK found no context token, fell
-    through to its *local dev* branch and died on
-    ``AccessDeniedException … CreateWorkloadIdentity``.
-
-    ``MCPClient`` is a lazy ``ToolProvider`` — its transport callable does not run
-    until ``load_tools()``, which happens inside the request — so moving just the
-    fetch into that callable is enough. The connection was already lazy; only the
-    header was eager.
-
-    Idempotent. Raises ``ConversionError`` if the anchor is gone (codegen drift),
-    same posture as the other grafts: better a failed conversion than a runtime that
-    reports active and reaches no tools.
-    """
-    if GW_LAZY_TOKEN_MARK in client_py or f"class {GW_NO_BUNDLE_CLIENT}(" in client_py:
-        return client_py
-    if "MCPClient(" not in client_py:
-        # Nothing is constructed, so there is no eager fetch to defer. Checked
-        # before the anchor so "no gateway client" stays benign while "a client
-        # whose shape we no longer recognise" still fails loudly below.
-        return client_py
-
-    def _replace(match: re.Match[str]) -> str:
-        indent = match.group("indent")
-        return (
-            f"{indent}def {GW_LAZY_TOKEN_MARK}():\n"
-            f"{indent}    # <launchpad-lazy-gateway-token:v1> fetched at session-open\n"
-            f"{indent}    # time, not import time: the workload access token only\n"
-            f"{indent}    # exists inside a request context.\n"
-            f"{indent}    _token = {match.group('fetch')}\n"
-            f"{indent}    return streamablehttp_client(\n"
-            f"{indent}        url,\n"
-            f'{indent}        headers={{"Authorization": f"Bearer {{_token}}"}}'
-            f" if _token else {{}},\n"
-            f"{indent}    )\n"
-            f"\n"
-            f"{indent}return {GW_NO_BUNDLE_CLIENT}({GW_LAZY_TOKEN_MARK}{match.group('rest')})"
-        )
-
-    grafted, count = _GW_EAGER_TOKEN_RE.subn(_replace, client_py)
-    # AWS_IAM clients fetch nothing, but they need the same baggage-free wrapper.
-    grafted, signed = _GW_SIGV4_CLIENT_RE.subn(
-        lambda m: f"{m.group('indent')}return {GW_NO_BUNDLE_CLIENT}(lambda: "
-        f"{GW_SIGV4_TRANSPORT}(", grafted,
-    )
-    if count + signed == 0:
-        raise ConversionError(
-            "graft anchor missing: eager 'token = _get_bearer_token_*()' + "
-            "MCPClient(lambda: streamablehttp_client(url, headers=headers)) shape not "
-            "found in mcp_client/client.py (agentcore CLI codegen changed?)"
-        )
-    if _MCP_CLIENT_IMPORT not in grafted:
-        raise ConversionError(
-            "graft anchor missing: 'from strands.tools.mcp.mcp_client import MCPClient' "
-            "not found in mcp_client/client.py (agentcore CLI codegen changed?)"
-        )
-    return grafted.replace(_MCP_CLIENT_IMPORT, _MCP_CLIENT_IMPORT + _NO_BUNDLE_CLIENT_SOURCE, 1)
-
-
-GW_CLIENTS_MARK = "# <launchpad-gateway-clients:v1>"
-_MCP_CLIENTS_INIT_RE = re.compile(r"^mcp_clients = \[\][ \t]*$", re.MULTILINE)
-_GLOB_CHARS = set("*?[")
-
-
-def _gateway_allowlist(alias: str, allowed_tools: list[str] | None) -> list[str] | None:
-    """The tool names `allowedTools` selects on one Gateway alias.
-
-    ``None`` = every tool (``*``, ``@alias`` or no allowlist at all); ``[]`` = the
-    alias is not selected, so the converted runtime must not mount it either.
-    """
-    if allowed_tools is None or "*" in allowed_tools or f"@{alias}" in allowed_tools:
-        return None
-    prefix = f"@{alias}/"
-    return [entry[len(prefix):] for entry in allowed_tools if entry.startswith(prefix)]
-
-
-def graft_missing_gateway_clients(
-    files: dict[str, str],
-    harness_tools: list[dict[str, Any]],
-    allowed_tools: list[str] | None,
-    *,
-    skip_gateway_arns: frozenset[str] = frozenset(),
-) -> dict[str, str]:
-    """Restore the Gateway MCP clients the CLI export drops for a narrowed Harness.
-
-    agentcore CLI 0.21.x only emits ``mcp_client/client.py`` Gateway clients (and the
-    module-scope ``mcp_clients += get_all_gateway_mcp_clients()``) when the Harness
-    ``allowedTools`` is ``*``. The platform deploys target-scoped selectors
-    (``@launchpad_gw/<target>___<tool>``), so the export silently loses every Gateway
-    and the converted Runtime would answer without its business tools.
-
-    The clients are rebuilt from the live Harness tool definitions in the CLI's own
-    shape (so the lazy-token and soft-fail grafts apply unchanged), with the
-    Harness narrowing carried over as Strands ``tool_filters``. An OAuth Gateway
-    mints its M2M bearer token; an AWS_IAM Gateway (``outboundAuth.awsIam``) gets a
-    SigV4-signing transport with its URL built from the ARN, because the platform
-    wires only the shared Gateway's URL into the env. Gateways in
-    ``skip_gateway_arns`` (the KB gateway, replaced by direct retrieval) and aliases
-    the allowlist does not select are left out. Idempotent; a no-op when the export
-    already constructs clients.
-    """
-    client_py = files.get("mcp_client/client.py") or ""
-    if GW_CLIENTS_MARK in client_py or "MCPClient(" in client_py:
-        return files
-    gateways = []
-    for tool in harness_tools:
-        config = (tool.get("config") or {}).get("agentCoreGateway") or {}
-        arn = config.get("gatewayArn")
-        if tool.get("type") != "agentcore_gateway" or not arn or arn in skip_gateway_arns:
-            continue
-        allow = _gateway_allowlist(str(tool.get("name") or ""), allowed_tools)
-        if allow == []:
-            continue
-        outbound = config.get("outboundAuth") or {}
-        oauth = outbound.get("oauth") or {}
-        if not oauth.get("providerArn") and "awsIam" not in outbound:
-            raise ConversionError(
-                f"gateway {tool.get('name')!r} has neither OAuth nor AWS_IAM outbound "
-                "auth; the converted runtime cannot authenticate to it"
-            )
-        gateways.append((str(tool["name"]), arn, oauth or None, allow))
-    if not gateways:
-        return files
-    if "main.py" not in files or not _MCP_CLIENTS_INIT_RE.search(files["main.py"]):
-        raise ConversionError(
-            "graft anchor missing: module-scope 'mcp_clients = []' not found "
-            "(agentcore CLI codegen changed?)"
-        )
-
-    lines = [GW_CLIENTS_MARK,
-             "# Rebuilt by Launchpad: the CLI export drops Gateways of a narrowed Harness."]
-    head = ["import os", "import logging"]
-    if any(allow and any(set(name) & _GLOB_CHARS for name in allow) for *_, allow in gateways):
-        head.append("import re")
-    signed = any(oauth is None for _, _, oauth, _ in gateways)
-    if signed:
-        head += ["import boto3", "import httpx", "from botocore.auth import SigV4Auth",
-                 "from botocore.awsrequest import AWSRequest"]
-    head += ["from mcp.client.streamable_http import streamablehttp_client",
-             "from strands.tools.mcp.mcp_client import MCPClient"]
-    if not all(oauth is None for _, _, oauth, _ in gateways):
-        head.append("from bedrock_agentcore.identity import requires_access_token")
-    getters = []
-    for alias, arn, oauth, allow in gateways:
-        ident = re.sub(r"\W", "_", alias)
-        rest = f", prefix={alias!r}"
-        if allow is not None:
-            matchers = ", ".join(
-                f"re.compile({fnmatch.translate(name)!r})" if set(name) & _GLOB_CHARS
-                else repr(name)
-                for name in allow
-            )
-            rest += f", tool_filters={{'allowed': [{matchers}]}}"
-        if oauth is None:
-            region, gateway_id = arn.split(":")[3], arn.rsplit("/", 1)[-1]
-            url = f"https://{gateway_id}.gateway.bedrock-agentcore.{region}.amazonaws.com/mcp"
-            lines += [
-                "",
-                f"def get_{ident}_mcp_client() -> MCPClient | None:",
-                f"    url = {url!r}  # AWS_IAM Gateway: SigV4 with the runtime role",
-                f"    return MCPClient(lambda: {GW_SIGV4_TRANSPORT}(url, {region!r}){rest})",
-            ]
-            getters.append(ident)
-            continue
-        env_key = "GATEWAY_GATEWAY_" + arn.rsplit("/", 1)[-1].upper().replace("-", "_") + "_URL"
-        provider = oauth["providerArn"].rsplit("/", 1)[-1]
-        scopes = list(oauth.get("scopes") or [])
-        lines += [
-            "",
-            "@requires_access_token(",
-            f"    provider_name={provider!r},",
-            f"    scopes={scopes!r},",
-            '    auth_flow="M2M",',
-            ")",
-            f"def _get_bearer_token_{ident}(*, access_token: str):",
-            "    return access_token",
-            "",
-            f"def get_{ident}_mcp_client() -> MCPClient | None:",
-            f'    url = os.environ.get("{env_key}")',
-            "    if not url:",
-            f'        logger.warning("{env_key} not set — {alias} gateway tools unavailable")',
-            "        return None",
-            f"    token = _get_bearer_token_{ident}()",
-            '    headers = {"Authorization": f"Bearer {token}"} if token else {}',
-            f"    return MCPClient(lambda: streamablehttp_client(url, headers=headers){rest})",
-        ]
-        getters.append(ident)
-    lines += ["", "def get_all_gateway_mcp_clients() -> list[MCPClient]:", "    clients = []"]
-    for ident in getters:
-        lines += [f"    client = get_{ident}_mcp_client()", "    if client:",
-                  "        clients.append(client)"]
-    lines.append("    return clients")
-    # Every name the rebuilt clients use, whatever the export's scaffold already had.
-    missing = [line for line in head if line.startswith(("import ", "from "))
-               and line not in client_py.splitlines()]
-    if "logger = logging.getLogger(__name__)" not in client_py:
-        missing.append("logger = logging.getLogger(__name__)")
-    grafted = dict(files)
-    grafted["mcp_client/client.py"] = (
-        (client_py.rstrip() + "\n\n" if client_py.strip() else "")
-        + "\n".join(missing) + "\n"
-        + (_SIGV4_TRANSPORT_SOURCE if signed else "")
-        + "\n" + "\n".join(lines) + "\n"
-    )
-    grafted.setdefault("mcp_client/__init__.py", "")
-    grafted["main.py"] = _MCP_CLIENTS_INIT_RE.sub(
-        "mcp_clients = []\n"
-        "from mcp_client.client import get_all_gateway_mcp_clients  "
-        "# <launchpad-gateway-clients:v1>\n"
-        "mcp_clients += get_all_gateway_mcp_clients()",
-        files["main.py"], count=1,
-    )
-    return grafted
-
-
-def graft_gateway_softfail(main_py: str) -> str:
-    """Make the exported module-scope gateway-client construction fail soft.
-
-    The export ends up with, at import time:
-
-        mcp_clients += get_all_gateway_mcp_clients()
-
-    which raises when the outbound M2M token cannot be fetched. A crash there is
-    worse than missing tools: the runtime never starts, the deploy pipeline's
-    health signal still reports the agent `active`, and every invoke fails.
-
-    Idempotent — re-grafting an already-grafted bundle is a no-op.
-    """
-    if GW_SOFTFAIL_START in main_py:
+def graft_actor_from_payload(main_py: str) -> str:
+    """A7: the platform sends the (agent-scoped) actor as payload.actor_id on every invoke."""
+    if _ACTOR_LINE in main_py:
         return main_py
-    match = _GW_CLIENTS_CALL_RE.search(main_py)
-    if match is None:
+    out, n = ACTOR_RE.subn(lambda m: f"{m.group('indent')}{_ACTOR_LINE}", main_py)
+    if n != 1:
+        raise ConversionError("graft anchor missing (A7): user_id = getattr(context, 'user_id', …)")
+    return out
+
+
+def render_loop_bounds(main_py: str, max_iterations: int, timeout_seconds: int) -> str:
+    """A8: the export bakes the Harness loop bounds; the spec owns them here."""
+    out, n1 = LOOP_ITER_RE.subn(rf"\g<1>{int(max_iterations)}\g<2>", main_py)
+    out, n2 = LOOP_HOOK_TIMEOUT_RE.subn(rf"\g<1>{int(timeout_seconds)}\g<2>", out)
+    out, n3 = LOOP_INVOKE_TIMEOUT_RE.subn(rf"\g<1>{int(timeout_seconds)}", out)
+    if (n1, n2, n3) != (1, 1, 1):
         raise ConversionError(
-            "graft anchor missing: module-scope 'mcp_clients += "
-            "get_all_gateway_mcp_clients()' not found while the export DOES carry "
-            "mcp_client/client.py (agentcore CLI codegen changed?)"
+            f"graft anchor missing (A8): loop bounds matched {(n1, n2, n3)}, expected (1, 1, 1)"
         )
-    indent = match.group("indent")
-    replacement = (
-        f"{indent}{GW_SOFTFAIL_START}\n"
-        f"{indent}try:\n"
-        f"{indent}    {match.group('call').strip()}\n"
-        f"{indent}except Exception as _launchpad_gw_exc:\n"
-        f"{indent}    print(\n"
-        f"{indent}        '[launchpad] gateway MCP clients unavailable: '\n"
-        f"{indent}        f'{{type(_launchpad_gw_exc).__name__}}: {{_launchpad_gw_exc}}',\n"
-        f"{indent}        flush=True,\n"
-        f"{indent}    )\n"
-        f"{indent}{GW_SOFTFAIL_END}"
+    return out
+
+
+def render_skill_sources(main_py: str, skills: list[str]) -> str:
+    """A6: the S3 skill prefixes the export's fetcher resolves per request."""
+    out, n = SKILL_SOURCES_RE.subn(
+        lambda m: f"{m.group('indent')}s3_skill_sources = {list(skills)!r}", main_py
     )
-    return main_py[: match.start()] + replacement + main_py[match.end():]
+    if n != 1:
+        raise ConversionError("graft anchor missing (A6): s3_skill_sources = [...] list literal")
+    return out
+
+
+def graft_tool_module(
+    main_py: str, *, start: str, end: str, import_line: str, tool_names: list[str]
+) -> str:
+    """Register tools from a bundled module on the A2 collection (shape of the KB graft)."""
+    if start in main_py and end in main_py:
+        return main_py
+    match = _TOOLS_COLLECTION_RE.search(main_py)
+    if match is None:
+        raise ConversionError("graft anchor missing (A2): tools = [] collection not found")
+    graft = (f"{start}\n{import_line}\n{end}\n\n{match.group(0)}\n"
+             f"tools.extend([{', '.join(tool_names)}])")
+    return main_py[:match.start()] + graft + main_py[match.end():]
 
 
 def flatten_requirements(files: dict[str, str], platform: list[str]) -> list[str]:
@@ -1032,8 +610,8 @@ def flatten_requirements(files: dict[str, str], platform: list[str]) -> list[str
 
     `platform` must be the FULL platform contribution for the spec being built
     (`zip_runtime.platform_requirements(...)`), not just the template base list —
-    otherwise a project the platform names in an extras list (Mantle's `openai`)
-    survives here and is emitted a second time into the spec.
+    otherwise a project the platform names in an extras list survives here and is
+    emitted a second time into the spec.
 
     Consequence of "the platform wins": a source Harness whose own floor is higher
     than the platform's range loses that floor. That is the safe direction — the
@@ -1097,180 +675,620 @@ def discover_skills(files: dict[str, str]) -> tuple[list[str], list[str]]:
     return sorted(set(s3_uris)), sorted(set(other))
 
 
-def conversion_platform_inputs(source_agent: Any) -> tuple[str, str, str]:
-    """`(method, model_source, protocol)` the converted spec will carry.
+def graft_lazy_gateway_token(client_py: str) -> str:
+    """Defer the export's outbound token fetch from import time to session-open time.
 
-    The caller needs these *before* the spec exists, to look up the platform
-    requirement list to resolve pins against. Shared with `build_conversion_spec`
-    below so the two cannot derive a different `model_source` — a disagreement
-    there would resolve pins against a platform list the deploy never uses, which
-    is the whole failure this indirection exists to prevent.
+    The exported ``mcp_client/client.py`` does::
+
+        token = _get_bearer_token_launchpad_gw()          # module scope!
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return MCPClient(lambda: streamablehttp_client(url, headers=headers), ...)
+
+    and ``main.py`` calls ``get_all_gateway_mcp_clients()`` at module scope. So the
+    token is fetched before any request exists — and the workload access token the
+    M2M exchange needs is a **per-request** context value (the Runtime injects it as
+    a header). Measured on a live conversion: the SDK found no context token, fell
+    through to its *local dev* branch and died on
+    ``AccessDeniedException … CreateWorkloadIdentity``.
+
+    ``MCPClient`` is a lazy ``ToolProvider`` — its transport callable does not run
+    until ``load_tools()``, which happens inside the request — so moving just the
+    fetch into that callable is enough. The connection was already lazy; only the
+    header was eager.
+
+    A remote MCP (not behind a Gateway at all — e.g. the public
+    `knowledge-mcp.global.api.aws`) carries no token to defer; it instead gets the
+    soft-failing client (``_LaunchpadSoftMCPClient``) so an unreachable server
+    degrades to "no tools" instead of failing every request.
+
+    Idempotent. Raises ``ConversionError`` if the anchor is gone (codegen drift),
+    same posture as the other grafts: better a failed conversion than a runtime that
+    reports active and reaches no tools.
     """
-    source_spec = source_agent.spec or {}
-    return (
-        "zip_runtime",  # conversion always targets the zip runtime
-        source_spec.get("model_source")
-        or AgentSpec.model_fields["model_source"].default,
-        "http",  # conversion never emits an A2A runtime
-    )
-
-
-def build_conversion_spec(
-    source_agent: Any, files: dict[str, str], platform: list[str],
-    new_name: str, workspace: WorkspaceContext,
-    harness: dict[str, Any] | None = None,
-) -> AgentSpec:
-    grafted = dict(files)
-    source_spec = source_agent.spec or {}
-    # Gateway attachments must survive the conversion or the runtime reports READY
-    # and then reaches no tools: agent_iam gates the AgentCore Identity statements
-    # on a gateway/mcp ToolRef being present, and the invoke chain gates
-    # `runtimeUserId` — without which the Runtime injects no workload token — on the
-    # same field. Same failure shape as the dropped `spec.skills` (see the note
-    # below): deploy succeeds, invoke is silently tool-less.
-    gateway_tools = [
-        ToolRef(**ref)
-        for ref in (source_spec.get("tools") or [])
-        if isinstance(ref, dict) and ref.get("type") in ("gateway", "mcp")
-    ]
-    kb_refs = [
-        KnowledgeBaseRef(**ref)
-        for ref in (source_spec.get("knowledge_bases") or [])
-    ]
-    kbs = mounted_kb_refs(kb_refs)
-    source_prompt = source_spec.get("system_prompt")
-    prompt_default = source_prompt
-    source_tool_defaults = dict(source_spec.get("tool_description_overrides") or {})
-    tool_defaults = source_tool_defaults
-    if kbs:
-        prompt_default = str(source_prompt or "") + kb_prompt_section(kbs)
-        tool_defaults = {
-            KB_TOOL_NAME: kb_tool_description(kbs),
-            KB_DEEP_TOOL_NAME: kb_deep_tool_description(kbs),
-            **source_tool_defaults,
-        }
-        grafted["launchpad_kb_tools.py"] = render_direct_kb_source(kbs)
-        grafted["main.py"] = graft_direct_kb_tools(files["main.py"])
-    natives = [n for n in NATIVE_HARNESS_TOOLS if n in selected_native_tools(source_spec)]
-    if natives:
-        dropped = [n for n in natives if not re.search(rf"^def {n}\(", grafted["main.py"], re.M)]
-        if dropped:
-            if not NATIVE_TOOL_TEMPLATE.is_file():
-                raise ConversionError(
-                    f"native tool graft needs the agentcore CLI template ({NATIVE_TOOL_TEMPLATE})"
-                )
-            grafted["main.py"] = graft_native_tools(
-                grafted["main.py"], dropped, NATIVE_TOOL_TEMPLATE.read_text(encoding="utf-8")
-            )
-    grafted["main.py"] = graft_config_bundle(
-        grafted["main.py"],
-        default_system_prompt=prompt_default,
-        tool_description_overrides=tool_defaults,
-    )
-    native_input = True
-    if conversion_platform_inputs(source_agent)[1] == "mantle":
-        # Old/incomplete bundles cannot prove their model's native file format.
-        # Leave these unmarked; a fresh CLI export supplies model/load.py.
-        if "model/load.py" not in grafted:
-            native_input = False
-        else:
-            grafted["model/load.py"] = graft_mantle_attachment_model(grafted["model/load.py"])
-    if native_input:
-        grafted["main.py"] = graft_runtime_attachments(grafted["main.py"])
-    if harness is not None and gateway_tools:
-        kb_gw_arn = workspace.resources.get("kb_gateway_arn")
-        grafted = graft_missing_gateway_clients(
-            grafted, list(harness.get("tools") or []), harness.get("allowedTools"),
-            skip_gateway_arns=frozenset([kb_gw_arn]) if kbs and kb_gw_arn else frozenset(),
-        )
-    client_py = grafted.get("mcp_client/client.py")
-    if client_py is not None and (
-        gateway_tools
-        or "MCPClient(" in client_py
-        or "get_all_gateway_mcp_clients" in grafted["main.py"]
+    if (
+        GW_LAZY_TOKEN_MARK in client_py
+        or f"class {GW_NO_BUNDLE_CLIENT}(" in client_py
+        or f"class {GW_SOFT_CLIENT}(" in client_py
     ):
-        # A tool-free export also carries an unused client.py scaffold returning
-        # no clients. Only that inert case may omit the main.py call; configured
-        # tools or actual client construction must still pass both graft guards.
-        grafted["mcp_client/client.py"] = graft_lazy_gateway_token(
-            grafted["mcp_client/client.py"]
+        return client_py
+    if "MCPClient(" not in client_py:
+        # Nothing is constructed, so there is no eager fetch to defer. Checked
+        # before the anchor so "no gateway client" stays benign while "a client
+        # whose shape we no longer recognise" still fails loudly below.
+        return client_py
+
+    def _replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}def {GW_LAZY_TOKEN_MARK}():\n"
+            f"{indent}    # <launchpad-lazy-gateway-token:v1> fetched at session-open\n"
+            f"{indent}    # time, not import time: the workload access token only\n"
+            f"{indent}    # exists inside a request context.\n"
+            f"{indent}    _token = {match.group('fetch')}\n"
+            f"{indent}    return streamablehttp_client(\n"
+            f"{indent}        url,\n"
+            f'{indent}        headers={{"Authorization": f"Bearer {{_token}}"}}'
+            f" if _token else {{}},\n"
+            f"{indent}    )\n"
+            f"\n"
+            f"{indent}return {GW_NO_BUNDLE_CLIENT}({GW_LAZY_TOKEN_MARK}{match.group('rest')})"
         )
-        grafted["main.py"] = graft_gateway_softfail(grafted["main.py"])
-    env_contract = discover_env(grafted, workspace)
-    wired = {k: v for k, v in env_contract.items() if v is not None}
-    notes = {"system_prompt": "wired (config-bundle override grafted)",
-             "inline_tools": "carried verbatim"}
-    notes["attachments"] = (
-        "wired (native image/PDF bytes and v1 acknowledgement)"
-        if native_input else "unsupported (export lacks the Mantle model adapter)"
+
+    grafted, count = _GW_EAGER_TOKEN_RE.subn(_replace, client_py)
+    # AWS_IAM clients fetch nothing, but they need the same baggage-free wrapper.
+    grafted, signed = _GW_SIGV4_CLIENT_RE.subn(
+        lambda m: f"{m.group('indent')}return {GW_NO_BUNDLE_CLIENT}(lambda: "
+        f"{GW_SIGV4_TRANSPORT}(", grafted,
     )
-    if natives:
-        notes["native_tools"] = f"wired ({', '.join(natives)} from the agentcore CLI template)"
-    if kbs:
-        notes["knowledge_bases"] = (
-            "wired (direct kb_search + kb_deep_search; Harness KB Gateway replaced)"
-        )
-    # Skill bundles must land in spec.skills or the exec role is never granted S3
-    # read for them (agent_iam gates that statement on spec.skills), and the
-    # exported code — which fetches the prefixes it baked in at request time —
-    # fails with AccessDenied at INVOKE while the deploy itself reports success.
-    code_s3_skills, code_other_skills = discover_skills(grafted)
-    skills = sorted({*(source_spec.get("skills") or []), *code_s3_skills})
-    if skills:
-        notes["skills"] = (
-            f"wired ({len(skills)} bundle(s) fetched from S3 at request time; "
-            "exec role granted read on those prefixes)"
-        )
-    if code_other_skills:
-        # Non-S3 sources (e.g. git) need no S3 grant, but the runtime must be able
-        # to reach them — say so rather than implying the whole capability is wired.
-        notes["skills_non_s3"] = (
-            f"not verified — exported code fetches {len(code_other_skills)} "
-            "non-S3 skill source(s); network egress for those is unverified"
-        )
-    if gateway_tools:
-        notes["gateway_tools"] = (
-            f"wired ({len(gateway_tools)} attachment(s) carried; exec role keeps its "
-            "AgentCore Identity grants and invoke sends runtimeUserId so the "
-            "exported MCP client can mint its outbound token)"
-        )
-    for key, value in env_contract.items():
-        # A GATEWAY_* key belongs to the shared Gateway (now wired) or to the KB
-        # gateway (deliberately replaced by grafted direct-retrieval tools); the
-        # resolved value is what distinguishes them.
-        label = "memory" if key.startswith("MEMORY_") else (
-            ("gateway" if value is not None else "kb_gateway")
-            if key.startswith("GATEWAY_") else key.lower()
-        )
-        notes[label] = (
-            f"wired ({key})" if value is not None
-            else f"not wired — {key} unset; exported code degrades gracefully"
-        )
-    return AgentSpec(
-        name=new_name,
-        method="zip_runtime",
-        model_id=source_spec.get("model_id") or AgentSpec.model_fields["model_id"].default,
-        model_source=conversion_platform_inputs(source_agent)[1],
-        system_prompt=prompt_default or "(baked into exported code)",
-        tool_description_overrides=tool_defaults,
-        tools=gateway_tools,
-        skills=skills,
-        # The source Harness declares ranges in its own pyproject.toml. A spec
-        # must name immutable artifacts (app/schemas/requirements.py), so resolve
-        # them here rather than either refusing the conversion or storing a spec
-        # that installs something different on every rebuild. `platform` is what
-        # keeps the resolved pins lockable by the package stage — see resolve_pins.
-        requirements=resolve_pins(
-            flatten_requirements(grafted, platform), platform
-        ),
-        code_bundle={k: v for k, v in grafted.items() if k != "pyproject.toml"},
-        source_harness={
-            "agent_id": source_agent.id,
-            "agent_name": source_agent.name,
-            "harness_arn": source_agent.arn or "",
-        },
-        conversion_notes=notes,
-        env=wired,
-        memory=MemoryConfig(**(source_spec.get("memory") or {})),
-        knowledge_bases=kb_refs,
+    # A remote MCP (no Gateway, no token) gets the soft-failing subclass instead —
+    # a bare lazy-token wrapper would have nothing to defer, but the connection
+    # itself still needs to degrade gracefully rather than crash every request.
+    grafted, remote = _GW_REMOTE_CLIENT_RE.subn(
+        lambda m: f"{m.group('indent')}return {GW_SOFT_CLIENT}(lambda: "
+        f"streamablehttp_client({m.group('url')})", grafted,
     )
+    if count + signed + remote == 0:
+        raise ConversionError(
+            "graft anchor missing (A4): eager 'token = _get_bearer_token_*()' + "
+            "MCPClient(lambda: streamablehttp_client(url, headers=headers)) shape, nor a "
+            "remote MCP client, not found in mcp_client/client.py "
+            "(agentcore CLI codegen changed?)"
+        )
+    if _MCP_CLIENT_IMPORT not in grafted:
+        raise ConversionError(
+            "graft anchor missing (A4): 'from strands.tools.mcp.mcp_client import MCPClient' "
+            "not found in mcp_client/client.py (agentcore CLI codegen changed?)"
+        )
+    return grafted.replace(
+        _MCP_CLIENT_IMPORT,
+        _MCP_CLIENT_IMPORT + _NO_BUNDLE_CLIENT_SOURCE + _SOFT_CLIENT_SOURCE,
+        1,
+    )
+
+
+GW_CLIENTS_MARK = "# <launchpad-gateway-clients:v1>"
+_MCP_CLIENTS_INIT_RE = re.compile(r"^mcp_clients = \[\][ \t]*$", re.MULTILINE)
+_GLOB_CHARS = set("*?[")
+_GW_REMOTE_CLIENT_RE = re.compile(
+    r"^(?P<indent>[ \t]*)return MCPClient\(lambda: streamablehttp_client\((?P<url>'https?://[^']+')\)",
+    re.MULTILINE,
+)
+GW_SOFT_CLIENT = "_LaunchpadSoftMCPClient"
+_SOFT_CLIENT_SOURCE = f'''
+
+class {GW_SOFT_CLIENT}({GW_NO_BUNDLE_CLIENT}):
+    """A remote MCP server this runtime cannot reach degrades to "no tools" instead of
+    failing every request (spec D7: knowledge-mcp.global.api.aws reachability from
+    aws-cn is an N9 live check)."""
+
+    def load_tools(self, *args, **kwargs):
+        try:
+            return super().load_tools(*args, **kwargs)
+        except Exception as exc:
+            print(f"[launchpad] MCP tools unavailable: {{type(exc).__name__}}: {{exc}}", flush=True)
+            return []
+'''
+
+
+def _gateway_allowlist(alias: str, allowed_tools: list[str] | None) -> list[str] | None:
+    """The tool names `allowedTools` selects on one Gateway alias.
+
+    ``None`` = every tool (``*``, ``@alias`` or no allowlist at all); ``[]`` = the
+    alias is not selected, so the converted runtime must not mount it either.
+    """
+    if allowed_tools is None or "*" in allowed_tools or f"@{alias}" in allowed_tools:
+        return None
+    prefix = f"@{alias}/"
+    return [entry[len(prefix):] for entry in allowed_tools if entry.startswith(prefix)]
+
+
+def graft_missing_gateway_clients(
+    files: dict[str, str],
+    harness_tools: list[dict[str, Any]],
+    allowed_tools: list[str] | None,
+    *,
+    skip_gateway_arns: frozenset[str] = frozenset(),
+    principal_carrier: bool = False,
+) -> dict[str, str]:
+    """Build the Gateway (and remote-MCP) clients the vendored template leaves out.
+
+    ``principal_carrier`` (stream A3b): the SigV4 transport also puts the turn's principal
+    token into the requests it signs (``launchpad_principal_carrier``, written beside the
+    bundle by the Harness renderer); off, the graft is byte-identical to before.
+
+    `mcp_client/client.py.tmpl` is an imports-only scaffold (contract A4): it imports
+    `MCPClient`/`streamablehttp_client` and defines no client. This rebuilds the
+    clients from the spec's attached tools, in the agentcore CLI's own export shape
+    (so the lazy-token and soft-fail grafts apply unchanged), with narrowing carried
+    over as Strands ``tool_filters``. An OAuth Gateway mints its M2M bearer token; an
+    AWS_IAM Gateway (``outboundAuth.awsIam``) gets a SigV4-signing transport with its
+    URL built from the ARN, because the platform wires only the shared Gateway's URL
+    into the env. A ``remote_mcp`` tool (no Gateway at all — e.g. the public
+    `knowledge-mcp.global.api.aws`) gets a plain, unauthenticated streamable-HTTP
+    client that `graft_lazy_gateway_token` wraps in the soft-failing subclass.
+    Gateways in ``skip_gateway_arns`` (the KB gateway, replaced by direct retrieval)
+    and aliases the allowlist does not select are left out. Idempotent; a no-op when
+    the export already constructs clients.
+    """
+    client_py = files.get("mcp_client/client.py") or ""
+    if GW_CLIENTS_MARK in client_py or "MCPClient(" in client_py:
+        return files
+    gateways = []
+    remotes: list[tuple[str, str, list[str] | None]] = []
+    for tool in harness_tools:
+        if tool.get("type") == "remote_mcp":
+            url = ((tool.get("config") or {}).get("remoteMcp") or {}).get("url")
+            if not url:
+                raise ConversionError(f"remote MCP {tool.get('name')!r} has no url")
+            allow = _gateway_allowlist(str(tool.get("name") or ""), allowed_tools)
+            if allow != []:
+                remotes.append((str(tool["name"]), str(url), allow))
+            continue
+        config = (tool.get("config") or {}).get("agentCoreGateway") or {}
+        arn = config.get("gatewayArn")
+        if tool.get("type") != "agentcore_gateway" or not arn or arn in skip_gateway_arns:
+            continue
+        allow = _gateway_allowlist(str(tool.get("name") or ""), allowed_tools)
+        if allow == []:
+            continue
+        outbound = config.get("outboundAuth") or {}
+        oauth = outbound.get("oauth") or {}
+        if not oauth.get("providerArn") and "awsIam" not in outbound:
+            raise ConversionError(
+                f"gateway {tool.get('name')!r} has neither OAuth nor AWS_IAM outbound "
+                "auth; the converted runtime cannot authenticate to it"
+            )
+        gateways.append((str(tool["name"]), arn, oauth or None, allow))
+    if not gateways and not remotes:
+        return files
+    if "main.py" not in files or not _MCP_CLIENTS_INIT_RE.search(files["main.py"]):
+        raise ConversionError(
+            "graft anchor missing (A4): module-scope 'mcp_clients = []' not found "
+            "(agentcore CLI codegen changed?)"
+        )
+
+    lines = [GW_CLIENTS_MARK,
+             "# Rebuilt by Launchpad: the vendored template defines no Gateway clients."]
+    head = ["import os", "import logging"]
+    if any(allow and any(set(name) & _GLOB_CHARS for name in allow) for *_, allow in gateways):
+        head.append("import re")
+    signed = any(oauth is None for _, _, oauth, _ in gateways)
+    if signed:
+        head += ["import boto3", "import httpx", "from botocore.auth import SigV4Auth",
+                 "from botocore.awsrequest import AWSRequest"]
+    head += ["from mcp.client.streamable_http import streamablehttp_client",
+             "from strands.tools.mcp.mcp_client import MCPClient"]
+    if not all(oauth is None for _, _, oauth, _ in gateways):
+        head.append("from bedrock_agentcore.identity import requires_access_token")
+    getters = []
+    for alias, arn, oauth, allow in gateways:
+        ident = re.sub(r"\W", "_", alias)
+        rest = f", prefix={alias!r}"
+        if allow is not None:
+            matchers = ", ".join(
+                f"re.compile({fnmatch.translate(name)!r})" if set(name) & _GLOB_CHARS
+                else repr(name)
+                for name in allow
+            )
+            rest += f", tool_filters={{'allowed': [{matchers}]}}"
+        if oauth is None:
+            region, gateway_id = arn.split(":")[3], arn.rsplit("/", 1)[-1]
+            suffix = aws_clients.dns_suffix_for_partition(aws_clients.partition_for_region(region))
+            url = f"https://{gateway_id}.gateway.bedrock-agentcore.{region}.{suffix}/mcp"
+            lines += [
+                "",
+                f"def get_{ident}_mcp_client() -> MCPClient | None:",
+                f"    url = {url!r}  # AWS_IAM Gateway: SigV4 with the runtime role",
+                f"    return MCPClient(lambda: {GW_SIGV4_TRANSPORT}(url, {region!r}){rest})",
+            ]
+            getters.append(ident)
+            continue
+        env_key = "GATEWAY_GATEWAY_" + arn.rsplit("/", 1)[-1].upper().replace("-", "_") + "_URL"
+        provider = oauth["providerArn"].rsplit("/", 1)[-1]
+        scopes = list(oauth.get("scopes") or [])
+        lines += [
+            "",
+            "@requires_access_token(",
+            f"    provider_name={provider!r},",
+            f"    scopes={scopes!r},",
+            '    auth_flow="M2M",',
+            ")",
+            f"def _get_bearer_token_{ident}(*, access_token: str):",
+            "    return access_token",
+            "",
+            f"def get_{ident}_mcp_client() -> MCPClient | None:",
+            f'    url = os.environ.get("{env_key}")',
+            "    if not url:",
+            f'        logger.warning("{env_key} not set — {alias} gateway tools unavailable")',
+            "        return None",
+            f"    token = _get_bearer_token_{ident}()",
+            '    headers = {"Authorization": f"Bearer {token}"} if token else {}',
+            f"    return MCPClient(lambda: streamablehttp_client(url, headers=headers){rest})",
+        ]
+        getters.append(ident)
+    for alias, url, allow in remotes:
+        ident = re.sub(r"\W", "_", alias)
+        rest = f", prefix={alias!r}" + (
+            f", tool_filters={{'allowed': {allow!r}}}" if allow else ""
+        )
+        lines += [
+            "",
+            f"def get_{ident}_mcp_client() -> MCPClient | None:",
+            f"    return MCPClient(lambda: streamablehttp_client({url!r}){rest})",
+        ]
+        getters.append(ident)
+    lines += ["", "def get_all_gateway_mcp_clients() -> list[MCPClient]:", "    clients = []"]
+    for ident in getters:
+        lines += [f"    client = get_{ident}_mcp_client()", "    if client:",
+                  "        clients.append(client)"]
+    lines.append("    return clients")
+    # Every name the rebuilt clients use, whatever the export's scaffold already had.
+    missing = [line for line in head if line.startswith(("import ", "from "))
+               and line not in client_py.splitlines()]
+    if "logger = logging.getLogger(__name__)" not in client_py:
+        missing.append("logger = logging.getLogger(__name__)")
+    transport = _SIGV4_TRANSPORT_SOURCE
+    if signed and principal_carrier:
+        missing.append(PRINCIPAL_CLIENT_IMPORT)
+        transport = "\n\n" + _render_sigv4_transport(principal_carrier=True)
+    grafted = dict(files)
+    grafted["mcp_client/client.py"] = (
+        (client_py.rstrip() + "\n\n" if client_py.strip() else "")
+        + "\n".join(missing) + "\n"
+        + (transport if signed else "")
+        + "\n" + "\n".join(lines) + "\n"
+    )
+    grafted.setdefault("mcp_client/__init__.py", "")
+    grafted["main.py"] = _MCP_CLIENTS_INIT_RE.sub(
+        "mcp_clients = []\n"
+        "from mcp_client.client import get_all_gateway_mcp_clients  "
+        "# <launchpad-gateway-clients:v1>\n"
+        "mcp_clients += get_all_gateway_mcp_clients()",
+        files["main.py"], count=1,
+    )
+    return grafted
+
+
+def graft_gateway_softfail(main_py: str) -> str:
+    """Make the exported module-scope gateway-client construction fail soft.
+
+    The export ends up with, at import time:
+
+        mcp_clients += get_all_gateway_mcp_clients()
+
+    which raises when the outbound M2M token cannot be fetched. A crash there is
+    worse than missing tools: the runtime never starts, the deploy pipeline's
+    health signal still reports the agent `active`, and every invoke fails.
+
+    Idempotent — re-grafting an already-grafted bundle is a no-op.
+    """
+    if GW_SOFTFAIL_START in main_py:
+        return main_py
+    match = _GW_CLIENTS_CALL_RE.search(main_py)
+    if match is None:
+        raise ConversionError(
+            "graft anchor missing (A4): module-scope 'mcp_clients += "
+            "get_all_gateway_mcp_clients()' not found while the export DOES carry "
+            "mcp_client/client.py (agentcore CLI codegen changed?)"
+        )
+    indent = match.group("indent")
+    replacement = (
+        f"{indent}{GW_SOFTFAIL_START}\n"
+        f"{indent}try:\n"
+        f"{indent}    {match.group('call').strip()}\n"
+        f"{indent}except Exception as _launchpad_gw_exc:\n"
+        f"{indent}    print(\n"
+        f"{indent}        '[launchpad] gateway MCP clients unavailable: '\n"
+        f"{indent}        f'{{type(_launchpad_gw_exc).__name__}}: {{_launchpad_gw_exc}}',\n"
+        f"{indent}        flush=True,\n"
+        f"{indent}    )\n"
+        f"{indent}{GW_SOFTFAIL_END}"
+    )
+    return main_py[: match.start()] + replacement + main_py[match.end():]
+
+
+# ─── memory grafts (N8; docs/cn/interfaces/memory-runtime.md §6 steps 2–3) ───────
+# The bundle carries N6's library as `launchpad_memory.py` (harness_local). These grafts
+# wire it into the vendored entrypoint: A11 appends the library's hooks to the Harness
+# `Agent(hooks=[ExecutionLimitsHook(…)])` list, A12 prepends `recall_context(actor, prompt)`
+# to the system prompt each turn. Both are no-ops at runtime without LAUNCHPAD_MEMORY_ID.
+MEMORY_GRAFT_START = "# <launchpad-memory:v1>"
+MEMORY_GRAFT_END = "# </launchpad-memory:v1>"
+MEMORY_HOOKS_MARK = "# <launchpad-memory-hooks:v1>"
+MEMORY_RECALL_START = "# <launchpad-memory-recall:v1>"
+MEMORY_RECALL_END = "# </launchpad-memory-recall:v1>"
+_MEMORY_IMPORT_ANCHOR = "from memory.session import get_memory_session_manager"  # A10
+_MEMORY_HOOKS_CALL = "*make_memory_hooks(user_id, session_id)"
+_MEMORY_FACTORY_PARAMS = ("session_id", "user_id")
+_MEMORY_PROMPT_LINE = "prompt = _extract_prompt(payload)"
+_MEMORY_IMPORT_GRAFT = f'''
+{MEMORY_GRAFT_START}
+# docs/cn/interfaces/memory-runtime.md §6: the bundled library is inert without
+# LAUNCHPAD_MEMORY_ID; one that cannot be imported degrades to no memory, like the
+# memory/session.py shim does.
+try:
+    from launchpad_memory import make_memory_hooks, recall_context
+except Exception as _launchpad_memory_exc:
+    print(f"[launchpad] memory library unavailable: {{type(_launchpad_memory_exc).__name__}}: "
+          f"{{_launchpad_memory_exc}}", flush=True)
+
+    def make_memory_hooks(actor_id, session_id):
+        return []
+
+    def recall_context(actor_id, query, top_k=3):
+        return ""
+
+
+def _launchpad_recall_query(prompt):
+    """The user text of this turn ('' for tool results and non-text payloads)."""
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        for message in reversed(prompt):
+            if isinstance(message, dict) and message.get("role") == "user":
+                texts = [block.get("text") for block in message.get("content", [])
+                         if isinstance(block, dict) and block.get("text")]
+                if texts:
+                    return "\\n".join(texts)
+    return ""
+{MEMORY_GRAFT_END}
+'''
+_MEMORY_RECALL_BLOCK = (
+    "{indent}" + MEMORY_RECALL_START + "\n"
+    "{indent}_launchpad_query = _launchpad_recall_query(prompt)\n"
+    "{indent}_launchpad_known = recall_context(user_id, _launchpad_query) "
+    'if _launchpad_query else ""\n'
+    # The Harness caches one Agent per session/actor (unlike the HTTP strands_agent
+    # runtime, which builds one per turn), so the reset keys on the USER turn
+    # (_launchpad_query), not on recall presence (_launchpad_known) — otherwise a
+    # recall-empty user turn would inherit the previous turn's stale recall text
+    # still sitting on the cached Agent's system_prompt. A tool-result continuation
+    # turn (_launchpad_query == "") skips the reset and leaves the loop's context
+    # untouched.
+    "{indent}if _launchpad_query:\n"
+    "{indent}    agent.system_prompt = resolve_system_prompt() + (\n"
+    '{indent}        f"\\n\\nKnown user context:\\n{{_launchpad_known}}" if _launchpad_known '
+    'else ""\n'
+    "{indent}    )\n"
+    "{indent}" + MEMORY_RECALL_END + "\n"
+)
+
+
+def _parse(main_py: str, anchor: str) -> ast.Module:
+    try:
+        return ast.parse(main_py)
+    except SyntaxError as exc:
+        raise ConversionError(
+            f"graft anchor invalid Python ({anchor}): {exc.msg} at line {exc.lineno}"
+        ) from exc
+
+
+def _offset(main_py: str, lineno: int, col: int) -> int:
+    lines = main_py.splitlines(keepends=True)
+    return sum(len(line) for line in lines[: lineno - 1]) + col
+
+
+def _agent_hooks_list(main_py: str) -> ast.List:
+    """A11: the `hooks=[…]` list literal of the one `Agent(...)` call inside a factory whose
+    parameters start with `(session_id, user_id, …)` — the names the graft scopes memory to."""
+    tree = _parse(main_py, "A11")
+    found: list[ast.List] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        params = tuple(a.arg for a in fn.args.args)
+        if params[: len(_MEMORY_FACTORY_PARAMS)] != _MEMORY_FACTORY_PARAMS:
+            continue
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "Agent"):
+                continue
+            hooks = [kw.value for kw in node.keywords if kw.arg == "hooks"]
+            if len(hooks) == 1 and isinstance(hooks[0], ast.List):
+                found.append(hooks[0])
+    if len(found) != 1:
+        raise ConversionError(
+            "graft anchor missing (A11): expected exactly one Agent(..., hooks=[...]) list "
+            "literal inside get_or_create_agent(session_id, user_id, …) "
+            "(agentcore CLI codegen changed?)"
+        )
+    return found[0]
+
+
+def graft_memory_import(main_py: str) -> str:
+    """Import the bundled library (soft) and define the recall-query helper, right after
+    the A10 session import so both grafts below resolve their names."""
+    if MEMORY_GRAFT_START in main_py:
+        return main_py
+    if main_py.count(_MEMORY_IMPORT_ANCHOR) != 1:
+        raise ConversionError(
+            f"graft anchor missing (A10): {_MEMORY_IMPORT_ANCHOR!r} not found once "
+            "(agentcore CLI codegen changed?)"
+        )
+    return main_py.replace(
+        _MEMORY_IMPORT_ANCHOR, _MEMORY_IMPORT_ANCHOR + "\n" + _MEMORY_IMPORT_GRAFT.rstrip("\n"), 1
+    )
+
+
+def graft_memory_hooks(main_py: str) -> str:
+    """A11: APPEND `*make_memory_hooks(user_id, session_id)` to the Harness
+    `Agent(hooks=[ExecutionLimitsHook(…)])` list — never replace it (the loop bounds stay)."""
+    if MEMORY_HOOKS_MARK in main_py or _MEMORY_HOOKS_CALL in main_py:
+        return main_py
+    hooks = _agent_hooks_list(main_py)
+    if hooks.lineno == hooks.end_lineno or hooks.end_lineno is None or hooks.end_col_offset is None:
+        raise ConversionError(
+            "graft anchor invalid (A11): hooks=[...] must span several lines with the "
+            "closing bracket on its own line (agentcore CLI codegen changed?)"
+        )
+    lines = main_py.splitlines(keepends=True)
+    bracket_line = lines[hooks.end_lineno - 1]
+    bracket_indent = bracket_line[: len(bracket_line) - len(bracket_line.lstrip())]
+    if bracket_line[: hooks.end_col_offset - 1].strip():
+        raise ConversionError(
+            "graft anchor invalid (A11): the closing bracket of hooks=[...] shares its line"
+        )
+    out = main_py
+    if hooks.elts:
+        last = hooks.elts[-1]
+        last_end = _offset(main_py, last.end_lineno, last.end_col_offset)
+        bracket_at = _offset(main_py, hooks.end_lineno, hooks.end_col_offset - 1)
+        between = re.sub(r"#[^\n]*", "", main_py[last_end:bracket_at])
+        if not between.strip().endswith(","):
+            out = main_py[:last_end] + "," + main_py[last_end:]
+        first_line = lines[last.lineno - 1]
+        elt_indent = first_line[: len(first_line) - len(first_line.lstrip())]
+    else:
+        elt_indent = bracket_indent + "    "
+    extra = elt_indent[len(bracket_indent):] if elt_indent.startswith(bracket_indent) else "    "
+    tree_after = _agent_hooks_list(out)  # offsets after the optional comma insertion
+    bracket_at = _offset(out, tree_after.end_lineno, tree_after.end_col_offset - 1)
+    graft = f"{extra}{_MEMORY_HOOKS_CALL},  {MEMORY_HOOKS_MARK}\n{bracket_indent}"
+    return out[:bracket_at] + graft + out[bracket_at:]
+
+
+def _recall_anchor(main_py: str) -> tuple[ast.AsyncFunctionDef, ast.Assign]:
+    """A12: inside the A5 entrypoint, `agent = get_or_create_agent(session_id, user_id, …)`
+    precedes `prompt = _extract_prompt(payload)`; both on their own statement lines."""
+    tree = _parse(main_py, "A12")
+    invocations = [
+        node for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "invoke"
+    ]
+    if len(invocations) != 1:
+        raise ConversionError("graft anchor missing (A12): one async invoke required")
+    invoke = invocations[0]
+    prompts = [
+        node for node in invoke.body
+        if isinstance(node, ast.Assign) and ast.unparse(node) == _MEMORY_PROMPT_LINE
+    ]
+    agents = [
+        node for node in invoke.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "agent"
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "get_or_create_agent"
+        and tuple(ast.unparse(a) for a in node.value.args)[:2] == _MEMORY_FACTORY_PARAMS
+    ]
+    if len(prompts) != 1 or len(agents) != 1 or agents[0].lineno >= prompts[0].lineno:
+        raise ConversionError(
+            "graft anchor missing (A12): expected `agent = get_or_create_agent(session_id, "
+            "user_id, …)` before `prompt = _extract_prompt(payload)` in invoke "
+            "(agentcore CLI codegen changed?)"
+        )
+    return invoke, prompts[0]
+
+
+def graft_memory_recall(main_py: str) -> str:
+    """A12: `recall_context(actor, prompt)` prepended to the system prompt each turn, exactly
+    as strands_agent/main.py.tmpl does (advisory text; '' when memory is off)."""
+    if MEMORY_RECALL_START in main_py:
+        return main_py
+    if "def resolve_system_prompt()" not in main_py:
+        raise ConversionError(
+            "graft order (A12): the config-bundle graft (A1) must run before the memory recall "
+            "graft — resolve_system_prompt() is not defined"
+        )
+    _, prompt = _recall_anchor(main_py)
+    lines = main_py.splitlines(keepends=True)
+    source_line = lines[prompt.lineno - 1]
+    if source_line.strip() != _MEMORY_PROMPT_LINE:
+        raise ConversionError("graft anchor invalid (A12): extraction must occupy its own line")
+    indent = source_line[: len(source_line) - len(source_line.lstrip())]
+    lines.insert(prompt.end_lineno, _MEMORY_RECALL_BLOCK.format(indent=indent))
+    return "".join(lines)
+
+
+def graft_memory(main_py: str) -> str:
+    """Import (A10) + hooks (A11) + recall (A12); idempotent as a whole."""
+    return graft_memory_recall(graft_memory_hooks(graft_memory_import(main_py)))
+
+
+# ── stream A3b: the per-user principal carrier in a Harness bundle ──────────────────
+PRINCIPAL_MODULE_NAME = "launchpad_principal_carrier"
+PRINCIPAL_IMPORT_MARK = "# <launchpad-principal-import:v1>"
+PRINCIPAL_CAPTURE_MARK = "# <launchpad-principal-capture:v1>"
+PRINCIPAL_CLIENT_IMPORT = (
+    f"from {PRINCIPAL_MODULE_NAME} import _launchpad_with_principal  "
+    "# <launchpad-principal-transport:v1>"
+)
+
+
+PRINCIPAL_UNSCOPED_NAME = "_launchpad_invoke_unscoped"
+
+
+def graft_principal_carrier(main_py: str) -> str:
+    """The carrier's import (after the memory import graft, A10) and a turn-scoped
+    entrypoint: the generated ``invoke`` keeps its body under ``_launchpad_invoke_unscoped``
+    and the new ``@app.entrypoint invoke`` runs it inside ``launchpad_principal_turn`` — the
+    token is set when the turn starts and cleared in a ``finally`` when it ends (review D1).
+    Idempotent. Runs after every other graft (they anchor on ``invoke``'s body). The
+    bundle's Agent already runs tools with a ``SequentialToolExecutor`` (the vendored
+    template), which T10 needs."""
+    if PRINCIPAL_IMPORT_MARK in main_py:
+        return main_py
+    if main_py.count(MEMORY_GRAFT_END) != 1:
+        raise ConversionError(
+            "graft order (principal carrier): the memory import graft (A10) must run first")
+    tree = _parse(main_py, "principal carrier")
+    invoke = next((fn for fn in tree.body if isinstance(fn, ast.AsyncFunctionDef)
+                   and fn.name == "invoke"), None)
+    entry = None if invoke is None else next(
+        (d for d in invoke.decorator_list if ast.unparse(d) == "app.entrypoint"), None)
+    if invoke is None or not invoke.body or entry is None or len(invoke.decorator_list) != 1:
+        raise ConversionError(
+            "graft anchor missing (principal carrier): no `@app.entrypoint async def invoke` "
+            "(agentcore CLI codegen changed?)")
+    if not any(isinstance(n, ast.Yield | ast.YieldFrom) for n in ast.walk(invoke)):
+        raise ConversionError(
+            "graft anchor changed (principal carrier): `invoke` is no async generator")
+    args = [a.arg for a in invoke.args.args]
+    if invoke.args.vararg or invoke.args.kwarg or invoke.args.kwonlyargs or not args \
+            or args[0] != "payload":
+        raise ConversionError(
+            "graft anchor changed (principal carrier): `invoke` must take (payload, ...)")
+    lines = main_py.splitlines(keepends=True)
+    def_line = lines[invoke.lineno - 1]
+    if "async def invoke(" not in def_line or entry.lineno != invoke.lineno - 1:
+        raise ConversionError(
+            "graft anchor changed (principal carrier): unexpected `invoke` header layout")
+    params = ", ".join(args)
+    wrapper = (
+        "\n\n@app.entrypoint  # <launchpad-principal-turn:v1>\n"
+        f"async def invoke({params}):\n"
+        "    async for event in launchpad_principal_turn(\n"
+        f"            payload, {PRINCIPAL_UNSCOPED_NAME}({params})):  {PRINCIPAL_CAPTURE_MARK}\n"
+        "        yield event\n"
+    )
+    end = invoke.end_lineno
+    tail = "".join(lines[end:])
+    head = lines[: entry.lineno - 1]
+    body = [def_line.replace("async def invoke(", f"async def {PRINCIPAL_UNSCOPED_NAME}(", 1),
+            *lines[invoke.lineno: end]]
+    if body and not body[-1].endswith("\n"):
+        body[-1] += "\n"
+    main_py = "".join(head) + "".join(body) + wrapper + tail
+    return main_py.replace(
+        MEMORY_GRAFT_END,
+        MEMORY_GRAFT_END + f"\nfrom {PRINCIPAL_MODULE_NAME} import launchpad_principal_turn  "
+        f"{PRINCIPAL_IMPORT_MARK}", 1)

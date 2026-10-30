@@ -1,0 +1,134 @@
+{
+ "result": {
+  "tools": [
+   {
+    "name": "hr-database___get_employee",
+    "description": "Look up an employee record by employee id (format EMP-NNNN). Returns name, department, role and vacation-day balances including days remaining this year.",
+    "inputSchema": {
+     "type": "object",
+     "properties": {
+      "employee_id": {
+       "type": "string",
+       "description": "Employee id, e.g. EMP-1024"
+      }
+     },
+     "required": [
+      "employee_id"
+     ]
+    }
+   },
+   {
+    "name": "hr-database___list_departments",
+    "description": "List all departments with their head and headcount.",
+    "inputSchema": {
+     "type": "object",
+     "properties": {}
+    }
+   },
+   {
+    "name": "hr-database___check_calendar",
+    "description": "Check the team calendar for conflicts in a date range (format YYYY-MM-DD..YYYY-MM-DD).",
+    "inputSchema": {
+     "type": "object",
+     "properties": {
+      "range": {
+       "type": "string",
+       "description": "Date range, e.g. 2026-08-03..2026-08-07"
+      }
+     },
+     "required": [
+      "range"
+     ]
+    }
+   },
+   {
+    "name": "hr-database___create_payout",
+    "description": "Create an expense payout for an employee (finance write action \u2014 policy gated).",
+    "inputSchema": {
+     "type": "object",
+     "properties": {
+      "employee_id": {
+       "type": "string"
+      },
+      "amount": {
+       "type": "number",
+       "description": "Payout amount in USD"
+      }
+     },
+     "required": [
+      "employee_id",
+      "amount"
+     ]
+    }
+   },
+   {
+    "name": "hr-approvals___verify_identity",
+    "description": "Verify an employee's identity with a one-time code",
+    "inputSchema": {
+     "type": "object",
+     "properties": {
+      "employee_id": {
+       "type": "string"
+      },
+      "code": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "employee_id",
+      "code"
+     ]
+    },
+    "outputSchema": {
+     "type": "object",
+     "properties": {
+      "employee_id": {
+       "type": "string"
+      },
+      "verified": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "employee_id",
+      "verified"
+     ]
+    }
+   },
+   {
+    "name": "hr-approvals___approve_payout",
+    "description": "Record an approval for a payout",
+    "inputSchema": {
+     "type": "object",
+     "properties": {
+      "employee_id": {
+       "type": "string"
+      },
+      "amount": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "employee_id",
+      "amount"
+     ]
+    },
+    "outputSchema": {
+     "type": "object",
+     "properties": {
+      "approved": {
+       "type": "boolean"
+      },
+      "approval_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "approved",
+      "approval_id"
+     ]
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_list_filter_request/v1",
+  "title": "I4 POST /v1/list-filter request (tools/list filtering; read-only, records nothing)",
+  "type": "object",
+  "properties": {
+    "ws": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent": {
+      "type": "object"
+    },
+    "principal": {
+      "type": "object"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "maxItems": 1000
+    },
+    "resource": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ws",
+    "agent",
+    "principal",
+    "actions"
+  ],
+  "additionalProperties": false
+}

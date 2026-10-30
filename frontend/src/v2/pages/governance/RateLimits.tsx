@@ -81,7 +81,7 @@ export function RateLimitsSection({
 
   return (
     <Card
-      title={t("v2.governance.section.rateLimits")}
+      title={t("v2.governance.section.rate-limits")}
       sub={t("governance.rateLimits.sub")}
       end={
         <Button

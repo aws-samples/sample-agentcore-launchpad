@@ -1,0 +1,15 @@
+"""launchpad_builtin_tools.py — AgentCore built-in tools for the self-built Harness (方式B).
+
+The managed Harness exposed `code-interpreter` natively; here it is the Strands tool
+from strands-agents-tools over the same AgentCore Code Interpreter service, in the
+runtime's own region with its execution role (agent_iam Sid AgentCoreCodeInterpreter).
+Verified against strands-agents-tools 0.8.3: `AgentCoreCodeInterpreter(region=...)`
+exposes the `@tool` method `code_interpreter` (R10)."""
+
+import os
+
+from strands_tools.code_interpreter import AgentCoreCodeInterpreter
+
+_interpreter = AgentCoreCodeInterpreter(region=os.environ.get("AWS_REGION", "cn-northwest-1"))
+# the callable the model sees must be named `code_interpreter` (harness_tool_access)
+code_interpreter = _interpreter.code_interpreter

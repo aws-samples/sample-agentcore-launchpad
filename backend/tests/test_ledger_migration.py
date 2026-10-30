@@ -120,3 +120,49 @@ def test_migrate_is_idempotent(tmp_path):
     db_module._migrate(engine)
     db_module._migrate(engine)
     assert_no_schema_drift(engine)
+
+
+# ── N12: evaluation / optimization tables ─────────────────────────────────────
+
+N12_TABLES = (
+    # restored baseline tables
+    "eval_datasets", "eval_runs", "eval_recommendations", "eval_pipelines",
+    "online_eval_configs", "experiments", "runtime_canaries",
+    # additive CN tables (plan §A.2 / CA-3)
+    "eval_evaluators", "eval_results", "online_samples", "config_bundles",
+    "experiment_assignments",
+)
+N12_UNIQUE_INDEXES = {
+    "eval_evaluators": "uq_eval_evaluators_workspace_name",
+    "online_samples": "uq_online_samples_config_session_segment",
+    "experiment_assignments": "uq_experiment_assignments_owner_session",
+}
+
+
+def test_every_n12_table_is_workspace_scoped(tmp_path):
+    engine = _engine(tmp_path)
+    Base.metadata.create_all(bind=engine)
+    live = set(sa.inspect(engine).get_table_names())
+    for table in N12_TABLES:
+        assert table in live, table
+        assert table in db_module.WORKSPACE_SCOPED_TABLES, table
+        columns = {c["name"] for c in sa.inspect(engine).get_columns(table)}
+        assert "workspace_id" in columns, table
+        assert _indexes_on(engine, table, "workspace_id"), f"{table} has no workspace index"
+
+
+def test_n12_unique_indexes_survive_the_workspace_column_round_trip(tmp_path):
+    """The migration rehearsal drops `workspace_id` (and every index on it) and lets
+    `_migrate` put them back — the unique indexes that span it must come back too."""
+    engine = _engine(tmp_path)
+    Base.metadata.create_all(bind=engine)
+    for table in N12_UNIQUE_INDEXES:
+        with engine.begin() as conn:
+            for name in _indexes_on(engine, table, "workspace_id"):
+                conn.execute(sa.text(f"DROP INDEX {name}"))
+            conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))
+    db_module._migrate(engine)
+    assert_no_schema_drift(engine)
+    for table, index in N12_UNIQUE_INDEXES.items():
+        names = {i["name"]: i for i in sa.inspect(engine).get_indexes(table)}
+        assert index in names and names[index]["unique"], (table, index)

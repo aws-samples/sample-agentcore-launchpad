@@ -65,6 +65,11 @@ export function SessionRail({
                 <span className="v2-chat-session-title">{s.preview || `${s.session_id.slice(0, 20)}…`}</span>
                 <span className="v2-chat-session-meta">
                   {t("chatPage.historyTurns", { count: s.turns })} · {fmtTime(s.last_at).slice(5, 16)}
+                  {s.source === "public_api" && (
+                    <Tag tone="blue" title={t("v2.chat.sourcePublicApiHint")} testId="session-source-public-api">
+                      {t("v2.chat.sourcePublicApi")}
+                    </Tag>
+                  )}
                   {s.ended_at && <Tag tone="gray">{t("v2.chat.ended")}</Tag>}
                 </span>
               </button>

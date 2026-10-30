@@ -23,9 +23,15 @@ import {
   planConfirmScenarios,
   planUnblockGoldenTest,
 } from "../../../lib/assistant";
+import { EvalGateBadge } from "../../../components/EvalGateBadge";
+import { planRecommendationGate, unresolvedBlockingCount } from "../../../lib/evalPlanGate";
+import { localizedNote, type PlanNoteDetail } from "../../../lib/plan-notes";
 import { Alert, Button, Confirm, LinkButton, Select, Table, Tag, type TagTone } from "../../ui";
 import { NextStepsCard } from "./NextSteps";
-import { SECTION_IDS } from "./common";
+import { evalResourceV2Link } from "./classicUrl";
+import { SECTION_IDS, useReadOnly } from "./common";
+import { ValidationErrorList } from "./ValidationErrors";
+import { errorDetails } from "../../../lib/validation-errors";
 
 /**
  * SE-047 — the reviewed evaluation-assets plan of one assistant conversation.
@@ -70,6 +76,7 @@ const PLAN_TONE: Record<string, TagTone> = {
 };
 
 const CLOUD_KINDS = new Set(["judge", "derived", "code"]);
+const HISTORY_VIEW_ID = "v2-assistant-eval-history-view";
 
 type Scenario = NonNullable<AssistantEvalPlanContent["scenarios"]>[number];
 type Blocked = NonNullable<AssistantEvalPlanContent["blocked_golden_tests"]>[number];
@@ -90,6 +97,8 @@ export function EvalAssetsCard({
   repairDisabledReason?: string;
 }) {
   const { t } = useTranslation();
+  // a read-only viewer sees every plan revision and operation, prepares/edits/creates nothing
+  const readOnly = useReadOnly();
   const [state, setState] = useState<AssistantEvalPlanState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -106,6 +115,8 @@ export function EvalAssetsCard({
   const [blocking, setBlocking] = useState<{ goldenTestId: string; reason: string } | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [pollFailures, setPollFailures] = useState(0);
+  // N17-obs467: the earlier-plan operation opened read-only from 「更早的操作」
+  const [viewing, setViewing] = useState<string | null>(null);
 
   // staleness: a generation bumps on every conversation/workspace change and on unmount
   const generation = useRef(0);
@@ -138,6 +149,7 @@ export function EvalAssetsCard({
     setPollFailures(0);
     setConfirmPlan(null);
     setConfirmCleanup(null);
+    setViewing(null);
     load();
     return () => {
       alive.current = false;
@@ -151,6 +163,22 @@ export function EvalAssetsCard({
   // the operation of THIS plan revision only — never a fallback to an older one
   const operation = current ? operations.find((o) => o.plan_id === current.id) ?? null : null;
   const history = operations.filter((o) => o.id !== operation?.id);
+  const viewed = viewing ? history.find((o) => o.id === viewing) ?? null : null;
+  // N17-obs467: a newer plan revision with no operation of its own says that an earlier
+  // revision already created assets (the latest one whose operation still stands) — they
+  // live on under 「更早的操作」, not gone
+  const earlier = current && !operation
+    ? history
+      .filter((o) => o.plan_revision < current.revision && (o.status === "succeeded" || o.status === "partial"))
+      .sort((a, b) => b.plan_revision - a.plan_revision)[0] ?? null
+    : null;
+  const earlierDataset = earlier
+    ? asArray<AssistantEvalResource>(earlier.resources).find((r) => r.kind === "dataset" && asRecord(r.result).dataset_id) ?? null
+    : null;
+  const openHistory = (id: string) => {
+    setViewing(id);
+    requestAnimationFrame(() => document.getElementById(HISTORY_VIEW_ID)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
+  };
   const requiresNewPlan = operation?.requires_new_plan === true;
   const operationPending = operations.some((o) =>
     o.running || o.status === "queued" || o.status === "running" || o.status === "cleaning");
@@ -302,6 +330,7 @@ export function EvalAssetsCard({
   const recommendations = asArray<Recommendation>(content.recommendations);
   const scenarios = asArray<Scenario>(content.scenarios);
   const blocked = asArray<Blocked>(content.blocked_golden_tests);
+  const noteDetails = current?.note_details;
   const invalid = !!current && current.validation_errors.length > 0;
   const reviewPending = scenarios.filter((s) => s?.review_required).length;
   // A plan whose members have the expected shape is shown as tables even while it
@@ -315,7 +344,7 @@ export function EvalAssetsCard({
       ? reviewPending ? t("assistantEval.reviewPending", { n: reviewPending }) : t("assistantEval.fixErrors")
       : undefined;
   const opResources = asArray<AssistantEvalResource>(operation?.resources);
-  const rowEditable = !operation && jsonDraft === null;
+  const rowEditable = !readOnly && !operation && jsonDraft === null;
   const currentContent = asRecord(current?.content);
 
   // scenario rows and blocked golden tests share one table
@@ -340,6 +369,27 @@ export function EvalAssetsCard({
             )}
           </h2>
           <Alert>{t("assistantEval.scopeNote")}</Alert>
+          {earlier && (
+            <div style={{ marginTop: 8 }}>
+              <Alert
+                testId="v2-assistant-eval-earlier-assets"
+                action={
+                  <span className="v2-actions">
+                    {earlierDataset && evalResourceV2Link(earlierDataset) && (
+                      <Link to={evalResourceV2Link(earlierDataset)!} data-testid="v2-assistant-eval-earlier-assets-dataset">{t("assistantEval.openDataset")} ›</Link>
+                    )}
+                    <LinkButton onClick={() => openHistory(earlier.id)} testId="v2-assistant-eval-earlier-assets-view">
+                      {t("assistantEval.historyView")}
+                    </LinkButton>
+                  </span>
+                }
+              >
+                {earlierDataset
+                  ? t("assistantEval.earlierAssets", { plan: earlier.plan_revision, dataset: String(asRecord(earlierDataset.result).dataset_id) })
+                  : t("assistantEval.earlierAssetsNoDataset", { plan: earlier.plan_revision })}
+              </Alert>
+            </div>
+          )}
           {loadError && (
             <Alert tone="error" action={<LinkButton onClick={load}>{t("assistantEval.refresh")}</LinkButton>}>
               {loadError}
@@ -347,6 +397,7 @@ export function EvalAssetsCard({
           )}
 
           <div className="v2-toolbar">
+            {!readOnly && <>
             <label className="v2-row" style={{ fontSize: 13, color: "var(--v2-ink-2)" }}>
               {t("assistantEval.sourceRevision")}
               <Select
@@ -377,6 +428,7 @@ export function EvalAssetsCard({
                 {t("assistantEval.confirmScenarios", { n: reviewPending })}
               </Button>
             )}
+            </>}
             {current && summary && (
               <div className="end">
                 <span className="v2-muted mono" style={{ fontSize: 12 }} data-testid="v2-assistant-eval-summary">
@@ -404,12 +456,11 @@ export function EvalAssetsCard({
           {invalid && (
             <Alert tone="error">
               {reviewPending ? t("assistantEval.reviewNote") : t("assistantEval.invalidNote")}
-              <ul className="v2-list">
-                {current!.validation_errors.map((e, i) => (
-                  <li key={i} className="mono" style={{ fontSize: 12, wordBreak: "break-word" }}>{e}</li>
-                ))}
-              </ul>
-              {current?.status === "invalid" && (
+              <ValidationErrorList
+                errors={errorDetails(current!.validation_errors, current!.validation_error_details)}
+                testId="v2-assistant-eval-errors"
+              />
+              {current?.status === "invalid" && !readOnly && (
                 <div style={{ marginTop: 10 }}>
                   <Button size="sm" disabled={!!repairReason} title={repairReason}
                     onClick={() => void repair()} testId="v2-assistant-eval-repair">
@@ -583,7 +634,7 @@ export function EvalAssetsCard({
                           );
                         },
                       },
-                      { key: "def", title: t("assistantEval.col.definition"), render: (e) => <EvaluatorDefinition e={e} /> },
+                      { key: "def", title: t("assistantEval.col.definition"), render: (e) => <EvaluatorDefinition e={e} noteDetail={noteDetails?.evaluators?.[String(e?.key ?? "")]} /> },
                       {
                         key: "gts",
                         title: t("assistantEval.col.goldenTests"),
@@ -597,10 +648,8 @@ export function EvalAssetsCard({
                         title: t("assistantEval.col.gate"),
                         className: "nowrap",
                         render: (e) => (
-                          <span className="mono">
-                            {e?.blocking ? t("assistantEval.blocking") : t("assistantEval.informational")}
-                            {e?.threshold !== null && e?.threshold !== undefined ? ` · ≥ ${e.threshold}` : ""}
-                          </span>
+                          <EvalGateBadge blocking={e?.blocking} threshold={e?.threshold} metric={e?.metric ?? null}
+                            testId={`v2-assistant-eval-gate-${String(e?.key ?? "")}`} />
                         ),
                       },
                       {
@@ -621,6 +670,13 @@ export function EvalAssetsCard({
               {recommendations.length > 0 && (
                 <div className="v2-assistant-section" data-testid="v2-assistant-eval-recommendations">
                   <h3>{t("assistantEval.recommendations")}</h3>
+                  {unresolvedBlockingCount(recommendations) > 0 && (
+                    <Alert tone="error">
+                      <span data-testid="v2-assistant-eval-unresolved-blocking">
+                        {t("assistantEval.unresolvedBlockingHint", { n: unresolvedBlockingCount(recommendations) })}
+                      </span>
+                    </Alert>
+                  )}
                   <Table
                     density="dense"
                     rows={recommendations}
@@ -628,6 +684,18 @@ export function EvalAssetsCard({
                     columns={[
                       { key: "i", title: "#", width: 48, render: (r) => <span className="mono">{Number(r?.index ?? 0) + 1}</span> },
                       { key: "text", title: t("assistantEval.col.recommendation"), render: (r) => String(r?.text ?? "") },
+                      {
+                        key: "gate",
+                        title: t("assistantEval.col.gateIntent"),
+                        className: "nowrap",
+                        render: (r) => {
+                          const g = planRecommendationGate(r);
+                          return g ? (
+                            <EvalGateBadge blocking={g.blocking} threshold={g.threshold} metric={g.metric} source={g.source}
+                              testId={`v2-assistant-eval-rec-gate-${String(r?.index ?? "")}`} />
+                          ) : <span className="v2-muted">—</span>;
+                        },
+                      },
                       {
                         key: "map",
                         title: t("assistantEval.col.mappedTo"),
@@ -641,7 +709,11 @@ export function EvalAssetsCard({
                             <Tag tone={r?.status === "mapped" ? "green" : r?.status === "declined" ? "gray" : "orange"}>
                               {t(`assistantEval.recStatus.${r?.status ?? "unresolved"}`)}
                             </Tag>
-                            {r?.note && <span className="sub">{r.note}</span>}
+                            {r?.note && (
+                              <span className="sub" title={r.note} data-testid={`v2-assistant-eval-rec-note-${String(r?.index ?? "")}`}>
+                                {localizedNote(t, r.note, noteDetails?.recommendations?.[String(r?.index ?? "")])}
+                              </span>
+                            )}
                           </>
                         ),
                       },
@@ -650,7 +722,7 @@ export function EvalAssetsCard({
                 </div>
               )}
 
-              {!operation && (
+              {!operation && !readOnly && (
                 <div className="v2-assistant-actions">
                   <Button kind="primary" disabled={!canCreate} title={createReason}
                     onClick={() => setConfirmPlan(current)} testId="v2-assistant-eval-create">
@@ -671,12 +743,12 @@ export function EvalAssetsCard({
             <div style={{ marginTop: 12 }}>
               <Alert
                 tone="warn"
-                action={
+                action={readOnly ? undefined : (
                   <Button size="sm" kind="primary" disabled={!!replacementReason} title={replacementReason}
                     onClick={prepareReplacement} testId="v2-assistant-eval-replacement">
                     {t("assistantEval.prepareReplacement")}
                   </Button>
-                }
+                )}
               >
                 <strong>{t("assistantEval.newPlanTitle")}</strong>
                 <div>{t("assistantEval.newPlanNotice")}</div>
@@ -713,14 +785,35 @@ export function EvalAssetsCard({
                     key: "ops",
                     title: t("v2.common.actions"),
                     className: "right",
-                    render: (o) => canMaterialize && o.status !== "cleaned" && o.status !== "running" && o.status !== "queued" ? (
+                    // N17-obs467: 「查看」 first — the destructive cleanup was a row's only action
+                    render: (o) => (
                       <div className="v2-actions">
-                        <LinkButton danger disabled={busy} onClick={() => setConfirmCleanup(o)}>{t("assistantEval.cleanup")}</LinkButton>
+                        <LinkButton onClick={() => (viewing === o.id ? setViewing(null) : openHistory(o.id))}
+                          testId={`v2-assistant-eval-history-view-${o.id}`}>
+                          {viewing === o.id ? t("assistantEval.historyHide") : t("assistantEval.historyView")}
+                        </LinkButton>
+                        {canMaterialize && o.status !== "cleaned" && o.status !== "running" && o.status !== "queued" && (
+                          <LinkButton danger disabled={busy} onClick={() => setConfirmCleanup(o)}>{t("assistantEval.cleanup")}</LinkButton>
+                        )}
                       </div>
-                    ) : null,
+                    ),
                   },
                 ]}
               />
+              {viewed && (
+                <div id={HISTORY_VIEW_ID}>
+                  <OperationView
+                    readOnly
+                    operation={viewed}
+                    pollError={null}
+                    canMaterialize={false}
+                    busy={busy}
+                    onRefresh={() => undefined}
+                    onRetry={() => undefined}
+                    onCleanup={() => undefined}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -806,7 +899,7 @@ function ScenarioTurns({ s }: { s: Scenario }) {
   );
 }
 
-function EvaluatorDefinition({ e }: { e: AssistantEvalPlanEvaluator }) {
+function EvaluatorDefinition({ e, noteDetail }: { e: AssistantEvalPlanEvaluator; noteDetail?: PlanNoteDetail }) {
   const { t } = useTranslation();
   const kind = String(e?.kind ?? "");
   return (
@@ -838,15 +931,21 @@ function EvaluatorDefinition({ e }: { e: AssistantEvalPlanEvaluator }) {
           </pre>
         </details>
       )}
-      {e?.note && <div className="v2-muted">{e.note}</div>}
+      {e?.note && (
+        <div className="v2-muted" title={e.note} data-testid={`v2-assistant-eval-note-${String(e?.key ?? "")}`}>
+          {localizedNote(t, e.note, noteDetail)}
+        </div>
+      )}
     </div>
   );
 }
 
 function OperationView({
-  operation, pollError, canMaterialize, busy, onRefresh, onRetry, onCleanup,
+  operation, pollError, canMaterialize, busy, onRefresh, onRetry, onCleanup, readOnly = false,
 }: {
   operation: AssistantEvalOperation;
+  /** N17-obs467: an earlier plan's operation opened from 「更早的操作」 — resources only */
+  readOnly?: boolean;
   pollError: string | null;
   canMaterialize: boolean;
   busy: boolean;
@@ -856,12 +955,13 @@ function OperationView({
 }) {
   const { t } = useTranslation();
   const live = operation.status === "running" || operation.status === "queued";
+  const testId = readOnly ? "v2-assistant-eval-history-operation" : "v2-assistant-eval-operation";
   return (
-    <div className="v2-assistant-section" data-testid="v2-assistant-eval-operation" data-status={operation.status}>
+    <div className="v2-assistant-section" data-testid={testId} data-status={operation.status}>
       <h3 className="v2-row">
-        {t("assistantEval.operation")}
+        {readOnly ? t("assistantEval.historyOperation", { plan: operation.plan_revision }) : t("assistantEval.operation")}
         <Tag tone={OP_TONE[operation.status] ?? "gray"} dot>{t(`assistantEval.opStatus.${operation.status}`)}</Tag>
-        {live && !pollError && <LinkButton onClick={onRefresh}>{t("assistantEval.refresh")}</LinkButton>}
+        {live && !pollError && !readOnly && <LinkButton onClick={onRefresh}>{t("assistantEval.refresh")}</LinkButton>}
       </h3>
       <div className="v2-muted mono" style={{ fontSize: 12, marginBottom: 8 }}>
         {t("assistantEval.operationMeta", {
@@ -884,7 +984,7 @@ function OperationView({
         density="dense"
         rows={asArray<AssistantEvalResource>(operation.resources)}
         rowKey={(r) => r.key}
-        testId="v2-assistant-eval-resources"
+        testId={readOnly ? "v2-assistant-eval-history-resources" : "v2-assistant-eval-resources"}
         columns={[
           { key: "kind", title: t("assistantEval.col.resource"), render: (r) => <span className="mono">{t(`assistantEval.resource.${r.kind}`, r.kind)}</span> },
           {
@@ -902,7 +1002,7 @@ function OperationView({
         ]}
       />
       <div style={{ marginTop: 8 }}><Alert>{t("assistantEval.registeredNote")}</Alert></div>
-      {canMaterialize && (
+      {canMaterialize && !readOnly && (
         <div className="v2-row">
           {!operation.requires_new_plan && (operation.status === "partial" || operation.status === "failed")
             && operation.attempts < operation.max_attempts && (
@@ -936,9 +1036,10 @@ function ResourceDetails({ res }: { res: AssistantEvalResource }) {
   const { t } = useTranslation();
   const r = asRecord(res.result);
   const readback = asRecord(r.readback);
+  const link = evalResourceV2Link(res);
   return (
     <div className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
-      {res.link && <div><Link to={res.link}>{t("assistantEval.open")} ›</Link></div>}
+      {link && <div><Link to={link}>{t("assistantEval.open")} ›</Link></div>}
       {res.kind === "dataset" && r.dataset_id ? (
         <div>{String(r.dataset_id)} · {t("assistantEval.items", { n: Number(r.item_count ?? 0) })}</div>
       ) : null}

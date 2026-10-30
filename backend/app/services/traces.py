@@ -6,25 +6,32 @@ at all** once the lookback was more than a few hours — measured on a real sess
 32 spans were sitting in `aws/spans` the whole time, `?lookback_hours=72` gave 0. That is
 the defect this replaces.
 
-It now reuses `observability.SPANS_SOURCE`, the same multi-group source every
-Observability query already uses, which also makes the rail forward-compatible with
-AgentCore's per-agent span destination (documented as the default for newer agents).
+It now reuses `observability._spans_source()`, the same multi-group source every
+Observability query already uses (narrowed the same way by
+`Settings.observability_spans_source`), which also makes the rail forward-compatible
+with AgentCore's per-agent span destination (documented as the default for newer agents).
 Note that in this account per-agent runtime groups currently hold **no spans** — only
 application logs and OTEL log records — which is exactly why the query must filter for
 actual spans; see `session_span_query`.
 
 Span *shaping* (`normalize_spans`, `categorize`, `_span_times`) stays here; only the
 fetch is shared.
+
+Console deep links are **partition-aware**: the host comes from
+`WorkspaceContext.console_host` (`console.amazonaws.cn` for aws-cn), never a literal.
+`cloudwatch_url` opens Logs Insights on the contributing log groups with the same
+session filter this rail ran; `log_group_url` opens the primary group itself.
 """
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from app.core.errors import AppError
-from app.services.observability import SPANS_SOURCE, run_insights_queries
+from app.services.observability import _spans_source, run_insights_queries
 from app.services.workspace import WorkspaceContext
 
-# Only used for the fallback console deep link when nothing was found.
+# Fallback console deep link target when no span named a log group.
 SPANS_LOG_GROUP = "aws/spans"
 SPAN_LIMIT = 200
 
@@ -50,8 +57,13 @@ def session_span_query(session_id: str) -> str:
     ``severityText`` / ``spanId``, no ``name``). Those also mention the session id, so
     without this they would land in the rail as nameless "span" rows.
     """
+    return f"{_spans_source()}{_span_pipeline(session_id)}"
+
+
+def _span_pipeline(session_id: str) -> str:
+    """The query minus its SOURCE clause — shared by the Insights fetch and the console
+    deep link (whose log groups travel in the URL, not in the editor text)."""
     return (
-        f"{SPANS_SOURCE}"
         " | fields @message, @log"
         f' | filter @message like "{session_id}"'
         " | filter ispresent(name) or ispresent(spanName)"
@@ -160,14 +172,28 @@ def session_trace(
     workspace: WorkspaceContext,
     lookback_hours: int = 3,
     logs: Any = None,
+    also: list[str] | None = None,
+    records_guard: Callable[[str, list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
-    region = workspace.region
+    """``also``: further runtime session ids whose spans belong to this conversation (the
+    per-user policy carrier's derived per-principal sessions, ``principal_mint``)."""
     unavailable_reason = None
     try:
         raw, per_group = find_session_spans(
             session_id, workspace, lookback_hours, logs=logs
         )
+        if records_guard:
+            records_guard(session_id, raw)
+        for extra in also or []:
+            more, groups = find_session_spans(extra, workspace, lookback_hours, logs=logs)
+            if records_guard:
+                records_guard(extra, more)
+            raw = raw + more
+            for group, count in groups.items():
+                per_group[group] = per_group.get(group, 0) + count
     except AppError as exc:
+        if exc.code == "observability.session_not_found":
+            raise
         # The rail is a side panel on the Chat page: a Logs Insights hiccup must not
         # turn chatting into an error state.
         raw, per_group, unavailable_reason = [], {}, exc.code
@@ -175,20 +201,69 @@ def session_trace(
     # `log_group` now means "the group that contributed the most spans" rather than
     # always aws/spans, which is strictly more truthful once several contribute.
     primary = max(per_group, key=lambda g: per_group[g]) if per_group else SPANS_LOG_GROUP
+    log_groups = sorted(per_group, key=lambda g: -per_group[g])
     return {
         "session_id": session_id,
         "span_count": len(spans),
         "spans": spans,
-        "log_groups": sorted(per_group, key=lambda g: -per_group[g]),
+        "log_groups": log_groups,
         "log_group": primary,
-        "cloudwatch_url": _log_group_url(region, primary),
+        "lookback_hours": lookback_hours,
+        # Logs Insights, pre-filled with this rail's own session filter over the groups
+        # that answered (or the shared destination when none did).
+        "cloudwatch_url": insights_url(
+            workspace, session_id, log_groups or [SPANS_LOG_GROUP], lookback_hours
+        ),
+        "log_group_url": log_group_url(workspace, primary),
         "unavailable_reason": unavailable_reason,
     }
 
 
-def _log_group_url(region: str, log_group: str) -> str:
+def _console_base(workspace: WorkspaceContext) -> str:
+    region = workspace.region
+    return f"https://{region}.{workspace.console_host}/cloudwatch/home?region={region}"
+
+
+def log_group_url(workspace: WorkspaceContext, log_group: str) -> str:
+    """Console deep link to one log group (the console double-encodes the path: `/` is
+    `%2F` → `%252F`, written `$252F` inside the hash)."""
     escaped = log_group.replace("/", "$252F")
-    return (
-        f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}"
-        f"#logsV2:log-groups/log-group/{escaped}"
+    return f"{_console_base(workspace)}#logsV2:log-groups/log-group/{escaped}"
+
+
+def _insights_text(value: str) -> str:
+    """The console's string escape inside `queryDetail`: every byte outside
+    `[A-Za-z0-9._-]` becomes `*xx` (space `*20`, `/` `*2f`, newline `*0a`)."""
+    return "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch in "._-") else "".join(
+            f"*{b:02x}" for b in ch.encode("utf-8")
+        )
+        for ch in value
     )
+
+
+def insights_url(
+    workspace: WorkspaceContext,
+    session_id: str,
+    log_groups: list[str],
+    lookback_hours: int,
+) -> str:
+    """Logs Insights deep link: the rail's session filter as the editor text, the given
+    groups as the source, a relative window of `lookback_hours`.
+
+    The hash carries `?queryDetail=<detail>` with `?`/`=` written `$3F`/`$3D` and the
+    detail's structural characters `~ ( ) '` percent-encoded twice with `%` written `$`
+    (`~` → `$257E`) — the shape the console itself produces."""
+    editor = _span_pipeline(session_id).lstrip(" |").replace(" | ", "\n| ")
+    sources = "".join(f"~'{_insights_text(g)}" for g in log_groups)
+    detail = (
+        f"~(end~0~start~-{lookback_hours * 3600}~timeType~'RELATIVE~unit~'seconds"
+        f"~editorString~'{_insights_text(editor)}~source~({sources}))"
+    )
+    encoded = (
+        detail.replace("~", "$257E")
+        .replace("(", "$2528")
+        .replace(")", "$2529")
+        .replace("'", "$2527")
+    )
+    return f"{_console_base(workspace)}#logsV2:logs-insights$3FqueryDetail$3D{encoded}"

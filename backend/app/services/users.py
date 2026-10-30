@@ -13,6 +13,7 @@ import hmac
 import re
 import secrets
 import string
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import User, UserWorkspace, Workspace
+from app.services import login_guard
 
 # Member-grantable agent-management capabilities. Defined here (not in
 # routers.auth, which imports this module) so both auth and the users console
@@ -38,6 +40,8 @@ AGENT_PERMISSIONS = (
     "identity.manage",
     "identity.grant",
     "memory.manage",
+    # D20: author / publish / apply Cedar policies (switching to enforce stays admin-only)
+    "policy.manage",
 )
 
 # --- password hashing -------------------------------------------------------
@@ -86,10 +90,13 @@ def _burn_verify(password: str) -> None:
     verify_password(password, hash_password(_DUMMY_HASH_PASSWORD))
 
 
-def generate_password(length: int = 14) -> str:
-    """Admin password reset: a readable-but-random password shown once."""
+def generate_password(length: int = 14, settings: Settings | None = None) -> str:
+    """Admin password reset: a readable-but-random password shown once (never shorter
+    than the configured policy minimum)."""
+    current = settings or get_settings()
+    size = max(length, effective_min_length(current))
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+    return "".join(secrets.choice(alphabet) for _ in range(size))
 
 
 # --- validation -------------------------------------------------------------
@@ -98,7 +105,36 @@ _USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,31}$")
 _EMAIL_RE = re.compile(
     r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9]([A-Za-z0-9.-]{0,251})\.[A-Za-z]{2,24}$"
 )
-MIN_PASSWORD_LENGTH = 8
+# Floor of the policy; the effective minimum is `Settings.auth_password_min_length`
+# (default 12, r12-g; floor lowered 8 → 6 by user decision 2026-10-19, N14-obs3 — the
+# pydantic bound on the setting is the same number). Lowest accepted setting.
+MIN_PASSWORD_LENGTH = 6
+POLICY_STRICT = "strict"
+POLICY_RELAXED = "relaxed"
+
+# Top-common passwords (r12-g, N12-obs57). Deliberately small and embedded: the length
+# rule already removes almost every entry of the public top-10k lists, so this covers
+# the long-enough stragglers plus the product's own obvious choices. Matched after
+# lower-casing and dropping separators, so `Password-1234!` still hits `password1234`.
+COMMON_PASSWORDS: frozenset[str] = frozenset(
+    {
+        "password", "password1", "password12", "password123", "password1234",
+        "password12345", "password123456", "passwordpassword", "passw0rd", "passw0rd1234",
+        "p@ssw0rd", "p@ssword1234", "p@ssw0rd1234", "mypassword123", "newpassword123",
+        "changeme1234", "changeme12345", "letmein12345", "welcome12345", "welcome123456",
+        "administrator", "administrator1", "admin1234567", "admin12345678", "adminadmin123",
+        "root12345678", "qwertyuiop12", "qwertyuiop123", "qwertyuiopasdfghjkl", "qwerty123456",
+        "qwerty1234567", "1q2w3e4r5t6y", "1q2w3e4r5t6y7u", "1qaz2wsx3edc", "1qaz2wsx3edc4rfv",
+        "zaq12wsxcde3", "asdfghjkl123", "asdfasdfasdf", "123456789012", "1234567890123",
+        "12345678901234", "123456789abc", "123456789qwe", "1234567890qwerty", "abcdefghijkl",
+        "abcd12345678", "abc123456789", "iloveyou1234", "iloveyou12345", "sunshine1234",
+        "princess1234", "football1234", "baseball1234", "superman1234", "trustno1trustno1",
+        "monkey123456", "dragon123456", "shadow123456", "master123456", "michael123456",
+        "jennifer1234", "computer1234", "internet1234", "whatever1234", "starwars1234",
+        "launchpad123", "launchpad1234", "launchpad2026", "agentcore123", "agentcore1234",
+        "agentcore2026", "bedrock12345", "amazon123456", "awsawsawsaws", "aws123456789",
+    }
+)
 
 
 def normalize_username(username: str) -> str:
@@ -151,11 +187,69 @@ def validate_email(email: str, settings: Settings) -> str:
     return address
 
 
-def validate_password(password: str) -> str:
-    if len(password or "") < MIN_PASSWORD_LENGTH:
+def _compact(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+# The separator-insensitive form of every common entry (N16-obs20): three entries carry an
+# `@` (`p@ssw0rd`, …) that `_compact` strips from the CANDIDATE, so `P-@-ssw0rd-1234` used
+# to slip past the list while `Password-1234!` was caught. Compare compact with compact.
+_COMMON_COMPACT: frozenset[str] = frozenset(_compact(word) for word in COMMON_PASSWORDS)
+
+
+def effective_min_length(settings: Settings) -> int:
+    return max(MIN_PASSWORD_LENGTH, settings.auth_password_min_length)
+
+
+def password_policy(settings: Settings) -> dict[str, Any]:
+    """The policy the consoles hint and pre-validate from (`GET /api/auth/status`
+    `password_policy`, additive, N14-obs3): `{mode, min_length}`."""
+    return {"mode": settings.auth_password_policy, "min_length": effective_min_length(settings)}
+
+
+def validate_password(
+    password: str,
+    *,
+    username: str | None = None,
+    email: str | None = None,
+    settings: Settings | None = None,
+) -> str:
+    """Password policy for registration and admin resets (r12-g, N12-obs57).
+
+    `Settings.auth_password_policy` picks the rule set. `strict` (default) applies
+    three rules, each with its own `detail.reason` so the consoles can word them:
+    `too_short` (`detail.min_length`), `matches_identity` (equal to the username, the
+    email or its local part, case-insensitive) and `common` (embedded top-common list).
+    `relaxed` (N14-obs3, user decision 2026-10-19) applies the minimum length only, so
+    `too_short` is the only reason it can raise. Stored hashes are never re-checked, so
+    existing accounts are unaffected until they next change their password.
+    """
+    current = settings or get_settings()
+    minimum = effective_min_length(current)
+    candidate = password or ""
+    if len(candidate) < minimum:
         raise AppError(
             "auth.weak_password",
-            f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+            f"Password must be at least {minimum} characters",
+            {"reason": "too_short", "min_length": minimum},
+        )
+    if current.auth_password_policy == POLICY_RELAXED:
+        return password
+    lowered = candidate.strip().lower()
+    identity = {normalize_username(username or "").lower(), normalize_email(email or "")}
+    identity.add(normalize_email(email or "").partition("@")[0])
+    identity.discard("")
+    if lowered in identity:
+        raise AppError(
+            "auth.weak_password",
+            "Password must not be your username or email address",
+            {"reason": "matches_identity", "min_length": minimum},
+        )
+    if lowered in COMMON_PASSWORDS or _compact(candidate) in _COMMON_COMPACT:
+        raise AppError(
+            "auth.weak_password",
+            "This password is too common; choose a less predictable one",
+            {"reason": "common", "min_length": minimum},
         )
     return password
 
@@ -167,7 +261,8 @@ def as_utc(value: datetime | None) -> datetime | None:
     """SQLite hands back naive datetimes; re-attach UTC before comparing."""
     if value is None:
         return None
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
+    # N17-obs463: an inbound value may carry +08:00 — convert, never relabel
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def is_expired(user: User, now: datetime | None = None) -> bool:
@@ -214,6 +309,11 @@ def serialize(
     moment = now or datetime.now(UTC)
     expires_at = as_utc(user.expires_at)
     last_login = as_utc(user.last_login_at)
+    # r12-g: the in-process lockout state for this name (admins unlock via PATCH)
+    failed_logins, locked_epoch = login_guard.guard.state(user.username_key)
+    locked_until = (
+        datetime.fromtimestamp(locked_epoch, UTC).isoformat() if locked_epoch else None
+    )
     return {
         "id": user.id,
         "username": user.username,
@@ -226,6 +326,8 @@ def serialize(
         "created_at": (as_utc(user.created_at) or moment).isoformat(),
         "last_login_at": last_login.isoformat() if last_login else None,
         "login_count": user.login_count,
+        "failed_logins": failed_logins,
+        "locked_until": locked_until,
         "created_by": user.created_by,
         "permissions": effective_permissions(user),
         "workspaces": workspaces or [],
@@ -258,6 +360,58 @@ def find_by_email(db: Session, email: str) -> User | None:
     return db.scalars(select(User).where(User.email == address)).first()
 
 
+def pending_count(db: Session) -> int:
+    return int(db.scalar(select(func.count()).select_from(User).where(
+        User.status == STATUS_PENDING
+    )) or 0)
+
+
+def active_admin_ids(db: Session, now: datetime | None = None) -> set[str]:
+    """Ids of the `users` rows that can sign in as an administrator right now.
+
+    The config-driven built-in admin is deliberately NOT counted (r12-g): it is a
+    break-glass credential, and the last-admin guard exists so that account
+    management never depends on it — at least one real admin row must remain.
+    """
+    moment = now or datetime.now(UTC)
+    rows = db.scalars(
+        select(User).where(User.role == "admin", User.status == STATUS_ACTIVE)
+    )
+    return {row.id for row in rows if not is_expired(row, moment)}
+
+
+def _is_active_admin(user: User) -> bool:
+    return user.role == "admin" and user.status == STATUS_ACTIVE and not is_expired(user)
+
+
+def _patch_removes_admin(user: User, patch: dict[str, Any]) -> bool:
+    """Whether applying `patch` to an active admin row leaves it unable to administer."""
+    if not _is_active_admin(user):
+        return False
+    # only the VALID non-admin values count: an invalid role / status still gets its 400
+    if patch.get("role") == "member":
+        return True
+    if patch.get("status") in (STATUS_PENDING, STATUS_DISABLED):
+        return True
+    if "expires_at" in patch:
+        value = patch["expires_at"]
+        if isinstance(value, datetime) and as_utc(value) <= datetime.now(UTC):
+            return True
+    return False
+
+
+def ensure_not_last_admin(db: Session, user: User) -> None:
+    """409 `users.last_admin` when `user` is the only active administrator row."""
+    if not active_admin_ids(db) - {user.id}:
+        raise AppError(
+            "users.last_admin",
+            "This is the last active administrator account; promote another account "
+            "before demoting, disabling, expiring or deleting it",
+            {"user_id": user.id, "username": user.username},
+            status_code=409,
+        )
+
+
 def get_user(db: Session, user_id: str) -> User:
     user = db.get(User, user_id)
     if user is None:
@@ -281,7 +435,7 @@ def register_user(
     current = settings or get_settings()
     name = validate_username(username, current)
     address = validate_email(email, current)
-    validate_password(password)
+    validate_password(password, username=name, email=address, settings=current)
 
     if find_by_username(db, name) is not None:
         raise AppError("auth.username_taken", "This username is already taken", status_code=409)
@@ -450,7 +604,26 @@ def extend_validity(user: User, days: int) -> None:
     user.expires_at = max(base, now) + timedelta(days=days)
 
 
+# N16-obs21 (P1, lead ruling): the last-admin guard is a read-then-write; two administrators
+# demoting / deleting each other at the same instant both read "another admin remains" and
+# both commit. One uvicorn worker over SQLite, so a process-level lock around check + commit
+# serialises every account mutation (the ledger's own writer lock does the cross-process part).
+_ACCOUNT_MUTATION_LOCK = threading.RLock()
+
+
 def apply_patch(
+    db: Session,
+    user: User,
+    patch: dict[str, Any],
+    settings: Settings | None = None,
+) -> str | None:
+    """Apply an admin patch in place (serialised — see `_ACCOUNT_MUTATION_LOCK`)."""
+    with _ACCOUNT_MUTATION_LOCK:
+        db.expire_all()  # read the guard's rows as committed by the previous holder
+        return _apply_patch(db, user, patch, settings)
+
+
+def _apply_patch(
     db: Session,
     user: User,
     patch: dict[str, Any],
@@ -463,6 +636,10 @@ def apply_patch(
     """
     current = settings or get_settings()
     generated: str | None = None
+    # r12-g: never let a patch (incl. an admin's own self-demotion) remove the last
+    # active administrator row — the console would be left to the break-glass admin.
+    if _patch_removes_admin(user, patch):
+        ensure_not_last_admin(db, user)
     if "status" in patch:
         status = patch["status"]
         if status not in STATUSES:
@@ -494,17 +671,33 @@ def apply_patch(
         # an explicit null asks the platform to generate one, which is the only
         # case the caller gets a password back (shown once in the console)
         chosen = patch["password"]
-        password = chosen or generate_password()
-        validate_password(password)
+        password = chosen or generate_password(settings=current)
+        validate_password(password, username=user.username, email=user.email, settings=current)
         user.password_hash = hash_password(password)
         generated = None if chosen else password
+        # a new password signs this account's OTHER sessions out: the cookie carries the
+        # epoch it was issued under and resolve_identity refuses a stale one
+        user.session_epoch = (user.session_epoch or 0) + 1
+    if patch.get("unlock"):
+        # r12-g: clear the sign-in lockout (in-process state keyed by the name)
+        login_guard.guard.unlock(user.username_key)
     if "permissions" in patch:
         user.permissions = _normalized_permissions(patch["permissions"])
     if "workspaces" in patch:
         set_workspace_grants(db, user, patch["workspaces"])
+    # A disable, a lapsed expiry, a demotion or a revoked grant can each offboard
+    # the account from the /v1 keys it minted; same transaction as the change itself.
+    _disable_offboarded_api_keys(db, user.id)
     db.commit()
     db.refresh(user)
     return generated
+
+
+def _disable_offboarded_api_keys(db: Session, user_id: str) -> None:
+    # Imported here: services.api_keys reads this module's account-state helpers.
+    from app.services import api_keys as api_keys_service
+
+    api_keys_service.disable_offboarded_keys(db, user_id)
 
 
 def workspace_grants(db: Session, user_ids: Sequence[str]) -> dict[str, list[str]]:
@@ -584,9 +777,61 @@ def _normalized_permissions(value: Any) -> dict[str, bool] | None:
     return denied or None
 
 
-def delete_user(db: Session, user: User) -> None:
+def delete_user(
+    db: Session,
+    user: User,
+    *,
+    successor: str | None = None,
+    successor_name: str | None = None,
+    actor_user_id: str | None = None,
+) -> dict[str, list[str]]:
+    """Delete the account (serialised with every other account mutation, N16-obs21)."""
+    with _ACCOUNT_MUTATION_LOCK:
+        db.expire_all()
+        return _delete_user(db, user, successor=successor, successor_name=successor_name,
+                            actor_user_id=actor_user_id)
+
+
+def _delete_user(
+    db: Session,
+    user: User,
+    *,
+    successor: str | None = None,
+    successor_name: str | None = None,
+    actor_user_id: str | None = None,
+) -> dict[str, list[str]]:
+    """Delete the account, its workspace grants and its architect-assistant
+    conversations (``assistant.purge.cascade_principal``: ledger-only conversations are
+    deleted, conversations that deployed an Agent or created evaluation assets are
+    reassigned to ``successor`` — the deleting administrator's principal — so nothing
+    becomes unreachable). Returns the cascade result.
+
+    r12-g guards, both before any write: an administrator never deletes their own
+    account (409 `users.self_delete`; `actor_user_id` is None for the config admin,
+    who has no row to delete), and the last active administrator row is never deleted
+    (409 `users.last_admin`)."""
+    from app.assistant.principal import principal_of_user_id
+    from app.assistant.purge import cascade_principal  # local import: router ↔ service cycle
+
+    if actor_user_id is not None and actor_user_id == user.id:
+        raise AppError(
+            "users.self_delete",
+            "You cannot delete your own account; ask another administrator",
+            {"user_id": user.id},
+            status_code=409,
+        )
+    if _is_active_admin(user):
+        ensure_not_last_admin(db, user)
+
+    cascade = cascade_principal(
+        db, principal_of_user_id(user.id), successor=successor, successor_name=successor_name
+    )
     # grants first: SQLite does not enforce the FK, so the rows would linger and
     # a recycled user id would inherit them
     db.query(UserWorkspace).filter(UserWorkspace.user_id == user.id).delete()
     db.delete(user)
+    # The /v1 keys it minted are disabled, never deleted: they stay listed for audit,
+    # and their dangling `created_by` keeps them from being re-enabled (#259).
+    _disable_offboarded_api_keys(db, user.id)
     db.commit()
+    return cascade

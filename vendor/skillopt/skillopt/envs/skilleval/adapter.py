@@ -49,7 +49,7 @@ class SkillEvalAdapter(EnvAdapter):
         skill_dir: str = "",
         trainable_files: list[str] | str | None = None,
         judge_mode: str = "auto",
-        judge_backend: str = "claude_code_exec",
+        judge_backend: str = "opencode_exec",
         judge_model: str = "",
         judge_timeout: int = 300,
         judge_effort: str = "low",

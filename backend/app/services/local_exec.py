@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import DATA_DIR, get_settings
+from app.services.aws_clients import GLOBAL_BEDROCK_BEARER_ENV
 
 logger = logging.getLogger("launchpad.local_exec")
 
@@ -192,12 +193,11 @@ _ENV_ALLOWLIST = frozenset({
     "STUDIO_SKILLS_DIR",
 })
 
-# Forwarded only when `studio_exec_forward_aws_credentials` is on. The default
-# Mantle path genuinely needs these: generated code builds
-# OpenAIResponsesModel(bedrock_mantle_config=...) and the SDK mints a bearer token
-# from the ambient credentials, which is why local debug works off the operator's
-# AWS profile with no BEDROCK_API_KEY (see scripts/setup_exec_env.sh). Turning the
-# forward off is the hardened posture and requires the caller to supply a key.
+# Forwarded only when `studio_exec_forward_aws_credentials` is on. Local debug
+# uses the operator's ambient credentials; forwarding them is on by default
+# (see scripts/setup_exec_env.sh). Turning the forward off is the hardened
+# posture and requires the caller to supply the Global Bedrock API key with
+# the request.
 _AWS_CREDENTIAL_ENV = frozenset({
     "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
     "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE", "AWS_ROLE_ARN",
@@ -244,8 +244,14 @@ def build_execution_env(
         env["AWS_EC2_METADATA_DISABLED"] = "true"
     if openai_api_key:
         env["OPENAI_API_KEY"] = openai_api_key
-    if bedrock_api_key:
-        env["BEDROCK_API_KEY"] = bedrock_api_key
+    # Global Bedrock API key for the generated BedrockModel calls (spec C3/C4): a key
+    # supplied with the request wins; otherwise the backend's own bearer is forwarded.
+    # Always under the name botocore reads — never the pre-CN BEDROCK_API_KEY name.
+    bearer = bedrock_api_key or os.environ.get(GLOBAL_BEDROCK_BEARER_ENV, "")
+    if bearer:
+        env[GLOBAL_BEDROCK_BEARER_ENV] = bearer
+    # Generated code enters the Global profiles from here, not from AWS_REGION.
+    env["LAUNCHPAD_MODEL_REGION"] = current.model_region
     return env
 
 

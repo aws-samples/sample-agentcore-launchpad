@@ -7,6 +7,7 @@ import type { AgentInfo } from "../../../lib/api";
 import { fmtTime } from "../../format";
 import { Button, Card, type Column, LinkButton, Table, Tag, type TagTone } from "../../ui";
 import { stageSummary } from "./common";
+import { compareTimesDesc } from "../../../lib/timestamps";
 
 const STATUS_TONE: Record<string, TagTone> = { active: "green", deploying: "blue", failed: "red", draft: "gray" };
 
@@ -25,7 +26,7 @@ export function RecentAgents({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const open = (agent: AgentInfo) => navigate(`/v2/agents?view=detail&id=${encodeURIComponent(agent.id)}`);
-  const rows = [...(agents ?? [])].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")).slice(0, 6);
+  const rows = [...(agents ?? [])].sort((a, b) => compareTimesDesc(a.created_at, b.created_at)).slice(0, 6);
   const columns: Column<AgentInfo>[] = [
     {
       key: "name",

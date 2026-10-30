@@ -1,6 +1,8 @@
 # Match the Strands version verified with AgentCore 1.17's Memory integration.
-strands-agents[a2a,otel]==1.47.0
+strands-agents[a2a,otel,openai]==1.47.0
 bedrock-agentcore==1.17.*
+# bearer-token (Bedrock API key) auth for bedrock-runtime
+boto3>=1.43.109,<2
 aws-opentelemetry-distro>=0.10,<1
 fastapi
 uvicorn

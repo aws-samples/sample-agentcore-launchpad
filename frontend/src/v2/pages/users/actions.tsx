@@ -1,3 +1,4 @@
+import { copyBrowserText } from "../../../lib/browser-compat";
 import { Copy } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -62,6 +63,9 @@ export function useUserActions(onChanged: () => void) {
       setBusyId(null);
     }
   };
+
+  // r12-g: clears the in-process sign-in lockout; nothing else about the account changes.
+  const unlock = (user: ConsoleUser) => void patch(user, { unlock: true }, "usersPage.unlocked");
 
   const toggleStatus = (user: ConsoleUser) =>
     user.status === "active"
@@ -226,7 +230,7 @@ export function useUserActions(onChanged: () => void) {
                   setApproveTarget(null);
                   void patch(
                     target,
-                    { status: "active", workspaces: approveGrants },
+                    { status: "active", workspace_ids: approveGrants },
                     "usersPage.approved",
                   );
                 }}
@@ -275,8 +279,9 @@ export function useUserActions(onChanged: () => void) {
               <Button
                 onClick={() => {
                   if (!reset) return;
-                  void navigator.clipboard?.writeText(reset.password);
-                  toast("success", t("usersPage.copied"));
+                  void copyBrowserText(reset.password).then((copied) => {
+                    if (copied) toast("success", t("usersPage.copied"));
+                  });
                 }}
               >
                 <Copy size={14} aria-hidden="true" />
@@ -297,5 +302,5 @@ export function useUserActions(onChanged: () => void) {
     );
   };
 
-  return { busyId, patch, ask, toggleStatus, openExtend, openApprove, renderDialogs };
+  return { busyId, patch, ask, toggleStatus, unlock, openExtend, openApprove, renderDialogs };
 }

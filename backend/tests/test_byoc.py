@@ -21,6 +21,7 @@ from app.services import byoc_uploads
 from app.services.agentcore import runtime as rt
 from tests.conftest import ws_ctx
 from tests.test_agent_iam_lifecycle import StubIam
+from tests.test_visibility import admin, app  # noqa: F401 — auth-enabled console fixtures
 
 ECR_IMAGE = "111122223333.dkr.ecr.us-west-2.amazonaws.com/my-agents:v1"
 
@@ -227,35 +228,35 @@ def test_byoc_refuses_a2a_and_attachments():
 def test_byoc_allowed_models_defaults_to_model_id():
     # backward compat: every spec written before the field existed reads back
     # as a single-model list headed by spec.model_id
-    spec = AgentSpec(**_byoc_spec(model_id="global.anthropic.claude-haiku-4-5"))
+    spec = AgentSpec(**_byoc_spec(model_id="global.moonshotai.kimi-k3"))
     assert spec.byoc.allowed_models is None
-    assert spec.allowed_model_ids == ["global.anthropic.claude-haiku-4-5"]
+    assert spec.allowed_model_ids == ["global.moonshotai.kimi-k3"]
 
 
 def test_byoc_allowed_models_sets_primary_when_model_id_omitted():
     spec = AgentSpec(**_byoc_spec(byoc={
         "artifact_kind": "code_zip", "upload_id": "u1",
-        "allowed_models": ["us.model.one", "us.model.two"],
+        "allowed_models": ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"],
     }))
-    assert spec.model_id == "us.model.one"
-    assert spec.allowed_model_ids == ["us.model.one", "us.model.two"]
+    assert spec.model_id == "global.zai.glm-5.3"
+    assert spec.allowed_model_ids == ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"]
 
 
 def test_byoc_model_id_moves_to_the_front_of_allowed_models():
     spec = AgentSpec(**_byoc_spec(
-        model_id="us.model.two",
+        model_id="global.moonshotai.kimi-k3",
         byoc={"artifact_kind": "code_zip", "upload_id": "u1",
-              "allowed_models": ["us.model.one", "us.model.two"]},
+              "allowed_models": ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"]},
     ))
-    assert spec.allowed_model_ids == ["us.model.two", "us.model.one"]
+    assert spec.allowed_model_ids == ["global.moonshotai.kimi-k3", "global.zai.glm-5.3"]
 
 
 def test_byoc_model_id_must_be_in_allowed_models():
     with pytest.raises(ValidationError, match="must be one of byoc.allowed_models"):
         AgentSpec(**_byoc_spec(
-            model_id="us.model.other",
+            model_id="global.moonshotai.kimi-k3",
             byoc={"artifact_kind": "code_zip", "upload_id": "u1",
-                  "allowed_models": ["us.model.one"]},
+                  "allowed_models": ["global.zai.glm-5.3"]},
         ))
 
 
@@ -301,8 +302,17 @@ def test_non_byoc_refuses_allowed_models():
 
 def test_non_byoc_allowed_model_ids_is_the_single_model():
     spec = AgentSpec(name="a-agent", method="harness", system_prompt="s",
-                     model_id="us.model.one")
-    assert spec.allowed_model_ids == ["us.model.one"]
+                     model_id="global.zai.glm-5.3")
+    assert spec.allowed_model_ids == ["global.zai.glm-5.3"]
+
+
+def test_byoc_allowed_models_outside_the_catalog_are_refused():
+    with pytest.raises(ValidationError, match="model.not_allowed"):
+        AgentSpec(**_byoc_spec(
+            model_id="global.zai.glm-5.3",
+            byoc={**_byoc_spec()["byoc"],
+                  "allowed_models": ["global.zai.glm-5.3", "us.anthropic.claude-haiku-4-5"]},
+        ))
 
 
 def test_byoc_entrypoint_shape():
@@ -388,6 +398,48 @@ def test_upload_endpoint_stages_and_reads_back(client, stub_s3):
     detail = client.get(f"/api/agents/uploads/{body['upload_id']}")
     assert detail.status_code == 200
     assert detail.json()["sha256"] == body["sha256"]
+
+
+def test_upload_manifest_read_follows_the_workspace_visibility_rule(
+    app, admin, stub_s3,  # noqa: F811 — the imported auth-console fixtures, by name
+):
+    """N16-obs77: any member could read any upload manifest by id. The viewer rule
+    (users-and-ownership §7) now applies: ``shared`` keeps by-id reads open; under
+    ``isolated`` a member reads their own uploads, an administrator's, and legacy
+    manifests with no recorded uploader — another member's is the missing-upload 404."""
+    from tests.test_visibility import _isolate, _member
+
+    files = {"file": ("agent.zip", zip_bytes({"main.py": SDK_MAIN}), "application/zip")}
+    admins = admin.post("/api/agents/uploads", files=files).json()
+    ada_id, ada = _member(app, "ada")
+    _, bob = _member(app, "bob")
+    adas = ada.post("/api/agents/uploads", files=files).json()
+    assert adas["uploaded_by"] == "ada" and adas["uploaded_by_id"] == ada_id
+    assert admins["uploaded_by_id"] is None  # the config-driven administrator has no users.id
+
+    def read(client, upload_id):
+        return client.get(f"/api/agents/uploads/{upload_id}")
+
+    # shared (default): by-id reads stay open to every member
+    assert read(bob, admins["upload_id"]).status_code == 200
+    assert read(bob, adas["upload_id"]).status_code == 200
+
+    _isolate()
+    assert read(ada, adas["upload_id"]).status_code == 200  # the uploader
+    assert read(admin, adas["upload_id"]).status_code == 200  # administrators see everything
+    hidden = read(bob, adas["upload_id"])
+    assert hidden.status_code == 404 and hidden.json()["code"] == "byoc.upload_not_found"
+    assert read(bob, admins["upload_id"]).status_code == 200  # an admin's (NULL) uploader
+    # a manifest staged before `uploaded_by_id` existed carries no uploader id → visible
+    legacy_id = byoc_uploads.new_upload_id()
+    legacy = {k: v for k, v in adas.items() if k != "uploaded_by_id"}
+    legacy["upload_id"] = legacy_id
+    stub_s3.put_object(Bucket="launchpad-artifacts-test",
+                       Key=byoc_uploads.manifest_key(DEFAULT_WORKSPACE_ID, legacy_id),
+                       Body=json.dumps(legacy))
+    assert read(bob, legacy_id).status_code == 200
+    # an unknown id is the same 404 as a hidden one
+    assert read(bob, byoc_uploads.new_upload_id()).status_code == 404
 
 
 def test_upload_endpoint_reports_the_requirements_check(client, stub_s3, monkeypatch):
@@ -489,34 +541,40 @@ def test_create_and_redeploy_round_trip_allowed_models(client, stub_s3, monkeypa
     monkeypatch.setattr(agents_router, "start_deploy_async", lambda jid: None)
     body = _byoc_spec(byoc={
         "artifact_kind": "code_zip", "upload_id": "u1",
-        "allowed_models": ["us.model.one", "us.model.two"],
+        "allowed_models": ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"],
     })
     res = client.post("/api/agents", json=body)
     assert res.status_code == 202, res.text
     agent = res.json()["agent"]
-    assert agent["spec"]["model_id"] == "us.model.one"  # primary = first entry
-    assert agent["spec"]["byoc"]["allowed_models"] == ["us.model.one", "us.model.two"]
+    assert agent["spec"]["model_id"] == "global.zai.glm-5.3"  # primary = first entry
+    assert agent["spec"]["byoc"]["allowed_models"] == [
+        "global.zai.glm-5.3", "global.moonshotai.kimi-k3"
+    ]
 
-    # the stored spec redeploys as read back, with the list edited
+    # the stored spec redeploys as read back, with the list edited (reordered —
+    # the CN catalog has only the two models, so "editing the list" means
+    # swapping the primary rather than adding a third id)
     db = SessionLocal()
     db.get(Agent, agent["id"]).status = "active"  # simulate the finished deploy
     db.commit()
     db.close()
     spec = agent["spec"]
-    spec["byoc"]["allowed_models"] = ["us.model.two", "us.model.three"]
-    spec["model_id"] = "us.model.two"
+    spec["byoc"]["allowed_models"] = ["global.moonshotai.kimi-k3", "global.zai.glm-5.3"]
+    spec["model_id"] = "global.moonshotai.kimi-k3"
     res = client.post(f"/api/agents/{agent['id']}/redeploy", json=spec)
     assert res.status_code == 202, res.text
     stored = res.json()["agent"]["spec"]
-    assert stored["model_id"] == "us.model.two"
-    assert stored["byoc"]["allowed_models"] == ["us.model.two", "us.model.three"]
+    assert stored["model_id"] == "global.moonshotai.kimi-k3"
+    assert stored["byoc"]["allowed_models"] == [
+        "global.moonshotai.kimi-k3", "global.zai.glm-5.3"
+    ]
 
 
 def test_create_refuses_model_id_outside_allowed_models(client, stub_s3):
     body = _byoc_spec(
-        model_id="us.model.other",
+        model_id="global.moonshotai.kimi-k3",
         byoc={"artifact_kind": "code_zip", "upload_id": "u1",
-              "allowed_models": ["us.model.one"]},
+              "allowed_models": ["global.zai.glm-5.3"]},
     )
     res = client.post("/api/agents", json=body)
     assert res.status_code == 422
@@ -758,6 +816,50 @@ def test_resolve_requirements_pip_args(tmp_path):
     assert (src / "requirements.lock").exists()
 
 
+def test_resolve_requirements_sigtermed_install_is_an_interrupted_stage(tmp_path):
+    """N17-obs113 (b), BYOC side: the zip's pip install killed by the service's SIGTERM
+    (returncode -15, empty output) raises `StageInterrupted` — resumable, not failed."""
+    from app.deployer import pipeline
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "requirements.txt").write_text("requests>=2,<3\n")
+
+    def runner(args, **_kw):
+        if "compile" in args:
+            Path(args[args.index("-o") + 1]).write_text(
+                "requests==2.32.3 \\\n  --hash=sha256:deadbeef\n"
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=-15, stdout="", stderr="")
+
+    (tmp_path / "build").mkdir()
+    with pytest.raises(pipeline.StageInterrupted, match="killed by signal 15"):
+        byoc_dep.resolve_requirements_into(
+            src, tmp_path / "build", "PYTHON_3_11", lambda _m: None, pip_runner=runner
+        )
+
+
+def test_resolve_requirements_silent_failure_names_the_exit_status(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "requirements.txt").write_text("requests>=2,<3\n")
+
+    def runner(args, **_kw):
+        if "compile" in args:
+            Path(args[args.index("-o") + 1]).write_text(
+                "requests==2.32.3 \\\n  --hash=sha256:deadbeef\n"
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    (tmp_path / "build").mkdir()
+    with pytest.raises(RuntimeError, match=r"failed \(exit status 1\)"):
+        byoc_dep.resolve_requirements_into(
+            src, tmp_path / "build", "PYTHON_3_11", lambda _m: None, pip_runner=runner
+        )
+
+
 def test_resolve_requirements_refuses_boundary_violations(tmp_path):
     """An uploaded requirements.txt cannot pull from outside the platform index."""
     src = tmp_path / "src"
@@ -792,7 +894,7 @@ def test_package_stage_container_source_uses_codebuild(monkeypatch):
     codebuild = StubCodeBuild()
     _client_router(monkeypatch, {"s3": s3, "codebuild": codebuild, "ecr": StubEcr()})
     monkeypatch.setattr(
-        "app.deployer.container.get_settings",
+        "app.deployer.image_build.get_settings",
         lambda: SimpleNamespace(image_scan_enabled=False),
     )
     _seed_upload(s3, "u2", {"Dockerfile": b"FROM python:3.13-slim\n", "main.py": SDK_MAIN})
@@ -828,7 +930,7 @@ def test_package_stage_container_source_ships_platform_buildspec(monkeypatch):
 
     _client_router(monkeypatch, {"s3": s3, "codebuild": StubCodeBuild(), "ecr": StubEcr()})
     monkeypatch.setattr(
-        "app.deployer.container.get_settings",
+        "app.deployer.image_build.get_settings",
         lambda: SimpleNamespace(image_scan_enabled=False),
     )
     _seed_upload(s3, "u2", {
@@ -846,7 +948,7 @@ def test_package_stage_container_source_ships_platform_buildspec(monkeypatch):
     source = s3.objects[("bkt", "builds/byoc-agent/source.zip")]
     with zipfile.ZipFile(io.BytesIO(source)) as zf:
         shipped = zf.read("buildspec.yml")
-    from app.deployer.container import platform_buildspec_path
+    from app.deployer.image_build import platform_buildspec_path
 
     assert shipped == platform_buildspec_path().read_bytes()
     assert b"evil" not in shipped
@@ -905,10 +1007,14 @@ def test_describe_image_refuses_other_account():
 
 
 class StubRuntimeControl:
-    def __init__(self):
+    def __init__(self, existing: list[dict] | None = None):
         self.created_with = None
         self.updated_with = None
         self.deleted = []
+        # runtimes that already exist in the account (ListAgentRuntimes summaries,
+        # looked up again through GetAgentRuntime) — N10v2-bug1 adoption tests
+        self.existing: list[dict] = list(existing or [])
+        self.listed = 0
         self.exceptions = SimpleNamespace(
             ResourceNotFoundException=type("ResourceNotFoundException", (Exception,), {})
         )
@@ -923,7 +1029,17 @@ class StubRuntimeControl:
         return {"agentRuntimeId": kwargs["agentRuntimeId"], "agentRuntimeArn": "arn:rt-1",
                 "agentRuntimeVersion": "2", "status": "UPDATING"}
 
+    def list_agent_runtimes(self, **_kwargs):
+        self.listed += 1
+        return {"agentRuntimes": [dict(r) for r in self.existing]}
+
     def get_agent_runtime(self, agentRuntimeId):
+        for runtime in self.existing:
+            if runtime["agentRuntimeId"] == agentRuntimeId:
+                statuses = runtime.get("statuses")
+                if statuses:  # scripted CREATING → READY walk
+                    runtime["status"] = statuses.pop(0) if len(statuses) > 1 else statuses[0]
+                return {k: v for k, v in runtime.items() if k != "statuses"}
         return {"agentRuntimeId": agentRuntimeId, "agentRuntimeArn": "arn:rt-1",
                 "agentRuntimeVersion": "1", "status": "READY"}
 
@@ -960,6 +1076,10 @@ def test_deploy_stage_code_zip_payload(monkeypatch):
     assert stub.created_with["environmentVariables"] == {
         "MODEL_ID": "custom.model",
         "ALLOWED_MODEL_IDS": DEFAULT_MODEL_ID,  # no list ⇒ the primary alone
+        "LAUNCHPAD_MODEL_REGION": "us-west-2",
+        "LAUNCHPAD_MODEL_CREDENTIAL": "launchpad-global-bedrock",
+        "LAUNCHPAD_BUNDLE_BUCKET": "bkt",  # routed config bundles (N12)
+        "LAUNCHPAD_AGENT_ID": agent_id,  # every runtime names itself (N12-obs33)
     }
     assert _get_agent(agent_id).resource_id == "rt-1"
 
@@ -970,7 +1090,7 @@ def test_deploy_stage_injects_model_id_when_env_has_none(monkeypatch):
     stub = StubRuntimeControl()
     monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: stub)
     spec = AgentSpec(**_byoc_spec(
-        model_id="global.anthropic.claude-haiku-4-5",
+        model_id="global.moonshotai.kimi-k3",
         memory={"short_term": False, "long_term": False},
     ))
     agent_id, dep_id = _mk_agent(spec)
@@ -982,9 +1102,9 @@ def test_deploy_stage_injects_model_id_when_env_has_none(monkeypatch):
 
     byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
     env = stub.created_with["environmentVariables"]
-    assert env["MODEL_ID"] == "global.anthropic.claude-haiku-4-5"
+    assert env["MODEL_ID"] == "global.moonshotai.kimi-k3"
     # without an allowed_models list the union is just the primary
-    assert env["ALLOWED_MODEL_IDS"] == "global.anthropic.claude-haiku-4-5"
+    assert env["ALLOWED_MODEL_IDS"] == "global.moonshotai.kimi-k3"
 
 
 def test_deploy_stage_injects_allowed_model_ids_list(monkeypatch):
@@ -992,7 +1112,7 @@ def test_deploy_stage_injects_allowed_model_ids_list(monkeypatch):
     monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: stub)
     spec = AgentSpec(**_byoc_spec(
         byoc={"artifact_kind": "code_zip", "upload_id": "u1",
-              "allowed_models": ["us.model.one", "us.model.two"]},
+              "allowed_models": ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"]},
         memory={"short_term": False, "long_term": False},
     ))
     agent_id, dep_id = _mk_agent(spec)
@@ -1004,8 +1124,8 @@ def test_deploy_stage_injects_allowed_model_ids_list(monkeypatch):
 
     byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
     env = stub.created_with["environmentVariables"]
-    assert env["MODEL_ID"] == "us.model.one"  # primary = allowed_models[0]
-    assert env["ALLOWED_MODEL_IDS"] == "us.model.one,us.model.two"
+    assert env["MODEL_ID"] == "global.zai.glm-5.3"  # primary = allowed_models[0]
+    assert env["ALLOWED_MODEL_IDS"] == "global.zai.glm-5.3,global.moonshotai.kimi-k3"
 
 
 def test_deploy_stage_user_allowed_model_ids_wins(monkeypatch):
@@ -1013,7 +1133,7 @@ def test_deploy_stage_user_allowed_model_ids_wins(monkeypatch):
     monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: stub)
     spec = AgentSpec(**_byoc_spec(
         byoc={"artifact_kind": "code_zip", "upload_id": "u1",
-              "allowed_models": ["us.model.one", "us.model.two"]},
+              "allowed_models": ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"]},
         env={"ALLOWED_MODEL_IDS": "my,own,list"},
         memory={"short_term": False, "long_term": False},
     ))
@@ -1027,7 +1147,7 @@ def test_deploy_stage_user_allowed_model_ids_wins(monkeypatch):
     byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
     env = stub.created_with["environmentVariables"]
     assert env["ALLOWED_MODEL_IDS"] == "my,own,list"
-    assert env["MODEL_ID"] == "us.model.one"  # injection of the primary is independent
+    assert env["MODEL_ID"] == "global.zai.glm-5.3"  # injection of the primary is independent
 
 
 def test_deploy_stage_container_image_payload(monkeypatch):
@@ -1097,6 +1217,140 @@ def test_resumed_deploy_reconciles_the_per_agent_role(monkeypatch, mode, kind):
     assert role_arn != RESOURCES["execution_role_arn"]
     assert len(iam.roles) == 1
     assert any(call.startswith("get_role:") for call in iam.calls)
+
+
+def _existing_runtime(name: str, *, runtime_id="rt-old", role_arn=None, statuses=None,
+                      status="READY") -> dict:
+    out = {"agentRuntimeId": runtime_id, "agentRuntimeArn": f"arn:{runtime_id}",
+           "agentRuntimeName": name, "agentRuntimeVersion": "1", "status": status}
+    if role_arn:
+        out["roleArn"] = role_arn
+    if statuses:
+        out["statuses"] = list(statuses)
+    return out
+
+
+def _provisioned(monkeypatch, iam: StubIam, stub: StubRuntimeControl):
+    """A BYOC agent whose provision stage ran once (role exists, trust+policy right)."""
+    _client_router(monkeypatch, {"iam": iam})
+    monkeypatch.setattr(byoc_dep, "control_client", lambda _ws: stub)
+    monkeypatch.setattr(
+        byoc_dep, "get_settings", lambda: SimpleNamespace(per_agent_execution_roles=True),
+    )
+    agent_id, dep_id = _mk_agent(AgentSpec(**_byoc_spec(
+        memory={"short_term": False, "long_term": False})))
+    workspace = ws_ctx(RESOURCES, account_id="123456789012")
+    first = _stage_ctx(agent_id, dep_id, workspace)
+    byoc_dep._stage_provision(first, _get_agent(agent_id))
+    return agent_id, dep_id, workspace, first.scratch["execution_role_arn"]
+
+
+# N10v2-bug1 (live, 2026-10-10): CreateAgentRuntime was accepted, the backend restarted
+# while the runtime was CREATING, and the resumed `deploy` stage re-ran provision →
+# UpdateAssumeRolePolicy → AccessDenied; a naive fix would then have issued a SECOND
+# CreateAgentRuntime. The resumed stage must adopt the runtime that already exists for
+# this agent, write nothing to IAM, and converge on READY.
+def test_resumed_deploy_adopts_the_runtime_created_before_the_restart(monkeypatch):
+    from app.services.agent_iam import runtime_name_base
+
+    iam = StubIam()
+    stub = StubRuntimeControl()
+    agent_id, dep_id, workspace, role_arn = _provisioned(monkeypatch, iam, stub)
+    # the runtime the dead process created under this agent's deterministic base name
+    stub.existing.append(_existing_runtime(
+        f"{runtime_name_base('byoc-agent')}_ab12cd", role_arn=role_arn,
+        statuses=["CREATING", "CREATING", "READY"],
+    ))
+    iam_writes_before = [c for c in iam.calls if c.startswith(("update_trust:", "put_policy:"))]
+
+    real_wait = rt.wait_runtime_ready
+    monkeypatch.setattr(rt, "wait_runtime_ready",
+                        lambda client, rid, **kw: real_wait(
+                            client, rid, sleeper=lambda _s: None, **kw))
+    resumed = _stage_ctx(agent_id, dep_id, workspace)  # fresh process: empty scratch
+    logs: list[str] = []
+    resumed.log = logs.append
+    result = byoc_dep._stage_deploy(resumed, _get_agent(agent_id))
+
+    assert stub.created_with is None, "a second CreateAgentRuntime was issued"
+    row = _get_agent(agent_id)
+    assert row.resource_id == "rt-old" and row.arn == "arn:rt-old"
+    assert result.detail.startswith("READY · arn:rt-old")
+    iam_writes = [c for c in iam.calls if c.startswith(("update_trust:", "put_policy:"))]
+    assert iam_writes == iam_writes_before, "the resumed provision wrote to IAM"
+    assert any("adopt" in line and "rt-old" in line for line in logs)
+
+
+def test_a_same_base_runtime_on_another_role_is_not_adopted(monkeypatch):
+    """Base names are not unique (`a-b` and `a_b` share one); the runtime's roleArn
+    tells this agent's runtime from a neighbour's — a neighbour's is left alone and a
+    fresh runtime is created as before."""
+    from app.services.agent_iam import runtime_name_base
+
+    iam = StubIam()
+    stub = StubRuntimeControl()
+    agent_id, dep_id, workspace, _role_arn = _provisioned(monkeypatch, iam, stub)
+    stub.existing.append(_existing_runtime(
+        f"{runtime_name_base('byoc-agent')}_ffffff", role_arn="arn:aws:iam::1:role/other",
+    ))
+    byoc_dep._stage_deploy(_stage_ctx(agent_id, dep_id, workspace), _get_agent(agent_id))
+    assert stub.created_with is not None
+    assert _get_agent(agent_id).resource_id == "rt-1"
+
+
+def test_a_same_base_runtime_owned_by_another_ledger_row_is_not_adopted(monkeypatch):
+    """Shared-role deployments have one roleArn for every agent: the ledger is the
+    second guard — a runtime some other row already records is never taken over."""
+    from app.services.agent_iam import runtime_name_base
+
+    iam = StubIam()
+    stub = StubRuntimeControl()
+    agent_id, dep_id, workspace, role_arn = _provisioned(monkeypatch, iam, stub)
+    stub.existing.append(_existing_runtime(
+        f"{runtime_name_base('byoc-agent')}_123456", role_arn=role_arn,
+    ))
+    with SessionLocal() as db:
+        db.add(Agent(workspace_id="other-ws", name="byoc_agent", method="byoc",
+                     status="active", spec={}, resource_id="rt-old", arn="arn:rt-old"))
+        db.commit()
+    byoc_dep._stage_deploy(_stage_ctx(agent_id, dep_id, workspace), _get_agent(agent_id))
+    assert stub.created_with is not None
+    assert _get_agent(agent_id).resource_id == "rt-1"
+
+
+def test_a_failed_or_deleting_runtime_is_not_adopted(monkeypatch):
+    from app.services.agent_iam import runtime_name_base
+
+    iam = StubIam()
+    stub = StubRuntimeControl()
+    agent_id, dep_id, workspace, role_arn = _provisioned(monkeypatch, iam, stub)
+    base = runtime_name_base("byoc-agent")
+    stub.existing += [
+        _existing_runtime(f"{base}_aaaaaa", runtime_id="rt-dead", role_arn=role_arn,
+                          status="CREATE_FAILED"),
+        _existing_runtime(f"{base}_bbbbbb", runtime_id="rt-going", role_arn=role_arn,
+                          status="DELETING"),
+        _existing_runtime(f"{base}extra_cccccc", runtime_id="rt-longer", role_arn=role_arn),
+    ]
+    byoc_dep._stage_deploy(_stage_ctx(agent_id, dep_id, workspace), _get_agent(agent_id))
+    assert stub.created_with is not None
+    assert _get_agent(agent_id).resource_id == "rt-1"
+
+
+def test_a_denied_runtime_listing_falls_back_to_create(monkeypatch):
+    class NoList(StubRuntimeControl):
+        def list_agent_runtimes(self, **_kw):
+            raise RuntimeError("AccessDeniedException: bedrock-agentcore:ListAgentRuntimes")
+
+    iam = StubIam()
+    stub = NoList()
+    agent_id, dep_id, workspace, _ = _provisioned(monkeypatch, iam, stub)
+    ctx = _stage_ctx(agent_id, dep_id, workspace)
+    logs: list[str] = []
+    ctx.log = logs.append
+    byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
+    assert stub.created_with is not None
+    assert any("ListAgentRuntimes" in line for line in logs)
 
 
 def test_resumed_deploy_respects_explicit_shared_role_setting(monkeypatch):
@@ -1184,29 +1438,23 @@ def test_router_delete_dispatches_byoc(monkeypatch):
     calls = []
     monkeypatch.setattr(agents_router.byoc_method, "delete_agent_resources",
                         lambda agent, ws: calls.append(agent.id))
-    monkeypatch.setattr(agents_router.agent_iam, "delete_execution_role",
-                        lambda *a, **k: True)
+    # the residue steps (role, log groups, S3, snapshots, registry) have their own
+    # fakes in test_agent_teardown.py; here only the method dispatch is under test
+    monkeypatch.setattr(agents_router.teardown, "cleanup_residue", lambda *a, **k: [])
     agent = Agent(id="x1", workspace_id=DEFAULT_WORKSPACE_ID, name="byoc-agent",
-                  method="byoc", status="active", spec={})
-    assert agents_router._delete_agent_resources(agent, ws_ctx(RESOURCES)) is True
+                  method="byoc", status="active", spec={}, resource_id="byoc_rt-1")
+    report = agents_router._delete_agent_resources(agent, ws_ctx(RESOURCES))
+    assert report.aws_resource_deleted is True
+    assert [(s.step, s.status) for s in report.steps] == [("runtime", "deleted")]
     assert calls == ["x1"]
-
-
-# ── capability projections ───────────────────────────────────────────────────
-
-def test_byoc_capabilities_degrade_as_custom_source():
-    from app.optimization.service import canary_capability, experiment_capability
-
-    agent = SimpleNamespace(
-        method="byoc", status="active", arn="arn:aws:...:runtime/rt-1",
-        spec=_byoc_spec(), system_key=None,
-    )
-    exp = experiment_capability(agent)
-    assert exp["eligible"] is False
-    assert exp["reason_code"] == "custom-source-unverified"
-    can = canary_capability(agent)
-    assert can["eligible"] is False
-    assert can["reason_code"] == "custom-source-unverified"
+    # N16-obs76: a byoc agent whose deploy never provisioned has no runtime to report
+    never = Agent(id="x2", workspace_id=DEFAULT_WORKSPACE_ID, name="byoc-never",
+                  method="byoc", status="failed", spec={}, resource_id=None)
+    report = agents_router._delete_agent_resources(never, ws_ctx(RESOURCES))
+    assert report.aws_resource_deleted is False
+    assert [(s.step, s.status) for s in report.steps] == [("runtime", "skipped")]
+    assert report.skipped == ["runtime"] and report.removed == []
+    assert calls == ["x1", "x2"]  # the method delete still runs (staged upload objects)
 
 
 def test_create_code_runtime_default_contract_unchanged():

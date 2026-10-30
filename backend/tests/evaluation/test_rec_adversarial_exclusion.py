@@ -1,14 +1,13 @@
-"""AgentCore prompt recommendations leave reviewed adversarial-test sessions out.
+"""Recommendations leave reviewed adversarial-test sessions out of the evidence (N12 E2-4).
 
-AgentCore Recommendations refuses traces that contain prompt-injection content (live
-2026-10-03: one injection scenario failed a whole run's recommendation, the other 15
-sessions completed), so a scenario whose golden test is marked ``adversarial`` stays
-evaluated but its session is not sent; the other sessions' spans go inline.
+A prompt-injection session teaches the optimizer the wrong lesson (the Global job refused
+such traces outright), so a scenario whose golden test is marked ``adversarial`` stays
+evaluated but its ``eval_results`` rows are not shipped to the worker.
 """
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalDataset
-from tests.evaluation.test_run_recommendations import BATCH_ARN, _run, _span, _stub
+from tests.evaluation.test_run_recommendations import SESSIONS, _agent, _run, _stub
 
 
 def _item(scenario_id: str, *, adversarial: bool = False) -> dict:
@@ -32,80 +31,61 @@ def _dataset(items: list[dict]) -> str:
         db.close()
 
 
-SESSIONS = ["sess-0001", "sess-0002", "sess-0003"]
-
-
 def _start(client, run_id):
     return client.post(f"/api/eval/runs/{run_id}/recommendations",
                        json={"kinds": ["system_prompt"], "system_prompt": "Help."})
 
 
 def test_adversarial_sessions_are_left_out_and_recorded(client, monkeypatch):
-    spans = {sid: [_span(sid, "search")] for sid in SESSIONS}
-    _, data = _stub(monkeypatch, spans=spans)
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
+    executor = _stub(monkeypatch)
     ds = _dataset([_item("S1"), _item("S2", adversarial=True), _item("S3")])
-    run_id = _run("", session_ids=SESSIONS, dataset_id=ds)
+    run_id = _run(_agent(), session_ids=SESSIONS, dataset_id=ds)
 
     res = _start(client, run_id)
 
     assert res.status_code == 201, res.text
-    config = data.start_recommendation.call_args.kwargs["recommendationConfig"]
-    traces = config["systemPromptRecommendationConfig"]["agentTraces"]
-    assert traces == {"sessionSpans": spans["sess-0001"] + spans["sess-0003"]}
-    assert [q["sessions"] for q in data.queries] == [["sess-0001", "sess-0003"]]
+    spec = executor.submitted[0].spec
+    assert sorted(e["session_id"] for e in spec["evidence"]) == ["sess-0001", "sess-0003"]
+    assert spec["stats"]["records"] == 2
     excluded = [{"session_id": "sess-0002", "scenario_id": "S2"}]
-    assert res.json()["recommendations"][0]["result"] == {"excluded_sessions": excluded}
+    assert res.json()["recommendations"][0]["result"]["excluded_sessions"] == excluded
 
-    # the AWS result replaces the payload, never the record of what was left out
-    data.get_recommendation.return_value = {"status": "COMPLETED", "recommendationResult": {
-        "systemPromptRecommendationResult": {"recommendedSystemPrompt": "New.",
-                                             "explanation": "Why."}}}
+    # the worker's result replaces the payload, never the record of what was left out
+    executor.complete(executor.submitted[0].job_id, [], summary={"recommendation": {
+        "status": "COMPLETED", "recommended_prompt": "New.", "explanation": "Why.", "meta": {}}})
     row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-    assert row["result"] == {"excluded_sessions": excluded,
-                             "recommended_prompt": "New.", "explanation": "Why."}
+    assert row["result"] == {"provider": "gepa_lite", "provider_model_id": "global.zai.glm-5.3",
+                             "excluded_sessions": excluded, "recommended_prompt": "New.",
+                             "explanation": "Why.", "provider_meta": {}}
 
 
-def test_without_marked_sessions_the_batch_reference_is_kept(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
+def test_without_marked_sessions_every_session_is_evidence(client, monkeypatch):
+    executor = _stub(monkeypatch)
     ds = _dataset([_item("S1"), _item("S2"), _item("S3")])
 
-    res = _start(client, _run("", session_ids=SESSIONS, dataset_id=ds))
+    res = _start(client, _run(_agent(), session_ids=SESSIONS, dataset_id=ds))
 
     assert res.status_code == 201, res.text
-    config = data.start_recommendation.call_args.kwargs["recommendationConfig"]
-    assert config["systemPromptRecommendationConfig"]["agentTraces"] == {
-        "batchEvaluation": {"batchEvaluationArn": BATCH_ARN}}
-    assert data.queries == []
+    assert len(executor.submitted[0].spec["evidence"]) == 3
+    assert "excluded_sessions" not in res.json()["recommendations"][0]["result"]
 
 
 def test_a_dataset_that_no_longer_pairs_with_the_sessions_excludes_nothing(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
+    executor = _stub(monkeypatch)
     ds = _dataset([_item("S1", adversarial=True), _item("S2")])  # edited: 2 items, 3 sessions
 
-    res = _start(client, _run("", session_ids=SESSIONS, dataset_id=ds))
+    res = _start(client, _run(_agent(), session_ids=SESSIONS, dataset_id=ds))
 
     assert res.status_code == 201, res.text
-    config = data.start_recommendation.call_args.kwargs["recommendationConfig"]
-    assert "batchEvaluation" in config["systemPromptRecommendationConfig"]["agentTraces"]
+    assert len(executor.submitted[0].spec["evidence"]) == 3
 
 
-def test_a_run_of_only_adversarial_sessions_is_refused_before_aws(client, monkeypatch):
-    _, data = _stub(monkeypatch)
+def test_a_run_of_only_adversarial_sessions_is_refused_before_any_job(client, monkeypatch):
+    executor = _stub(monkeypatch)
     ds = _dataset([_item(s, adversarial=True) for s in ("S1", "S2", "S3")])
 
-    res = _start(client, _run("", session_ids=SESSIONS, dataset_id=ds))
+    res = _start(client, _run(_agent(), session_ids=SESSIONS, dataset_id=ds))
 
     assert res.status_code == 409
     assert res.json()["code"] == "recommendation.only_adversarial_sessions"
-    data.start_recommendation.assert_not_called()
-
-
-def test_the_golden_test_snapshot_carries_the_flag_only_when_set():
-    from app.assistant.evaluation_plan import golden_test_snapshot
-
-    assert golden_test_snapshot({"id": "G1", "input": "x", "adversarial": True})["adversarial"]
-    assert "adversarial" not in golden_test_snapshot({"id": "G1", "input": "x",
-                                                      "adversarial": False})
+    assert executor.submitted == []

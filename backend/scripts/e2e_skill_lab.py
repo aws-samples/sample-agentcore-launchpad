@@ -125,7 +125,7 @@ def do_eval() -> int:
             "--skill", str(skill_dir),
             "--tasks", str(tasks_file),
             "--out_root", str(out_root),
-            "--target_backend", "claude_code_exec",
+            "--target_backend", "opencode_exec",
             "--model", settings.skill_lab_target_model_id,
             "--optimizer_backend", "bedrock_chat",
             "--optimizer_model", settings.skill_lab_judge_model_id,

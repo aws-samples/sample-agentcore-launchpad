@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_list_filter_response/v1",
+  "title": "I4 POST /v1/list-filter 200 response",
+  "type": "object",
+  "properties": {
+    "visible": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["visible"],
+  "additionalProperties": false
+}

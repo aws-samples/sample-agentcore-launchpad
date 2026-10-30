@@ -1,0 +1,23 @@
+{
+ "seam": "console-api",
+ "case": "agents_delete_seam-probe-unsupported",
+ "response_or_error": {
+  "status": 409,
+  "headers_subset": {
+   "Content-Type": "application/json"
+  },
+  "body": {
+   "code": "aws.conflict",
+   "message": "The agent is currently being modified by another operation. Current status: CREATING. Wait and try again.",
+   "detail": {
+    "aws_error_code": "ConflictException",
+    "operation": "DeleteAgentRuntime"
+   }
+  }
+ },
+ "status": 409,
+ "elapsed_s": 0.739,
+ "captured_at": "2026-10-19T09:19:41Z",
+ "notes": "Cleanup of my accidental 202 (seam probe); the envelope doubles as the delete-while-deploying / delete-after-failed-deploy shape.",
+ "source": "t1 console API over EIP, admin session, aaacb0a6"
+}

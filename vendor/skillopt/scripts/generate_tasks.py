@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SkillOpt skilleval: generate an evaluation task set for one or more skills.
 
-Points a claude/codex CLI agent at skill documents and asks it to author
+Points the OpenCode CLI agent at skill documents and asks it to author
 ``count`` skilleval task items (id/question/rubric[/files/task_type]).  The
 agent WRITES ``generated_tasks.json`` into its working directory — files are
 far more reliable than parsing JSON out of chatty stdout.  The file is then
@@ -11,9 +11,9 @@ failure is fed back to the agent for one retry before the run fails.
 Usage
 -----
     python3 scripts/generate_tasks.py \
-        --skill ~/.claude/skills/my-skill \
-        --skill ~/.claude/skills/related-skill \
-        --backend claude_code_exec \
+        --skill ~/.agents/skills/my-skill \
+        --skill ~/.agents/skills/related-skill \
+        --backend opencode_exec \
         --count 5 \
         --out_root outputs/taskgen_myskill
 """
@@ -35,10 +35,10 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from skillopt.envs.skilleval.dataloader import load_tasks
-from skillopt.model.codex_harness import run_claude_code_exec, run_codex_exec
+from skillopt.model.opencode_backend import run_opencode_exec
 from skillopt.model.common import default_model_for_backend
 
-EXEC_BACKENDS = ("claude_code_exec", "codex_exec")
+EXEC_BACKENDS = ("opencode_exec",)
 OUTPUT_FILENAME = "generated_tasks.json"
 MAX_SKILL_CHARS = 16000
 MAX_TOTAL_SKILL_CHARS = 64000
@@ -85,11 +85,10 @@ def parse_args() -> argparse.Namespace:
         help="Skill to generate tasks for: a markdown file, or a skill directory "
              "containing SKILL.md. Repeat for a unified multi-skill task set.",
     )
-    p.add_argument("--backend", type=str, default="claude_code_exec", choices=EXEC_BACKENDS,
+    p.add_argument("--backend", type=str, default="opencode_exec", choices=EXEC_BACKENDS,
                    help="Exec backend that authors the tasks")
     p.add_argument("--model", type=str, default="",
-                   help="Model override; empty = backend default "
-                        "(codex_exec: the codex CLI's own configured default)")
+                   help="Model override; empty = backend default")
     p.add_argument("--count", type=int, default=5,
                    help="Number of tasks to generate")
     p.add_argument(
@@ -715,16 +714,12 @@ def validate_generated_tasks(
 
 def run_agent(backend: str, work_dir: str, prompt: str, model: str, timeout: int) -> str:
     """Dispatch one generation attempt to the exec backend; returns the response text."""
-    if backend == "codex_exec":
-        response, _raw = run_codex_exec(
-            work_dir=work_dir, prompt=prompt, model=model, timeout=timeout,
-        )
-    else:
-        response, _raw = run_claude_code_exec(
-            work_dir=work_dir, prompt=prompt, model=model, timeout=timeout,
-            allowed_tools="Read,Bash,Write,Edit,Glob,Grep",
-            allow_file_edits=True,
-        )
+    if backend not in EXEC_BACKENDS:
+        raise ValueError(f"Unsupported exec backend: {backend!r}")
+    response, _raw = run_opencode_exec(
+        work_dir=work_dir, prompt=prompt, model=model, timeout=timeout,
+        allow_file_edits=True,
+    )
     return response
 
 
@@ -763,10 +758,10 @@ def main() -> None:
     if len(set(skill_names)) != len(skill_names):
         sys.exit(f"error: skill names must be unique, got {skill_names}")
     model = args.model
-    if not model and args.backend != "codex_exec":
+    if not model:
         model = default_model_for_backend(args.backend)
 
-    out_root = os.path.abspath(args.out_root)  # codex -C double-resolves relative paths
+    out_root = os.path.abspath(args.out_root)  # the exec CLI resolves paths from its project dir
     work_dir = os.path.join(out_root, "gen_workspace")
     os.makedirs(work_dir, exist_ok=True)
     out_file = os.path.join(work_dir, OUTPUT_FILENAME)

@@ -3,8 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import app.core.config as config_mod
 from app.core.config import Settings, load_yaml_config
+from app.core.features import FEATURES
 
 
 def test_defaults(tmp_path, monkeypatch):
@@ -18,13 +21,21 @@ def test_defaults(tmp_path, monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     s = Settings()
-    assert s.region == "us-west-2"
+    assert s.region == "cn-northwest-1"
+    assert s.model_region == "us-west-2"
+    assert s.features == list(FEATURES)
     assert s.database_url.startswith("sqlite:///")
     assert s.app_name == "AgentCore Launchpad"
     assert s.auth_username == "admin"
     assert s.auth_password is None
     assert s.auth_cookie_secure is False
     assert s.agentcore_read_timeout_s == 1000
+
+
+def test_default_spans_source_is_both():
+    from app.core.config import Settings
+
+    assert Settings().observability_spans_source == "both"
 
 
 def test_yaml_source_feeds_settings(tmp_path, monkeypatch):
@@ -66,11 +77,13 @@ def test_agentcore_read_timeout_from_environment(monkeypatch):
 
 def test_test_bootstrap_does_not_inherit_host_yaml_or_cached_settings(tmp_path):
     host = tmp_path / "host-launchpad.yaml"
-    content = ("region: us-east-1\nstudio_exec_backend: docker\nmodel_prices_refresh_hours: 1\n"
+    content = ("region: us-east-1\nstudio_exec_backend: docker\n"
                "resources:\n  artifacts_bucket: host-production-bucket\n")
     host.write_text(content)
     script = """
 import sys
+
+import pytest
 from pathlib import Path
 from app.core import config
 
@@ -83,12 +96,9 @@ import tests.conftest
 from app.core.db import engine
 
 assert config.CONFIG_FILE != host
-assert config.get_settings().region == "us-west-2"
+assert config.get_settings().region == "cn-northwest-1"
 assert config.get_settings().studio_exec_backend == "subprocess"
 assert config.get_settings().resources["artifacts_bucket"] == "launchpad-artifacts-test"
-from app.services.model_prices import start_auto_refresh
-assert config.get_settings().model_prices_refresh_hours == 0
-assert start_auto_refresh() is None
 assert str(engine.url) == config.get_settings().database_url
 assert "launchpad-test-" in str(engine.url)
 """
@@ -97,7 +107,40 @@ assert "launchpad-test-" in str(engine.url)
     result = subprocess.run(
         [sys.executable, "-c", script, str(host)],
         cwd=Path(__file__).resolve().parents[1],
-        env=env, capture_output=True, text=True, timeout=30,
+        # a cold app import can exceed 30 s while several verify gates share the machine
+        env=env, capture_output=True, text=True, timeout=180,
     )
     assert result.returncode == 0, result.stderr
     assert host.read_text() == content
+
+
+def test_default_mirrors_are_the_china_pypi_and_npm_mirrors():
+    from app.core.config import Settings
+
+    s = Settings()
+    assert s.pip_index_url == "https://pypi.tuna.tsinghua.edu.cn/simple"
+    assert s.pip_extra_index_url == ""  # N11-obs25: secondary index is opt-in
+    # N11-r3-bug7: the BUILD mirror is a different knob from the HOST mirror — tuna
+    # answers CodeBuild's NAT egress with an immediate 4xx while the EC2 hosts get 200,
+    # so CodeBuild resolves from NJU (uv-complete) with Tencent as the fallback.
+    assert s.codebuild_pip_index_url == "https://mirror.nju.edu.cn/pypi/web/simple"
+    assert s.codebuild_pip_fallback_index_url == "https://mirrors.cloud.tencent.com/pypi/simple"
+    assert s.codebuild_pip_index_url != s.pip_index_url
+    assert s.npm_registry == "https://registry.npmmirror.com"
+    assert s.base_image_mirror_enabled is False
+    assert s.base_image_mirror_prefix == "base"
+
+
+def test_password_policy_defaults_and_floor():
+    """r14-c (N14-obs3): strict by default; the length floor is 6 (was 8) and a lower
+    value is still refused the way the old floor was — at settings load."""
+    import pydantic
+
+    assert Settings().auth_password_policy == "strict"
+    assert Settings().auth_password_min_length == 12
+    assert Settings(auth_password_min_length=6).auth_password_min_length == 6
+    assert Settings(auth_password_policy="relaxed").auth_password_policy == "relaxed"
+    with pytest.raises(pydantic.ValidationError):
+        Settings(auth_password_min_length=5)
+    with pytest.raises(pydantic.ValidationError):
+        Settings(auth_password_policy="lenient")

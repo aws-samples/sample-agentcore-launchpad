@@ -178,7 +178,7 @@ export function mirrorTaskErrors(drafts: Drafts, t: TFunction): Record<string, R
           path.startsWith("~") ||
           path.includes("\\") ||
           path.split("/").some((part) => !part || part === "." || part === "..") ||
-          [".agents", ".claude", ".codex", ".git", "task.md"].includes(
+          [".agents", ".opencode", ".git", "task.md"].includes(
             path.split("/")[0]?.toLowerCase(),
           );
         if (unsafe) {

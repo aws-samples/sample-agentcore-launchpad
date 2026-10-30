@@ -1,0 +1,6 @@
+# Evaluation worker (N12 plan §B.0) — resolved for aarch64 / Python 3.13 in requirements.lock.
+strands-agents[otel,openai]==1.47.0
+bedrock-agentcore==1.17.*
+boto3>=1.43.109,<2
+strands-agents-evals==1.5.0
+strands-harness-optimizer==0.0.1

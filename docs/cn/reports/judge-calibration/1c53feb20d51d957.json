@@ -1,0 +1,1644 @@
+{
+ "fingerprint": "1c53feb20d51d957",
+ "meta": {
+  "generated_at": "2026-10-26T19:05:26+00:00",
+  "sha": "0f9bcb7ddde6 +dirty",
+  "fingerprint": "1c53feb20d51d957",
+  "mini": false,
+  "tier": "easy",
+  "pairs": 88,
+  "pair_set": 88,
+  "reps": 3,
+  "models": [
+   "global.zai.glm-5.3",
+   "global.moonshotai.kimi-k3"
+  ],
+  "evaluators": null,
+  "langs": {
+   "zh": 49,
+   "en": 39
+  }
+ },
+ "summary": {
+  "per_evaluator": [
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 4,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.5625
+    },
+    "anchor": {
+     "items": 4,
+     "bad_max": 0.5,
+     "hit_rate": 0.5,
+     "mean_score": 0.4375
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.5,
+     "0.5": 0.5,
+     "0.25": 0.25
+    },
+    "evaluator": "Builtin.Coherence",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 8,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.7,
+     "kappa": 0.5,
+     "false_pass_rate": 0.5,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0442,
+    "verbosity": {
+     "items": 4,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": null,
+    "language": {
+     "twins": 4,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "self_contradiction": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 4,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.875
+    },
+    "anchor": {
+     "items": 4,
+     "bad_max": 0.5,
+     "hit_rate": 1.0,
+     "mean_score": 0.125
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 1.0,
+     "0.5": 1.0,
+     "0.25": 0.5
+    },
+    "evaluator": "Builtin.Coherence",
+    "model": "global.zai.glm-5.3",
+    "items": 8,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.7,
+     "kappa": 1.0,
+     "false_pass_rate": 0.0,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0442,
+    "verbosity": {
+     "items": 4,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": null,
+    "language": {
+     "twins": 4,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "self_contradiction": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 3,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.8333
+    },
+    "anchor": {
+     "items": 3,
+     "bad_max": 0.0,
+     "hit_rate": 0.6667,
+     "mean_score": 0.1667
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 0.6667
+    },
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 6,
+    "bar": 0.7,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0393,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 2,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "padded": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 3,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 1.0
+    },
+    "anchor": {
+     "items": 3,
+     "bad_max": 0.0,
+     "hit_rate": 1.0,
+     "mean_score": 0.0
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 1.0
+    },
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.zai.glm-5.3",
+    "items": 6,
+    "bar": 0.7,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 2,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "padded": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 36,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.6389
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 0.2778
+    },
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 72,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0098,
+    "verbosity": {
+     "items": 36,
+     "verdict_changed": 1,
+     "change_rate": 0.0278,
+     "mean_score_delta": -0.0139
+    },
+    "position": {
+     "items": 14,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 16,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "fact_wrong": {
+      "items": 72,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 36,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.6389
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 0.2778
+    },
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "items": 72,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": {
+     "items": 36,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 14,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0357
+    },
+    "language": {
+     "twins": 16,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "fact_wrong": {
+      "items": 72,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 47,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.6277
+    },
+    "anchor": {
+     "items": 8,
+     "bad_max": 0.5,
+     "hit_rate": 1.0,
+     "mean_score": 0.0625
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.7234,
+     "0.5": 0.5745,
+     "0.25": 0.2128
+    },
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 94,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.75,
+     "kappa": 0.7234,
+     "false_pass_rate": 0.2766,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0147,
+    "verbosity": {
+     "items": 47,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 18,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0139
+    },
+    "language": {
+     "twins": 22,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "fact_wrong": {
+      "items": 72,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_not_used": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_source": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 47,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.5745
+    },
+    "anchor": {
+     "items": 8,
+     "bad_max": 0.5,
+     "hit_rate": 1.0,
+     "mean_score": 0.0
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.6383,
+     "0.5": 0.4255,
+     "0.25": 0.234
+    },
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "items": 94,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.75,
+     "kappa": 0.6383,
+     "false_pass_rate": 0.3617,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.005,
+    "verbosity": {
+     "items": 47,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 18,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0139
+    },
+    "language": {
+     "twins": 22,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "fact_wrong": {
+      "items": 72,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_not_used": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_source": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 24,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.1667,
+    "false_fail_rate": 0.0,
+    "kappa": 0.8333,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.1667,
+    "rerun_score_std": 0.0786,
+    "verbosity": {
+     "items": 12,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 2,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 10,
+     "agree_rate": 0.8,
+     "accuracy": {
+      "zh": 0.9286,
+      "en": 0.9
+     }
+    },
+    "by_defect": {
+     "other_person_data": {
+      "items": 8,
+      "false_pass": 1,
+      "false_fail": 0
+     },
+     "tool_not_used": {
+      "items": 16,
+      "false_pass": 1,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.zai.glm-5.3",
+    "items": 24,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": {
+     "items": 12,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 2,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 10,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "other_person_data": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_not_used": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 13,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.5383
+    },
+    "anchor": {
+     "items": 13,
+     "bad_max": 0.333,
+     "hit_rate": 1.0,
+     "mean_score": 0.2947
+    },
+    "kappa_at": {
+     "1.0": 0.0,
+     "0.833": 1.0,
+     "0.667": 1.0,
+     "0.5": 1.0
+    },
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 26,
+    "bar": 0.7,
+    "lenient": {
+     "bar": 0.667,
+     "kappa": 1.0,
+     "false_pass_rate": 0.0,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0135,
+    "verbosity": {
+     "items": 13,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 1,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 10,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "wrong_refusal": {
+      "items": 26,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 13,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.6665
+    },
+    "anchor": {
+     "items": 13,
+     "bad_max": 0.333,
+     "hit_rate": 1.0,
+     "mean_score": 0.1665
+    },
+    "kappa_at": {
+     "1.0": 0.0,
+     "0.833": 1.0,
+     "0.667": 1.0,
+     "0.5": 1.0
+    },
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.zai.glm-5.3",
+    "items": 26,
+    "bar": 0.7,
+    "lenient": {
+     "bar": 0.667,
+     "kappa": 1.0,
+     "false_pass_rate": 0.0,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0173,
+    "verbosity": {
+     "items": 13,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 1,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 10,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "wrong_refusal": {
+      "items": 26,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.Refusal",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 30,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0333,
+    "rerun_score_std": 0.0157,
+    "verbosity": {
+     "items": 15,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 1,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 12,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "other_person_data": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_refusal": {
+      "items": 26,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.Refusal",
+    "model": "global.zai.glm-5.3",
+    "items": 30,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": {
+     "items": 15,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "position": {
+     "items": 1,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 12,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "other_person_data": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_refusal": {
+      "items": 26,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 8,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.75
+    },
+    "anchor": {
+     "items": 8,
+     "bad_max": 0.25,
+     "hit_rate": 1.0,
+     "mean_score": 0.25
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.8902,
+     "0.5": 0.7765,
+     "0.25": 0.4099
+    },
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 19,
+    "bar": 0.7,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.125,
+    "false_fail_rate": 0.0,
+    "kappa": 0.8902,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0124,
+    "verbosity": null,
+    "position": {
+     "items": 1,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 0.8889
+     }
+    },
+    "by_defect": {
+     "control": {
+      "items": 3,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "half_off_topic": {
+      "items": 4,
+      "false_pass": 1,
+      "false_fail": 0
+     },
+     "off_topic": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "other_question": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 8,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.7812
+    },
+    "anchor": {
+     "items": 8,
+     "bad_max": 0.25,
+     "hit_rate": 1.0,
+     "mean_score": 0.2188
+    },
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 1.0,
+     "0.5": 0.7765,
+     "0.25": 0.4099
+    },
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.zai.glm-5.3",
+    "items": 19,
+    "bar": 0.7,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0526,
+    "rerun_score_std": 0.0062,
+    "verbosity": null,
+    "position": {
+     "items": 1,
+     "verdict_changed": 0,
+     "change_rate": 0.0,
+     "mean_score_delta": 0.0
+    },
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "control": {
+      "items": 3,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "half_off_topic": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "off_topic": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "other_question": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 10,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 5,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "control": {
+      "items": 2,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_repeated": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_unrelated": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.zai.glm-5.3",
+    "items": 10,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 5,
+     "agree_rate": 1.0,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "control": {
+      "items": 2,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_repeated": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "tool_unrelated": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   }
+  ],
+  "cross_judge": [
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Coherence",
+    "items": 8,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Conciseness",
+    "items": 6,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Correctness",
+    "items": 72,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Faithfulness",
+    "items": 94,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "items": 24,
+    "agree_rate": 0.9167,
+    "kappa": 0.8333,
+    "disagreements": [
+     {
+      "pair": "hr-notool-en",
+      "side": "bad",
+      "global.moonshotai.kimi-k3": "Yes",
+      "global.zai.glm-5.3": "No"
+     },
+     {
+      "pair": "other-salary-zh",
+      "side": "bad",
+      "global.moonshotai.kimi-k3": "Yes",
+      "global.zai.glm-5.3": "No"
+     }
+    ]
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Helpfulness",
+    "items": 26,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Refusal",
+    "items": 30,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.ResponseRelevance",
+    "items": 19,
+    "agree_rate": 0.9474,
+    "kappa": 0.8902,
+    "disagreements": [
+     {
+      "pair": "relevance-half-hr-en",
+      "side": "bad",
+      "global.moonshotai.kimi-k3": "Generally Yes",
+      "global.zai.glm-5.3": "Neutral/Mixed"
+     }
+    ]
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "items": 10,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   }
+  ],
+  "kappa_bar": 0.7,
+  "by_type": [
+   {
+    "defect": "control",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 6,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.zai.glm-5.3",
+    "good": 6,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "fact_wrong",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 108,
+    "bad": 108,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.662
+   },
+   {
+    "defect": "fact_wrong",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "good": 108,
+    "bad": 108,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.6389
+   },
+   {
+    "defect": "fact_wrong",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 108,
+    "bad": 108,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.3148,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5718
+   },
+   {
+    "defect": "fact_wrong",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 108,
+    "bad": 108,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.3796,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5093
+   },
+   {
+    "defect": "half_off_topic",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.5,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 0.5,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.375
+   },
+   {
+    "defect": "half_off_topic",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.zai.glm-5.3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.1667,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 0.8333,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.4583
+   },
+   {
+    "defect": "off_topic",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.8333
+   },
+   {
+    "defect": "off_topic",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.8333
+   },
+   {
+    "defect": "other_person_data",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.1667,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 0.8333,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "other_person_data",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.zai.glm-5.3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "other_person_data",
+    "evaluator": "Builtin.Refusal",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "other_person_data",
+    "evaluator": "Builtin.Refusal",
+    "model": "global.zai.glm-5.3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "other_question",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.9167
+   },
+   {
+    "defect": "other_question",
+    "evaluator": "Builtin.ResponseRelevance",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.9167
+   },
+   {
+    "defect": "padded",
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.9444
+   },
+   {
+    "defect": "padded",
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 1.0
+   },
+   {
+    "defect": "self_contradiction",
+    "evaluator": "Builtin.Coherence",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.3333,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.6875
+   },
+   {
+    "defect": "self_contradiction",
+    "evaluator": "Builtin.Coherence",
+    "model": "global.zai.glm-5.3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0833,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.8125
+   },
+   {
+    "defect": "tool_not_used",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.9271
+   },
+   {
+    "defect": "tool_not_used",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 1.0
+   },
+   {
+    "defect": "tool_not_used",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.125,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 0.875,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "tool_not_used",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.zai.glm-5.3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "tool_repeated",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "tool_repeated",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.zai.glm-5.3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "tool_unrelated",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "tool_unrelated",
+    "evaluator": "Builtin.ToolSelectionAccuracy",
+    "model": "global.zai.glm-5.3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "wrong_refusal",
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 39,
+    "bad": 39,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5469
+   },
+   {
+    "defect": "wrong_refusal",
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 39,
+    "bad": 39,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.6451
+   },
+   {
+    "defect": "wrong_refusal",
+    "evaluator": "Builtin.Refusal",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 39,
+    "bad": 39,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0256,
+    "lenient_false_pass_rate": null,
+    "kappa": 0.9744,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "wrong_refusal",
+    "evaluator": "Builtin.Refusal",
+    "model": "global.zai.glm-5.3",
+    "good": 39,
+    "bad": 39,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "wrong_source",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 1.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.25
+   },
+   {
+    "defect": "wrong_source",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 1.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.25
+   }
+  ]
+ }
+}

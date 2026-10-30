@@ -20,6 +20,9 @@ VENDOR_DEMO = (
 
 @pytest.fixture
 def lab(tmp_path, monkeypatch, client):
+    # the submit paths probe the hub's Global Bedrock bearer (N13-obs20) — hermetic, not the
+    # developer's shell env
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
     monkeypatch.setattr(taskset_svc, "TASKSETS_DIR", tmp_path / "tasksets")
     monkeypatch.setattr(
         taskset_svc, "get_settings", lambda: SimpleNamespace(skill_lab_python=sys.executable)
@@ -111,6 +114,7 @@ def test_taskgen_expansion_refuses_sample_targets(lab, monkeypatch):
     from app.skill_lab import jobs, runner
 
     monkeypatch.setattr(runner, "require_worker", lambda ws: {})
+    monkeypatch.setattr(runner, "require_model_credential", lambda ws: {})
     db = SessionLocal()
     try:
         with pytest.raises(AppError) as err:

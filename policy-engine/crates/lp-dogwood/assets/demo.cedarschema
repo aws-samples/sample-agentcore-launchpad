@@ -1,0 +1,174 @@
+namespace AgentCore {
+  type LaunchpadContext = {
+    agent_id: String,
+    channel: String,
+    sessionId: String
+  };
+
+  type SystemContext = {
+    local_hour: Long,
+    local_weekday: Long,
+    now_epoch_s: Long
+  };
+
+  type hr_approvals___approve_payoutInput = {
+    amount: decimal,
+    employee_id: String
+  };
+
+  type hr_approvals___approve_payoutOutput = {
+    approval_id: String,
+    approved: Bool
+  };
+
+  type hr_approvals___verify_identityInput = {
+    code: String,
+    employee_id: String
+  };
+
+  type hr_approvals___verify_identityOutput = {
+    employee_id: String,
+    verified: Bool
+  };
+
+  type hr_database___check_calendarInput = {
+    range: String
+  };
+
+  type hr_database___check_calendarOutput = {  };
+
+  type hr_database___create_payoutInput = {
+    amount: decimal,
+    employee_id: String
+  };
+
+  type hr_database___create_payoutOutput = {  };
+
+  type hr_database___get_employeeInput = {
+    employee_id: String
+  };
+
+  type hr_database___get_employeeOutput = {  };
+
+  type hr_database___list_departmentsInput = {  };
+
+  type hr_database___list_departmentsOutput = {  };
+
+  entity Agent in [Workspace] = {
+    method: String,
+    name?: String,
+    system: Bool
+  };
+
+  entity ApiKey = {
+    name: String
+  };
+
+  entity Gateway;
+
+  entity IamEntity in [Agent] = {
+    agent_id: String
+  };
+
+  entity Role;
+
+  entity System;
+
+  entity User in [Role] = {
+    role: String,
+    user_id?: String,
+    username: String
+  };
+
+  entity Workspace;
+
+  action "CallTool" in [Action::"Mcp"] appliesTo {
+    principal: [IamEntity, User, ApiKey, System],
+    resource: [Gateway],
+    context: {
+      isOutput: Bool,
+      launchpad: LaunchpadContext,
+      output?: {      },
+      system: SystemContext
+    }
+  };
+
+  action "Mcp" appliesTo {
+    principal: [IamEntity, User, ApiKey, System],
+    resource: [Gateway],
+    context: {
+      isOutput: Bool,
+      launchpad: LaunchpadContext,
+      output?: {      },
+      system: SystemContext
+    }
+  };
+
+  action "hr-approvals___approve_payout" in [Action::"CallTool", Action::"target:hr-approvals"] appliesTo {
+    principal: [ApiKey, IamEntity, System, User],
+    resource: [Gateway],
+    context: {
+      input: hr_approvals___approve_payoutInput,
+      launchpad: LaunchpadContext,
+      output?: hr_approvals___approve_payoutOutput,
+      system: SystemContext
+    }
+  };
+
+  action "hr-approvals___verify_identity" in [Action::"CallTool", Action::"target:hr-approvals"] appliesTo {
+    principal: [ApiKey, IamEntity, System, User],
+    resource: [Gateway],
+    context: {
+      input: hr_approvals___verify_identityInput,
+      launchpad: LaunchpadContext,
+      output?: hr_approvals___verify_identityOutput,
+      system: SystemContext
+    }
+  };
+
+  action "hr-database___check_calendar" in [Action::"CallTool", Action::"target:hr-database"] appliesTo {
+    principal: [ApiKey, IamEntity, System, User],
+    resource: [Gateway],
+    context: {
+      input: hr_database___check_calendarInput,
+      launchpad: LaunchpadContext,
+      output?: hr_database___check_calendarOutput,
+      system: SystemContext
+    }
+  };
+
+  action "hr-database___create_payout" in [Action::"CallTool", Action::"target:hr-database"] appliesTo {
+    principal: [ApiKey, IamEntity, System, User],
+    resource: [Gateway],
+    context: {
+      input: hr_database___create_payoutInput,
+      launchpad: LaunchpadContext,
+      output?: hr_database___create_payoutOutput,
+      system: SystemContext
+    }
+  };
+
+  action "hr-database___get_employee" in [Action::"CallTool", Action::"target:hr-database"] appliesTo {
+    principal: [ApiKey, IamEntity, System, User],
+    resource: [Gateway],
+    context: {
+      input: hr_database___get_employeeInput,
+      launchpad: LaunchpadContext,
+      output?: hr_database___get_employeeOutput,
+      system: SystemContext
+    }
+  };
+
+  action "hr-database___list_departments" in [Action::"CallTool", Action::"target:hr-database"] appliesTo {
+    principal: [ApiKey, IamEntity, System, User],
+    resource: [Gateway],
+    context: {
+      input: hr_database___list_departmentsInput,
+      launchpad: LaunchpadContext,
+      output?: hr_database___list_departmentsOutput,
+      system: SystemContext
+    }
+  };
+  action "target:hr-approvals" in [Action::"CallTool"];
+  action "target:hr-database" in [Action::"CallTool"];
+}

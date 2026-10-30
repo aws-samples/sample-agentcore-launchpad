@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type BrowserDemoResult, type GovernanceToolInfo } from "../../../lib/api";
+import { useBrowserSigningSupported } from "../../../lib/capabilities";
 import { governanceError } from "../../../lib/governance";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -200,16 +201,20 @@ function CodeInterpreterDemo() {
   );
 }
 
-/** Built-in Browser: open a session on a URL with optional Web Bot Auth / profile, watch it live. */
-function BrowserDemo() {
+/** Built-in Browser: open a session on a URL with an optional profile (and Web Bot Auth
+ *  where the partition signs — never in aws-cn, N17-obs258), watch it live. */
+export function BrowserDemo() {
   const { t } = useTranslation();
   const toast = useV2Toast();
+  const signingSupported = useBrowserSigningSupported();
   const options = useLoad(
     () => api.browserDemoOptions().catch((err: unknown) => Promise.reject(new Error(governanceError(err)))),
     "gov-browser-options",
   );
   const [url, setUrl] = useState(BROWSER_DEMO_URL);
-  const [webBotAuth, setWebBotAuth] = useState(false);
+  const [webBotAuthPicked, setWebBotAuth] = useState(false);
+  // N17-obs258: a pick never outlives the capability (aws-cn has no signer)
+  const webBotAuth = signingSupported && webBotAuthPicked;
   const [browserIdentifier, setBrowserIdentifier] = useState("");
   const [profileIdentifier, setProfileIdentifier] = useState("");
   const [saveProfile, setSaveProfile] = useState(false);
@@ -347,12 +352,20 @@ function BrowserDemo() {
             data-testid="browser-url"
           />
         </Field>
-        <Field label={t("v2.governance.demo.requestSigning")}>
-          <label className={locked ? "v2-check disabled" : "v2-check"} style={{ height: 32 }}>
-            <input type="checkbox" checked={webBotAuth} disabled={locked} onChange={(e) => setWebBotAuth(e.target.checked)} />
-            {t("v2.governance.demo.webBotAuth")}
-          </label>
-        </Field>
+        {signingSupported && (
+          <Field label={t("v2.governance.demo.requestSigning")}>
+            <label className={locked ? "v2-check disabled" : "v2-check"} style={{ height: 32 }}>
+              <input
+                type="checkbox"
+                checked={webBotAuth}
+                disabled={locked}
+                onChange={(e) => setWebBotAuth(e.target.checked)}
+                data-testid="browser-web-bot-auth"
+              />
+              {t("v2.governance.demo.webBotAuth")}
+            </label>
+          </Field>
+        )}
         {webBotAuth ? (
           <Field label={t("v2.governance.demo.browserResource")}>
             <Select
@@ -365,9 +378,9 @@ function BrowserDemo() {
               testId="browser-resource"
             />
           </Field>
-        ) : (
+        ) : signingSupported ? (
           <div />
-        )}
+        ) : null}
         <Field label={t("v2.governance.demo.profile")}>
           <Select
             mono

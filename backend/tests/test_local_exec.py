@@ -79,18 +79,31 @@ def test_build_execution_env_sets_consent_and_region():
     assert env["AWS_DEFAULT_REGION"] == env["AWS_REGION"]
 
 
-def test_build_execution_env_injects_keys_when_given():
+def test_build_execution_env_injects_keys_when_given(monkeypatch):
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     env = local_exec.build_execution_env(openai_api_key="sk-x", bedrock_api_key="bk-y")
     assert env["OPENAI_API_KEY"] == "sk-x"
-    assert env["BEDROCK_API_KEY"] == "bk-y"
+    # a per-request key is the Global Bedrock API key under the name botocore reads
+    assert env["AWS_BEARER_TOKEN_BEDROCK"] == "bk-y"
+    assert "BEDROCK_API_KEY" not in env  # the Mantle-era name is gone
+
+
+def test_build_execution_env_forwards_the_backends_bearer_and_model_region(monkeypatch):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "hub-bearer")
+    env = local_exec.build_execution_env()
+    assert env["AWS_BEARER_TOKEN_BEDROCK"] == "hub-bearer"
+    assert env["LAUNCHPAD_MODEL_REGION"] == "us-west-2"
+    # an explicit per-request key wins over the forwarded one
+    overridden = local_exec.build_execution_env(bedrock_api_key="bk-y")
+    assert overridden["AWS_BEARER_TOKEN_BEDROCK"] == "bk-y"
 
 
 def test_build_execution_env_omits_keys_when_absent(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("BEDROCK_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     env = local_exec.build_execution_env()
     assert "OPENAI_API_KEY" not in env
-    assert "BEDROCK_API_KEY" not in env
+    assert "AWS_BEARER_TOKEN_BEDROCK" not in env
 
 
 # --- environment allowlist (T2) -------------------------------------------
@@ -540,7 +553,7 @@ def test_docker_invocation_never_inlines_secret_values():
     assert "bk-secret-bedrock" not in joined
     assert "OPENAI_API_KEY" in inv.argv  # forwarded as a bare -e name
     assert inv.env["OPENAI_API_KEY"] == "sk-secret-openai"
-    assert inv.env["BEDROCK_API_KEY"] == "bk-secret-bedrock"
+    assert inv.env["AWS_BEARER_TOKEN_BEDROCK"] == "bk-secret-bedrock"
 
 
 def test_docker_invocation_keeps_host_paths_out_of_the_container(monkeypatch):

@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.config import get_settings
-from app.skill_lab import artifacts, jobs, runner
+from app.skill_lab import artifacts, jobs, runner, verdict
 from app.skill_lab import tasksets as taskset_svc
 from tests.conftest import set_default_resources
 
@@ -48,9 +48,25 @@ for task in tasks:
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         (out / "child_pid.txt").write_text(str(child.pid))
         time.sleep(60)
+    elif q.startswith("ERROR:"):
+        # what the vendored rollout writes for a failed exec: an exec-side failure is a
+        # scored artifact_failure, an infrastructure one (remote worker / S3) is invalid
+        kind = q.split(":", 1)[1]
+        rows.append({"id": task["id"], "task_type": "default", "hard": 0, "soft": 0.0,
+                     "score_valid": kind != "infra", "duration_s": 0.1,
+                     "judge_status": "artifact_failure" if kind != "infra" else "evaluation_error",
+                     "judge_reason": "", "response": "", "artifacts": [],
+                     "error": "RuntimeError: Remote opencode_exec failed (job j1): "
+                              "no workload access token"})
+        continue
     rows.append({"id": task["id"], "task_type": "default", "hard": 1, "soft": 1.0,
                  "score_valid": True, "duration_s": 0.1, "judge_status": "valid_pass",
                  "judge_reason": "ok", "response": "done", "artifacts": []})
+ok = sum(1 for r in rows if not r.get("error"))
+errored = sum(1 for r in rows if r.get("error") and r["score_valid"])
+invalid = sum(1 for r in rows if not r["score_valid"])
+print("  [skilleval] rollout finished: %d ok, %d errored, %d invalid" % (ok, errored, invalid),
+      flush=True)
 print("[skilleval] judging %d responses" % len(rows), flush=True)
 (out / "results.json").write_text(json.dumps(rows))
 print("[skilleval] done", flush=True)
@@ -66,6 +82,9 @@ WORKER_RESOURCES = {
 
 @pytest.fixture
 def lab(tmp_path, monkeypatch, client):
+    # the submit paths probe the hub's Global Bedrock bearer (N13-obs20) — hermetic, not the
+    # developer's shell env
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
     stub = tmp_path / "stub_cli.py"
     stub.write_text(STUB_CLI)
     # A real Settings copy, not a namespace: spawn() derives the child's rlimit
@@ -73,8 +92,8 @@ def lab(tmp_path, monkeypatch, client):
     fake_settings = get_settings().model_copy(
         update={
             "skill_lab_python": sys.executable,
-            "skill_lab_target_model_id": "us.anthropic.claude-sonnet-5",
-            "skill_lab_judge_model_id": "us.anthropic.claude-sonnet-5",
+            "skill_lab_target_model_id": "global.moonshotai.kimi-k3",
+            "skill_lab_judge_model_id": "global.zai.glm-5.3",
         }
     )
     monkeypatch.setattr(runner, "EVAL_SCRIPT", stub)
@@ -145,17 +164,18 @@ def test_command_contract(lab, tmp_path):
     )
     text = " ".join(command)
     assert command[0] == sys.executable
-    assert "--target_backend claude_code_exec" in text
+    assert "--target_backend opencode_exec" in text
     assert "--optimizer_backend bedrock_chat" in text
-    assert "--judge_mode auto" in text
+    assert "--judge_mode chat" in text  # N13 v1 default (spike §10a)
     assert "--workers 3" in text and "--limit 5" in text
 
 
 def test_target_backend_param(lab, tmp_path):
-    """codex_exec flows into argv and swaps the blank-model default to the codex
-    catalog slug; an explicit model always wins; unknown backends 422."""
-    params = runner.clamp_params({"target_backend": "codex_exec"})
-    assert params["target_model"] == get_settings().skill_lab_codex_target_model_id
+    """opencode_exec is the only backend (D16): it flows into argv with the platform's
+    default target model; an explicit model always wins; anything else 422s."""
+    assert runner.TARGET_BACKENDS == ("opencode_exec",)
+    params = runner.clamp_params({"target_backend": "opencode_exec"})
+    assert params["target_model"] == "global.moonshotai.kimi-k3"
     command = runner.build_eval_command(
         skill_dir=tmp_path / "skill",
         tasks_file=tmp_path / "tasks.json",
@@ -163,16 +183,14 @@ def test_target_backend_param(lab, tmp_path):
         params=params,
     )
     text = " ".join(command)
-    assert "--target_backend codex_exec" in text
+    assert "--target_backend opencode_exec" in text
     assert f"--model {params['target_model']}" in text
 
     explicit = runner.clamp_params(
-        {"target_backend": "codex_exec", "target_model": "openai.gpt-5.5"}
+        {"target_backend": "opencode_exec", "target_model": "global.zai.glm-5.3"}
     )
-    assert explicit["target_model"] == "openai.gpt-5.5"
-
-    # claude default untouched by the codex path
-    assert runner.clamp_params(None)["target_model"] == "us.anthropic.claude-sonnet-5"
+    assert explicit["target_model"] == "global.zai.glm-5.3"
+    assert runner.clamp_params(None)["target_backend"] == "opencode_exec"
 
     from app.core.errors import AppError
 
@@ -182,7 +200,7 @@ def test_target_backend_param(lab, tmp_path):
 
 
 def test_train_config_carries_target_backend(lab, tmp_path):
-    params = runner.clamp_train_params({"target_backend": "codex_exec"})
+    params = runner.clamp_train_params({"target_backend": "opencode_exec"})
     split_env = {"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"}
     config_path = runner.build_train_config(
         skill_dir=tmp_path / "skill",
@@ -194,13 +212,14 @@ def test_train_config_carries_target_backend(lab, tmp_path):
     import yaml
 
     config = yaml.safe_load(config_path.read_text())
-    assert config["model"]["target_backend"] == "codex_exec"
-    assert config["model"]["target"] == get_settings().skill_lab_codex_target_model_id
+    assert config["model"]["target_backend"] == "opencode_exec"
+    assert config["model"]["target"] == "global.moonshotai.kimi-k3"
 
 
 def test_judge_mode_param(lab, tmp_path):
-    """auto is the default; chat carries NO judge-exec flags; auto/agentic carry
-    the host-side judge quartet with judge_exec_model mirroring judge_model."""
+    """chat is the default (N13 v1: the judge is bedrock_chat via the bearer); every
+    mode carries the host-side judge quartet with judge_exec_model mirroring
+    judge_model, so a per-task escalation always has its route."""
     from app.core.errors import AppError
 
     def argv(params):
@@ -212,12 +231,14 @@ def test_judge_mode_param(lab, tmp_path):
         )
 
     default = runner.clamp_params(None)
-    assert default["judge_mode"] == "auto"
+    assert default["judge_mode"] == "chat"
     text = argv(default)
-    assert "--judge_mode auto" in text
+    assert "--judge_mode chat" in text
     assert f"--judge_exec_model {default['judge_model']}" in text
-    assert "--judge_exec_backend claude_code_exec" in text
+    assert "--judge_exec_backend opencode_exec" in text
     assert "--judge_sandbox_command bwrap" in text
+    auto = argv(runner.clamp_params({"judge_mode": "auto"}))
+    assert "--judge_mode auto" in auto and "--judge_exec_backend opencode_exec" in auto
 
     # `chat` states the route too (08-26): a per-task explicit judge_mode can still
     # escalate under a chat run, and omitting the flags left that escalation on the
@@ -226,7 +247,7 @@ def test_judge_mode_param(lab, tmp_path):
     # tests/test_skill_lab_judge_routing.py.
     chat = argv(runner.clamp_params({"judge_mode": "chat"}))
     assert "--judge_mode chat" in chat
-    assert "--judge_exec_backend claude_code_exec" in chat
+    assert "--judge_exec_backend opencode_exec" in chat
     assert "--judge_sandbox_command bwrap" in chat
 
     with pytest.raises(AppError) as err:
@@ -247,78 +268,44 @@ def test_train_config_judge_keys(lab, tmp_path):
         )
         return yaml.safe_load(path.read_text())["env"]
 
-    auto_env = env_of(runner.clamp_train_params(None))
+    auto_env = env_of(runner.clamp_train_params({"judge_mode": "auto"}))
     assert auto_env["judge_mode"] == "auto"
-    assert auto_env["judge_backend"] == "claude_code_exec"
+    assert auto_env["judge_backend"] == "opencode_exec"
     assert auto_env["judge_model"] == runner.clamp_train_params(None)["judge_model"]
     assert auto_env["judge_sandbox_command"] == "bwrap"
 
     # Same contract change as the eval path (08-26).
-    chat_env = env_of(runner.clamp_train_params({"judge_mode": "chat"}))
-    assert chat_env["judge_mode"] == "chat"
-    assert chat_env["judge_backend"] == "claude_code_exec"
+    chat_env = env_of(runner.clamp_train_params(None))
+    assert chat_env["judge_mode"] == "chat"  # the N13 v1 default
+    assert chat_env["judge_backend"] == "opencode_exec"
 
 
 def test_status_reports_agentic_judge_readiness(lab):
     body = lab.get("/api/skill-lab/status").json()
     assert body["judge_modes"] == ["auto", "chat", "agentic"]
-    for key in ("agentic_judge_ready", "judge_codex_ready", "judge_claude_ready",
-                "judge_cli_ready"):
+    for key in ("agentic_judge_ready", "judge_opencode_ready", "judge_cli_ready"):
         assert isinstance(body[key], bool), key
+    assert body["target_backends"] == ["opencode_exec"]
+    assert "default_codex_target_model" not in body
 
 
-def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):
-    """A codex judge starts from an isolated empty CODEX_HOME (vendored
-    fail-closed behavior) — the runner materializes a Bedrock provider seed and
-    points SKILLOPT_JUDGE_CODEX_HOME at it so the judge never needs an OpenAI
-    key. Catalog mirrors the host file, `{}` when absent."""
-    from app.core.config import get_settings
+def test_judge_exec_route_is_opencode_for_every_model_family(lab, tmp_path):
+    """One exec CLI (D16): every judge model routes to opencode_exec with its id
+    passed through unchanged (the provider addresses it as bedrock-openai/<id>)."""
+    for model in ("global.zai.glm-5.3", "global.moonshotai.kimi-k3", "us.openai.gpt-6-sol"):
+        assert runner.judge_exec_route(model) == ("opencode_exec", model)
+        assert runner.judge_cli_binary(model) == "opencode"
 
-    catalog = tmp_path / "cat.json"
-    catalog.write_text('{"models": []}')
-    monkeypatch.setattr(
-        get_settings(), "skill_lab_codex_catalog_path", str(catalog), raising=False
-    )
-    seed = runner.ensure_judge_codex_home()
-    config_text = (seed / "config.toml").read_text()
-    assert 'model_provider = "amazon-bedrock-runtime"' in config_text
-    assert "[model_providers.amazon-bedrock-runtime.aws]" in config_text
-    assert 'web_search = "disabled"' in config_text
-    assert 'region = "us-east-1"' in config_text
-    assert "[features.multi_agent_v2]" in config_text
-    assert str(seed / "bedrock-models.json") in config_text
-    assert (seed / "bedrock-models.json").read_text() == '{"models": []}'
-
-    workspace = SimpleNamespace(resources=dict(WORKER_RESOURCES), region="us-west-2")
-    env = runner.build_job_env(workspace)
-    assert env["SKILLOPT_JUDGE_CODEX_HOME"] == str(seed)
-
-
-def test_judge_exec_route_by_family(lab, tmp_path):
-    """An openai-family judge model (the default: us.openai.gpt-6-sol) runs
-    the agentic judge on the host codex CLI with the SAME profile id — codex's
-    amazon-bedrock-runtime provider rejects bare ids for on-demand throughput.
-    Anthropic judges keep the claude CLI unchanged."""
-    assert runner.judge_exec_route("us.openai.gpt-6-sol") == (
-        "codex_exec", "us.openai.gpt-6-sol",
-    )
-    assert runner.judge_exec_route("global.openai.gpt-6-sol") == (
-        "codex_exec", "global.openai.gpt-6-sol",
-    )
-    assert runner.judge_exec_route("global.anthropic.claude-opus-5") == (
-        "claude_code_exec", "global.anthropic.claude-opus-5",
-    )
-
-    params = runner.clamp_params({"judge_model": "us.openai.gpt-6-sol"})
+    params = runner.clamp_params({"judge_model": "global.zai.glm-5.3"})
     text = " ".join(
         runner.build_eval_command(
             skill_dir=tmp_path / "s", tasks_file=tmp_path / "t.json",
             out_dir=tmp_path / "o", params=params,
         )
     )
-    assert "--optimizer_model us.openai.gpt-6-sol" in text
-    assert "--judge_exec_backend codex_exec" in text
-    assert "--judge_exec_model us.openai.gpt-6-sol" in text
+    assert "--optimizer_model global.zai.glm-5.3" in text
+    assert "--judge_exec_backend opencode_exec" in text
+    assert "--judge_exec_model global.zai.glm-5.3" in text
 
     import yaml
 
@@ -326,46 +313,123 @@ def test_judge_exec_route_by_family(lab, tmp_path):
         skill_dir=tmp_path / "skill",
         split_env={"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"},
         eval_test=True,
-        out_config=tmp_path / "cfg-gpt.yaml",
-        params=runner.clamp_train_params({"judge_model": "us.openai.gpt-6-sol"}),
+        out_config=tmp_path / "cfg-glm.yaml",
+        params=runner.clamp_train_params({"judge_model": "global.zai.glm-5.3"}),
     )
     env = yaml.safe_load(cfg.read_text())["env"]
-    assert env["judge_backend"] == "codex_exec"
-    assert env["judge_model"] == "us.openai.gpt-6-sol"
+    assert env["judge_backend"] == "opencode_exec"
+    assert env["judge_model"] == "global.zai.glm-5.3"
     config = yaml.safe_load(cfg.read_text())
-    assert config["model"]["optimizer"] == "us.openai.gpt-6-sol"
+    assert config["model"]["optimizer"] == "global.zai.glm-5.3"
+    assert config["model"]["optimizer_backend"] == "bedrock_chat"
+
+
+def _cn_workspace():
+    return SimpleNamespace(
+        resources=dict(WORKER_RESOURCES), region="cn-northwest-1",
+        dns_suffix="amazonaws.com.cn", account_id="111122223333",
+    )
 
 
 def test_env_is_allowlisted(lab, monkeypatch):
     monkeypatch.setenv("LAUNCHPAD_ADMIN_PASSWORD", "secret")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
-    workspace = SimpleNamespace(resources=dict(WORKER_RESOURCES), region="us-west-2")
-    env = runner.build_job_env(workspace)
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-key")
+    env = runner.build_job_env(_cn_workspace())
     assert "LAUNCHPAD_ADMIN_PASSWORD" not in env
     assert env["AWS_ACCESS_KEY_ID"] == "AKIATEST"
     assert env["SKILLOPT_EXEC_RUNNER"] == "agentcore"
-    # codex contract (both ride the exec-job payload into the worker): >=0.147
-    # has no `exec --full-auto`, and the microVM kernel can't run bubblewrap —
-    # the VM itself is the sandbox. Live-verified 2026-08-18.
-    assert env["CODEX_EXEC_FULL_AUTO"] == "false"
-    assert env["CODEX_EXEC_SANDBOX"] == "danger-full-access"
     assert env["SKILLOPT_AGENTCORE_S3_PREFIX"] == "skill-lab/exec-jobs"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTHONUNBUFFERED"] == "1"  # killed jobs must not lose buffered log output
+    # the executor seam (D16): OpenAI-compatible root built with the partition helper,
+    # the hub's bearer for the CLI and the bedrock_chat judge, the Converse region,
+    # and the egress allow-list naming both partition suffixes
+    assert env["SKILLOPT_OPENCODE_BASE_URL"].endswith("/openai/v1")
+    assert env["SKILLOPT_OPENCODE_BASE_URL"].startswith("https://bedrock-runtime.us-west-2.")
+    assert env["AWS_BEARER_TOKEN_BEDROCK"] == "bedrock-key"
+    assert env["BEDROCK_CHAT_REGION"] == "us-west-2"
+    assert "amazonaws.com.cn" in env["SKILLOPT_OPENCODE_NO_PROXY"]
+    assert not {k for k in env if k.startswith(("CODEX", "CLAUDE"))}
 
 
-def test_worker_role_policy_covers_codex_mantle_path():
-    """codex's amazon-bedrock provider calls bedrock-mantle (a separate IAM
-    service): without the statement a codex_exec rollout 401s at runtime."""
+def test_a_hub_without_the_bearer_refuses_the_job_at_submit(lab, monkeypatch):
+    from app.core.errors import AppError
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    with pytest.raises(AppError) as err:
+        runner.build_job_env(_cn_workspace())
+    assert err.value.code == "skill_lab.model_credential_missing"
+    assert err.value.status_code == 503
+
+
+def test_submit_without_the_bearer_refuses_the_job_at_submit(lab, monkeypatch):
+    """N13-obs20 (E15 NC-13, lead ruling 2026-10-18): the bearer is probed synchronously at
+    submit — eval, train and taskgen all answer 503 ``skill_lab.model_credential_missing``
+    and write no job row / directory (today: 201, then ``failed "failed to start: …"``)."""
+    taskset_id = _taskset(lab, ["q1"])
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    bodies = [
+        {},  # eval (the _submit default)
+        {"type": "train", "split": None},
+        {"type": "taskgen", "taskset_id": None, "target_split": None},
+    ]
+    for overrides in bodies:
+        res = _submit(lab, taskset_id, **{k: v for k, v in overrides.items() if v is not None})
+        if overrides.get("type") == "taskgen":
+            res = lab.post("/api/skill-lab/jobs", json={
+                "type": "taskgen", "skill_source": {"kind": "registry", "record_id": "rec-1"},
+            })
+        assert res.status_code == 503, res.text
+        body = res.json()
+        assert body["code"] == "skill_lab.model_credential_missing"
+        assert "AWS_BEARER_TOKEN_BEDROCK" in body["message"]
+    assert lab.get("/api/skill-lab/jobs").json() == []
+    assert not list(artifacts.JOBS_DIR.glob("*")) if artifacts.JOBS_DIR.exists() else True
+    # the task set is untouched and the probe is the only thing in the way
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
+    res = _submit(lab, taskset_id)
+    assert res.status_code == 201, res.text
+    assert _wait(lab, res.json()["id"])["status"] == "succeeded"
+
+
+def test_worker_role_policy_is_partition_aware_and_carries_the_model_credential():
+    """No bedrock:InvokeModel in aws-cn (C3/C4): the worker exchanges its workload
+    token for the Global Bedrock API key, so the role carries the ModelCredential
+    statements of every agent role; ECR/S3 ARNs follow the partition."""
     from app.services.workspace_iam import skill_lab_worker_role_policy
 
-    policy = skill_lab_worker_role_policy("bkt", "arn:aws:ecr:us-west-2:1:repository/r", "1")
+    policy = skill_lab_worker_role_policy(
+        "cn-northwest-1", "111122223333", "bkt", "launchpad-agents",
+        model_credential="launchpad-global-bedrock", runtime_name="launchpad_skill_lab_worker",
+    )
     statements = {s["Sid"]: s for s in policy["Statement"]}
-    mantle = statements["BedrockMantleInference"]
-    assert "bedrock-mantle:CreateInference" in mantle["Action"]
-    # Mantle models live outside the workspace region (sol is us-east-1-only),
-    # so the region segment must stay wildcarded.
-    assert mantle["Resource"].startswith("arn:aws:bedrock-mantle:*:")
+    assert "BedrockModels" not in statements and "BedrockMantleInference" not in statements
+    assert statements["EcrPull"]["Resource"] == (
+        "arn:aws-cn:ecr:cn-northwest-1:111122223333:repository/launchpad-agents"
+    )
+    assert statements["WorkspaceObjects"]["Resource"] == "arn:aws-cn:s3:::bkt/skill-lab/*"
+    api_key = statements["ModelCredentialApiKey"]
+    assert set(api_key["Action"]) == {
+        "bedrock-agentcore:GetResourceApiKey", "bedrock-agentcore:GetWorkloadAccessToken",
+    }
+    assert any(
+        r.endswith("workload-identity/launchpad_skill_lab_worker-*") for r in api_key["Resource"]
+    )
+    # N-R6: the worker may fetch any platform provider's key (`launchpad-*`) — a SiliconFlow
+    # target or judge model needs `launchpad-siliconflow`
+    assert (
+        "arn:aws-cn:bedrock-agentcore:cn-northwest-1:111122223333:token-vault/default/"
+        "apikeycredentialprovider/launchpad-*"
+    ) in api_key["Resource"]
+    secret = statements["ModelCredentialVaultSecret"]["Resource"]
+    assert isinstance(secret, list) and secret
+    assert all(
+        r.startswith("arn:aws-cn:secretsmanager:cn-northwest-1:111122223333:secret:")
+        for r in secret
+    )
+    assert any(r.endswith("apikey/launchpad-*-*") for r in secret)
+    assert "arn:aws:" not in str(policy)
 
 
 # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -385,7 +449,7 @@ def test_lifecycle_success_with_results_and_log(lab):
     token_usage = results["summary"].pop("token_usage")
     assert token_usage["target"]["missing_rows"] == 2 and token_usage["target"]["input"] is None
     assert results["summary"] == {
-        "tasks": 2, "passed": 2, "invalid": 0, "pass_rate": 1.0,
+        "tasks": 2, "passed": 2, "invalid": 0, "errored": 0, "pass_rate": 1.0,
         "soft_mean": 1.0, "duration_s": 0.2,
         # empty on a healthy run; populated only when a judge failure names a
         # missing host CLI (08-26)
@@ -411,6 +475,69 @@ def test_failure_captures_exit_code_and_tail(lab):
     pending = lab.get(f"/api/skill-lab/jobs/{job['id']}/results")
     assert pending.status_code == 404
     assert pending.json()["code"] == "skill_lab.results_pending"
+
+
+def test_all_rollouts_errored_fails_the_job_with_a_readable_reason(lab):
+    """N10v3-bug3: every rollout failed on the worker, the CLI still exited 0 and the job
+    showed a green `succeeded` with "PASS RATE 0.0% · INVALID 0". Nothing was scored,
+    so the job is `failed`, the reason names the count + first error, and the results
+    (with the per-row error) stay readable."""
+    ts = _taskset(lab, ["ERROR:exec", "ERROR:exec", "ERROR:infra"])
+    job = _wait(lab, _submit(lab, ts).json()["id"])
+    assert job["status"] == "failed"
+    assert "all 3 rollouts failed" in job["error"]
+    assert "1 infrastructure" in job["error"] and "2 exec" in job["error"]
+    assert "no workload access token" in job["error"]  # the first row's error, verbatim
+    # the per-row evidence is still served for a failed job
+    results = lab.get(f"/api/skill-lab/jobs/{job['id']}/results").json()
+    assert results["summary"]["tasks"] == 3
+    assert results["summary"]["errored"] == 2  # scored-zero exec failures (run_batch's "errored")
+    assert results["summary"]["invalid"] == 1  # the infrastructure one, excluded — disjoint
+    assert results["summary"]["passed"] == 0
+    assert all(r["error"] for r in results["rows"])
+
+
+def test_partially_errored_run_stays_succeeded_but_counts_the_errors(lab):
+    ts = _taskset(lab, ["do a", "ERROR:exec"])
+    job = _wait(lab, _submit(lab, ts).json()["id"])
+    assert job["status"] == "succeeded" and job["error"] is None
+    summary = lab.get(f"/api/skill-lab/jobs/{job['id']}/results").json()["summary"]
+    assert summary["errored"] == 1 and summary["invalid"] == 0
+    assert summary["passed"] == 1 and summary["pass_rate"] == 0.5
+
+
+def test_rollout_health_is_parsed_from_the_shared_rollout_log_line(tmp_path, monkeypatch):
+    """Train jobs write no results.json the platform reads, but every rollout batch
+    (eval and train alike) logs `[skilleval] rollout finished: X ok, Y errored, Z
+    invalid` — the one shared signal for "the run never scored anything"."""
+    monkeypatch.setattr(artifacts, "JOBS_DIR", tmp_path / "jobs")
+    job_id = "job_trainfail1"
+    artifacts.job_dir(job_id).mkdir(parents=True)
+    (artifacts.job_dir(job_id) / "log.txt").write_text(
+        "  [skilleval] rolling out 3 tasks (workers=2)\n"
+        "  [skilleval] rollout finished: 0 ok, 3 errored, 0 invalid\n"
+        "    RuntimeError: Remote opencode_exec failed (job j2): no workload access token\n"
+        "  [skilleval] rollout finished: 0 ok, 2 errored, 1 invalid\n"
+        "[STEP 1 done] action=skip_no_patches\n"
+    )
+    assert verdict.rollout_health(job_id) == {
+        "batches": 2, "ok": 0, "errored": 5, "invalid": 1, "total": 6,
+    }
+    reason = verdict.all_rollouts_failed_reason(job_id, "train")
+    assert reason is not None
+    assert "all 6 rollouts across 2 batch(es) failed" in reason
+    assert "0 ok" in reason and "no workload access token" in reason
+    # a batch with at least one scored rollout is a real (if poor) run, not a failure
+    (artifacts.job_dir(job_id) / "log.txt").write_text(
+        "  [skilleval] rollout finished: 1 ok, 2 errored, 0 invalid\n"
+    )
+    assert verdict.all_rollouts_failed_reason(job_id, "train") is None
+    # no rollout line at all (stub trainers, very old logs) → no verdict either way
+    (artifacts.job_dir(job_id) / "log.txt").write_text("STEP 1\n")
+    assert verdict.rollout_health(job_id) is None
+    assert verdict.all_rollouts_failed_reason(job_id, "train") is None
+    # taskgen never rolls out
+    assert verdict.all_rollouts_failed_reason(job_id, "taskgen") is None
 
 
 def test_cancel_running_kills_the_process_group(lab):
@@ -716,7 +843,7 @@ def test_results_usage_partial_missing_and_malformed_rows(lab):
         # rollout crashed before the transcript existed: no usage key at all;
         # the chat judge skipped the empty response: no judge_usage key.
         {"id": "b", "hard": 0, "soft": 0.0, "score_valid": True, "duration_s": 0.2,
-         "error": "claude_code_exec failed"},
+         "error": "opencode_exec failed"},
         # a hand-edited / corrupted record
         {"id": "c", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
          "usage": {"input": -5, "output": 7}, "judge_usage": "n/a"},
@@ -1256,3 +1383,50 @@ def test_submit_snapshot_and_row_visibility_are_serialized_against_delete(lab, m
     error = delete_result.get("error")
     assert getattr(error, "code", None) == "skill_lab.taskset_in_use"
     assert taskset_svc.taskset_dir(taskset_id).is_dir()
+
+
+# ─── N-R6: the OpenCode provider table comes from the catalog ────────────────────────
+
+
+@pytest.mark.siliconflow
+def test_executor_builds_the_opencode_provider_table_from_the_catalog(monkeypatch):
+    import json
+
+    from app.schemas.agent import model_catalog_table
+    from app.services import aws_clients
+    from app.services.workspace import WorkspaceContext
+    from app.skill_lab.executors import opencode as executor
+
+    table = executor.opencode_providers()
+    assert set(table) == {"siliconflow"}
+    sf = table["siliconflow"]
+    assert sf["base_url"] == "https://api.siliconflow.cn/v1"
+    assert sf["api_key_env"] == "LAUNCHPAD_SILICONFLOW_API_KEY"
+    assert sf["credential_provider"] == "launchpad-siliconflow"
+    assert sf["id_prefix"] == "siliconflow."
+    expected = {e["api_model_name"] for e in model_catalog_table().values()
+                if e["provider"] == "siliconflow"}
+    assert set(sf["models"]) == expected and all(m["tool_call"] for m in sf["models"].values())
+    # D21 (M1-d, additive per provider): the catalog version the table was rendered from
+    from app.schemas.agent import catalog_version
+    assert sf["catalog_version"] == catalog_version()
+    assert json.loads(executor.opencode_providers_env()) == table
+    assert executor.provider_hosts() == ["api.siliconflow.cn"]
+    assert executor.model_provider_name("siliconflow.Qwen/Qwen3.8-27B") == "siliconflow"
+    assert executor.model_provider_name("global.zai.glm-5.3") == "bedrock"
+    assert executor.model_provider_name("custom") == "bedrock"
+
+    ws = WorkspaceContext(account_id="111122223333", region="cn-northwest-1")
+    monkeypatch.setenv(aws_clients.GLOBAL_BEDROCK_BEARER_ENV, "bearer")
+    # the worker gets the table and NO key material
+    worker_env = executor.worker_runtime_environment(ws)
+    assert json.loads(worker_env[executor.PROVIDERS_ENV]) == table
+    assert "LAUNCHPAD_SILICONFLOW_API_KEY" not in worker_env
+    assert "api.siliconflow.cn" in worker_env[executor.NO_PROXY_ENV]
+    # the host gets the table, and the SiliconFlow key only when the hub has one
+    monkeypatch.delenv("LAUNCHPAD_SILICONFLOW_API_KEY", raising=False)
+    host_env = executor.host_env(ws)
+    assert json.loads(host_env[executor.PROVIDERS_ENV]) == table
+    assert "LAUNCHPAD_SILICONFLOW_API_KEY" not in host_env
+    monkeypatch.setenv("LAUNCHPAD_SILICONFLOW_API_KEY", "sf-key")
+    assert executor.host_env(ws)["LAUNCHPAD_SILICONFLOW_API_KEY"] == "sf-key"

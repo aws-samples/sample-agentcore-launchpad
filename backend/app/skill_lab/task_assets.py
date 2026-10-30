@@ -13,9 +13,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import Request, UploadFile
-from fastapi.responses import JSONResponse
 
 from app.core.config import DATA_DIR
+from app.core.display_time import DisplayTimeJSONResponse
 from app.core.errors import AppError
 
 STAGING_DIR = DATA_DIR / "skill-lab" / "task-asset-staging"
@@ -77,7 +77,7 @@ def validate_destination(path: str) -> str:
     parts = PurePosixPath(path).parts
     if not parts or any(part in ("", ".", "..") for part in path.split("/")):
         raise _error("asset_path_invalid", f"unsafe task asset destination {path!r}")
-    if parts[0].casefold() in {".agents", ".claude", ".codex", ".git", "task.md"}:
+    if parts[0].casefold() in {".agents", ".opencode", ".git", "task.md"}:
         raise _error("asset_path_invalid", f"task asset destination {path!r} is reserved")
     return path
 
@@ -98,7 +98,7 @@ async def task_asset_body_limit_middleware(request: Request, call_next: Any) -> 
         except ValueError:
             length = None
         if length is not None and length > MAX_UPLOAD_REQUEST_BYTES:
-            return JSONResponse(
+            return DisplayTimeJSONResponse(
                 status_code=413,
                 content={
                     "code": "skill_lab.asset_request_too_large",

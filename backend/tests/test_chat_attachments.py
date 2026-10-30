@@ -24,14 +24,18 @@ from app.services.attachments import attachment_capability, prepare_attachments
 from tests.conftest import ws_ctx
 
 
-def agent_row(method="zip_runtime", *, native=True, protocol="http"):
+def agent_row(method="zip_runtime", *, native=True, protocol="http", model_id=None):
+    # The default model is Kimi K3 — the one catalog model with native vision
+    # (GLM 5.3 is text-only, see schemas.agent.MODEL_CAPABILITIES) — so every
+    # test here that exercises native image delivery keeps working off the
+    # fixture default.
     with SessionLocal() as db:
         row = Agent(
             name="attachments", method=method, status="active", version="2",
             workspace_id=DEFAULT_WORKSPACE_ID,
             arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/test",
             attachment_version="2" if native else None,
-            spec={"protocol": protocol, "model_id": "global.anthropic.claude-sonnet-4-6"},
+            spec={"protocol": protocol, "model_id": model_id or "global.moonshotai.kimi-k3"},
         )
         db.add(row)
         db.commit()
@@ -88,8 +92,8 @@ def test_native_file_bytes_and_filename_mapping():
     assert "data" not in result.metadata[0]
 
 
-def test_harness_pdf_extracts_text_and_explains_loss():
-    result = prepare_attachments(agent_row("harness"), [attachment("report.pdf", pdf())])
+def test_undeployed_pdf_extracts_text_and_explains_loss():
+    result = prepare_attachments(agent_row(native=False), [attachment("report.pdf", pdf())])
     assert not result.native
     assert "file-code-732" in result.prompt("")
     assert "PDF text only" in result.prompt("")
@@ -110,7 +114,7 @@ def test_old_or_custom_agents_get_text_files_without_republish(method):
 def test_scanned_pdf_has_no_text_fallback_but_native_keeps_original_bytes():
     data = scanned_pdf()
     with pytest.raises(AppError, match="readable text") as exc:
-        prepare_attachments(agent_row("harness"), [attachment("scan.pdf", data)])
+        prepare_attachments(agent_row(native=False), [attachment("scan.pdf", data)])
     assert exc.value.code == "chat.attachment_pdf_text_unavailable"
     native = prepare_attachments(agent_row(), [attachment("scan.pdf", data)])
     assert base64.b64decode(native.native[0]["data"]) == data
@@ -141,9 +145,9 @@ def test_invalid_files_fail_before_invoke(item, code):
     assert exc.value.code == f"chat.attachment_{code}"
 
 
-def test_harness_image_rejection_and_limits():
+def test_undeployed_image_rejection_and_limits():
     with pytest.raises(AppError) as exc:
-        prepare_attachments(agent_row("harness"), [attachment("x.png", png())])
+        prepare_attachments(agent_row(native=False), [attachment("x.png", png())])
     assert exc.value.code == "chat.attachment_image_unsupported"
     with pytest.raises(AppError) as exc:
         prepare_attachments(agent_row(), [attachment("x.txt", b"test")] * (MAX_FILES + 1))
@@ -174,6 +178,21 @@ def test_contract_is_version_bound_and_model_aware():
     assert not attachment_capability(row)["images"]
     row = agent_row(native=False, protocol="a2a")
     assert attachment_capability(row)["images"]
+
+
+def test_image_support_is_per_model_not_per_catalog():
+    """Spec C3 has two models; only Kimi K3 has native vision (Bedrock model
+    cards) — GLM 5.3 is a catalog member but must NOT get the native-image path."""
+    kimi = agent_row(model_id="global.moonshotai.kimi-k3")
+    assert attachment_capability(kimi)["images"] is True
+
+    glm = agent_row(model_id="global.zai.glm-5.3")
+    capability = attachment_capability(glm)
+    assert capability["images"] is False
+    assert ".png" not in capability["accept"]
+    with pytest.raises(AppError) as exc:
+        prepare_attachments(glm, [attachment("x.png", png())])
+    assert exc.value.code == "chat.attachment_image_unsupported"
 
 
 def test_byoc_with_model_selection_still_requires_a_custom_input_contract():
@@ -222,15 +241,6 @@ def test_old_console_session_cannot_receive_native_attachments():
     with pytest.raises(AppError) as exc:
         prepare_attachments(row, [attachment("x.png", png())], session_id="old-session")
     assert exc.value.code == "chat.attachment_new_session_required"
-
-
-def test_native_canary_is_refused_but_text_fallback_is_safe(monkeypatch):
-    from app.optimization import canary_service
-    monkeypatch.setattr(canary_service, "active_canary_route", lambda _: {"arn": "test"})
-    with pytest.raises(AppError) as exc:
-        prepare_attachments(agent_row(), [attachment("x.png", png())])
-    assert exc.value.code == "chat.attachment_canary_unsupported"
-    assert prepare_attachments(agent_row(), [attachment("x.txt", b"safe text")]).native == []
 
 
 def test_runtime_acknowledgement_and_a2a_file_parts():
@@ -282,14 +292,20 @@ def test_old_runtime_never_reports_success_when_it_ignored_a_file(payload):
 
 
 def test_attachment_only_chat_persists_only_metadata_and_history(monkeypatch):
-    row = agent_row("harness")
+    from app.services import invoke
+
+    row = agent_row()
     captured = []
 
-    def harness_events(_agent, prompt, *args, **kwargs):
-        captured.append(prompt)
-        yield {"event": "delta", "data": {"text": "read file-code-732"}}
+    def runtime_invoke(**kwargs):
+        captured.append(json.loads(kwargs["payload"])["prompt"])
+        return {"contentType": "text/event-stream", "response": io.BytesIO(
+            b'data: {"event":"delta","text":"read file-code-732"}\n\n'
+        )}
 
-    monkeypatch.setattr(chat_service, "_harness_events", harness_events)
+    monkeypatch.setattr(
+        invoke, "data_client", lambda _: SimpleNamespace(invoke_agent_runtime=runtime_invoke),
+    )
     client = TestClient(create_app())
     item = attachment("note.txt", b"file-code-732").model_dump()
     response = client.post(f"/api/chat/{row.id}", json={"attachments": [item]})
@@ -310,8 +326,9 @@ def test_attachment_only_chat_persists_only_metadata_and_history(monkeypatch):
 
 def test_public_sync_and_stream_use_same_text_adapter(monkeypatch):
     from app.routers import public_api
+    from app.services import invoke
 
-    row = agent_row("harness")
+    row = agent_row()
     with SessionLocal() as db:
         db.add(ApiKey(
             workspace_id=row.workspace_id, name="files", prefix="test",
@@ -324,12 +341,16 @@ def test_public_sync_and_stream_use_same_text_adapter(monkeypatch):
         prompts.append(kwargs["attachments"].prompt(prompt))
         return {"text": "ok", "session_id": "s" * 36}
 
-    def stream(_agent, prompt, *args, **kwargs):
-        prompts.append(prompt)
-        yield {"event": "delta", "data": {"text": "ok"}}
+    def runtime_invoke(**kwargs):
+        prompts.append(json.loads(kwargs["payload"])["prompt"])
+        return {"contentType": "text/event-stream", "response": io.BytesIO(
+            b'data: {"event":"delta","text":"ok"}\n\n'
+        )}
 
     monkeypatch.setattr(public_api, "invoke_agent_text", sync)
-    monkeypatch.setattr(chat_service, "_harness_events", stream)
+    monkeypatch.setattr(
+        invoke, "data_client", lambda _: SimpleNamespace(invoke_agent_runtime=runtime_invoke),
+    )
     client = TestClient(create_app())
     body = {"attachments": [attachment("x.txt", b"public-file-token").model_dump()]}
     for suffix in ("invoke", "invoke-stream"):
@@ -454,13 +475,21 @@ def test_streamed_body_cap_does_not_depend_on_content_length():
     assert response.json()["code"] == "chat.attachment_too_large"
 
 
-def test_harness_chat_stream_receives_prepared_text(monkeypatch):
-    row = agent_row("harness")
+def test_native_chat_stream_receives_prepared_text(monkeypatch):
+    from app.services import invoke
+
+    row = agent_row()
     received = []
-    def events(_agent, prompt, *args, **kwargs):
-        received.append(prompt)
-        yield {"event": "delta", "data": {"text": "ok"}}
-    monkeypatch.setattr(chat_service, "_harness_events", events)
+
+    def runtime_invoke(**kwargs):
+        received.append(json.loads(kwargs["payload"])["prompt"])
+        return {"contentType": "text/event-stream", "response": io.BytesIO(
+            b'data: {"event":"delta","text":"ok"}\n\n'
+        )}
+
+    monkeypatch.setattr(
+        invoke, "data_client", lambda _: SimpleNamespace(invoke_agent_runtime=runtime_invoke),
+    )
     files = prepare_attachments(row, [attachment("x.txt", b"test-token")])
     result = list(chat_service.chat_stream(row, "read", attachments=files, workspace=ws_ctx()))
     assert "test-token" in received[0]

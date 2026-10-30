@@ -6,16 +6,18 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type OnlineEvalConfigRow } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   agentLabel,
+  canPauseArm,
   canToggle,
   configName,
   isEditable,
   isTransient,
   modeOf,
   OWNER_TONE,
+  pauseOwner,
   POLL_MS,
   statusTone,
 } from "../../online";
@@ -33,15 +35,22 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { useMayMutate } from "../../ownership";
+import { useEvaluatorNames } from "../../useEvaluatorNames";
+import { awsStatusLabel } from "../../awsStatus";
 
 type Pending = { row: OnlineEvalConfigRow; action: "pause" | "resume" | "delete" };
 
 export function OnlineList() {
   const { t } = useTranslation();
+  useEvaluatorNames(); // N17-obs429: custom evaluators by name
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
   const { can } = useAuth();
   const mayRun = can("eval.run");
+  // N17-obs440: edit / pause / resume / delete are creator-or-admin (server: obs426) — a member
+  // who did not create the config sees them disabled with the hint (a NULL creator is an admin's)
+  const mayMutate = useMayMutate();
   const { data, loading, error, reload } = useLoad(() => api.v2OnlineConfigs(), "online-configs");
   const [mode, setMode] = useState("");
   const [owner, setOwner] = useState("");
@@ -100,7 +109,7 @@ export function OnlineList() {
         <>
           <span className="v2-row" style={{ flexWrap: "nowrap" }}>
             <LinkButton onClick={() => open(row)} testId={`v2-online-${row.config_id}`}>
-              <span className="ellipsis" style={{ maxWidth: 220 }} title={configName(row)}>
+              <span className="ellipsis" style={{ maxWidth: 220 }} title={row.name ?? row.config_id}>
                 {configName(row)}
               </span>
             </LinkButton>
@@ -143,7 +152,7 @@ export function OnlineList() {
         // the resource status only speaks up when it is not the steady ACTIVE
         row.status && row.status !== "ACTIVE" ? (
           <Tag tone={statusTone(row.status)} title={row.failure_reason ?? undefined}>
-            {row.status}
+            {awsStatusLabel(t, row.status)}
           </Tag>
         ) : (
           <Tag tone={row.execution_status === "ENABLED" ? "green" : "gray"} dot>
@@ -152,33 +161,55 @@ export function OnlineList() {
         )
       ),
     },
-    { key: "updated", title: t("v2.tasks.colUpdated"), className: "nowrap", render: (row) => fmtTime(row.updated_at ?? row.created_at) },
+    {
+      key: "updated",
+      title: t("v2.tasks.colUpdated"),
+      className: "nowrap",
+      render: (row) => (
+        <>
+          {fmtTime(row.updated_at ?? row.created_at)}
+          <span className="sub" title={t("v2.common.creator")}>{creatorLabel(row)}</span>
+        </>
+      ),
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),
       className: "right",
       render: (row) => {
         const locked = busy || isTransient(row);
+        const ownerLocked = !mayMutate(row);
+        const hint = ownerLocked ? t("v2.common.creatorOnly") : undefined;
         return (
           <div className="v2-actions">
             <LinkButton onClick={() => open(row)}>{t("v2.common.view")}</LinkButton>
             {isEditable(row) && (
-              <LinkButton disabled={locked || !mayRun} onClick={() => setParams({ view: "edit", id: row.config_id })}>
+              <LinkButton disabled={locked || !mayRun || ownerLocked} title={hint} onClick={() => setParams({ view: "edit", id: row.config_id })}>
                 {t("v2.common.edit")}
               </LinkButton>
             )}
             {canToggle(row) && row.execution_status === "ENABLED" && (
-              <LinkButton disabled={locked} onClick={() => setPending({ row, action: "pause" })}>
+              <LinkButton disabled={locked || ownerLocked} title={hint} onClick={() => setPending({ row, action: "pause" })}>
+                {t("v2.tasks.pause")}
+              </LinkButton>
+            )}
+            {canPauseArm(row) && (
+              <LinkButton
+                disabled={locked || !mayMutate(pauseOwner(row))}
+                title={mayMutate(pauseOwner(row)) ? undefined : t("v2.common.creatorOnly")}
+                onClick={() => setPending({ row, action: "pause" })}
+                testId={`v2-online-pause-arm-${row.config_id}`}
+              >
                 {t("v2.tasks.pause")}
               </LinkButton>
             )}
             {canToggle(row) && row.execution_status === "DISABLED" && (
-              <LinkButton disabled={locked || !mayRun} onClick={() => setPending({ row, action: "resume" })}>
+              <LinkButton disabled={locked || !mayRun || ownerLocked} title={hint} onClick={() => setPending({ row, action: "resume" })}>
                 {t("v2.tasks.resume")}
               </LinkButton>
             )}
             {canToggle(row) && (
-              <LinkButton danger disabled={busy || row.status === "DELETING" || !mayRun} onClick={() => setPending({ row, action: "delete" })}>
+              <LinkButton danger disabled={busy || row.status === "DELETING" || !mayRun || ownerLocked} title={hint} onClick={() => setPending({ row, action: "delete" })}>
                 {t("v2.common.delete")}
               </LinkButton>
             )}

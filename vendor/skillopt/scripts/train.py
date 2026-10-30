@@ -143,7 +143,7 @@ def parse_args() -> argparse.Namespace:
     # Legacy flat CLI overrides (still work, prefer --cfg-options for new usage)
     p.add_argument("--env", type=str)
     p.add_argument("--backend", type=str,
-                   choices=["azure_openai", "codex", "codex_exec", "claude", "claude_chat", "claude_code_exec", "qwen", "qwen_chat", "minimax", "minimax_chat"])
+                   choices=["azure_openai", "opencode", "opencode_exec", "qwen", "qwen_chat", "minimax", "minimax_chat"])
     p.add_argument("--optimizer_model", type=str)
     p.add_argument("--target_model", type=str)
     p.add_argument("--optimizer_backend", type=str)
@@ -197,21 +197,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--minimax_temperature", type=float)
     p.add_argument("--minimax_max_tokens", type=int)
     p.add_argument("--minimax_enable_thinking", type=_BOOL)
-    p.add_argument("--codex_exec_path", type=str)
-    p.add_argument("--codex_exec_sandbox", type=str)
-    p.add_argument("--codex_exec_profile", type=str)
-    p.add_argument("--codex_exec_full_auto", type=_BOOL)
-    p.add_argument("--codex_exec_reasoning_effort", type=str)
-    p.add_argument("--codex_exec_use_sdk", type=str)
-    p.add_argument("--codex_exec_network_access", type=_BOOL)
-    p.add_argument("--codex_exec_web_search", type=_BOOL)
-    p.add_argument("--codex_exec_approval_policy", type=str)
-    p.add_argument("--claude_code_exec_path", type=str)
-    p.add_argument("--claude_code_exec_profile", type=str)
-    p.add_argument("--claude_code_exec_use_sdk", type=str)
-    p.add_argument("--claude_code_exec_effort", type=str)
-    p.add_argument("--claude_code_exec_max_thinking_tokens", type=int)
-    p.add_argument("--codex_trace_to_optimizer", type=_BOOL)
+    p.add_argument("--opencode_exec_path", type=str)
+    p.add_argument("--opencode_exec_effort", type=str)
     p.add_argument("--skill_init", type=str)
     p.add_argument("--num_epochs", type=int)
     p.add_argument("--train_size", type=int)
@@ -335,21 +322,8 @@ _LEGACY_TO_STRUCTURED: dict[str, str] = {
     "minimax_temperature": "model.minimax_temperature",
     "minimax_max_tokens": "model.minimax_max_tokens",
     "minimax_enable_thinking": "model.minimax_enable_thinking",
-    "codex_exec_path": "model.codex_exec_path",
-    "codex_exec_sandbox": "model.codex_exec_sandbox",
-    "codex_exec_profile": "model.codex_exec_profile",
-    "codex_exec_full_auto": "model.codex_exec_full_auto",
-    "codex_exec_reasoning_effort": "model.codex_exec_reasoning_effort",
-    "codex_exec_use_sdk": "model.codex_exec_use_sdk",
-    "codex_exec_network_access": "model.codex_exec_network_access",
-    "codex_exec_web_search": "model.codex_exec_web_search",
-    "codex_exec_approval_policy": "model.codex_exec_approval_policy",
-    "claude_code_exec_path": "model.claude_code_exec_path",
-    "claude_code_exec_profile": "model.claude_code_exec_profile",
-    "claude_code_exec_use_sdk": "model.claude_code_exec_use_sdk",
-    "claude_code_exec_effort": "model.claude_code_exec_effort",
-    "claude_code_exec_max_thinking_tokens": "model.claude_code_exec_max_thinking_tokens",
-    "codex_trace_to_optimizer": "model.codex_trace_to_optimizer",
+    "opencode_exec_path": "model.opencode_exec_path",
+    "opencode_exec_effort": "model.opencode_exec_effort",
     "num_epochs": "train.num_epochs",
     "train_size": "train.train_size",
     "steps_per_epoch": "train.steps_per_epoch",
@@ -440,15 +414,9 @@ def load_config(args: argparse.Namespace) -> dict:
     if explicit_backend is not None:
         backend = normalize_backend_name(explicit_backend)
         flat["model_backend"] = backend
-        if backend in {"claude", "claude_chat"}:
-            flat.setdefault("optimizer_backend", "claude_chat")
-            flat.setdefault("target_backend", "claude_chat")
-        elif backend in {"codex", "codex_exec"}:
-            flat.setdefault("optimizer_backend", "openai_chat")
-            flat.setdefault("target_backend", "codex_exec")
-        elif backend == "claude_code_exec":
-            flat.setdefault("optimizer_backend", "openai_chat")
-            flat.setdefault("target_backend", "claude_code_exec")
+        if backend in {"opencode", "opencode_exec"}:
+            flat.setdefault("optimizer_backend", "bedrock_chat")
+            flat.setdefault("target_backend", "opencode_exec")
         elif backend in {"qwen", "qwen_chat"}:
             flat.setdefault("optimizer_backend", "openai_chat")
             flat.setdefault("target_backend", "qwen_chat")
@@ -462,30 +430,24 @@ def load_config(args: argparse.Namespace) -> dict:
         flat.setdefault("optimizer_backend", "openai_chat")
         flat.setdefault("target_backend", "openai_chat")
 
-    if flat.get("optimizer_backend") == "claude_chat":
+    if flat.get("optimizer_backend") == "bedrock_chat":
         if (
             str(flat.get("optimizer_model", "") or "").strip() in _OPENAI_DEFAULT_MODEL_SENTINELS
             and not _has_model_override("model.optimizer", "optimizer_model")
         ):
-            flat["optimizer_model"] = default_model_for_backend("claude_chat")
+            flat["optimizer_model"] = default_model_for_backend("bedrock_chat")
     if flat.get("optimizer_backend") == "qwen_chat":
         if (
             str(flat.get("optimizer_model", "") or "").strip() in _OPENAI_DEFAULT_MODEL_SENTINELS
             and not _has_model_override("model.optimizer", "optimizer_model")
         ):
             flat["optimizer_model"] = default_model_for_backend("qwen_chat")
-    if flat.get("target_backend") == "claude_chat":
+    if flat.get("target_backend") == "opencode_exec":
         if (
             str(flat.get("target_model", "") or "").strip() in _OPENAI_DEFAULT_MODEL_SENTINELS
             and not _has_model_override("model.target", "target_model")
         ):
-            flat["target_model"] = default_model_for_backend("claude_chat")
-    if flat.get("target_backend") == "claude_code_exec":
-        if (
-            str(flat.get("target_model", "") or "").strip() in _OPENAI_DEFAULT_MODEL_SENTINELS
-            and not _has_model_override("model.target", "target_model")
-        ):
-            flat["target_model"] = default_model_for_backend("claude_chat")
+            flat["target_model"] = default_model_for_backend("opencode_exec")
     if flat.get("target_backend") == "qwen_chat":
         if (
             str(flat.get("target_model", "") or "").strip() in _OPENAI_DEFAULT_MODEL_SENTINELS

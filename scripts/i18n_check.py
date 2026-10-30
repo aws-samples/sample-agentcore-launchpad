@@ -136,7 +136,13 @@ def strict_checks(locale_keys: set[str]) -> bool:
             print(f"i18n_check: hardcoded string {rel}:{lineno}: {text!r}")
     print(f"i18n_check: hardcoded-string findings: {len(findings)}")
 
-    missing = sorted(k for k in used_keys if k not in locale_keys)
+    # i18next resolves `t("k", {count})` through `k_one` / `k_other` (plural suffixes):
+    # a base key with plural variants is present (N16-obs57, round 16).
+    plural = ("_zero", "_one", "_two", "_few", "_many", "_other")
+    missing = sorted(
+        k for k in used_keys
+        if k not in locale_keys and not any(f"{k}{s}" in locale_keys for s in plural)
+    )
     if missing:
         failed = True
         print(f"i18n_check: t() keys missing from locales: {missing}")

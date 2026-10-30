@@ -17,11 +17,9 @@ name, and a VCS ref pointing at a branch or tag, all of which resolve differentl
 over time.
 
 Deliberately **not** applied to the platform's own requirement lists
-(`base_requirements()`, `STUDIO_EXTRA_REQUIREMENTS`, `MANTLE_EXTRA_REQUIREMENTS`,
-`a2a_base_requirements()`). Those keep ranges on purpose — see the comment block
-above `MANTLE_EXTRA_REQUIREMENTS`, which relies on pip intersecting two specs for
-the same project — and reproducibility for the whole set comes from the hashed
-lockfile the package stage generates, not from hand-pinned ranges.
+(`base_requirements()`, `STUDIO_EXTRA_REQUIREMENTS`, `a2a_base_requirements()`).
+Those keep ranges on purpose, and reproducibility for the whole set comes from
+the hashed lockfile the package stage generates, not from hand-pinned ranges.
 """
 
 import re

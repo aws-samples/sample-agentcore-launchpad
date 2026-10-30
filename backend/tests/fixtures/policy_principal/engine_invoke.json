@@ -1,0 +1,133 @@
+{
+  "_comment": "I4 item for the hub's INVOKE gate (contract amendment 4). Sent through I5 authorize_stateless (never recorded). The policies use the Global vocabulary (the D20 baseline after rewrite_d20) plus one forbid that reads the agent's attributes; cases patch the request.",
+  "runtime_session_id": "lp-chat-0f6c2a1e9b7d4c3a8e5f1b2d3c4a5e6f7a8b",
+  "tsv": 3,
+  "request": {
+    "ws": "default",
+    "session": "1314b91f5187cbd098f3cba05b287deae325e072287e8f88bc747161f53e9fab",
+    "record": false,
+    "action": "AgentCore::Action::\"invoke\"",
+    "resource": "AgentCore::Agent::\"ag_hrhelp01\"",
+    "agent": {
+      "entity": "AgentCore::IamEntity::\"arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34\"",
+      "agent_id": "ag_hrhelp01",
+      "method": "zip_runtime",
+      "system": false
+    },
+    "principal": {
+      "entity": "AgentCore::User::\"hr-intern\"",
+      "parents": [
+        "AgentCore::Role::\"member\""
+      ],
+      "attrs": {
+        "username": "hr-intern",
+        "role": "member",
+        "user_id": "u_hrintern01"
+      }
+    },
+    "context": {
+      "input": {},
+      "agent_id": "ag_hrhelp01",
+      "channel": "chat",
+      "expect": {
+        "policy_set_version": "ps-inv-1",
+        "temporal_set_version": 0
+      }
+    }
+  },
+  "policies": [
+    {
+      "id": "pol_invoke_members",
+      "version": 1,
+      "mode": "active",
+      "statement": "permit (principal in AgentCore::Role::\"member\", action == AgentCore::Action::\"invoke\", resource);"
+    },
+    {
+      "id": "pol_invoke_admins",
+      "version": 1,
+      "mode": "active",
+      "statement": "permit (principal in AgentCore::Role::\"admin\", action == AgentCore::Action::\"invoke\", resource);"
+    },
+    {
+      "id": "pol_invoke_hub",
+      "version": 1,
+      "mode": "active",
+      "statement": "permit (principal == AgentCore::System::\"hub\", action == AgentCore::Action::\"invoke\", resource);"
+    },
+    {
+      "id": "pol_no_presets_for_members",
+      "version": 1,
+      "mode": "active",
+      "statement": "forbid (principal in AgentCore::Role::\"member\", action == AgentCore::Action::\"invoke\", resource) when { resource.system };"
+    }
+  ],
+  "cases": [
+    {
+      "name": "member invokes a workspace agent",
+      "patch": {},
+      "expect": {
+        "decision": "allow",
+        "stage_a": "allow",
+        "determining": [
+          "pol_invoke_members"
+        ]
+      }
+    },
+    {
+      "name": "member invokes a system preset",
+      "patch": {
+        "agent.system": true
+      },
+      "expect": {
+        "decision": "deny",
+        "determining": [
+          "pol_no_presets_for_members"
+        ]
+      }
+    },
+    {
+      "name": "api key: no invoke permit names ApiKey (D1 revised)",
+      "patch": {
+        "principal": {
+          "entity": "AgentCore::ApiKey::\"key_9f3a\"",
+          "parents": [],
+          "attrs": {
+            "name": "ci-bot"
+          }
+        },
+        "context.channel": "v1"
+      },
+      "expect": {
+        "decision": "deny",
+        "determining": []
+      }
+    },
+    {
+      "name": "the hub itself",
+      "patch": {
+        "principal": {
+          "entity": "AgentCore::System::\"hub\"",
+          "parents": [],
+          "attrs": {}
+        },
+        "context.channel": "system"
+      },
+      "expect": {
+        "decision": "allow",
+        "determining": [
+          "pol_invoke_hub"
+        ]
+      }
+    },
+    {
+      "name": "resource names another agent than the agent block (wrong item)",
+      "patch": {
+        "resource": "AgentCore::Agent::\"ag_other01\""
+      },
+      "expect": {
+        "decision": "deny",
+        "errors0": "policy_evaluation_error"
+      }
+    }
+  ]
+}

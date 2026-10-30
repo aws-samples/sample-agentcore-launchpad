@@ -1,0 +1,32 @@
+{
+ "seam": "agentcore-browser",
+ "case": "stop_browser_session_already_stopped",
+ "captured_at": "2026-10-19T09:12:17Z",
+ "notes": "Idempotency shape of a second stop.",
+ "response_or_error": {
+  "exception": "botocore.exceptions.ClientError",
+  "Error": {
+   "Message": "Session already terminated: <browser-session-id>",
+   "Code": "ConflictException"
+  },
+  "ResponseMetadata": {
+   "RequestId": "eda8f4b8-fa90-4786-8718-a24c14d443b0",
+   "HTTPStatusCode": 409,
+   "HTTPHeaders": {
+    "date": "Mon, 19 Oct 2026 09:12:17 GMT",
+    "content-type": "application/json",
+    "content-length": "68",
+    "connection": "keep-alive",
+    "x-amzn-requestid": "eda8f4b8-fa90-4786-8718-a24c14d443b0",
+    "x-amzn-errortype": "ConflictException:http://internal.amazon.com/coral/com.amazon.bedrock.agentcore.common/"
+   }
+  },
+  "extra_top_level_keys": [
+   "message"
+  ],
+  "str": "An error occurred (ConflictException) when calling the StopBrowserSession operation: Session already terminated: <browser-session-id>"
+ },
+ "status": 409,
+ "elapsed_s": 0.037,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

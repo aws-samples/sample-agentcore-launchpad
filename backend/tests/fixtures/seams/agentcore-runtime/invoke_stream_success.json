@@ -1,0 +1,65 @@
+{
+ "seam": "agentcore-runtime",
+ "case": "invoke_stream_success",
+ "captured_at": "2026-10-19T09:15:18Z",
+ "notes": "hr_helpdesk_wb006 (Strands text agent, BedrockAgentCoreApp SSE). Lines truncated to 300 chars; page/model content minimal by prompt design.",
+ "response_or_error": {
+  "invoke_response_meta": {
+   "ResponseMetadata": {
+    "RequestId": "34b785a2-e2b8-433a-b2c6-00b1040db066",
+    "HTTPStatusCode": 200,
+    "HTTPHeaders": {
+     "date": "Mon, 19 Oct 2026 09:15:20 GMT",
+     "content-type": "text/event-stream; charset=utf-8",
+     "transfer-encoding": "chunked",
+     "connection": "keep-alive",
+     "x-amzn-requestid": "34b785a2-e2b8-433a-b2c6-00b1040db066",
+     "x-amzn-bedrock-agentcore-runtime-session-id": "9c4615d3-133b-4ee3-815b-962af66b6b0c-c76832ee"
+    }
+   },
+   "runtimeSessionId": "9c4615d3-133b-4ee3-815b-962af66b6b0c-c76832ee",
+   "contentType": "text/event-stream; charset=utf-8",
+   "statusCode": 200
+  },
+  "line_count": 1,
+  "bytes": 377,
+  "first_3_lines": [
+   "data: {\"error\": \"no workload access token: this runtime's workload identity is linked to the AgentCore Runtime and cannot self-mint one (Identity refused GetWorkloadAccessToken for LAUNCHPAD_WORKLOAD_NAME) — the caller must send runtimeUserId so the Runtime injects the token into the request\", \"erro"
+  ],
+  "last_2_lines": [
+   "data: {\"error\": \"no workload access token: this runtime's workload identity is linked to the AgentCore Runtime and cannot self-mint one (Identity refused GetWorkloadAccessToken for LAUNCHPAD_WORKLOAD_NAME) — the caller must send runtimeUserId so the Runtime injects the token into the request\", \"erro"
+  ],
+  "data_line_key_shapes_unique": [
+   [
+    "\"",
+    "<",
+    "n",
+    "o",
+    "n",
+    "-",
+    "j",
+    "s",
+    "o",
+    "n",
+    " ",
+    "d",
+    "a",
+    "t",
+    "a",
+    " ",
+    "l",
+    "i",
+    "n",
+    "e",
+    ">",
+    "\""
+   ]
+  ],
+  "data_line_key_shapes_unique_raw": [
+   "\"<non-json data line>\""
+  ]
+ },
+ "status": 200,
+ "elapsed_s": 2.574,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

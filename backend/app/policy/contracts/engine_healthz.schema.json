@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_healthz/v1",
+  "title": "I4 GET /healthz (unauthenticated, no data)",
+  "type": "object",
+  "properties": {
+    "ready": {"type": "boolean"},
+    "shard": {"type": "integer", "minimum": 0},
+    "store_epoch": {"type": "string"},
+    "sets": {"type": "object", "additionalProperties": {"type": "string"}}
+  },
+  "required": ["ready", "shard", "store_epoch", "sets"],
+  "additionalProperties": false
+}

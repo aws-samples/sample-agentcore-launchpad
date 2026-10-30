@@ -59,6 +59,9 @@ WORKER_RESOURCES = {
 
 @pytest.fixture
 def lab(tmp_path, monkeypatch, client):
+    # the submit paths probe the hub's Global Bedrock bearer (N13-obs20) — hermetic, not the
+    # developer's shell env
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
     stub = tmp_path / "stub_gen_cli.py"
     stub.write_text(STUB_GEN_CLI)
     fake_settings = get_settings().model_copy(update={"skill_lab_python": sys.executable})
@@ -131,12 +134,11 @@ def _taskset(client, tasks, name="ts", mode="single"):
 
 def test_clamp_taskgen_params(lab):
     params = runner.clamp_taskgen_params(None)
-    assert params["target_backend"] == "claude_code_exec"
+    assert params["target_backend"] == "opencode_exec"
     assert params["model"] == get_settings().skill_lab_target_model_id
     assert params["count"] == 5 and params["timeout"] == 900
 
-    codex = runner.clamp_taskgen_params({"target_backend": "codex_exec"})
-    assert codex["model"] == get_settings().skill_lab_codex_target_model_id
+    assert params["model"] == get_settings().skill_lab_target_model_id
 
     for bad in ({"count": 0}, {"count": 31}, {"timeout": 10}, {"target_backend": "x"},
                 {"guidance": "g" * 4001}):
@@ -181,7 +183,7 @@ def test_generate_review_import(lab):
     assert results["type"] == "taskgen"
     assert results["count"] == 3
     assert [t["id"] for t in results["tasks"]] == ["gen_001", "gen_002", "gen_003"]
-    assert results["summary"]["backend"] == "claude_code_exec"
+    assert results["summary"]["backend"] == "opencode_exec"
 
     imported = lab.post(
         f"/api/skill-lab/jobs/{job['id']}/import-taskset", json={"name": "generated set"}

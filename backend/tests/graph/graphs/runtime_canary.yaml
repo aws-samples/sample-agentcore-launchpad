@@ -1,0 +1,432 @@
+# Lifecycle graph — Runtime canary (E13). Round 16, channel A, r16-o.
+#
+# The AWS-touching actions (setup, traffic, verdict, rollback) are the ledger emulations of
+# tests/model/test_canary_state_machine.py (r16-e `Seams`); advance / complete / cleanup are
+# the real functions with the control-plane / S3 seams recorded.
+graph: runtime_canary
+module: E13
+entity: Runtime canary row (`runtime_canaries`) with its online configs and assignments
+initial: absent
+
+contracts:
+  EE_9:
+    doc: docs/cn/interfaces/evaluation-engine.md
+    section: "9. Routing contract"
+    quote: >-
+      `STOPPED` (promote / complete / rollback / cleanup) ends routing. … **`complete` is the terminal
+      policy** … `insufficient-data` stays blocked for both actions, and **`complete` is refused on
+      ANY `control-wins`, significant or not** (409 `canary.verdict_blocked` … without the override
+      `advance` answers 409 `canary.override_required`, with `allow_non_significant: true` it proceeds
+  UO_S8:
+    doc: docs/cn/interfaces/users-and-ownership.md
+    section: "8. Step 3 — mutation ownership"
+    quote: >-
+      `POST /api/runtime-canaries/{id}/action` | `setup`, `traffic`, `advance`, `complete`,
+      `rollback`, `cleanup` — every action that mints a version, drives traffic, changes the
+      production routing or destroys resources | `verdict` (scores sessions both arms already
+      collected; changes no version, route, weight or resource) | `canary.forbidden {canary_id,
+      action}` … anyone else answers **403 `<kind>.forbidden`** with `{created_by, created_by_name,
+      <kind>_id, action}` before any side effect
+  CANARY_STAGES:
+    doc: docs/cn/acceptance/E13-canary.md
+    section: "3. Negative / boundary cases"
+    quote: >-
+      `traffic` before `setup`; `verdict` before traffic; `complete` at stage 0 / 1; `advance` at 1/99
+      | `409 canary.stage_not_ready` with "run canary setup first" / "send traffic at the current
+      weights first" / "reach the final 1/99 stage first" / "the final 1/99 stage must be completed,
+      not advanced" … `traffic` without `dataset_id`; with a `simulated` dataset | `422
+      canary.dataset_required` … `cleanup` twice; `cleanup` on a `cleaned` row | 202 both times,
+      not-found deletes swallowed
+  CANARY_LEDGER:
+    doc: docs/cn/interfaces/testing.md
+    section: "6.1 Model tests — the canary row"
+    quote: >-
+      ledger mirrors the model (status, ramp stage, weights, A/B `RUNNING` ↔ `STOPPED`, exactly two
+      owner online configs while live, none + no assignments once `cleaned`); `complete` promotes the
+      candidate spec / version … cleanup idempotent
+  API_CANARY_CREATE:
+    doc: docs/cn/acceptance/E13-canary.md
+    section: "3. Negative / boundary cases"
+    quote: >-
+      inactive or hidden agent → `400 canary.agent_not_active` … second canary on wb006 while one is
+      `running` | `409 canary.already_running`
+  AC_E13_07:
+    doc: docs/cn/acceptance/E13-canary.md
+    section: "2. Acceptance cases › AC-E13-07"
+    quote: >-
+      `advance` to 50/50 then 1/99 … `setup.ramp_stage 1 → 2`, `weights [50,50] → [1,99]`; a new
+      round pops the previous `verdict`
+  AT_10:
+    doc: docs/cn/interfaces/assistant-turns.md
+    section: "10. CLEAR"
+    quote: >-
+      While a job is live: conversation writes `409 assistant.conversation_clearing`
+      (`service.accessible_conversation`), the Agents' canary action / create, redeploy and delete
+      routes `409 assistant.agent_clearing` (`purge.refuse_while_clearing`).
+
+nodes:
+  - id: absent
+  - id: fresh
+  # N17-obs14 (r17-b soak walks): the ramp is unrolled into its three contract-named stages
+  # (E13 AC-E13-07: 90/10 → 50/50 → 1/99). A cycle hid the stage counter — `advance` at 1/99 is
+  # the NC-E13-05 refusal and `complete` is allowed only there — so a walk around the cycle a
+  # third time met answers the graph could not name. Stage 0 keeps the unsuffixed ids.
+  - id: ready
+  - id: traffic_sent
+  - id: verdict_recorded
+  - id: ready_s1
+  - id: traffic_sent_s1
+  - id: verdict_recorded_s1
+  - id: ready_s2
+  - id: traffic_sent_s2
+  - id: verdict_recorded_s2
+  - id: completed
+  - id: rolled_back
+  - id: cleaned
+    terminal: true
+
+edges:
+  - id: create_inactive_agent
+    from: absent
+    to: absent
+    kind: refusal
+    via: POST /api/runtime-canaries for a `deploying` agent
+    expect: {status: 400, code: canary.agent_not_active}
+    cites: [API_CANARY_CREATE]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-new, v2-canary-agent, v2-canary-create]}
+  - id: seed_running
+    from: absent
+    to: fresh
+    via: the canary row an accepted POST leaves (`status running`, `stage setup`, candidate spec in `artifacts`) — seeded; the real create mints a Runtime version
+    expect: {canary_status: running}
+    cites: [API_CANARY_CREATE]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-create]}
+  - id: create_already_running
+    from: fresh
+    to: fresh
+    kind: refusal
+    via: POST /api/runtime-canaries for the same agent while one runs
+    expect: {status: 409, code: canary.already_running}
+    cites: [API_CANARY_CREATE]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-create]}
+  - id: traffic_before_setup
+    from: fresh
+    to: fresh
+    kind: refusal
+    via: action traffic before setup
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: setup
+    from: fresh
+    to: ready
+    via: action setup (emulated — writes the setup / abtest artifacts and two online configs)
+    expect: {status: 202, stage: 0, online_configs: 2}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: setup_twice
+    from: ready
+    to: ready
+    kind: refusal
+    via: action setup again
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: verdict_before_traffic
+    from: ready
+    to: ready
+    kind: refusal
+    via: action verdict with no traffic at the current weights
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: traffic_without_dataset
+    from: ready
+    to: ready
+    kind: refusal
+    via: action traffic without dataset_id
+    expect: {status: 422, code: canary.dataset_required}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-dataset]}
+  - id: traffic
+    from: ready
+    to: traffic_sent
+    via: action traffic {dataset_id}
+    expect: {status: 202, assignments: ">0"}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-dataset, 'v2-canary-action-{action}']}
+  - id: advance_before_verdict
+    from: traffic_sent
+    to: traffic_sent
+    kind: refusal
+    via: action advance with no verdict at the current weights
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: verdict
+    from: traffic_sent
+    to: verdict_recorded
+    via: action verdict (treatment-wins, significant)
+    expect: {status: 202}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: member_verdict
+    from: traffic_sent
+    to: verdict_recorded
+    via: another member's action verdict (the one action every member may run)
+    expect: {status: 202}
+    cites: [UO_S8]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: other_member_advance
+    from: verdict_recorded
+    to: verdict_recorded
+    kind: refusal
+    via: another member's action advance
+    expect: {status: 403, code: canary.forbidden}
+    cites: [UO_S8]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: complete_before_final
+    from: verdict_recorded
+    to: verdict_recorded
+    kind: refusal
+    via: action complete at stage 0 (90/10)
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES, EE_9]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: advance
+    from: verdict_recorded
+    to: ready_s1
+    via: action advance (treatment-wins significant) — 90/10 → 50/50
+    expect: {status: 202, stage: 1}
+    cites: [AC_E13_07, CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  # ---- stage 1 (50/50) ----
+  - id: verdict_before_traffic_s1
+    from: ready_s1
+    to: ready_s1
+    kind: refusal
+    via: action verdict right after the advance (the new round popped the previous verdict)
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [AC_E13_07, CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: rollback_s1
+    from: ready_s1
+    to: rolled_back
+    via: action rollback at 50/50
+    expect: {status: 202, abtest: STOPPED}
+    cites: [EE_9, CANARY_STAGES]
+    gap: >-
+      No contract sentence names rollback's precondition (the code allows it for ANY `running`
+      canary, even before setup) nor the `stage_not_ready` answer of a `completed` / `rolled_back`
+      canary ("canary is already <status>"): evaluation-engine.md §9 only lists rollback among the
+      actions that end routing, and the E13 acceptance rows name the pre-completion reasons.
+    register: N16-obs116
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-rollback, v2-confirm-ok]}
+  - id: traffic_s1
+    from: ready_s1
+    to: traffic_sent_s1
+    via: action traffic {dataset_id} at 50/50
+    expect: {status: 202, assignments: ">0"}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-dataset, 'v2-canary-action-{action}']}
+  - id: advance_before_verdict_s1
+    from: traffic_sent_s1
+    to: traffic_sent_s1
+    kind: refusal
+    via: action advance with no verdict at 50/50
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: verdict_s1
+    from: traffic_sent_s1
+    to: verdict_recorded_s1
+    via: action verdict at 50/50 (treatment-wins, significant)
+    expect: {status: 202}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: member_verdict_s1
+    from: traffic_sent_s1
+    to: verdict_recorded_s1
+    via: another member's action verdict at 50/50
+    expect: {status: 202}
+    cites: [UO_S8]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: other_member_advance_s1
+    from: verdict_recorded_s1
+    to: verdict_recorded_s1
+    kind: refusal
+    via: another member's action advance at 50/50
+    expect: {status: 403, code: canary.forbidden}
+    cites: [UO_S8]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: complete_before_final_s1
+    from: verdict_recorded_s1
+    to: verdict_recorded_s1
+    kind: refusal
+    via: action complete at stage 1 (50/50)
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES, EE_9]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: advance_s1
+    from: verdict_recorded_s1
+    to: ready_s2
+    via: action advance (treatment-wins significant) — 50/50 → 1/99
+    expect: {status: 202, stage: 2}
+    cites: [AC_E13_07, CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  # ---- stage 2 (1/99, final) ----
+  - id: verdict_before_traffic_s2
+    from: ready_s2
+    to: ready_s2
+    kind: refusal
+    via: action verdict right after the advance to 1/99
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [AC_E13_07, CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: rollback_s2
+    from: ready_s2
+    to: rolled_back
+    via: action rollback at 1/99
+    expect: {status: 202, abtest: STOPPED}
+    cites: [EE_9, CANARY_STAGES]
+    gap: >-
+      No contract sentence names rollback's precondition (the code allows it for ANY `running`
+      canary, even before setup) nor the `stage_not_ready` answer of a `completed` / `rolled_back`
+      canary ("canary is already <status>"): evaluation-engine.md §9 only lists rollback among the
+      actions that end routing, and the E13 acceptance rows name the pre-completion reasons.
+    register: N16-obs116
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-rollback, v2-confirm-ok]}
+  - id: traffic_s2
+    from: ready_s2
+    to: traffic_sent_s2
+    via: action traffic {dataset_id} at 1/99
+    expect: {status: 202, assignments: ">0"}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-dataset, 'v2-canary-action-{action}']}
+  - id: advance_before_verdict_s2
+    from: traffic_sent_s2
+    to: traffic_sent_s2
+    kind: refusal
+    via: action advance with no verdict at 1/99
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: verdict_s2
+    from: traffic_sent_s2
+    to: verdict_recorded_s2
+    via: action verdict at 1/99 (treatment-wins, significant)
+    expect: {status: 202}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: member_verdict_s2
+    from: traffic_sent_s2
+    to: verdict_recorded_s2
+    via: another member's action verdict at 1/99
+    expect: {status: 202}
+    cites: [UO_S8]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: other_member_advance_s2
+    from: verdict_recorded_s2
+    to: verdict_recorded_s2
+    kind: refusal
+    via: another member's action advance at 1/99
+    expect: {status: 403, code: canary.forbidden}
+    cites: [UO_S8]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: advance_at_final
+    from: verdict_recorded_s2
+    to: verdict_recorded_s2
+    kind: refusal
+    via: action advance at 1/99 ("the final 1/99 stage must be completed, not advanced")
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [CANARY_STAGES]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}']}
+  - id: complete_final
+    from: verdict_recorded_s2
+    to: completed
+    via: action complete at the final 1/99 stage with a treatment-wins verdict
+    expect: {status: 202, agent_version: candidate, abtest: STOPPED}
+    cites: [EE_9, CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: ['v2-canary-action-{action}', v2-confirm-ok]}
+  - id: rollback
+    from: ready
+    to: rolled_back
+    via: action rollback (allowed for ANY running canary)
+    expect: {status: 202, abtest: STOPPED}
+    cites: [EE_9, CANARY_STAGES]
+    gap: >-
+      No contract sentence names rollback's precondition (the code allows it for ANY `running`
+      canary, even before setup) nor the `stage_not_ready` answer of a `completed` / `rolled_back`
+      canary ("canary is already <status>"): evaluation-engine.md §9 only lists rollback among the
+      actions that end routing, and the E13 acceptance rows name the pre-completion reasons.
+    register: N16-obs116
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-rollback, v2-confirm-ok]}
+  - id: rollback_fresh
+    from: fresh
+    to: rolled_back
+    via: action rollback before setup
+    expect: {status: 202}
+    cites: [EE_9, CANARY_STAGES]
+    gap: >-
+      No contract sentence names rollback's precondition (the code allows it for ANY `running`
+      canary, even before setup) nor the `stage_not_ready` answer of a `completed` / `rolled_back`
+      canary ("canary is already <status>"): evaluation-engine.md §9 only lists rollback among the
+      actions that end routing, and the E13 acceptance rows name the pre-completion reasons.
+    register: N16-obs116
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-rollback, v2-confirm-ok]}
+  - id: action_after_complete
+    from: completed
+    to: completed
+    kind: refusal
+    via: action advance on a completed canary
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [EE_9, CANARY_STAGES]
+    gap: >-
+      No contract sentence names rollback's precondition (the code allows it for ANY `running`
+      canary, even before setup) nor the `stage_not_ready` answer of a `completed` / `rolled_back`
+      canary ("canary is already <status>"): evaluation-engine.md §9 only lists rollback among the
+      actions that end routing, and the E13 acceptance rows name the pre-completion reasons.
+    register: N16-obs116
+    ui: null
+  - id: action_after_rollback
+    from: rolled_back
+    to: rolled_back
+    kind: refusal
+    via: action traffic on a rolled-back canary
+    expect: {status: 409, code: canary.stage_not_ready}
+    cites: [EE_9, CANARY_STAGES]
+    gap: >-
+      No contract sentence names rollback's precondition (the code allows it for ANY `running`
+      canary, even before setup) nor the `stage_not_ready` answer of a `completed` / `rolled_back`
+      canary ("canary is already <status>"): evaluation-engine.md §9 only lists rollback among the
+      actions that end routing, and the E13 acceptance rows name the pre-completion reasons.
+    register: N16-obs116
+    ui: null
+  - id: cleanup_completed
+    from: completed
+    to: cleaned
+    via: action cleanup
+    expect: {status: 202, online_configs: 0, assignments: 0}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-cleanup, v2-confirm-ok]}
+  - id: cleanup_rolled_back
+    from: rolled_back
+    to: cleaned
+    via: action cleanup
+    expect: {status: 202, online_configs: 0, assignments: 0}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-cleanup, v2-confirm-ok]}
+  - id: cleanup_again
+    from: cleaned
+    to: cleaned
+    via: action cleanup on a cleaned canary (idempotent)
+    expect: {status: 202, online_configs: 0}
+    cites: [CANARY_STAGES, CANARY_LEDGER]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-cleanup, v2-confirm-ok]}
+  - id: create_after_cleaned
+    from: cleaned
+    to: fresh
+    via: a second canary on the same agent once the first is cleaned (seeded like the first)
+    expect: {canary_status: running}
+    cites: [API_CANARY_CREATE]
+    ui: {page: /v2/eval/experiments, view: null, controls: [v2-canary-create]}

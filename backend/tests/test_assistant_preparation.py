@@ -12,6 +12,7 @@ import pytest
 
 from app.assistant import preparation, service
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.core.display_time import to_display_payload
 from app.models.assistant import AssistantConversation, AssistantProposal
 from app.models.ledger import Agent, Job, Workspace
 from app.services.workspace import WorkspaceContext, workspace_context
@@ -94,6 +95,11 @@ class S3:
     def delete_object(self, Bucket, Key):
         self.files.pop((Bucket, Key), None)
 
+    def delete_objects(self, Bucket, Delete, **kw):  # noqa: N803 — boto kwargs
+        for obj in Delete.get("Objects", []):
+            self.delete_object(Bucket=Bucket, Key=obj["Key"])
+        return {"Deleted": [{"Key": o["Key"]} for o in Delete.get("Objects", [])]}
+
     def list_objects_v2(self, Bucket, Prefix):
         return {"Contents": [{"Key": k} for (b, k) in self.files if b == Bucket
                              and k.startswith(Prefix)]}
@@ -159,7 +165,7 @@ def test_model_preserves_explicit_selection_and_member_edit_updates_it(client, r
     proposed = _propose(client, harness, cid, raw)
     assert proposed["content"]["skills"] == ["meeting-summarizer"]
     assert proposed["content"]["knowledge_bases"] == ["KB123ABC"]
-    context = harness.calls[-1]["messages"][0]["content"][0]["text"]
+    context = harness.messages_of(-1)[0]["content"][0]["text"]
     assert "Member-selected preparation resources" in context
     assert '"skills": ["meeting-summarizer"]' in context
     edited = client.put(f"{BASE}/conversations/{cid}/proposal", json={"content": raw})
@@ -193,7 +199,7 @@ def test_mcp_selection_is_authoritative_and_deploys_only_selected_attachments(
     proposed = _propose(client, harness, cid, {**VALID_PROPOSAL, "tools": []})
     assert proposed["status"] == "draft", proposed["validation_errors"]
     assert proposed["content"]["tools"] == ["mcp:deepwiki"]
-    assert '"tools": ["mcp:deepwiki"]' in harness.calls[-1]["messages"][0]["content"][0]["text"]
+    assert '"tools": ["mcp:deepwiki"]' in harness.messages_of(-1)[0]["content"][0]["text"]
     approved = _approve(client, cid, proposed)
     assert approved.status_code == 202, approved.text
     with SessionLocal() as db:
@@ -270,32 +276,6 @@ def test_member_cannot_change_approved_resources_even_in_invalid_proposal(
     assert _count(Job) == 1
 
 
-def test_member_evaluation_edit_preserves_approval_and_preparation(client, ready, harness):
-    from .test_assistant_evaluation_repair import _fixed
-
-    cid = _open(client)
-    original = _propose(client, harness, cid)
-    assert _approve(client, cid, original).status_code == 202
-    before = _latest(client, cid)
-    content = _fixed(original["content"])
-    content["tools"].reverse()  # Same resource set remains legal.
-    result = client.put(f"{BASE}/conversations/{cid}/proposal", json={"content": content})
-    assert result.status_code == 200, result.text
-    revised = result.json()["proposal"]
-    assert revised["status"] == "draft"
-    assert revised["content"]["evaluation_plan"] == content["evaluation_plan"]
-    for field in preparation.RESOURCE_FIELDS:
-        assert set(revised["content"][field]) == set(original["content"][field])
-    detail = _latest(client, cid)
-    assert detail["proposals"][0] == before["proposals"][0]
-    assert detail["preparation"] == before["preparation"]
-    prepared = client.post(f"{BASE}/conversations/{cid}/evaluation-plan/prepare",
-                           json={"revision": revised["revision"]})
-    assert prepared.status_code == 201, prepared.text
-    assert prepared.json()["plan"]["status"] == "draft"
-    assert _count(Job) == 1
-
-
 @pytest.mark.parametrize("invalid_field", ["system_prompt", "tools"])
 def test_member_edit_retaining_resources_still_receives_ordinary_validation(
     client, ready, harness, invalid_field,
@@ -338,50 +318,11 @@ def test_refresh_after_approval_reads_drift_without_minting_proposal(
     result = client.post(f"{BASE}/conversations/{cid}/catalog")
     assert result.status_code == 200, result.text
     detail = result.json()["conversation"]
-    assert detail["catalog"] == catalog
+    assert detail["catalog"] == to_display_payload(catalog)  # N17-obs463: wire times +08:00
     assert detail["proposals"] == before["proposals"]
     for field in preparation.RESOURCE_FIELDS:
         assert detail["preparation"][field] == original["content"][field]
     assert detail["preparation"]["revision"] == before["preparation"]["revision"] + 1
-    assert _count(Job) == 1
-
-
-@pytest.mark.parametrize("explicit_selection", [False, True])
-def test_model_evaluation_repair_preserves_approved_resources(
-    client, ready, harness, explicit_selection,
-):
-    from .test_assistant import _sse
-    from .test_assistant_evaluation_repair import _fixed, _repair, _seed
-
-    cid, source, plan = _seed(client)
-    assert _approve(client, cid, source).status_code == 202
-    if not explicit_selection:
-        with SessionLocal() as db:
-            db.get(AssistantConversation, cid).preparation = {}
-            db.commit()
-    before = _latest(client, cid)
-    fixed = _fixed(source["content"])
-    fixed.update(knowledge_bases=[], skills=[], tools=["mcp:missing"])
-    harness.reply(_block(fixed))
-    result = _repair(client, cid, plan)
-    assert result.status_code == 200, result.text
-    events = _sse(result)
-    assert events[-1][0] == "done" and not any(kind == "error" for kind, _ in events)
-    revised = next(data for kind, data in events if kind == "proposal")
-    assert revised["status"] == "draft", revised["validation_errors"]
-    assert revised["content"]["evaluation_plan"] == fixed["evaluation_plan"]
-    for field in preparation.RESOURCE_FIELDS:
-        assert revised["content"][field] == source["content"][field]
-    context = harness.calls[-1]["messages"][0]["content"][0]["text"]
-    assert "Approved resources (locked)" in context and "/create" in context
-    detail = _latest(client, cid)
-    assert detail["preparation"] == before["preparation"]
-    assert detail["proposals"][0] == before["proposals"][0]
-    prepared = client.post(f"{BASE}/conversations/{cid}/evaluation-plan/prepare",
-                           json={"revision": revised["revision"]})
-    assert prepared.status_code == 201, prepared.text
-    assert prepared.json()["plan"]["status"] == "draft"
-    assert _save(client, cid).json()["code"] == "assistant.resources_locked"
     assert _count(Job) == 1
 
 
@@ -415,7 +356,10 @@ def test_latest_historical_approval_overrides_newer_draft_and_saved_selections(
     for field in preparation.RESOURCE_FIELDS:
         assert before["preparation"][field] == []
     blocked = _approve(client, cid, before["proposals"][-1])
-    assert blocked.status_code == 409 and blocked.json()["code"] == "assistant.resources_locked"
+    # N16-obs40: a conversation that already minted its Agent refuses every later creation
+    # approval before looking at the draft's resources (which the lock would refuse too)
+    assert blocked.status_code == 409 and blocked.json()["code"] == "assistant.already_approved"
+    assert blocked.json()["detail"]["revision"] == second["revision"]
     # The historical approval keeps its idempotent outcome, despite the newer draft.
     assert _approve(client, cid, second).status_code == 200
     revised = _propose(client, harness, cid)
@@ -516,39 +460,6 @@ def test_mcp_refresh_retains_disappeared_selection_and_requires_new_review(
     assert _count(Job) == 0
 
 
-def test_adding_mcp_invalidates_zero_call_seed_without_rewriting_rules(
-    client, ready, harness,
-):
-    cid = _open(client)
-    rule = {"id": "zero", "type": "tool_count", "max": 0}
-    raw = {**VALID_PROPOSAL, "tools": [], "skills": [], "knowledge_bases": [],
-           "native_tools": [],  # a zero-call rule needs no tool at all, native ones included
-           "evaluation_plan": {"evaluators": [{
-               "kind": "code", "key": "zero", "name": "zero_calls", "level": "SESSION",
-               "title": "No tool calls",
-               "rules": {"version": 1, "checks": [rule]},
-           }]}}
-    original = _propose(client, harness, cid, raw)
-    assert original["status"] == "draft", original["validation_errors"]
-    changed = _save(client, cid, tools=["mcp:deepwiki"])
-    assert changed.status_code == 200, changed.text
-    latest = changed.json()["proposals"][-1]
-    assert latest["status"] == "invalid"
-    assert any("forbids all tool calls" in err for err in latest["validation_errors"])
-    assert latest["content"]["evaluation_plan"]["evaluators"][0]["rules"]["checks"][0]["max"] == 0
-    assert changed.json()["proposals"][0]["content_hash"] == original["content_hash"]
-    assert _count(Job) == 0
-    # Undoing the incompatible selection repairs the proposal without editing its rules.
-    restored = _save(client, cid, tools=[])
-    assert restored.status_code == 200, restored.text
-    recovered = restored.json()["proposals"][-1]
-    assert recovered["revision"] == latest["revision"] + 1
-    assert recovered["status"] == "draft"
-    assert recovered["content"]["tools"] == []
-    assert recovered["content"]["evaluation_plan"] == original["content"]["evaluation_plan"]
-    assert restored.json()["proposals"][-2]["content_hash"] == latest["content_hash"]
-
-
 def test_stale_revision_and_unavailable_catalog_do_not_change_selection(client, ready, monkeypatch):
     cid = _open(client)
     assert _save(client, cid, skills=["meeting-summarizer"], revision=0).status_code == 200
@@ -566,22 +477,6 @@ def test_stale_revision_and_unavailable_catalog_do_not_change_selection(client, 
     assert detail["catalog"]["skills"] == []
     assert "access denied" in detail["catalog"]["warnings"][0]
     assert "NOT evidence of an empty" in service.catalog_section(detail["catalog"])
-
-
-@pytest.mark.parametrize("missing", ["kb_gateway_id", "kb_gateway_arn", "oauth_provider_arn",
-                                     "status", "url"])
-def test_kb_selection_needs_all_live_harness_gateway_prerequisites(
-    client, ready, monkeypatch, missing,
-):
-    cid = _open(client)
-    cat = _catalog()
-    if missing in ("status", "url"):
-        cat["resources"]["kb_gateway"].pop(missing)
-    else:
-        cat["resources"].pop(missing)
-    monkeypatch.setattr(service, "fetch_catalog", lambda ws: cat)
-    res = _save(client, cid, kbs=["KB123ABC"])
-    assert res.status_code == 409 and "ready knowledge-base gateway" in res.json()["message"]
 
 
 def test_refresh_preserves_selection_and_mints_review_on_binding_drift(
@@ -803,7 +698,8 @@ def test_import_enforces_owner_workspace_permission_and_server_source_only(gated
     assert _save(other, cid, revision=0).status_code == 404
     assert _import(other, cid, sid, revision=0).status_code == 404
     other_cid = _open(other)
-    assert _import(other, other_cid, sid, revision=0).status_code == 410
+    response = _import(other, other_cid, sid, revision=0)
+    assert response.status_code == 404 and response.json()["code"] == "registry.staging_not_found"
     assert s3.uploaded == []
     _set_permissions(ids[MEMBER_CREDS["username"]], {"agents.deploy": False})
     assert _save(member, cid, revision=0).status_code == 200
@@ -822,13 +718,45 @@ def test_import_enforces_owner_workspace_permission_and_server_source_only(gated
 
 
 def test_import_staging_cannot_cross_workspace(client, ready, s3):
+    """Fix round 1: preparation.py's staging consumption goes through the shared
+    ``registry_console.take_staging`` helper, which answers the same 404
+    ``registry.staging_not_found`` as the console routes."""
     from app.routers.registry import _staging
 
     cid = _open(client)
     sid = _inspect(client)
     _staging[sid]["workspace_id"] = "other"
-    assert _import(client, cid, sid).status_code == 410
+    response = _import(client, cid, sid)
+    assert response.status_code == 404 and response.json()["code"] == "registry.staging_not_found"
     assert not s3.uploaded
+
+
+def test_import_consumes_the_staging_through_the_shared_console_helper(client, ready, s3):
+    """N4 hand-over: the skill import claims its staging exactly once through
+    ``registry_console.take_staging`` (workspace- and principal-bound, the same 404 as
+    the console routes), never by reaching into the staging map itself."""
+    from app.services import registry_console
+
+    real = registry_console.take_staging
+    taken: list[tuple] = []
+
+    def spy(staging_id, *, workspace, principal):
+        taken.append((staging_id, type(workspace).__name__, workspace.id, principal))
+        return real(staging_id, workspace=workspace, principal=principal)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(registry_console, "take_staging", spy)
+        cid = _open(client)
+        sid = _inspect(client)
+        res = _import(client, cid, sid)
+    assert res.status_code == 200, res.text
+    # two bound lookups per import, both through the shared helper: the preparation
+    # pre-check before any upload, then the shared ``import_staged_skills`` path
+    # (``consume=False``) for the selection — never an unbound read of the staging map
+    assert taken and set(taken) == {
+        (sid, "WorkspaceContext", DEFAULT_WORKSPACE_ID, "local-operator")}
+    assert len(taken) == 2
+    assert s3.uploaded  # the selection's files were uploaded
 
 
 def test_import_claim_blocks_turn_refresh_selection_edit_approval_and_purge(

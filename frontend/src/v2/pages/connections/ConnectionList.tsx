@@ -1,3 +1,4 @@
+import { copyBrowserText } from "../../../lib/browser-compat";
 import { Copy, Plus, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -205,7 +206,7 @@ function CreateConnection({
   const { t } = useTranslation();
   const templates = useLoad(() => api.connectionTemplates(), "connection-templates");
   const list = useMemo(() => templates.data?.templates ?? [], [templates.data]);
-  const [templateId, setTemplateId] = useState("cognito");
+  const [templateId, setTemplateId] = useState("custom_oidc");
   const template: ConnectionTemplate | undefined = list.find((x) => x.id === templateId) ?? list[0];
   const [values, setValues] = useState<Values>({});
   const [obo, setObo] = useState<OboFormState>({ ...EMPTY_OBO_FORM });
@@ -333,11 +334,6 @@ function CreateConnection({
           <input className="v2-input" value={val("description")} maxLength={200} onChange={(e) => put("description", e.target.value)} />
         </Field>
         {fields.map((field) => input(field, field === "client_secret" || field === "api_key"))}
-        {oboOffer === "cognito" && (
-          <Alert tone="info">
-            {t("v2.connections.obo.cognito")}
-          </Alert>
-        )}
         {oboOffer === "offered" && <OboFields form={obo} onChange={setObo} />}
         {error && <Alert tone="error">{error}</Alert>}
       </div>
@@ -426,9 +422,8 @@ function CallbackDialog({ connection, onClose }: { connection: ConnectionInfo | 
             <Button
               size="sm"
               onClick={() =>
-                void navigator.clipboard
-                  ?.writeText(url)
-                  .then(() => toast("success", t("v2.connections.copied")))
+                void copyBrowserText(url)
+                  .then((copied) => { if (copied) toast("success", t("v2.connections.copied")); })
                   .catch(() => undefined)
               }
               title={t("v2.connections.copy")}

@@ -2,10 +2,11 @@
 
 ## Prerequisites / 前置条件
 
-- AWS account with Bedrock AgentCore previews enabled (Runtime, Harness, Gateway, Policy, Evaluation) in `us-west-2`; Agent Registry is GA (`agent-registry` namespace since 2026-08-06, see [registry-ga-migration.md](registry-ga-migration.md)) and needs no preview enablement
-- Credentials with administrator-level access (`aws sts get-caller-identity` works)
-- `uv` ≥ 0.8, Node.js ≥ 20 (`npm`), AWS CDK CLI v2 (`npm i -g aws-cdk`), Docker (ARM64-capable, phase 5)
-- One-time CDK bootstrap per account/region: `cdk bootstrap aws://<account>/us-west-2`
+- An AWS account in `cn-northwest-1`, where AgentCore Runtime, Gateway, Identity and Observability are generally available — no preview enablement
+- A **Global** AWS account's Amazon Bedrock API key with access to `global.zai.glm-5.3` and/or `global.moonshotai.kimi-k3` (Bedrock models are not yet available in the China regions; the CN Runtime reaches them cross-partition — see [architecture.md](architecture.md))
+- Credentials with administrator-level access in the `cn-northwest-1` account (`aws sts get-caller-identity` works)
+- `uv` ≥ 0.8, Node.js ≥ 20 (`npm`), AWS CDK CLI v2 (`npm i -g aws-cdk`), Docker (ARM64-capable; only needed for the BYOC Dockerfile path)
+- One-time CDK bootstrap per account/region: `cdk bootstrap aws://<account>/cn-northwest-1`
 
 ## Bootstrap / 引导
 
@@ -40,33 +41,14 @@ What it creates / 创建内容:
 | S3 artifacts bucket | `launchpad-artifacts-<acct>-<region>` |
 | ECR repo | `launchpad-agents` |
 | CodeBuild (ARM64) | `launchpad-agent-builder` |
-| Cognito user pool | `launchpad-users` (+ groups `platform-admin`, `hr-analyst`, demo users `admin`/`demo`) |
 | IAM execution role | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
-| AgentCore Memory | `launchpad_memory` (short-term events + semantic, user-preference, session-summary and episodic long-term strategies; re-running bootstrap adds missing strategies to an existing memory) |
+| AgentCore Memory | `launchpad_memory` (short-term events + semantic, user-preference and session-summary long-term strategies; re-running bootstrap adds missing strategies to an existing memory) |
 | AgentCore Gateway | `launchpad-gw-<suffix>` |
 | Managed AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 
 Demo user passwords are generated and stored in `config/launchpad.yaml`
 (**gitignored** — treat as local secrets; a sanitized `config/launchpad.example.yaml` is committed).
-
-### Policy is operator-managed / Policy 由用户显式管理
-
-Bootstrap creates the shared Gateway but deliberately does **not** create a
-Policy Engine, create Cedar policies, attach an Engine, or select a Gateway
-enforcement mode. Existing Policy resources and attachments are also left
-untouched when bootstrap is rerun.
-
-Use Governance to opt in: manage the selected Gateway, create or select an
-Engine, and choose its initial Gateway attachment mode (`ENFORCE` by default or
-`LOG_ONLY`). `ENFORCE` is default-deny, so create and review permitting policies
-before relying on Gateway traffic.
-
-Bootstrap still enables CloudWatch Transaction Search for general
-observability. It does not create the per-Gateway CloudWatch Logs delivery used
-for detailed Policy decision spans. Policy decision counts come from
-CloudWatch metrics and remain available after Policy is configured; detailed
-decision rows require separately managed trace delivery.
 
 ## Run locally / 本地运行
 
@@ -93,7 +75,7 @@ starts:
 
 ### Console login / 控制台登录
 
-The console can use local accounts without Cognito or any other AWS dependency.
+The console authenticates with local accounts — no AWS identity dependency.
 Authentication is disabled until a password is configured, and the console shows
 an `AUTH OFF` badge in its top bar while that is the case.
 
@@ -127,17 +109,16 @@ credentials and restarting the backend invalidates existing sessions.
 There are two roles, and since 2026-08-11 they differ in exactly one place:
 **user management** (`/users`) is administrator-only; **everything else in the
 console is open to members** — registry register/edit/import, knowledge-base
-mutations, evaluation datasets/evaluators/runs, AB experiments and canaries,
-Cedar policy writes, API keys, the Studio canvas, and the browser /
-code-interpreter demos. The authoritative list is the table in
+mutations, API keys, the Studio canvas, and the browser / code-interpreter
+demos. The authoritative list is the table in
 `backend/app/core/route_policy.py`; a route missing from it is refused rather
 than served. (Local code execution additionally stays disabled in production
 for every role unless `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED` opts in.)
 
 A small set of capabilities remains **revocable per user** in the User
-Management console: the agent lifecycle (deploy, import, delete, convert) and
-starting evaluation/insights runs. Members hold them by default; revoking them
-shuts off deploys and billable eval jobs for that account.
+Management console: the agent lifecycle (deploy, import, delete, convert).
+Members hold them by default; revoking them shuts off deploys for that
+account.
 
 Note the console has no per-user data partitioning: every member sees and can
 mutate the same shared resources, so hand member accounts only to people you
@@ -192,6 +173,19 @@ the record rolls forward, which needs approval again. The record shows a SYSTEM 
 deletes it from the console, members can view and mount it, administrators operate its
 approval; uninstalling the preset keeps the record.
 **Live smoke is still pending** (see architecture.md → *System-managed presets*).
+
+**Auto-repair (N17-obs206).** An installed preset falls behind whenever the model catalog
+changes (a provider or model added / removed on Settings → Model Providers) or a new build
+ships a newer bundle. The host repairs every installed, active, behind preset in **every**
+workspace by itself — 60 s after startup and 180 s after the last catalog change (a burst of
+edits is one sweep), one deploy at a time — and the card shows AUTO-REPAIRING meanwhile.
+Keys of `config/launchpad.yaml` (or the `LAUNCHPAD_`-prefixed env, which wins):
+
+| Setting | Default | Effect |
+|---|---|---|
+| `system_presets_auto_repair` | `true` | Set false to turn the automatic sweep (startup + catalog-change triggers) off; the per-card REPAIR SNAPSHOT stays. |
+| `system_presets_auto_repair_start_delay_s` | `60` | Seconds after startup before the first sweep (0–3600). |
+| `system_presets_auto_repair_debounce_s` | `180` | Seconds of quiet after the last catalog-shaping registry write before a sweep (0–3600). |
 
 ### Architect assistant / 架构助手
 
@@ -349,9 +343,9 @@ tag, and the digest is recorded on the deployment. Image tags stay **mutable** o
 purpose: packaging runs before the version is bumped, so a re-publish pushes the
 same tag twice and an immutable-tag policy would fail that push.
 
-> **Applies to both stacks.** Scan-on-push is a CDK change, so `make bootstrap`
-> has to be run in `us-west-2` **and** on the `us-east-1` host. Until it is, the
-> gate on that host will report that it could not read a scan.
+> **Scan-on-push is a CDK change.** Re-run `make bootstrap` for it to take
+> effect on an existing deployment; until then, the gate reports that it could
+> not read a scan.
 
 > **Expect the default to block on day one.** A scan of a current demo image found
 > **4 CRITICAL** findings, all unpatched OS packages in the Debian base image
@@ -557,61 +551,37 @@ cookie to lapse.
 
 ## Production deployment / 生产部署
 
-`./start.py --prod` is a local preview: it builds the frontend, serves the built
-bundle, drops backend auto-reload, and binds to `0.0.0.0`. For a host that stays
-up, supervise the two processes instead and keep the console behind an edge that
-terminates TLS. The reference deployment (workshop EC2 + CloudFront) — its unit
-files and the verified update sequence — is written up in
-[agent-runbook-prod.md](agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box); its shape is:
+For a from-scratch host, use `infra/ec2/launchpad-cn-ec2.yaml` (no CDK toolchain
+needed on a fresh machine) — see [docs/cn/interfaces/deploy.md](cn/interfaces/deploy.md)
+for the exact parameters and verification commands. Its systemd/nginx shape:
 
 ```text
-browser → CloudFront (TLS, no caching, all methods, injects a secret origin header)
-            └─ nginx :80 on the instance — rejects any request without that header
-                 ├─ /api/, /v1/ → 127.0.0.1:8000   (backend, proxy_buffering off for SSE)
-                 └─ /,  /assets/ → 127.0.0.1:5173  (vite preview serving frontend/dist)
+browser (from AllowedCidr only) → nginx :80 or :443 on the instance
+                                       ├─ /api/, /v1/ → 127.0.0.1:8000   (backend, proxy_buffering off for SSE)
+                                       └─ /,  /assets/ → 127.0.0.1:5173  (vite preview serving frontend/dist)
 ```
 
-**1. Supervise the two processes.** The backend unit carries the auth
-configuration; nothing else enables the gate for you:
+No CloudFront, no public ALB (spec decision: v1 ships private-network-only — see
+[docs/architecture.md](architecture.md)). `LAUNCHPAD_AUTH_COOKIE_SECURE` follows
+where TLS terminates: `false` for the template's `TlsMode=none` (plain HTTP
+inside a trusted CIDR), `true` for `TlsMode=selfsigned`. The Global Bedrock API
+key reaches the host only via an SSM SecureString parameter the instance role
+reads at boot — never as a CloudFormation parameter value, never logged (spec
+C4).
 
-```ini
-# /etc/systemd/system/launchpad-backend.service   (excerpt)
-[Service]
-WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/backend
-Environment=LAUNCHPAD_RUN_MODE=prod
-Environment=LAUNCHPAD_AUTH_USERNAME=admin
-Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
-Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
-ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
-Restart=on-failure
-```
+**Optional fixed public IP (N12-obs52, user decision 2026-10-16).**
+`infra/ec2/launchpad-console-nlb.yaml` adds a separate, deletable stack: a Network
+Load Balancer with a static Elastic IP in front of the default host, TCP passthrough
+on **8443 only** (the host's self-signed TLS stays), open to **any source IP** by
+default (`AccessMode=OpenToInternet`; `AllowedCidrs` keeps an allowlist available) —
+the console sign-in is the only gate, so keep a strong administrator password and
+the registration controls above. One stack per host (each host stack has its own
+VPC; t1 is not fronted yet). The Elastic IP is retained when the stack is deleted
+(the advertised address survives; release it by hand). Commands, caveats and the
+deletion order:
+[docs/cn/interfaces/deploy.md §9](cn/interfaces/deploy.md#9-console-nlb-fixed-public-ip-n12-obs52); `scripts/ec2-console-nlb.sh` wraps them.
 
-```ini
-# /etc/systemd/system/launchpad-frontend.service  (excerpt)
-[Service]
-WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/frontend
-Requires=launchpad-backend.service
-ExecStart=/usr/bin/npm run preview -- --host 127.0.0.1 --port 5173 --strictPort
-Restart=on-failure
-```
-
-`vite preview` serves `frontend/dist`, so **every frontend change needs
-`npm run build` before the restart**. Both processes bind to `127.0.0.1`: only
-the reverse proxy is exposed.
-
-**2. Close the origin.** CloudFront adds a custom header (e.g.
-`X-Launchpad-Origin-Key`) and nginx refuses anything without it, so the public
-instance IP cannot bypass the CDN:
-
-```nginx
-if ($http_x_launchpad_origin_key != "<shared-secret>") { return 403; }
-proxy_set_header X-Forwarded-Proto https;   # TLS terminates at CloudFront
-```
-
-Because TLS terminates at the edge, keep `LAUNCHPAD_AUTH_COOKIE_SECURE=true`;
-over plain HTTP the browser would drop the session cookie.
-
-**3. Update an existing host.**
+**1. Update an existing host.**
 
 ```bash
 cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)

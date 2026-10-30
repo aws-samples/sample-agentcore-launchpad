@@ -5,11 +5,17 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../auth/auth-context";
 import { Btn, Chip, ConfirmDialog, Panel, useToast } from "../../components";
 import type { ChipTone } from "../../components";
-import type { SystemPresetInfo, SystemPresetSettings, SystemPresetStatus } from "../../lib/api";
+import type {
+  JobInfo,
+  SystemPresetInfo,
+  SystemPresetSettings,
+  SystemPresetStatus,
+} from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { presetConfigureRequest } from "./presetSettings";
 import type { PresetConfigureRequest } from "./presetSettings";
+import { zonedClock } from "../../lib/timestamps";
 
 const STATUS_TONE: Record<SystemPresetStatus, ChipTone> = {
   configuration_required: "muted",
@@ -24,7 +30,102 @@ const TERMINAL: SystemPresetStatus[] = ["active", "failed", "not_installed"];
 const IN_FLIGHT: SystemPresetStatus[] = ["deploying", "uninstalling"];
 const POLL_MS = 4000;
 
-type Operation = "install" | "uninstall";
+/** `repair` = the card's "Repair snapshot" (N17-obs234): the same bodiless install route —
+ *  the server re-publishes because the pinned model catalog is behind the ledger's stamp. */
+type Operation = "install" | "uninstall" | "repair";
+
+/**
+ * The preset's current/last job (install, repair, uninstall) with an on-demand log —
+ * N12-obs31 (a): a preset job can be filed under a workspace id `GET /api/jobs/{id}`
+ * does not see, so the log is read through the preset's own admin route. Polls while
+ * the job is live and the log is open.
+ */
+function PresetJobLog({
+  preset,
+  workspaceId,
+  isAdmin,
+}: {
+  preset: SystemPresetInfo;
+  workspaceId: string | null;
+  isAdmin: boolean;
+}) {
+  const { t } = useTranslation();
+  const job = preset.last_job ?? null;
+  const [open, setOpen] = useState(false);
+  const [log, setLog] = useState<JobInfo | null>(null);
+  // the raw failure (code + fallback message); translated in render so a language
+  // switch re-renders without re-fetching the log
+  const [failed, setFailed] = useState<{ code: string | null; message: string } | null>(null);
+  const live = job?.status === "queued" || job?.status === "running";
+  const jobId = job?.id ?? null;
+  useEffect(() => {
+    if (!open || !jobId) return;
+    let alive = true;
+    const read = () =>
+      void api
+        .getSystemPresetJob(preset.key, jobId, workspaceId)
+        .then((res) => {
+          if (!alive) return;
+          setLog(res);
+          setFailed(null);
+        })
+        .catch((err: unknown) => {
+          if (!alive) return;
+          setFailed(
+            err instanceof ApiError ? { code: err.code, message: err.message } : { code: null, message: String(err) },
+          );
+        });
+    read();
+    const timer = live ? window.setInterval(read, POLL_MS) : undefined;
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [open, jobId, live, preset.key, workspaceId]);
+  if (!job) return null;
+  return (
+    <div className="mono dim" style={{ fontSize: 11 }} data-testid="preset-job" data-job-status={job.status}>
+      {t("create.system.job.label", {
+        kind: t(`create.system.job.kind.${job.type}`, job.type),
+        job: job.id.slice(0, 8),
+        status: job.status,
+      })}
+      {isAdmin && (
+        <>
+          {" · "}
+          <button
+            type="button"
+            className="rowact"
+            data-testid="preset-job-log-toggle"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {t(open ? "create.system.job.hideLog" : "create.system.job.viewLog")}
+          </button>
+        </>
+      )}
+      {open && failed && (
+        <div style={{ color: "var(--crit)" }}>
+          {t("create.system.job.loadFailed", {
+            reason: failed.code ? t(`apiErrors.${failed.code}`, failed.message) : failed.message,
+          })}
+        </div>
+      )}
+      {open && log && (
+        <pre
+          data-testid="preset-job-log"
+          style={{ margin: "6px 0 0", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap" }}
+        >
+          {log.events.length === 0
+            ? t("create.system.job.empty")
+            : log.events
+                .map((e) => `${zonedClock(e.ts)} ${e.stage.padEnd(9)} ${e.level === "error" ? "✕ " : ""}${e.msg}`)
+                .join("\n")}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 /**
  * System-managed presets: platform-owned agents an administrator installs on
  * purpose. Reads are ledger-only (`GET /api/system-agents` builds no AWS client),
@@ -172,8 +273,10 @@ export function SystemPresetsPanel({
           "good",
         );
       } else {
-        // a first install with the preset defaults; every later change or
-        // re-publish goes through the shared editor (onConfigure)
+        // a first install with the preset defaults, or the "Repair snapshot" action of an
+        // active preset whose catalog pin is behind (`snapshot_behind`): the body stays `{}`
+        // in both cases — the SERVER decides to re-publish (N17-obs234); every settings
+        // change or forced re-publish goes through the shared editor (onConfigure)
         const res = await api.installSystemPreset(preset.key, {}, startedIn);
         if (!stillCurrent(startedIn)) return;
         // the response already carries the preset's new state — render it now so
@@ -252,6 +355,16 @@ export function SystemPresetsPanel({
           ? t("create.system.collision", { name: preset.name_collision.agent_name })
           : null;
         const isBusy = busy === preset.key;
+        // N17-obs234: an active preset whose installed catalog pin is behind the ledger's
+        // stamp (the model-providers banner) offers the repair right on its card
+        const snapshotBehind =
+          installed && preset.status === "active" && preset.snapshot_behind === true;
+        // N17-obs202: an active preset that FOLLOWS the agent-default role whose installed
+        // model lags the role (the administrator moved the model default) shows a note; the
+        // same bodiless repair applies the new model — one button for both notes
+        const defaultChanged =
+          installed && preset.status === "active" && preset.default_changed === true;
+        const repairable = snapshotBehind || defaultChanged;
         return (
           <div
             key={preset.key}
@@ -264,15 +377,24 @@ export function SystemPresetsPanel({
               <strong className="mono">{preset.label}</strong>
               <Chip tone="blue" icon="◈">{t("create.system.chip")}</Chip>
               <Chip tone={STATUS_TONE[preset.status]}>
-                {t(`create.system.status.${preset.status}`)}
+                {preset.status === "deploying" && preset.last_job?.trigger === "auto"
+                  ? t("create.system.autoRepairing") // N17-obs206: the sweep's own repair job
+                  : t(`create.system.status.${preset.status}`)}
               </Chip>
               {preset.update_available && (
                 <Chip tone="amber">{t("create.system.updateAvailable")}</Chip>
               )}
-              <span className="mono dim" style={{ fontSize: 11 }}>
+              <span className="mono dim" style={{ fontSize: 11 }} data-testid="preset-release">
                 harnessName: {preset.name.replace(/-/g, "_")} · skill v{preset.skill_version}
                 {installed && preset.installed_skill_version && (
                   <> · {t("create.system.installedVersion", { v: preset.installed_skill_version })}</>
+                )}
+                {preset.release && <> · {t("create.system.release", { tag: preset.release.tag })}</>}
+                {installed && preset.installed_release && preset.installed_release !== preset.release?.tag && (
+                  <> · {t("create.system.installedRelease", { tag: preset.installed_release })}</>
+                )}
+                {installed && preset.version && (
+                  <> · {t("create.system.runtimeVersion", { v: preset.version })}</>
                 )}
               </span>
             </div>
@@ -302,10 +424,22 @@ export function SystemPresetsPanel({
               </div>
             )}
             <div className="dim" style={{ fontSize: 11 }}>{t("create.system.adminOptionsApiOnly")}</div>
-            {preset.error && preset.status === "failed" && (
+            <PresetJobLog preset={preset} workspaceId={workspaceId} isAdmin={isAdmin} />
+            {preset.release_error && (
+              <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="preset-release-error">
+                <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                <span className="mono" style={{ fontSize: 11 }}>
+                  {t("create.system.releaseError")} {preset.release_error}
+                </span>
+              </div>
+            )}
+            {preset.error && (preset.status === "failed" || preset.last_deploy_failed) && (
               <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="preset-error">
                 <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-                <span className="mono" style={{ fontSize: 11 }}>{preset.error}</span>
+                <span className="mono" style={{ fontSize: 11 }}>
+                  {preset.last_deploy_failed ? `${t("v2.agents.lastDeployFailedDetail")} ` : ""}
+                  {preset.error}
+                </span>
               </div>
             )}
             {preset.operation && (
@@ -333,6 +467,28 @@ export function SystemPresetsPanel({
                       </span>
                     </>
                   )}
+                </span>
+              </div>
+            )}
+            {snapshotBehind && (
+              <div className="note" data-testid="preset-snapshot-behind">
+                <span className="i">[i]</span>
+                <span>
+                  {t("create.system.snapshotBehind", {
+                    installed: preset.catalog_version?.installed ?? "?",
+                    current: preset.catalog_version?.current ?? "?",
+                  })}
+                </span>
+              </div>
+            )}
+            {defaultChanged && (
+              <div className="note" data-testid="preset-default-changed">
+                <span className="i">[i]</span>
+                <span>
+                  {t("create.system.defaultChanged", {
+                    installed: preset.model_id ?? "?",
+                    current: preset.defaults.model_id,
+                  })}
                 </span>
               </div>
             )}
@@ -373,6 +529,21 @@ export function SystemPresetsPanel({
                   onClick={() => setConfirm({ kind: "install", preset })}
                 >
                   {t("create.system.install")}
+                </Btn>
+              )}
+              {repairable && (
+                <Btn
+                  primary
+                  data-testid={`repair-snapshot-${preset.key}`}
+                  disabled={!preset.can_repair || isBusy}
+                  disabledReason={isAdmin ? (blockers ?? undefined) : undefined}
+                  title={
+                    adminHint ??
+                    t(snapshotBehind ? "create.system.repairSnapshotHint" : "create.system.repairDefaultHint")
+                  }
+                  onClick={() => void run("repair", preset)}
+                >
+                  {t("create.system.repairSnapshot")}
                 </Btn>
               )}
               {installed && "model_id" in preset.settings && onConfigure && (

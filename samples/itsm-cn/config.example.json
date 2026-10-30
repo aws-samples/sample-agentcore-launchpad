@@ -1,0 +1,22 @@
+{
+  "scenario": "itsm-workshop",
+  "account_id": "YOUR_12_DIGIT_ACCOUNT_ID",
+  "region": "cn-northwest-1",
+  "profile": "cn-northwest-1",
+  "console": "https://YOUR_CONSOLE_HOST:8443",
+  "api_base": "https://YOUR_CONSOLE_HOST:8443",
+  "tls_verify": true,
+  "workspace": "default",
+  "admin_username": "admin",
+  "admin_password_parameter": "launchpad-console-password",
+  "staff_accounts": [
+    "itdesk01"
+  ],
+  "staff_publish_targets": {},
+  "model_id": "global.zai.glm-5.3",
+  "tools_host": "i-YOUR_EXISTING_SSM_MANAGED_HOST",
+  "tools_user": "ubuntu",
+  "tools_port": 8128,
+  "lambda_subnet_cidr": "10.44.50.0/24",
+  "state_dir": "../../../data/itsm-workshop"
+}

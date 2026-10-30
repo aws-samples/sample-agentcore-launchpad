@@ -1,0 +1,32 @@
+{
+ "seam": "agentcore-runtime",
+ "case": "invoke_unknown_runtime",
+ "captured_at": "2026-10-19T09:11:53Z",
+ "notes": "Well-formed ARN for a runtime id that does not exist.",
+ "response_or_error": {
+  "exception": "botocore.exceptions.ClientError",
+  "Error": {
+   "Message": "No endpoint or agent found with qualifier 'DEFAULT' for agent 'arn:aws-cn:bedrock-agentcore:cn-northwest-1:000000000000:runtime/does_not_exist-XXXXXXXXXX'",
+   "Code": "ResourceNotFoundException"
+  },
+  "ResponseMetadata": {
+   "RequestId": "f7e375d5-5e9d-4623-9170-2004d1c6e9b7",
+   "HTTPStatusCode": 404,
+   "HTTPHeaders": {
+    "date": "Mon, 19 Oct 2026 09:11:53 GMT",
+    "content-type": "application/json",
+    "content-length": "168",
+    "connection": "keep-alive",
+    "x-amzn-requestid": "f7e375d5-5e9d-4623-9170-2004d1c6e9b7",
+    "x-amzn-errortype": "ResourceNotFoundException:http://internal.amazon.com/coral/com.amazon.bedrock.agentcore.common/"
+   }
+  },
+  "extra_top_level_keys": [
+   "message"
+  ],
+  "str": "An error occurred (ResourceNotFoundException) when calling the InvokeAgentRuntime operation: No endpoint or agent found with qualifier 'DEFAULT' for agent 'arn:aws-cn:bedrock-agentcore:cn-northwest-1:000000000000:runtime/does_not_exist-XXXXXXXXXX'"
+ },
+ "status": 404,
+ "elapsed_s": 0.063,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

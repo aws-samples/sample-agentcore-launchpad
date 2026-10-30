@@ -1,19 +1,30 @@
-import type { AgentInfo } from "../../../lib/api";
+import type { AgentInfo, OverviewServiceId } from "../../../lib/api";
+import type { Feature } from "../../../lib/capabilities";
 
 /**
  * Service-health rows (mirrors the classic Overview): "bootstrap" rows come from
  * `make bootstrap` — missing is something to fix; "usage" rows count what the
- * operator has created — missing is the normal state of a fresh account.
+ * operator has created — missing is the normal state of a fresh account. The
+ * `policy` row is the self-hosted policy engine (Global AgentCore Policy structure), not
+ * the absent AgentCore service: it renders only with the `policy` feature and lights up
+ * once an engine is attached to a gateway.
  */
-export const SERVICES = [
-  { id: "runtime", kind: "usage", to: "/v2/agents" },
-  { id: "gateway", kind: "bootstrap", to: "/v2/governance" },
-  { id: "memory", kind: "bootstrap", to: "/v2/memory" },
-  { id: "registry", kind: "bootstrap", to: "/v2/registry" },
-  { id: "policy", kind: "usage", to: "/v2/governance" },
-  { id: "evaluation", kind: "usage", to: "/v2/eval/tasks" },
-  { id: "observability", kind: "bootstrap", to: "/v2/observability" },
-] as const;
+export function services(): readonly {
+  id: OverviewServiceId | "runtime";
+  kind: "usage" | "bootstrap";
+  to: string;
+  feature?: Feature;
+}[] {
+  return [
+    { id: "runtime", kind: "usage", to: "/v2/agents" },
+    { id: "gateway", kind: "bootstrap", to: "/v2/governance" },
+    { id: "memory", kind: "bootstrap", to: "/v2/memory" },
+    { id: "registry", kind: "bootstrap", to: "/v2/registry" },
+    { id: "evaluation", kind: "usage", to: "/v2/eval/tasks" },
+    { id: "observability", kind: "bootstrap", to: "/v2/observability" },
+    { id: "policy", kind: "usage", to: "/v2/policy", feature: "policy" },
+  ];
+}
 
 /** One-line deploy progress for an agent row (same reading as the classic feed). */
 export function stageSummary(agent: AgentInfo): string {

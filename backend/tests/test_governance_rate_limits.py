@@ -1,8 +1,7 @@
 """Gateway rate limits: list/create/update/delete with a stub control client.
 
-Every mutation is a synchronous control-plane call journaled inline in
-``policy_changes``; validation runs before any AWS call and answers 422 with a
-stable ``detail.reason``.
+Every mutation is a synchronous control-plane call; validation runs before any
+AWS call and answers 422 with a stable ``detail.reason``.
 """
 
 from datetime import UTC, datetime
@@ -11,10 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-from app.core.db import SessionLocal
-from app.models.ledger import PolicyChange
 from app.routers import governance as governance_router
-from app.services.agentcore import policy
+from app.services.agentcore import gateway as gateway_api
 
 GW = "gw-1"
 BASE = f"/api/governance/gateways/{GW}/rate-limits"
@@ -55,7 +52,7 @@ def _control(*, managed: bool = True) -> MagicMock:
         "updatedAt": datetime.now(UTC),
     }
     control.list_tags_for_resource.return_value = {
-        "tags": dict(policy.MANAGED_TAGS) if managed else {}
+        "tags": dict(gateway_api.MANAGED_TAGS) if managed else {}
     }
     control.list_gateway_rate_limits.return_value = {"rateLimits": [_detail()]}
     control.get_gateway_rate_limit.return_value = _detail()
@@ -86,14 +83,6 @@ def _create_body(**overrides) -> dict:
     return body
 
 
-def _journal() -> list[PolicyChange]:
-    db = SessionLocal()
-    try:
-        return db.query(PolicyChange).order_by(PolicyChange.created_at).all()
-    finally:
-        db.close()
-
-
 # ---- list -------------------------------------------------------------------
 
 
@@ -117,13 +106,12 @@ def test_list_rate_limits_follows_every_next_token_page(client, control):
     calls = control.list_gateway_rate_limits.call_args_list
     assert calls[0].kwargs == {"gatewayIdentifier": GW, "maxResults": 100}
     assert calls[1].kwargs["nextToken"] == "page-2"
-    assert _journal() == []  # reads are not journaled
 
 
 # ---- create -----------------------------------------------------------------
 
 
-def test_create_sends_exactly_the_validated_payload_and_journals_it(client, control):
+def test_create_sends_exactly_the_validated_payload(client, control):
     response = client.post(
         BASE,
         json=_create_body(
@@ -168,17 +156,6 @@ def test_create_sends_exactly_the_validated_payload_and_journals_it(client, cont
             "connections": [{"rate": 2.0, "period": "second"}],
         },
     ]
-
-    rows = _journal()
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.operation == "rate_limit.create"
-    assert row.status == "succeeded"
-    assert row.gateway_id == GW and row.gateway_name == "alpha"
-    assert row.before == {}
-    assert row.requested["dimension_keys"] == ["targetName", "$.context.jwt.sub"]
-    assert row.after["rateLimitId"] == "rl-1" and row.after["status"] == "CREATING"
-    assert row.completed_at is not None
 
 
 def test_create_accepts_camel_case_dimension_keys(client, control):
@@ -287,7 +264,6 @@ def test_create_validation_answers_422_before_any_aws_call(client, control, body
     assert payload["detail"]["reason"] == reason
     control.create_gateway_rate_limit.assert_not_called()
     control.get_gateway.assert_not_called()  # validation precedes even the managed check
-    assert _journal() == []
 
 
 def test_create_allows_rate_zero_and_ten_million_and_every_documented_key(client, control):
@@ -330,10 +306,9 @@ def test_mutation_on_unmanaged_gateway_is_409_without_an_aws_mutation(client, co
     control.create_gateway_rate_limit.assert_not_called()
     control.update_gateway_rate_limit.assert_not_called()
     control.delete_gateway_rate_limit.assert_not_called()
-    assert _journal() == []
 
 
-def test_conflict_exception_maps_to_409_and_journals_the_failure(client, control):
+def test_conflict_exception_maps_to_409(client, control):
     control.create_gateway_rate_limit.side_effect = ClientError(
         {"Error": {"Code": "ConflictException", "Message": "duplicate dimension keys"}},
         "CreateGatewayRateLimit",
@@ -344,18 +319,12 @@ def test_conflict_exception_maps_to_409_and_journals_the_failure(client, control
     assert response.status_code == 409
     assert response.json()["code"] == "aws.conflict"
     assert "duplicate dimension keys" in response.json()["message"]
-    rows = _journal()
-    assert len(rows) == 1
-    assert rows[0].operation == "rate_limit.create"
-    assert rows[0].status == "failed"
-    assert rows[0].after is None
-    assert "duplicate dimension keys" in (rows[0].error or "")
 
 
 # ---- update -----------------------------------------------------------------
 
 
-def test_update_replaces_entries_and_journals_before_and_after(client, control):
+def test_update_replaces_entries(client, control):
     response = client.put(
         f"{BASE}/rl-1",
         json={
@@ -377,13 +346,6 @@ def test_update_replaces_entries_and_journals_before_and_after(client, control):
         ],
         "description": "tightened",
     }
-    rows = _journal()
-    assert len(rows) == 1
-    assert rows[0].operation == "rate_limit.update"
-    assert rows[0].status == "succeeded"
-    assert rows[0].before["rateLimitId"] == "rl-1" and rows[0].before["status"] == "ACTIVE"
-    assert rows[0].requested["description"] == "tightened"
-    assert rows[0].after["status"] == "UPDATING"
 
 
 def test_update_validates_entries_against_the_existing_dimension_keys(client, control):
@@ -412,7 +374,6 @@ def test_update_rejects_dimension_keys(client, control, field):
     assert response.status_code == 422
     assert response.json()["detail"]["reason"] == "dimension_keys_immutable"
     control.update_gateway_rate_limit.assert_not_called()
-    assert _journal() == []
 
 
 def test_update_wrong_period_is_422(client, control):
@@ -427,7 +388,7 @@ def test_update_wrong_period_is_422(client, control):
 # ---- delete -----------------------------------------------------------------
 
 
-def test_delete_calls_aws_with_both_identifiers_and_journals(client, control):
+def test_delete_calls_aws_with_both_identifiers(client, control):
     response = client.delete(f"{BASE}/rl-1")
 
     assert response.status_code == 200, response.text
@@ -435,13 +396,6 @@ def test_delete_calls_aws_with_both_identifiers_and_journals(client, control):
     control.delete_gateway_rate_limit.assert_called_once_with(
         gatewayIdentifier=GW, rateLimitId="rl-1"
     )
-    rows = _journal()
-    assert len(rows) == 1
-    assert rows[0].operation == "rate_limit.delete"
-    assert rows[0].status == "succeeded"
-    assert rows[0].before["rateLimitId"] == "rl-1"
-    assert rows[0].requested == {"rate_limit_id": "rl-1"}
-    assert rows[0].after == {"rateLimitId": "rl-1", "status": "DELETING"}
 
 
 def test_delete_missing_rate_limit_is_404_envelope(client, control):
@@ -456,18 +410,6 @@ def test_delete_missing_rate_limit_is_404_envelope(client, control):
     response = client.delete(f"{BASE}/rl-9")
     assert response.status_code == 404
     assert response.json()["code"] == "aws.not_found"
-    rows = _journal()
-    assert rows[0].status == "failed" and rows[0].before == {}
-
-
-def test_audit_lists_rate_limit_mutations(client, control):
-    client.post(BASE, json=_create_body())
-    client.delete(f"{BASE}/rl-1")
-
-    response = client.get(f"/api/governance/gateways/{GW}/audit")
-    assert response.status_code == 200
-    operations = [change["operation"] for change in response.json()["changes"]]
-    assert operations == ["rate_limit.delete", "rate_limit.create"]
 
 
 # ---- wrapper ----------------------------------------------------------------
@@ -479,9 +421,10 @@ def test_rate_limit_wrappers_pass_identifiers_explicitly():
         {"rateLimits": [{"rateLimitId": "a"}], "nextToken": "n"},
         {"rateLimits": [{"rateLimitId": "b"}]},
     ]
-    assert [i["rateLimitId"] for i in policy.list_gateway_rate_limits(control, GW)] == ["a", "b"]
+    found = gateway_api.list_gateway_rate_limits(control, GW)
+    assert [i["rateLimitId"] for i in found] == ["a", "b"]
 
-    policy.create_gateway_rate_limit(
+    gateway_api.create_gateway_rate_limit(
         control, gateway_id=GW, dimension_keys=["targetName"], entries=[{"dimensions": {}}]
     )
     assert control.create_gateway_rate_limit.call_args.kwargs == {
@@ -489,7 +432,7 @@ def test_rate_limit_wrappers_pass_identifiers_explicitly():
         "dimensionKeys": ["targetName"],
         "entries": [{"dimensions": {}}],
     }
-    policy.create_gateway_rate_limit(
+    gateway_api.create_gateway_rate_limit(
         control,
         gateway_id=GW,
         dimension_keys=["targetName"],
@@ -497,13 +440,13 @@ def test_rate_limit_wrappers_pass_identifiers_explicitly():
         client_token="short",
     )
     assert control.create_gateway_rate_limit.call_args.kwargs["clientToken"] == "launchpad-short"
-    policy.update_gateway_rate_limit(control, gateway_id=GW, rate_limit_id="rl", entries=[])
+    gateway_api.update_gateway_rate_limit(control, gateway_id=GW, rate_limit_id="rl", entries=[])
     assert control.update_gateway_rate_limit.call_args.kwargs == {
         "gatewayIdentifier": GW,
         "rateLimitId": "rl",
         "entries": [],
     }
-    policy.delete_gateway_rate_limit(control, gateway_id=GW, rate_limit_id="rl")
+    gateway_api.delete_gateway_rate_limit(control, gateway_id=GW, rate_limit_id="rl")
     control.delete_gateway_rate_limit.assert_called_once_with(
         gatewayIdentifier=GW, rateLimitId="rl"
     )

@@ -22,6 +22,8 @@ PANEL = FRONTEND / "pages" / "create" / "SystemPresetsPanel.tsx"
 WIZARD = FRONTEND / "pages" / "CreateAgent.tsx"
 HELPERS = FRONTEND / "pages" / "create" / "presetSettings.ts"
 SPEC = FRONTEND / "lib" / "agent-spec.ts"
+V2_AGENTS = FRONTEND / "v2" / "pages" / "Agents.tsx"
+V2_AGENT_URLS = FRONTEND / "v2" / "pages" / "agents" / "classicUrl.ts"
 DIALOG = FRONTEND / "pages" / "create" / "PresetSettingsDialog.tsx"
 MOCK = ROOT / "backend" / "scripts" / "ui_system_preset_settings_mock.py"
 
@@ -77,9 +79,12 @@ def test_wizard_system_branch_saves_through_maintenance_route_only() -> None:
     # protected members are rendered, never edited, for a preset
     assert 'data-testid="preset-protected"' in wizard
     assert "{!systemEdit && (" in wizard
-    # the table's EDIT on a system row is administrator-only and uses the same path
-    assert "(!a.system || isAdmin)" in wizard
-    assert "void openSystemEdit(a)" in wizard
+    # the agent list is the V2 page (r13-a): its EDIT on a system row is administrator-only
+    # and hands the row to this wizard's configure flow (`/agents/:id/edit`), which opens
+    # the preset through the same opener
+    assert "(!a.system || isAdmin)" in _src(V2_AGENTS)
+    assert "if (agent.system) return `/agents/${agent.id}/edit`;" in _src(V2_AGENT_URLS)
+    assert "if (info.system) void openSystemEdit(info);" in wizard
 
 
 def test_async_editor_races_are_generation_guarded() -> None:
@@ -98,7 +103,8 @@ def test_async_editor_races_are_generation_guarded() -> None:
     opener = opener[: opener.index("const startEdit = (agent")]
     assert "nextEditorIntent()" in opener and "editorGen.current === intent" in opener
     # every newer intent invalidates a pending open
-    assert wizard.count("nextEditorIntent()") >= 5  # opener, resetForm, startEdit, details, new
+    # (the list's details opener went with the classic console, r13-a)
+    assert wizard.count("nextEditorIntent()") >= 4  # opener, resetForm, startEdit, new
     mock = _src(MOCK)
     assert "def race_scenario" in mock and "release_kb(foreign)" in mock
     assert "release_status()" in mock and "UNSAVED ordinary draft" in mock

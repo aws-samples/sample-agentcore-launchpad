@@ -24,6 +24,13 @@ IDENTITY_TEMPLATE = Path(__file__).with_name("identity_tools.py.tmpl")
 
 _MARKER = "__LAUNCHPAD_IDENTITY_TOOLS__"
 
+# The runtime's auto-created workload identity name (``identity_tools.py.tmpl``'s
+# own fallback for ``LAUNCHPAD_WORKLOAD_NAME``). Named here — not in
+# ``gateway_support`` — because the shared-Gateway client no longer mints an
+# outbound token (SigV4 only); this is now exclusively the tool-level outbound
+# auth block's self-minted-token fallback.
+ENV_WORKLOAD = "LAUNCHPAD_WORKLOAD_NAME"
+
 
 def auth_tools(spec: AgentSpec) -> list[ToolRef]:
     """The rest/mcp tools that carry an ``auth`` block, plus open rest tools.

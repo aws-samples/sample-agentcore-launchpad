@@ -7,6 +7,48 @@ AgentCore Launchpad 是覆盖在 Amazon Bedrock AgentCore 之上的一层轻量�
 
 English: [architecture.md](architecture.md)
 
+> **CN build（分支 `cn-region`）：** 有何不同见 `docs/cn/REQUIREMENTS.md` 与
+> `docs/cn/interfaces/`；下方 Harness/Memory/Registry/KB 相关章节描述的是
+> CN build 所替换的 Global 实现。
+
+## CN build 服务映射（cn-northwest-1）
+
+六个 AgentCore 组件在中国区正式可用，并被原生使用：**Runtime**（仅 V2——每次
+`CreateAgentRuntime`/`UpdateAgentRuntime` 调用都固定 `platformVersion="V2"`）、
+**Gateway**（仅支持 AWS_IAM 入站——中国区没有 Cognito 的 CUSTOM_JWT）、
+**Identity**（API-key / 自定义 OAuth2 凭证提供方——没有内置的
+Google/GitHub/Cognito）、**Code Interpreter**、**Browser**，以及
+**Observability**（通过 CloudWatch Logs Insights 读取 `aws/spans` Transaction
+Search 目标和/或各 Runtime 自己的日志组——如果某一来源为空，由
+`Settings.observability_spans_source` 收窄，见
+[docs/cn/interfaces/deploy.md](cn/interfaces/deploy.md)）。
+
+三个**中国区没有实现**的 AgentCore 服务——Memory、Agent Registry、Knowledge
+Bases——各由一个 Protocol 模块（`services/{memory,registry,knowledge}_backend.py`）
+背后的自建后端代替：控制台/API 契约不变，路由在后端调用 `set_backend()` 之前
+统一返回 503 `feature.unavailable`，AWS 只对上面六个组件保持权威来源。各
+Protocol 的方法清单与当前后端状态见
+`docs/cn/interfaces/{memory,registry,knowledge}-backend.md`。
+
+AgentCore Harness、Policy（Cedar）、Evaluations、Optimizations 和 Payments
+在中国区没有实现。方式A、Skill Lab 和 Cedar 已被整体删除（C5）。Harness 已
+重建为 `method="harness"`（自建 Harness，N7）：`AgentSpec` 从 Global
+`agentcore export` CLI 为一个参考 Harness 生成的代码（已 vendor）渲染而来，
+再接入平台自己的提示词/工具/技能/记忆契约（`deployer/harness_local.py`、
+`services/harness_convert.py`），最终通过与其他每种方式相同的
+`package → provision → deploy → register` 阶段，部署为一个普通的
+AgentCore Runtime——本构建中不存在任何托管 Harness 资源或
+`CreateHarness` 调用。设计与遗留风险见
+`docs/cn/CN-MIGRATION-ANALYSIS.md` §3.L 与 `docs/cn/reports/n7-w5-harness.md`。
+
+中国区暂无 Bedrock 模型。所有模型调用——控制台聊天、生成的 Agent 代码，以及
+架构助手——都会跨 partition 访问一个**Global**（海外）AWS 账号的
+`global.zai.glm-5.3`（默认）或 `global.moonshotai.kimi-k3`，通过
+`BedrockModel(api_key=..., region_name="us-west-2")` 调用；该 API key 是一个
+Global 账号的 Bedrock API key，保存在本中国区账号的 AgentCore Identity 中
+（`CreateApiKeyCredentialProvider`）——而不能用 IAM，因为 IAM 无法为跨
+partition 的请求签名。
+
 ## 系统图
 
 ```
@@ -47,7 +89,7 @@ English: [architecture.md](architecture.md)
 | **1. 构建核心(Build Core)** | Create Agent(方式A/B/C)、统一管道、Chat 记忆 | Runtime、Harness、Memory |
 | **2. 构建工具(Build Tools)** | 工具目录、内置工具演示 | Gateway(REST + Lambda → MCP)、内置工具(Code Interpreter、Browser) |
 | **3. 治理(Governance)** | Governance 页面、Registry 控制台、trace 面板 | Observability(Transaction Search)、Registry、Policy(Cedar) |
-| **4. 评估与优化(Evaluation & Optimization)** | Evaluation 页面、Experiments(`?view=experiment` 子页:阶段流水线 + 判定语义化) | Evaluation(batch + online、LLM-judge、insights)、Optimization(config bundles、A/B、canary) |
+| **4. 评估与优化(Evaluation & Optimization)** | Evaluation 页面、Experiments(`?view=experiment` 子页:仅运行时金丝雀——配置包实验先由 N12-obs49 隐藏，再由 N13-obs2 删除) | Evaluation(batch + online、LLM-judge、insights)、Optimization(运行时金丝雀) |
 
 ## 平台 ↔ AgentCore 服务映射
 
@@ -55,16 +97,16 @@ English: [architecture.md](architecture.md)
 |---|---|
 | **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。Agent 详情中的只读「版本与端点」面板通过 `GET /api/agents/{id}/versions` 读回 `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` 的全部分页,让操作者看到不可变版本列表、`DEFAULT` 端点以及任何固定在某版本上的命名端点。 |
 | **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。同一「版本与端点」面板对 harness 类 Agent 读取 `ListHarnessVersions` + `ListHarnessEndpoints`。 |
-| **Memory** | 一个共享的 `launchpad_memory` 单例:短期 session 事件 + 长期语义与用户偏好策略。命名空间只按 `{actorId}` 分区(没有 `{agentId}` 模板变量),因此平台把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——从而让**短期事件与长期记录**(`/facts/<agent>__<human>`)都按 Agent 分区。生成的 Strands Runtime 通过 `AgentCoreMemorySessionManager` 恢复短期对话。Claude Agent SDK 容器为每次调用创建独立的 `MemorySessionManager`,通过 `UserPromptSubmit` Hook 注入有界的短期对话及 `/facts/<actor>`、`/preferences/<actor>` 记录,并在调用成功后把 USER/ASSISTANT 对作为一个事件持久化。A2A Runtime 使用 `<agent>__a2a__<contextId>`,因为直接 A2A 调用目前没有经过身份认证的 human actor envelope。一个 Agent 学到的偏好不会串到同一个人的另一个 Agent 或 A2A context;台账仍存裸的 human actor 用于展示。 |
-| **知识库（Knowledge Bases）** *（Bedrock，不属于 AgentCore）* | 托管 Bedrock 知识库（`type: MANAGED`——向量库、嵌入与重排都由服务负责）是接地层：`MANAGED_KNOWLEDGE_BASE_CONNECTOR` 类型的 S3 数据源、ingestion 作业，以及 `Retrieve` / `AgenticRetrieveStream` 检索。Agent 既可以经专用 MCP 网关 `launchpad-kb-gw` 挂载（托管 Harness），也可以通过烤进生成的 zip/container 代码里的 `kb_search` / `kb_deep_search` 工具挂载——详见「托管知识库」一节。 |
-| **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。治理页为已纳管的 Gateway 管理 **Gateway 限流**（2026 年 8 月 GA）：`ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` 位于网关详情的「限流」面板之后，服务端校验并记入 `policy_changes`。 |
+| **Memory（内存）** *（自建，N6——`cn-northwest-1` 没有 AgentCore Memory）* | `SelfHostedMemoryBackend`（`services/memory_selfhosted.py`）实现与原 AgentCore Memory 相同的 `MemoryBackend` 协议——控制台/API 契约不变。短期 session 状态用 Strands 自带的 `S3SessionManager`（`SnapshotSessionManager` 子类）写入 `memory/<store>/<actor>/session_<sid>/…`；`LaunchpadMemoryHook`（`AfterInvocationEvent`）在旁边为每轮对话写一个 AgentCore 形状的事件文件，并向 SQS 投递一条消息，交给 `memory-extractor` Lambda（`infra/stacks/memory_stack.py`）运行三条会被抽取的长期策略——语义事实（`/facts/{actorId}`）、用户偏好（`/preferences/{actorId}`）、按会话摘要（`/summaries/{actorId}/{sessionId}`）——写成共享 `launchpad-memory` OpenSearch 索引里的 k-NN 记录（Titan v2 向量、余弦相似度，去重阈值 ≥ 0.92）；策略目录就是这三条（从未抽取的 `episodic` 已于 R13 删除，N13-obs4；仍列有它的存储照常加载、忽略该项）。命名空间仍只按 `{actorId}` 分区，平台仍把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——与此前完全一致，同时为 S3 事件文件与 OpenSearch 记录按 Agent 分区；A2A Runtime 使用同一个 `<agent>__<human>` actor：hub 以 A2A `message.metadata.launchpad_actor_id` 发送并**签名**——`launchpad_actor_sig` 为以每 Agent 密钥对 `(contextId, actor)` 做的 HMAC-SHA256，密钥由 hub 在进程内从控制台 `session_secret` 推导（`services/a2a_actor.py`），部署时以 `LAUNCHPAD_A2A_ACTOR_KEY` 注入——A2A 模板只有在签名校验通过且 actor 属于本 Agent（`<agent id>__…`，即 `LAUNCHPAD_AGENT_ID`；N16-obs90a）时才在构建 Agent 之前把它绑定到上下文（绑定为 N16-obs79，签名为 N16-obs90：任何持有 InvokeAgentRuntime 的调用方（例如 BYOC 对等体）都能发送 metadata，因此未签名的 actor 绝不被信任）。未指明 actor 或签名不符的调用沿用按上下文的 `<agent>__a2a__<contextId>`（每个上下文只记一次警告，不记录 actor 值）。重新部署会推导出同一密钥；只有轮换 `session_secret` 才会使其失效，直到下一次重新部署。**合并策略 v2（r14-a，N14-obs1）：** 抽取器先把该参与者最相近的 8 条已有记录交给模型，再逐条执行 `add / update / supersede / delete / noop`。update 原地改写，supersede 保留旧记录并标记 `superseded_by`，delete 为软删除。召回按相似度 × 时效半衰期 × 置信度排序，并跳过失效记录。每个存储有上限，超出时触发一次有界整合；可选软 TTL。召回读取该参与者最近的按会话摘要（对 `/summaries/{actorId}/*`、策略 `summarization` 做 k-NN，取前 3 条，总字数有界）以及按参与者滚动的 `/summaries/{actorId}/_actor` 摘要；后者由抽取器每 `actor_summary_interval` 次抽取重写一次——自 2026-10-29 起默认 1（此前为 5：刚结束的对话在下一次滚动之前对新会话不可见）。新增的记录字段全部为增量。详见 [memory-backend.md](cn/interfaces/memory-backend.md) 与 [memory-runtime.md](cn/interfaces/memory-runtime.md)。 |
+| **知识库（Knowledge Bases）** *（Bedrock，不属于 AgentCore）* | 托管 Bedrock 知识库（`type: MANAGED`——向量库、嵌入与重排都由服务负责）是接地层：`MANAGED_KNOWLEDGE_BASE_CONNECTOR` 类型的 S3 数据源、ingestion 作业，以及 `Retrieve` / `AgenticRetrieveStream` 检索。Agent 既可以经专用 MCP 网关 `launchpad-kb-gw` 挂载（托管 Harness），也可以通过烤进生成的 zip/container 代码里的 `kb_search` / `kb_deep_search` 工具挂载——详见「托管知识库」一节。（CN 构建，N6：改为自建于 S3 + OpenSearch 之上——`cn-northwest-1` 没有 AgentCore/Bedrock 知识库；详见 [kb-runtime.md](cn/interfaces/kb-runtime.md) 与 [knowledge-backend.md](cn/interfaces/knowledge-backend.md)。） |
+| **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。创建时**不**设置 `exceptionLevel: DEBUG`（N17-obs474——开启 DEBUG 时，拦截器 / 目标 Lambda 的错误会把 Lambda 的 errorMessage 和堆栈返回给调用方 Agent）；`backend/scripts/repair_gateway_exception_level.py`（默认演练，`--apply` 执行）修复已有网关：把 `GetGateway` 的每个字段带入 `UpdateGateway`，并回读确认只有 `exceptionLevel` 变化。治理页为已纳管的 Gateway 管理 **Gateway 限流**（2026 年 8 月 GA）：`ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` 位于网关详情的「限流」面板之后，服务端校验并记入 `policy_changes`。 |
 | **Identity** | 支撑网关的 token vault——一个 OAuth2 provider(Agent 出站鉴权)和一个 API-key provider。**入站认证**（P3）：一个 Runtime 同一时间只接受 IAM（SigV4）*或* `customJWTAuthorizer` 之一；解析顺序为 `spec.inbound_auth` > 工作区默认值（`Workspace.settings.inbound_auth_default`）> IAM，每次部署快照到智能体行，且每次 Create/UpdateAgentRuntime 都回显授权器（UpdateAgentRuntime 会重置省略的授权器）。`POST /api/agents/{id}/inbound-auth` 原地切换（同一 ARN，新版本）。所有 JWT 编辑处（向导、工作区默认值、智能体页面可编辑的切换对话框）都可以从 OAuth2 凭证取发现 URL（`GET /api/identity/connections/oidc-sources`，从不取其出站客户端 id），并在签发者不是工作区用户池时给出警告：平台调用都携带工作区 Cognito 令牌，因此调用链会提前以 `agent.inbound_issuer_mismatch` 拒绝这类智能体。JWT 智能体经数据面 HTTPS 端点以 Bearer 调用——Chat 的「以用户身份调用」发送登录用户的 Cognito JWT，否则使用工作区 M2M 令牌；两种情况下 Memory actor 都保持 `scoped_actor(agent, human)`。`obo` 网关目标以 `grantType: TOKEN_EXCHANGE` 绑定携带 `onBehalfOfTokenExchangeConfig` 的凭证（需要 CUSTOM_JWT 网关与支持 RFC 8693／RFC 7523 的 IdP；Cognito 返回 422；凭证的签发者与网关入站签发者不同时返回非阻断的 `warnings[]` 条目）。设计见 [identity.md](identity.md)。 |
 | **Registry** | GA 的 `agent-registry` 服务托管 `launchpad-registry`，编目 A2A Agent、MCP 服务器与 AGENT_SKILLS。`services/agentcore/registry.py` 把 GA 的 `AGENT/MCP/SKILL` 与 `data/dataSchemaVersion` 模型翻译成稳定的 Launchpad descriptor 契约；其他 AgentCore 服务仍在 `bedrock-agentcore` 之下。GA 的唯一性约束是 `(name, recordVersion)`，因此新建记录使用带类型后缀的初始版本（`1.0.0-a2a`、`1.0.0-mcp`、`1.0.0-skill`），内容编辑会保留该后缀。Registry 可用时，每次部署都会自动创建并提交一条 A2A 记录。在 SCP/IAM 策略拒绝 Registry 初始化的账号中，bootstrap 会把该能力记为不可用，仅属于 Registry 的 API 返回 503，部署管道只跳过 register 阶段；Runtime/Harness 部署仍然可用。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。治理页可以把一个既有的 AgentCore Gateway 导入为**一条** MCP 记录，其中包含 Gateway 端点与它完整的已发现工具目录；旧的按 target 逐条的记录会一直保留，直到该 Gateway 记录 APPROVED 之后被显式下架。Registry 的批准控制的是目录可见性，而不是 Gateway 授权。`GET /api/registry/attachables` 会把目录状态与 Harness 可挂载性分开报告，并在服务端解析 Gateway 鉴权方式。对于已部署 Launchpad A2A Agent 所拥有的 A2A 记录，Registry 抽屉的「实时名片」会读取运行时此刻实际提供的名片（`GET /api/registry/records/{id}/live-agent-card` → 以账本中的 `Agent.arn` 调用数据面 `GetAgentCard`，AWS 为此打开的会话随即结束），并与记录中存储的名片做对比；实时名片不落账本——AWS 始终是事实来源。两份名片的 `version` 都来自同一个平台常量——`services/agentcore/registry.py` 中的 `A2A_CARD_VERSION`：A2A 运行时模板在打包阶段把它传给 Strands `A2AServer(version=...)`，`build_a2a_card` 在注册阶段把它写进记录，因此两边从构造上就是一致的。它**不是** AgentCore 运行时版本（`Agent.version`，显示在「版本与端点」面板）——运行时版本由 Create/UpdateAgentRuntime 在模板渲染完成之后才分配，名片无法携带。在该常量出现之前发布的 A2A Agent 仍会提供 Strands 默认的 `0.0.1`，而记录里是 `1`；对比会持续标出差异，直到下一次重新发布（重新渲染 + 重新注册）让两边收敛。Registry 页面对同一个注册中心提供两种视图：**发布者列表**（`GET /api/registry/records` → 控制面 `ListRegistryRecords`，包含所有状态的全部记录）与**消费者视图**（`?view=discoverable`，`GET /api/registry/records/discoverable` → 数据面 `ListDiscoverableRegistryRecords`，按 `nextToken` 翻页到底）——即拥有数据面访问权限的消费者或 Agent 实际能发现的记录。发现摘要不含 `descriptors`，点开某一行才读取完整记录。在同一页面会话中拉取过消费者视图后，凡不在其中的控制面记录都会打上「不可发现」标签（DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED 是预期情形）——两份列表的差异才是这项功能的意义。 |
 | **Policy** | 挂接到网关的 Cedar 策略引擎,初始挂载模式由操作员选择(默认 `ENFORCE`,可选 `LOG_ONLY`);deny 决策会带上作出判定的 policy id。Harness 的一次调用在调用时被拒(带 `context.input` 条件的规则;不带条件的拒绝会直接把工具从 `tools/list` 中过滤掉)时,Chat 识别其返回的错误 `toolResult`(`services/policy_denials.py`,与 Policy Test 共用),推送 `policy_denied`,V2 Chat 在 as_user 授权卡片旁显示策略拦截卡片,并保存为 `policy` 历史行;ZIP Runtime 暂不转发工具结果。支持 NL → Cedar 策略生成。引用已被删除的引擎时,治理页面显式展示失效引用而不是报错,策略变更返回 409,创建并挂载会替换该引用。 |
-| **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。14 个通用提示词模板评估器(12 个 trace/session 级和 2 个普通工具调用级)、2 个技能 `TOOL_CALL` 提示词模板评估器,外加 3 个仅限真值的程序化 `Builtin.Trajectory*Match` session 级匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及在 `?view=evaluators` 子页支持完整 CRUD 的**自定义评估器**，共三种定义——**LLM 评审**（`llmAsAJudge`：带占位符的指令、数值量表、Bedrock 评审模型）、**派生**（`derived`：在所选模型上运行某个 Builtin/ThirdParty 基础评估器的提示词）与**代码评估器**（`codeBased.lambdaConfig`：位于 workspace 同区域的 Lambda 函数 ARN 加 1–300 秒超时，默认 60；没有指令、量表与模型）。任何定义在 `CreateEvaluator` 上都必须带 `level`。评审模型默认 `global.openai.gpt-6-sol`（LLM 评审与派生评估器，控制台与助手评估资产均如此）；`CreateEvaluator`/`UpdateEvaluator` 会以固定的 `max_output_tokens=10` 试调模型，而 GPT-6 要求 ≥ 16（显式设置 `inferenceConfig.maxTokens` 也不改变该试调），因此仅对这一种 `ValidationException` 改用 `global.anthropic.claude-sonnet-5-5` 重试一次，并在返回的 `model_fallback`（`{requested, used, reason}`）中说明——助手的资产物化会在重试前把回退信息及其独立的 client token 记到资源上，恢复中断的操作时重建的请求与之完全一致。控制台详情投影带 `definition: judge|derived|code`；`UpdateEvaluator` 为全量配置替换，因此更新载荷必须与评估器自身的类型一致——用评审载荷更新代码评估器（或任何跨类型组合）会被 `evaluator.definition_mismatch` 拒绝，而不是被静默转换。代码评估器的 Lambda 接收 `{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}`，返回 `{label, value?, explanation?}` 或 `{errorCode, errorMessage}`（限制 300 秒 / 6 MB）；控制台**不管理其 IAM**——批量/在线运行作为 `evaluationExecutionRoleArn` 传入的评估执行角色需要对该函数拥有 `lambda:InvokeFunction` + `lambda:GetFunction` 权限，且函数的资源策略须允许 `bedrock-agentcore.amazonaws.com`，两点都以提示形式写在 ARN 字段下方。代码评估器在所有可选自定义评估器的地方（批量运行、实验、在线配置）均可选用。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`):首次同步创建数据集(`CreateDataset`),之后每次同步都原地编辑该数据集的**草稿(DRAFT)**(`ListDatasetExamples` → `DeleteDatasetExamples` → `AddDatasetExamples`,每步经 `UPDATING` 轮询到 `ACTIVE`),因此数据集 id 与已发布版本得以保留;**发布版本**(`CreateDatasetVersion`)把草稿快照为不可变的编号版本,并把 `draftStatus` 从 `MODIFIED` 翻为 `UNMODIFIED`。行上的 `cloud` blob 缓存 id/ARN/状态以及 `draft_status`、`example_count` 与版本列表(`ListDatasetVersions`);仅云端的数据集以只读方式展示同样信息并同样可发布,单个已发布版本可删除(带 `datasetVersion` 的 `DeleteDataset`)。云端数据集运行可**固定到某个已发布版本**(`dataset_version`,在创建运行行之前先对照 `ListDatasetVersions` 校验;随后 `GetDataset` 与 `ListDatasetExamples` 读取该快照,回放的 scenario 与真值即该版本的内容);默认使用草稿,固定的版本记录在运行上并在运行列表显示为 `· v<N>`。已记录的副本若 AWS 已不认识(`ResourceNotFoundException`)或已经控制台删除,下次同步会重新创建;scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。数据集场景调用遇到上游偶发错误(流中途的 `runtimeClientError` / `internalServerException`、限流、5xx,或 Harness 循环在工具步骤后中断、没有作答——stop reason 为 `tool_result` / `tool_use` 的 `harness.incomplete_response`)时,会在新会话中重放该场景,最多再试 `TRANSIENT_SCENARIO_RETRIES`(2)次,之后才让运行失败;Harness 的预算停止(超时、执行上限)不重试,失败的运行会注明场景。账户单批次锁与队列语义不变。操作员可在运行页**停止**任意活跃运行(`POST /api/eval/runs/{id}/stop`):批次已在 AWS 上存在的运行用 `StopBatchEvaluation` 停止(STOPPING → STOPPED——已评判的会话保留结果,轮询器记为部分分数),仍在排队的运行在到达 AWS 之前于本地取消,正在回放数据集的运行在提示词之间停止且不会调用 `StartBatchEvaluation`。三种情形都以终态 `stopped` 结束(绝不记为 `failed`),原因为「stopped by operator」;不暴露 `DeleteBatchEvaluation`。运行行只保存每个评估器的**平均分**(`evaluatorSummaries.statistics.averageScore`,并带上它覆盖的评分条数 `count` = `totalEvaluated`;AWS 对代码评估器不给 `statistics`,运行结束时改从批次结果日志流计算该评估器的均值);架构助手下一步卡片显示的是按极性归一化、按条数加权的均分(`runMeanScore`),与任务详情按全部结果计算的归一化均分一致;**每个分数背后评审模型给出的理由**只存在于批次自己的结果日志流中(`GetBatchEvaluation.outputConfig.cloudWatchConfig` → `/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default` 下的 `run-<batchId>`,`gen_ai.evaluation.result` 记录),Runs 页面在选中终态运行时按需读取(`GET /api/eval/runs/{id}/results`,绝不持久化),渲染为「会话结果」面板 —— 按会话分组,每条评审一行(评估器、层级、得分、标签、可展开的理由;span 级评估器每次工具调用一行),并链接到可观测性的会话详情。 **在线评估**(`?view=online`):每个 agent + evaluator 集合对应一个 AgentCore `OnlineEvaluationConfig`,按采样比例(0.01–100 %)在会话空闲超时后对真实会话打分,不产生新的调用;结果写入 `/aws/bedrock-agentcore/evaluations/results/<configId>`(同时以 EMF 指标落到 `Bedrock-AgentCore/Evaluations`),控制台用 Logs Insights 聚合(每个 evaluator 的均值 / 标签分布 / 趋势 / 带 judge 解释的最近记录)。页面列出 workspace 账号内**全部**配置并按归属分类:`agent`(本控制台创建,可全操作)、`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(仅暂停/恢复/删除)。Update 始终发送完整 `rule`(AWS 整体替换),从未被调用过的 agent 创建时会被拒绝(AWS 校验日志组存在)。 配置有两种**模式**:`scores`(evaluators)或 `insights`(1–3 种洞察类型 + 可选的 DAILY/WEEKLY/MONTHLY 聚类——AWS 不允许同一配置两者兼有);insights 配置产出**报告**(以配置为数据源的批量评估:AWS 按聚类周期定期生成,或从控制台「立即出报告」经运行队列发起),通过 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` 归属,并复用运行页的洞察聚类树渲染;报告只覆盖该配置采样过的会话。 在线评分同时出现在查看会话的地方:可观测性的会话详情带一个「在线评估」区块(该会话在所有配置下的结果记录,按归属分类,失败降级——结果查询失败不会影响追踪),概览页新增 **在线质量 · 24h** tile(对 workspace 内 agent 持有配置做极性归一、按计数加权的均值,120 秒缓存,没有配置时不调用 AWS)。二者都通过 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 一次读取全部结果日志组。第三种**即时**模式从可观测会话详情同步调用数据面 `Evaluate` API 对单个会话打分(SCORE NOW:≤5 个 evaluator、每次调用 ≤10 条结果、不持久化)——用于试跑自定义 evaluator 或排查某个可疑会话;需要留档的分数仍由批量运行给出。 **基于运行的优化建议**（V2 任务详情）：已完成的运行以其会话为范围启动 `StartRecommendation`：系统提示词任务以其批次作为 `agentTraces.batchEvaluation`（若运行中有红线测试会话——架构助手标为 `adversarial` 的黄金测试，如注入、索取未公开信息、施压要求越界建议，其内容会让 AgentCore 拒绝整条推荐——则排除这些会话、内联传入其余会话的 span，并在行上记录 `result.excluded_sessions`；这些场景仍参与评估），工具描述任务（不接受批次来源）内联传入相同会话的 span；Managed Harness 的输入实时读取自 `GetHarness`（及其 Gateway target 工具 schema，按 `allowedTools` 过滤），其他 Agent 先回退到配置，再要求用户必填输入。`eval_recommendations` 行保存任务 id 与确认后的输入，读取时从 `GetRecommendation` 刷新。系统提示词也可以改由已注册的 `gepa_lite` 提供方生成（创建请求带 `provider` 与 `model_id`）：复用实验 RECOMMEND 阶段的反思流程，读取该运行自己的批次结果流与会话记录，在后台线程中执行，行上以 `provider-` 指针代替 AWS 推荐 id（重启后仍未结束的行会显示为已中断）——AgentCore 任务拒绝输入时可用它兜底（其提示词攻击防护会把部分正常的中文系统提示词直接拒掉）。Managed Harness 运行的已完成系统提示词建议，既可在架构助手第 3 步、也可在任务详情页**接受**：先在可编辑的对话框中审阅提示词，用审阅后的文本重新发布 Harness（`accept` 请求体 `system_prompt`；`accepted.edited` 记录是否经过修改）。 |
-| **Optimization** | 推荐 → 配置捆绑(configuration bundles)→ 网关 A/B(config-bundle 50/50)→ target-based canary → verdict → promote → cleanup。系统提示词推荐**可插拔**:默认走 AgentCore 推荐任务,也可选第三方 provider(`gepa_lite`——对所固定评估运行的逐会话 judge 分数、解释与对话记录做一轮 GEPA 式反思,模型为操作员选择的 Bedrock Converse 模型;同一轮反思也可改写 Agent 自带工具的描述),绕开 `StartRecommendation` 及其内容过滤;产出的提示词与工具描述仍写入 treatment 配置捆绑,由后续 A/B 测试衡量。发送流量阶段的数据集回放为并发发送(在途请求上限 `TRAFFIC_MAX_CONCURRENCY` = 10,可用 `LAUNCHPAD_TRAFFIC_CONCURRENCY` 下调);一条 prompt 即一个 session 即一个分组,因此不影响分流。 |
+| **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。14 个通用提示词模板评估器(12 个 trace/session 级和 2 个普通工具调用级)、2 个技能 `TOOL_CALL` 提示词模板评估器,外加 3 个仅限真值的程序化 `Builtin.Trajectory*Match` session 级匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及在 `?view=evaluators` 子页支持完整 CRUD 的**自定义评估器**，共三种定义——**LLM 评审**（`llmAsAJudge`：带占位符的指令、数值量表、Bedrock 评审模型）、**派生**（`derived`：在所选模型上运行某个 Builtin/ThirdParty 基础评估器的提示词）与**代码评估器**（`codeBased.lambdaConfig`：位于 workspace 同区域的 Lambda 函数 ARN 加 1–300 秒超时，默认 60；没有指令、量表与模型）。任何定义在 `CreateEvaluator` 上都必须带 `level`。评审模型默认 `global.openai.gpt-6-sol`（LLM 评审与派生评估器，控制台与助手评估资产均如此）；`CreateEvaluator`/`UpdateEvaluator` 会以固定的 `max_output_tokens=10` 试调模型，而 GPT-6 要求 ≥ 16（显式设置 `inferenceConfig.maxTokens` 也不改变该试调），因此仅对这一种 `ValidationException` 改用 `global.anthropic.claude-sonnet-5-5` 重试一次，并在返回的 `model_fallback`（`{requested, used, reason}`）中说明——助手的资产物化会在重试前把回退信息及其独立的 client token 记到资源上，恢复中断的操作时重建的请求与之完全一致。控制台详情投影带 `definition: judge|derived|code`；`UpdateEvaluator` 为全量配置替换，因此更新载荷必须与评估器自身的类型一致——用评审载荷更新代码评估器（或任何跨类型组合）会被 `evaluator.definition_mismatch` 拒绝，而不是被静默转换。代码评估器的 Lambda 接收 `{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}`，返回 `{label, value?, explanation?}` 或 `{errorCode, errorMessage}`（限制 300 秒 / 6 MB）；控制台**不管理其 IAM**——批量/在线运行作为 `evaluationExecutionRoleArn` 传入的评估执行角色需要对该函数拥有 `lambda:InvokeFunction` + `lambda:GetFunction` 权限，且函数的资源策略须允许 `bedrock-agentcore.amazonaws.com`，两点都以提示形式写在 ARN 字段下方。代码评估器在所有可选自定义评估器的地方（批量运行、实验、在线配置）均可选用。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`):首次同步创建数据集(`CreateDataset`),之后每次同步都原地编辑该数据集的**草稿(DRAFT)**(`ListDatasetExamples` → `DeleteDatasetExamples` → `AddDatasetExamples`,每步经 `UPDATING` 轮询到 `ACTIVE`),因此数据集 id 与已发布版本得以保留;**发布版本**(`CreateDatasetVersion`)把草稿快照为不可变的编号版本,并把 `draftStatus` 从 `MODIFIED` 翻为 `UNMODIFIED`。行上的 `cloud` blob 缓存 id/ARN/状态以及 `draft_status`、`example_count` 与版本列表(`ListDatasetVersions`);仅云端的数据集以只读方式展示同样信息并同样可发布,单个已发布版本可删除(带 `datasetVersion` 的 `DeleteDataset`)。云端数据集运行可**固定到某个已发布版本**(`dataset_version`,在创建运行行之前先对照 `ListDatasetVersions` 校验;随后 `GetDataset` 与 `ListDatasetExamples` 读取该快照,回放的 scenario 与真值即该版本的内容);默认使用草稿,固定的版本记录在运行上并在运行列表显示为 `· v<N>`。已记录的副本若 AWS 已不认识(`ResourceNotFoundException`)或已经控制台删除,下次同步会重新创建;scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。数据集场景调用遇到上游偶发错误(流中途的 `runtimeClientError` / `internalServerException`、限流、5xx,或 Harness 循环在工具步骤后中断、没有作答——stop reason 为 `tool_result` / `tool_use` 的 `harness.incomplete_response`)时,会在新会话中重放该场景,最多再试 `TRANSIENT_SCENARIO_RETRIES`(2)次,之后才让运行失败;Harness 的预算停止(超时、执行上限)不重试,失败的运行会注明场景。重试后仍失败的场景是出错的场景而不是失败的运行（所有场景都失败时运行才失败）；以这种方式失败的**模拟用户**场景还会记入 `scenario_failures`（`[{scenario_id, retries, code, error}]`，V2 任务详情显示提示）；V2 任务向导可选择模拟用户数据集，选中后需指定扮演用户的模型（`actor_model_id`）。账户单批次锁与队列语义不变。操作员可在运行页**停止**任意活跃运行(`POST /api/eval/runs/{id}/stop`):批次已在 AWS 上存在的运行用 `StopBatchEvaluation` 停止(STOPPING → STOPPED——已评判的会话保留结果,轮询器记为部分分数),仍在排队的运行在到达 AWS 之前于本地取消,正在回放数据集的运行在提示词之间停止且不会调用 `StartBatchEvaluation`。三种情形都以终态 `stopped` 结束(绝不记为 `failed`),原因为「stopped by operator」;不暴露 `DeleteBatchEvaluation`。运行行只保存每个评估器的**平均分**(`evaluatorSummaries.statistics.averageScore`,并带上它覆盖的评分条数 `count` = `totalEvaluated`;AWS 对代码评估器不给 `statistics`,运行结束时改从批次结果日志流计算该评估器的均值);架构助手下一步卡片显示的是按极性归一化、按条数加权的均分(`runMeanScore`),与任务详情按全部结果计算的归一化均分一致;**每个分数背后评审模型给出的理由**只存在于批次自己的结果日志流中(`GetBatchEvaluation.outputConfig.cloudWatchConfig` → `/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default` 下的 `run-<batchId>`,`gen_ai.evaluation.result` 记录),Runs 页面在选中终态运行时按需读取(`GET /api/eval/runs/{id}/results`,绝不持久化),渲染为「会话结果」面板 —— 按会话分组,每条评审一行(评估器、层级、得分、标签、可展开的理由;span 级评估器每次工具调用一行),并链接到可观测性的会话详情。 **在线评估**(`?view=online`):每个 agent + evaluator 集合对应一个 AgentCore `OnlineEvaluationConfig`,按采样比例(0.01–100 %)在会话空闲超时后对真实会话打分,不产生新的调用;结果写入 `/aws/bedrock-agentcore/evaluations/results/<configId>`(同时以 EMF 指标落到 `Bedrock-AgentCore/Evaluations`),控制台用 Logs Insights 聚合(每个 evaluator 的均值 / 标签分布 / 趋势 / 带 judge 解释的最近记录)。页面列出 workspace 账号内**全部**配置并按归属分类:`agent`(本控制台创建,可全操作)、`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(仅暂停/恢复/删除)。Update 始终发送完整 `rule`(AWS 整体替换),从未被调用过的 agent 创建时会被拒绝(AWS 校验日志组存在)。 配置有两种**模式**:`scores`(evaluators)或 `insights`(1–3 种洞察类型 + 可选的 DAILY/WEEKLY/MONTHLY 聚类——AWS 不允许同一配置两者兼有);insights 配置产出**报告**(以配置为数据源的批量评估:AWS 按聚类周期定期生成,或从控制台「立即出报告」经运行队列发起),通过 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` 归属,并复用运行页的洞察聚类树渲染;报告只覆盖该配置采样过的会话。 在线评分同时出现在查看会话的地方:可观测性的会话详情带一个「在线评估」区块(该会话在所有配置下的结果记录,按归属分类,失败降级——结果查询失败不会影响追踪),概览页新增 **在线质量 · 24h** tile(对 workspace 内 agent 持有配置做极性归一、按计数加权的均值,120 秒缓存,没有配置时不调用 AWS)。二者都通过 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 一次读取全部结果日志组。第三种**即时**模式从可观测会话详情同步调用数据面 `Evaluate` API 对单个会话打分(SCORE NOW:≤5 个 evaluator、每次调用 ≤10 条结果、不持久化)——用于试跑自定义 evaluator 或排查某个可疑会话;需要留档的分数仍由批量运行给出。 **基于运行的优化建议**（V2 任务详情）：已完成的运行以其会话为范围启动 `StartRecommendation`：系统提示词任务以其批次作为 `agentTraces.batchEvaluation`（若运行中有红线测试会话——架构助手标为 `adversarial` 的黄金测试，如注入、索取未公开信息、施压要求越界建议，其内容会让 AgentCore 拒绝整条推荐——则排除这些会话、内联传入其余会话的 span，并在行上记录 `result.excluded_sessions`；这些场景仍参与评估），工具描述任务（不接受批次来源）内联传入相同会话的 span；Managed Harness 的输入实时读取自 `GetHarness`（及其 Gateway target 工具 schema，按 `allowedTools` 过滤），其他 Agent 先回退到配置，再要求用户必填输入。`eval_recommendations` 行保存任务 id 与确认后的输入，读取时从 `GetRecommendation` 刷新。系统提示词也可以改由已注册的 `gepa_lite` 提供方生成（创建请求带 `provider` 与 `model_id`）：复用实验 RECOMMEND 阶段的反思流程，读取该运行自己的批次结果流与会话记录，在后台线程中执行，行上以 `provider-` 指针代替 AWS 推荐 id（重启后仍未结束的行会显示为已中断）——AgentCore 任务拒绝输入时可用它兜底（其提示词攻击防护会把部分正常的中文系统提示词直接拒掉）。Managed Harness 运行的已完成系统提示词建议，既可在架构助手第 3 步、也可在任务详情页**接受**：先在可编辑的对话框中审阅提示词，用审阅后的文本重新发布 Harness（`accept` 请求体 `system_prompt`；`accepted.edited` 记录是否经过修改）。 |
+| **Optimization** | **仅金丝雀（N13-obs2，用户决定 2026-10-17）：**运行的 AI 推荐被接受为新版本，再用 target-based 运行时金丝雀验证（setup → traffic → verdict → advance → complete / rollback → cleanup）。配置捆绑实验（recommend → bundles → gateway A/B → traffic → verdict → promote → cleanup）已退役——`/api/experiments*` 路由、阶段机与控制台页面全部删除；`experiments` 表保留一轮不做迁移，`routing` 不再读取其行。系统提示词推荐**可插拔**,提供方均为注册表中的自托管 provider(CN 没有托管的推荐任务):默认 `gepa_lite`——对所固定评估运行的逐会话 judge 分数、解释与对话记录做一轮 GEPA 式反思,模型为操作员选择的 Bedrock Converse 模型,同一轮反思也可改写 Agent 自带工具的描述;工作区启用后也可选 Strands `harness_optimizer`;两者都在评估 worker 上运行,控制台按注册表标签显示提供方名称(N12-obs32)。产出的提示词与工具描述仍写入 treatment 配置捆绑,由后续 A/B 测试衡量。发送流量阶段的数据集回放为并发发送(在途请求上限 `TRAFFIC_MAX_CONCURRENCY` = 10,可用 `LAUNCHPAD_TRAFFIC_CONCURRENCY` 下调);一条 prompt 即一个 session 即一个分组,因此不影响分流。 |
 | **Observability** | 通过 CloudWatch Logs Insights 同时读取两种遥测布局：旧版 trace 位于 `aws/spans`，统一后的 trace、日志和 prompt 位于 `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`。Span 记录按 session 渲染为链路面板。 |
-| **内置工具(Builtin Tools)** | Code Interpreter(`aws.codeinterpreter.v1`)与 Browser(`aws.browser.v1`)各有一个可运行的演示端点。 |
+| **内置工具(Builtin Tools)** | Code Interpreter(`aws.codeinterpreter.v1`)与 Browser(`aws.browser.v1`)各有一个可运行的演示端点。**N17-obs258：**Web Bot Auth 浏览器签名只在工作区分区提供签名服务时开放（`GET /api/capabilities.tools.browser_signing`）；中国分区没有签名服务（在 cn-northwest-1 与 cn-north-1 以 `browserSigning.enabled=true` 调 `CreateBrowser` 均返回 ValidationException "Browser signing configuration is not enabled in this environment"），因此 aws-cn 下 Browser 演示隐藏「启用 Web Bot Auth」开关与签名浏览器选择器，`POST /api/demos/browser {web_bot_auth: true}` 以 `409 browser.signing_unsupported_in_partition` 拒绝；Launchpad 从不创建 Browser 资源。 |
 
 ## 统一的五阶段部署管道
 
@@ -77,6 +119,18 @@ generate → package → provision → deploy → register
 每种方式为每个阶段贡献一个可调用函数(或省略以跳过)。阶段进度持久化在
 `Deployment` 行上,并作为 JSONL 事件镜像进 `Job` 日志,因此重启后的后端会从第一个
 未成功的阶段继续(启动时执行 `resume_pending_jobs()`)。
+
+基于 zip 的方式（zip_runtime / studio / harness）的 `package` 阶段在检出目录内被 git 忽略的
+`data/builds/<agent 名>/` 下组装部署包（N12-bug10：在检出目录内、属于服务用户——绝不用共享的
+`/tmp`；每个 agent 名一个目录，每次构建先删后建；BYOC 用临时目录）。上传后该目录保留以便检查，
+其保留策略由 `deployer/build_dirs.py` 负责（N17-obs151）：删除 agent 的路由把它作为
+`teardown.cleanup_residue` 的 `build_dir` 残留步骤一并移除（报告为 `deleted` 带字节数 /
+`skipped` / `failed` 带原因，绝不阻塞删除）；启动时的清扫——在 `resume_pending_jobs()` 之前运行，
+因此没有构建在进行——会删除台账里没有存活行的 agent 的目录（`deleted` 行只保留名称可复用，
+不保留其构建暂存），为每个存活 agent 保留最新的 `builds_keep_per_agent` 个目录（默认 2——
+今天每个 agent 只有一个目录，所以 ≥ 1 的任何值都会保留它，`0` 则连存活 agent 的暂存也清掉），
+再从最旧的开始裁剪直到根目录总量低于 `builds_max_gb` GiB（默认 10；`0` = 不设上限）。
+`launchpad.builds` 只记一行汇总——计数与字节数，绝不含路径（deploy.md §8.10）。
 
 | 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — 自带代码 |
 |---|---|---|---|---|
@@ -103,7 +157,7 @@ generate → package → provision → deploy → register
 |---|---|---|
 | `BedrockModels` | 总是 | 配置的 `model_id` |
 | `BedrockMantle*`、Marketplace | `model_source == "mantle"` | project/`*`;Marketplace 由 `CalledViaLast` 约束 |
-| `AgentCoreMemory` | 启用记忆 | 记忆单例 |
+| `MemorySnapshotObjects`、`MemorySnapshotList`、`MemoryExtractionQueue`、`MemorySearch`、`KnowledgeSearch` | 启用内存/知识库（自建，N6） | 本 agent 的 S3 快照前缀、抽取 SQS 队列，以及共享的 `launchpad-memory` / `launchpad-kb-<id>` OpenSearch 索引 |
 | `AgentCoreWorkloadIdentity`、`IdentityVaultSecrets` | 有 gateway/MCP 工具或知识库 | — |
 | `AgentCoreCodeInterpreter` / `AgentCoreBrowser` | 挂载了对应内置工具 | — |
 | `EcrPull` / `EcrAuth` | `method == "container"` | 该仓库 |
@@ -246,7 +300,7 @@ Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户把它关掉
 VPC 模式下访问 `acr-storage-*` S3 桶的出网要求在这里不适用，因为 Harness 和 zip runtime
 都保持 `PUBLIC`。生成的 Agent 不会被告知挂载路径（container 模板同样没有）；Harness 通过
 原生 `shell` / `file_operations` 工具访问它。Harness / Strands Agent 的这一设置只有 V2 向导
-（`FilesystemCard`）可以编辑，经典控制台会原样回传已存储的值。
+（`FilesystemCard`）可以编辑，系统预置的配置流程会原样回传已存储的值。
 
 ### BYOC —— 自带代码
 
@@ -340,7 +394,7 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 评审判定，为该 Agent **自带的**工具（treatment 捆绑可以覆盖的那一组已发现工具）给出修订后
 的描述;gateway / MCP 工具只作为上下文展示、绝不被改写，而一次没有任何工具调用的运行会把
 工具侧收口为 `no-tool-calls`，提示词侧照常进行。这是去掉了 GEPA 搜索循环、只留下其反思步骤
-的做法:随后的配置 A/B 才是评估该候选者的环节。无法产出可用提示词的 provider（没有已打分
+的做法:随后对接受版本做的运行时金丝雀才是评估该候选者的环节。无法产出可用提示词的 provider（没有已打分
 的会话、模型访问被拒、输出无法解析、经过一次压缩后仍超出 8 000 字符预算）会写入 `FAILED`
 状态与原因并且**不写提示词**——与失败的 AWS 任务遵循同一条 ISSUE-007 规则——因此 `accept`
 仍然被闸门挡住。产物记录 `provider`、`provider_model_id` 与证据数量，treatment 捆绑的提交
@@ -364,9 +418,8 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 
 有两个性质让它值得拥有自己的字段:
 
-- **它在 generate 阶段渲染，因此 `spec.code` / `spec.code_bundle` 保持 `None`**，Agent 也
-  就保留了配置捆绑实验的资格。把生成的源码写进这两个字段中的任何一个，都会让
-  `experiment_capability` 返回 `custom-source-unverified`——这正是它是一个 spec *选择项*
+- **它在 generate 阶段渲染，因此 `spec.code` / `spec.code_bundle` 保持 `None`**——产物始终能
+  从 spec 重新生成（金丝雀铸造候选版本时会重新渲染），这正是它是一个 spec *选择项*
   而不是被物化的代码的原因。
 - **工具包是把模板自带的 `calculator` / `current_utc_time` 替换掉，而不是在其之上追加**，
   因此部署出的工具面就恰好是工具包本身。这一点对 trace 就绪度很重要:`missing_tools` 非空
@@ -412,16 +465,28 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 
 **服务端持有身份。** 新增可空、带索引的 `Agent.system_key` 标记预置行。它从不从请求读取：
 `AgentSpec` 没有该字段，客户端在 spec 中传 `system_key`/`system` 会被 Pydantic 丢弃，行仍是
-普通 Agent。保留名称对普通 Agent 拒绝（`409 agent.name_reserved`），发现导入也会绕开它；
+普通 Agent。保留名称对普通 Agent 拒绝（`422 agent.name_reserved`——预置名、其基础名及所有 `<基础名>-<后缀>`，N16-obs82），发现导入也会绕开它；
 `(workspace_id, system_key) WHERE system_key IS NOT NULL AND status != 'deleted'` 上的部分
 唯一索引保证每个 Workspace 只有一个在用的预置。API 投影新增 `system` 成员
 （`{managed, key, label, skill_version, protected_actions}` 或 `null`），控制台据此渲染
 “系统”标签。
 
+**自动修复巡检（N17-obs206）。** 已安装的预置会把模型目录渲染进自己的快照，因此每一次影响目录的
+注册表写入都会让它变为 `snapshot_behind`；新构建则让它停留在旧版本。
+`system_agents/auto_repair.py` 会在**所有** Workspace 中自动修复这些预置（引导第 10 步只覆盖默认
+Workspace 的评估 worker）：一次巡检把每个已安装、运行中的预置交给既有的 `install_preset`，由其
+`_repair` 独自判定（目录版本落后——取最新一次未失败部署的固定版本——或重新推导的 spec 不同则重新
+发布，已是最新则为空操作；与卡片点击和引导之间只有一个胜出者）；候选预置在启动前才逐个声明，因此任一
+时刻最多只有一个自动修复任务未终结（重启只会续跑这一个；每个任务上限 30 分钟），上次重新发布失败的
+预置留给管理员查看，绝不自动重试。只有两个触发点：启动后 60 秒（新版本随主机更新到达），以及最后
+一次影响目录或模型角色的写入后 180 秒（去抖）（`system_presets_auto_repair`，默认开启）。运行中任务
+由巡检声明的卡片显示为「自动修复中」。
+契约：`docs/cn/interfaces/model-registry.md` §9。
+
 **受保护的变更路径。** 对预置，`POST …/redeploy`、`DELETE /api/agents/{id}` 与
 `POST …/convert` 在**构建任何 AWS 客户端之前**返回 `403 agent.system_managed`，无论调用者持有
 哪些 `perm:agents.*`——管理员也一样，只能通过 `/api/system-agents` 维护。间接写入路径受同一拒绝
-保护：`POST /api/experiments/{id}/action` 与 `POST /api/runtime-canaries/{id}/action` 在写入
+保护：`POST /api/runtime-canaries/{id}/action` 在写入
 `running_action` 之前就拒绝任何引用预置的（可能陈旧的）记录；后台线程会执行的服务入口
 （`act_promote`、金丝雀 `act_setup`/`act_complete`/`act_rollback`、两个 `run_action`
 调度器）在第一次 AWS 调用前拒绝；能力投影另外返回 `reason_code: system-managed`。
@@ -615,8 +680,8 @@ S3 对象之前生效：控制台 `PUT`（描述*与*内容，内联或暂存替
 （`submit`/`approve`/`reject`/`disable`）对成员拒绝、对管理员放行——路由显式传入调用方角色，服务默认
 *非管理员*，因此内部调用者无法因遗漏而批准；Skill Lab 的 `publish_job` 先检查来源记录，再进行多文件拆分
 （重建 `publish_skill/` 目录、启动拆分器）；保留的 Skill 名称在任何 S3 写入之前拒绝普通注册/导入/
-改名导入（`409 registry.name_reserved`；MCP 记录仍可使用该名称）。普通记录的成员可操作生命周期与编辑
-保持不变。记录 API 投影携带服务端推导的 `system` 成员（`{managed, preset_key, label, skill_version,
+改名导入（`409 registry.name_reserved`；MCP 记录仍可使用该名称）。普通记录的编辑仍为创建者或管理员；
+其生命周期是审批流程——任何成员都可提交，只有管理员可以批准、发布、驳回或停用（`403 registry.approval_admin_only`，N17-obs248）。记录 API 投影携带服务端推导的 `system` 成员（`{managed, preset_key, label, skill_version,
 release_digest, path, protected_actions, admin_actions} | null`），控制台据此渲染“系统”标签、隐藏
 编辑/重新导入/删除、只为管理员显示生命周期按钮；此类记录的 `?view=edit` 是只读摘要；“在新 Agent 中使用”
 保持 APPROVED 门控；`GET /api/system-agents` 向 API 调用方报告 `skill_registration`（台账映射）与
@@ -748,7 +813,7 @@ chat.session_not_found`；普通 Agent 不产生台账读取。对话会话/历�
 边界：会话与 trace 列表丢弃其他 principal 的助手会话行，会话/trace 详情与按需评估在载荷任何位置
 （span 属性、记录、消息事件）提及此类会话时返回 404，所有者仍能看到自己的轮次，普通 Agent 的会话
 保持共享（`app.assistant.sessions.PrivateSessions`）。流在回复完成前出错或被客户端关闭时，保存
-部分回答与一条 `error` 行（`interrupted …`），绝不从不完整输出派生提案，释放声明并关闭上游事件流
+部分回答与一条 `error` 行（`turn_interrupted` 标记，绝不是传输层的异常文本），仅保留围栏已闭合、完整传输的提案块（JSON 中途被切断的不算，N-ARCH-obs12），释放声明并关闭上游事件流
 （关闭传输不代表服务端计算已停止）。
 
 **惰性提案。** 普通模型轮次结束后，回复被扫描是否恰有一个标记为 `launchpad-proposal` 的围栏块
@@ -773,7 +838,7 @@ AgentCore Memory 及其全部策略）；“仅短期”的退出无法表达，
 `ListEvaluators`；自定义评估器不在其列；列举失败时退化为仅内置并附警告）——不在列表中的 `existing`
 id 是引用错误。协议把这份列表定为首选（内置 / 第三方 → 逐场景 `assertions` → 只有二者都无法打分时才
 自定义 judge 或代码规则），并要求**极简的第一版 `system_prompt`**（不超过 50 个字，只写 Agent 是谁、做什么；红线、
-升级触发、语气和工具用法放在黄金测试、评估器和 `requirements_baseline` 里）：提示词之后通过 Evaluation → Optimization 循环迭代，而不是一开始就写全。
+升级触发、语气和工具用法放在黄金测试、评估器和 `requirements_baseline` 里）：提示词之后基于提案的黄金测试迭代（CN 构建没有托管的评估/优化服务），而不是一开始就写全。
 `to_agent_spec` 是映射到 `AgentSpec` 的
 唯一路径，`resource_bindings` 是映射到**已审阅部署身份**的唯一路径：spec 加上每个资源的 Gateway
 ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope——绝非凭据值）、技能记录 ID + S3 路径 +
@@ -783,6 +848,19 @@ ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope—
 共享编号：有效为 `draft`（带绑定），否则为 `invalid`（原样保留并附错误，可见但永不可执行）；更早的
 草稿变为 `superseded`。`content_hash` 同时覆盖内容**与**绑定，因此批准所指即所渲染的内容。提示词
 或回复中的“approved”之类文字不改变任何事：一轮对话只在记录与提案表中创建行，别无其他。
+
+**成员编辑原样携带未展示的内容（N15-obs13）。** 控制台的提案编辑器只暴露十一个字段（`name`、模型、
+`system_prompt`、工具、原生工具、技能、知识库、记忆、迭代数、超时）；契约中的其他每个键——`summary`、
+基线 / 假设 / 手动任务、`golden_tests`、`evaluator_recommendations`、`evaluation_plan`、`fishbone`、
+`builtin_tools`，以及收窄到仍选中 Gateway 的 `tool_functions`——都从被编辑的修订**原样**带入成员修订
+（`proposalContentFromDraft`、`PROPOSAL_CARRIED_KEYS`），不存在的键保持不存在，因此未改动的编辑与其
+基线哈希一致；契约之外的键不携带（服务端会拒绝）。服务端对旧版控制台或手写的 `PUT` 守住同一不变量：
+提交内容**缺少** `evaluation_plan` 而最新修订带有种子时，种子原样带入，新修订记录修订级
+`notes[]` 条目 `proposal_repaired: evaluation_plan carried from revision N — the editor did not submit it`；
+显式 `evaluation_plan: null` 是刻意删除（无种子、无说明）；提交的种子对象按原样存储，绝不合并。带入的
+种子仍按编辑后的内容校验——删掉带入场景所指的黄金测试会得到一个 *invalid* 修订，可见且绝不被更正。
+此前，凡阻断型推荐指向种子 judge 的提案，每次编辑都会起草出零个种子评估器的计划并变得不可批准
+（“asks for a gate … that no evaluator carries”）。
 
 **上线障碍鱼骨图（Agent-DLC DEFINE）。** 预置的技能包携带 Agent-DLC 五维鱼骨图方法论
 （`references/fishbone-methodology.md`：认知 / 质量 / 责任 / 成本 / 性能 + 其他，一次一问、业务语言、
@@ -798,14 +876,26 @@ skill 的 `fishbone-data.json` 同构），成员编辑原样携带它，AWS 侧
 
 **清除会话即清除它创建的一切。** 历史会话面板的「清除」（`GET …/footprint` → 二次确认 →
 `DELETE …/conversations/{id}`，`app/assistant/purge.py`）从不只删对话记录：footprint 列出每个由批准部署的
-Agent、每次评估资产操作及其仍存活的云端资源、这些操作创建的本地 Dataset，以及阻塞项（正在流式的轮次、排队 /
-运行 / 清理中的操作、进行中的部署任务）。有任一阻塞项则拒绝且不删除任何内容；否则按依赖顺序复用已有的单资源路径——
-对每次操作执行带围栏的 `cleanup_operation`（未达到 `cleaned` 的操作以 `409 assistant.conversation_assets_remain`
-中止清除，会话保留以便剩余资源仍可归属）、删除本地 Dataset 行（成员手动同步到 AWS 的副本属于该成员，保留）、
-对每个 Agent 执行共享的 `delete_agent_row` 拆除（预置拒绝、资源、角色、账本、名称占用），最后才删账本行。
-按所有者绑定；成员可以清除只有对话记录的会话，涉及云端资产时还需要 `perm:agents.deploy`，涉及 Agent
-时还需要 `perm:agents.delete`（`403 auth.permission_required`；footprint 返回 `required_permissions` 与调用者的
-`can_clear`）——与单独的清理 / 删除 Agent 路由同一门槛。已记录的评估运行保留。
+Agent、**在这些 Agent 上运行的 Runtime 金丝雀**（含每个金丝雀拥有的本地 A/B 行、两个分支的在线评估与两个命名端点——CN
+没有专属金丝雀网关，也没有配置实验，N13-obs2）、每次评估资产操作及其仍存活的云端资源、这些操作创建的本地 Dataset，以及阻塞项
+（正在流式的轮次或 Skill 导入、排队 / 运行 / 清理中的操作、进行中的部署任务、仍在执行动作的金丝雀）和最近一次清除尝试
+（`purge`）。只有对话记录的会话直接删除；其余情况成为**持久化清除任务**（`purge_assistant_conversation`，`202 {job_id}`，
+通过 `GET /api/jobs/{id}` 轮询，启动时由 `resume_pending_jobs` 恢复），由 `assistant_conversations.purge_job_id` 认领。
+任务钉住归属证据（Agent / 金丝雀 / Dataset id），按依赖顺序复用已有的单资源路径，每步之前做围栏校验，并以**回读**而非删除响应
+确认完成：每个金丝雀在自身 `running_action` 认领下执行 `act_cleanup`（认领带有清除标记，启动时的金丝雀扫描会放过仍在进行的
+清除任务的认领），再有界等待 `remaining_resources` 回读确认在线评估配置与两个命名端点均已不存在（命名端点存在时
+`DeleteAgentRuntime` 返回 `ConflictException`——上游 issue #246；状态已为 `cleaned` 的金丝雀同样回读）；对每次操作执行
+带围栏的 `cleanup_operation`；删除本地 Dataset 行（成员手动同步到 AWS 的副本保留）；对每个 Agent 删除 Runtime（若其上存在
+不属于本会话金丝雀的命名端点，则事先拒绝），有界等待 `GetAgentRuntime` 返回不存在后再执行 `deployer/teardown.cleanup_residue`
+残留清理（执行角色、制品、记忆快照 / 记录、部署时登记的 A2A Registry 记录、日志组——执行角色或 Registry 步骤失败会中止任务，
+其余步骤仍为尽力而为）与账本；删除金丝雀保留的候选包；最后才删账本行。`skipped` 的清理结果、等待结束仍为 `DELETING` 的
+资源、`DELETE_FAILED`、冲突、不属于本会话的依赖或拒绝，都会使任务以 `failed` 结束并给出可操作的 `payload.blocker`——会话
+及其证据保留，再次「清除」会新建任务并继承清单、已确认的检查点与已受理的删除请求。任务进行期间，会话的所有写入返回
+`409 assistant.conversation_clearing`，其 Agent 拒绝金丝雀 / 重新发布 / 删除（`409 assistant.agent_clearing`）。按所有者
+绑定；成员可以清除只有对话记录的会话，涉及云端资产时还需要 `perm:agents.deploy`，涉及 Agent 时还需要 `perm:agents.delete`
+（`403 auth.permission_required`；footprint 返回 `required_permissions` 与调用者的 `can_clear`）——与单独的清理 / 删除
+Agent 路由同一门槛；并且将被拆除的每个金丝雀与 Agent 都必须是调用者自己的（创建者或管理员，`403 canary.forbidden` /
+`agent.forbidden`，在任何副作用之前；`users-and-ownership.md` §8）。已记录的评估运行与金丝雀记录保留。
 
 **批准——唯一的执行者。** `POST …/proposal/approve`（`perm:agents.deploy`，与 `POST /api/agents`
 同一权限，处理器内再次断言）指定 `{revision, content_hash}`。首先解析**请求的确切修订**：已批准的
@@ -1172,6 +1262,77 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
 会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
 从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
+### 规格快照——Agent 版本台账（上游 #277，仅只读）
+
+`Agent.spec` 在每次发布时都会被覆盖，台账本身说不出一个 Agent 两次编辑前的样子，也说不出某次评估运行
+测量的是哪个版本。`services/snapshots.py` 在按 workspace 划分的 `spec_snapshots` 表里为每次发布保留一行，
+每个 Agent 各自的 `seq` 递增：
+
+- **唯一写入点。** `deployer.pipeline.create_deployment` 在与 Deployment、Job 同一事务中记录快照，
+  自行提交的调用方也不例外——创建、重新发布、接受推荐、架构师批准与预置发布。恢复中的作业不会再经过
+  这里。Runtime 金丝雀的晋升不经部署就改变规格，因此自行记录一行，并盖上它上线的版本。
+- **实际部署的规格。** 成功时 `_finish` 盖上 AWS 版本，并把存储的规格替换为该时刻 Agent 的规格
+  （某个阶段可能在作业中途改写它）。失败的发布保持 `aws_version` 为空。
+- **基线。** 启动时，每个活跃、非发现导入、拥有 AWS 资源且尚无快照的 Agent 得到 #1，
+  `note: "baseline"`，内容是其当前规格。
+- **差异**（`GET /api/agents/{id}/snapshots/diff`）按点号路径比较嵌套字段，按成员比较列表，
+  代码、代码包、Studio 流程与系统提示词整体比较，并把每处变化归组（提示词、模型、工具、技能、
+  知识库、记忆、护栏）。超过 2 KB 的内容只返回长度。
+- **评估记分卡读取的内容。** 运行在提交时盖上最新的*已部署* `seq`（`EvalRun.agent_snapshot_seq`）；
+  对比页展示两次运行版本之间的发布及其差异。契约：`docs/cn/interfaces/evaluation-engine.md`。
+- **CN 未移植：** 上游的回滚路由（重新发布即可发布任意规格）、环境对比/漂移页，以及 Agent 页的快照卡片。
+
+### 评估评分卡
+
+评估视图可以读出一个 Agent 在多次运行中的得分：每次运行评估的是哪个版本、用什么基准衡量，以及两次运行
+如何逐个用例对齐。规则集中在 `app/evaluation/scorecard.py`；路由为 `GET /api/eval/scorecard`、
+`GET /api/eval/runs/compare` 与 `POST /api/eval/runs/{id}/rerun`（见 API 参考）。
+
+- **运行行上的记录。** `submit_run` 是创建运行行的唯一位置，它记录 `agent_snapshot_seq`（已部署到 AWS 的最新
+  配置快照——仍在部署中的快照并不是运行实际调用的版本），回放运行还记录 `dataset_fingerprint`（对规范化后的
+  场景做 sha256 取前 16 位十六进制，与键的顺序无关）和 `dataset_size`。回放循环在每个会话完成时写入
+  `scenario_map`（`{session_id: {scenario_id, input}}`）；被跳过的模拟用户场景没有条目。四列都可为空，旧行
+  保持为空。
+- **读取时的版本。** 每个运行载荷都带 `snapshot {seq, source}`：`stamped`；旧行按快照时间线 `inferred`
+  （运行创建时已完成部署的最新快照，没有则取最早的快照）；被动范围为 `observed`，因为其会话早于运行本身。
+  推断结果从不回写。
+  - 早于所有快照的运行（启动时的基线快照是后来补的）：只有在该运行与最早快照之间 Agent 没有成功部署过，
+    才取最早的快照。
+  - 否则版本未知，`snapshot` 为 null。控制台标为“早于版本记录”，比较时视为比所有已编号版本都早；因此快照
+    上线前采纳推荐带来的变化显示为版本变化，而不是同版本重跑。
+- **基准。** 本地数据集（revision 为指纹）、云端数据集（revision 为固定的版本或草稿的指纹），或该 Agent 的
+  线上流量——所有时间窗口、选定会话和日志流运行都归入这一项。趋势只连接同一基准的运行；综合分和退步判断
+  留在控制台中计算，因为评估器的方向由控制台掌握。
+- **对比。** 同一基准的两次回放按场景 id 配对会话。没有映射的旧运行，只有在没有跳过任何场景、且每个场景
+  恰好一个会话时才按位置配对；其他情况只比较总体分数，不读取结果。两个版本之间的配置变化来自
+  快照差异路由。
+- **再评一次**根据源运行重建 `RunCreate`（相同的对象、评估器、数据集及固定版本，或时间窗口长度），并与
+  `POST /api/eval/runs` 走同一个 `_start_run`，因此校验、可见性和预算检查不会出现分歧。选定会话和日志流
+  运行会被拒绝：给同一批会话重新打分只会测出评审模型的随机性。
+- **隔离。** 评分卡在 SQL 中按创建者过滤运行，并去掉被隐藏 Agent 的运行，然后才应用 1000 条的上限。对比不
+  展示被隐藏 Agent 的发布历史，也从不读取被隐藏数据集的用例。被隐藏的数据集使用运行上存储的名称。
+- **控制台。** V2 评估任务页以 `?view=compare&a=&b=` 展示对比（`v2/pages/tasks/RunCompare.tsx`，纯逻辑在
+  `v2/compare.ts`）：每个共同评估器一张指标卡，外加按两次都打了分的评估器计算的综合分；可比性提示；配置
+  变化（复用 Agent 页的 `DiffBody`，在两个快照之间比较）。两次运行对齐时还有逐用例表格，按所选依据的归一化
+  分数变化分类（变化 ≥ 0.1 记为改进或退步）。已完成且有分数的运行详情页提供“与上一次对比”，目标是评分卡中
+  同一 Agent、同一基准上更早的最近一次完成运行。
+- **按 Agent 标签。** `/v2/eval/tasks` 现在默认打开“按 Agent”（`AgentScoreList`），运行列表移到 `?tab=all`。
+  每个 Agent 一行，显示主基准（完成运行最多的那个）、最新综合分，以及与该基准上**上一版本**最近一次运行相比的
+  变化；没有可比的运行时说明原因。
+  - 综合分只取该基准每次完成运行都用到的评估器。
+  - “需要关注”列出退步（综合分降 0.05 及以上，或任一评估器降 0.1 及以上）；数据集有变化时显示为“待确认”，
+    同时也列出失败的运行。
+  - `?view=agent&key=`（`AgentScorecard`）按运行先后画出该基准的趋势，标出快照版本分段和数据集变化。页面另有
+    版本 × 评估器表、可勾选 A/B 去对比的运行记录，以及通过 `POST /api/eval/runs/{id}/rerun` 发起的“再评一次”。
+  - 规则在 `v2/scorecard.ts` 与 `pages/tasks/scorecardAttention.ts`。
+- **架构助手第 2 步（上游 #294，r15-c）。** “下一步”第 2 步（`v2/pages/assistant/RunHistory.tsx`）读取该 Agent
+  的评分卡，把它在方案 Dataset 上的运行当作一个基准，规则与上面相同。先显示最新综合分与上一版本相比的变化和迷你
+  趋势线，再列出最近 5 次运行，每行带版本、综合分和变化；一旦有运行，步骤标题改为“离线评估”。
+  - 同版本重跑只与该版本的上一次运行比较，并标为噪声（同版本重跑）。
+  - 按上面的规则退步的版本变化标为“退步”。
+  - 默认收起的“评估器明细”按评估器 × 版本列出最近 4 个版本。
+  - 指向评分卡、运行详情和对比页的链接，在这些页面点“返回”都会回到该对话（`pages/tasks/back.ts` 的 `returnState`）。
+
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +
@@ -1230,23 +1391,51 @@ Harness→runtime 转换出于同样这三条理由保留它的 gateway 工具�
 `export harness --build CodeZip`，随后把生成的目录树读进内存并删除——真正的存档产物是
 spec 的 `code_bundle`。`build_conversion_spec` 把 Launchpad 的配置捆绑契约嫁接到导出的
 `main.py` 上，这一步是必需的而不是修饰:导出代码把 `DEFAULT_SYSTEM_PROMPT` 写成常量，
-因此未经嫁接的转换做 A/B 实验时会像 harness 一样空转，所以嫁接锚点缺失会让整次转换失败，
-而不是发布一个静默无法 A/B 的 Agent。源 harness 选用的原生工具（`shell`、`file_operations`）若被导出丢掉，会从已安装 CLI 自带的模板重新嫁接回去——CLI 只在 `allowedTools` 条目匹配 `builtin/<name>` 时才启用内置工具，而 Launchpad 与 Harness 服务使用的是裸名称——这样孪生仍能读取技能的 `references/` 文件。产出的 `zip_runtime` spec 把源 harness 的 gateway
+因此未经嫁接的转换会像 harness 一样忽略被路由的配置捆绑（优化器的 rollout 会路由一个），所以嫁接锚点缺失会让整次转换失败，
+而不是发布一个静默忽略捆绑的 Agent。源 harness 选用的原生工具（`shell`、`file_operations`）若被导出丢掉，会从已安装 CLI 自带的模板重新嫁接回去——CLI 只在 `allowedTools` 条目匹配 `builtin/<name>` 时才启用内置工具，而 Launchpad 与 Harness 服务使用的是裸名称——这样孪生仍能读取技能的 `references/` 文件。产出的 `zip_runtime` spec 把源 harness 的 gateway
 `ToolRef`、技能前缀、memory 与知识库配置一并带过来，在 `conversion_notes` 里记下哪些被
-接通，并写上 `source_harness`，使 `experiment_capability` 判定新 Agent 具备实验资格。
+接通，并写上 `source_harness`（转换检查读取的嫁接标记）。
 v1 那条「gateway MCP 未接线」的说明是被删掉了，不是被改了措辞。
 
 一个被路由的配置捆绑会让 runtime **和** Gateway 双方各以自己的角色去解析该捆绑，因此按
 Agent 的执行角色*和* `launchpad-gateway-role` 上都需要 `GetConfigurationBundleVersion`。
 runtime 侧缺它会让调用从内部 500;Gateway 侧缺它会让 MCP 调用返回
 `HTTP 400 "Config bundle fetch failed"`，而 Agent 会静默地丢掉所有 Gateway 工具。两处授权
-都已到位，这正是配置捆绑 A/B 能够改变一个 *Gateway* 工具描述的前提。
+都已到位，这正是被路由的配置捆绑能够改变一个 *Gateway* 工具描述的前提。
 
 仍然是 harness 独有的部分:zip runtime 上的远端（`type: "mcp"`）服务器，以及 container 方式
 上的 Gateway 工具。
 
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
-一切与控制台路径完全相同。每个 Agent 的响应都带一份由后端拥有的 `invoke_capability`;
+一切与控制台路径完全相同。
+
+**归属（Family B 第一步——移植上游 #259 / #261，#263 的字段形状）。** 每个用户管理的资源都以同一种方式
+记录创建它的控制台主体：`created_by` 是创建者的 `users.id`（归属键；配置内置管理员与未开启鉴权的本地操作者
+没有 `users` 行、系统预置、发现导入的 runtime、bootstrap 资源以及旧行均为 NULL），`created_by_name` 是创建时的
+用户名，仅用于显示。`services/creators.py` 是唯一的辅助模块（`Creator.of_request`、`stamp`、`fields`；
+`record` / `lookup` / `forget` 操作按工作空间划分的 `resource_creators` 侧表，用于仅存在于 AWS 的资源种类——
+CN 构建中没有这类种类，每种资源都有自己的账本行）。打戳的表：`agents`（控制台创建、架构助手批准）、
+`chat_sessions`（开启会话的控制台账号——或 `/v1` 密钥的创建者；CN 扩展）、`api_keys`、`managed_memories` /
+`memory_stores`（被纳管的既有记忆只记名字）、`knowledge_bases`、`identity_providers`、`eval_datasets`、
+`eval_runs`、`eval_pipelines`、`online_eval_configs`、`eval_evaluators`、`experiments`、`runtime_canaries`、
+`skill_lab_jobs`、`skill_lab_tasksets`。创建者永远不能由客户端设置（Agent、密钥与知识库对携带创建者的请求体
+返回 422；开放的请求模型忽略它）。读取它的门禁：Agent 重新发布 / 删除为创建者或管理员
+（`routers/agents.py::require_agent_creator`，403 `agent.forbidden`；预置保留自己的守卫），记忆记录删除为
+该 Agent 的创建者或管理员（403 `memory.record_forbidden`），Cedar 的 `Agent.owner` / `ApiKey.created_by`
+属性携带 `created_by_name`（策略契约不变）。#261 之前的 `Agent.owner` 用户名列已退役（C5）：迁移把它复制到
+创建者列后删除该列。密钥记录创建者（`api_keys.created_by` = `users.id`）与 `last_used_at`（由
+`require_api_key` 在成功时写入，每分钟最多一次），并且只在创建者仍有资格持有时有效。同一个判定
+`services.api_keys.creator_offboarded`（账号已删除 / 非 active / 已过期，或成员没有密钥所属工作空间的授权——
+管理员一如既往绕过授权）用在三处：`require_api_key` 返回普通的 `401 auth.invalid_api_key` 并把密钥置为停用；
+`POST /api/apikeys/{id}/enable` 以 `409 apikey.creator_offboarded` 拒绝；`GET /api/apikeys` 标记该密钥。
+管理员停用 / 删除账号（`users_service.apply_patch` / `delete_user`）以及移除授权（按用户的
+`PATCH /api/users/{id}` 与批量的 `PUT /api/workspaces/{id}/grants`）在同一事务中立即停用创建者的密钥；账号过期
+没有写入事件，由使用时的检查覆盖。密钥从不因失效被删除。创建者没有 `users` 行或旧密钥创建者为 NULL 时，永远
+不会被判定为失效。CN 成员规则（用户决定）：成员只列出 / 切换 / 删除自己创建的密钥，只列出自己开启的 Chat
+会话（管理员看到全部；看不到的密钥或会话返回 404）。第二步（其余资源种类的可见性）建立在这些列之上——
+契约见 `docs/cn/interfaces/users-and-ownership.md`。
+
+每个 Agent 的响应都带一份由后端拥有的 `invoke_capability`;
 控制台调用、Chat 与 `/v1` 强制的是同一份投影。导入进来的 runtime 走带缓冲的兼容路径，
 因为 Launchpad 无法假定一个任意的外部 runtime 会发出生成代码那套 Claude SDK 事件契约。
 
@@ -1459,16 +1648,26 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 500 kB chunk 警告线，`vite.config.ts` 中的 `build.chunkSizeWarningLimit` 只被抬高到刚好覆盖
 这一个 chunk（2900 kB），因此入口 chunk 或任何页面 chunk 一旦劣化，这条警告仍会触发。
 
-## 控制台 V2
+## 控制台 V2——唯一的控制台
 
-第二套控制台体验与经典版**并存**：浅色、企业级 SaaS 风格的界面，按客户熟悉的评估工作流设计（顶部产品栏、分组可折叠侧边栏、带「共 N 项」计数的筛选列表页、分步向导、`|` 标题的分区卡片、状态标签）。它位于 `frontend/src/App.tsx` 中独立的 `/v2/*` 路由组，处在经典 `<Shell />` **之外**，有自己的外壳（`v2/V2Shell.tsx`）；两者共享认证、工作区 Provider 与 `lib/api.ts`，因此 V2 的每次读写都走与经典页面相同的后端路由与权限检查。
+控制台即浅色、企业级 SaaS 风格的 V2 体验，按客户熟悉的评估工作流设计（顶部产品栏、分组可折叠侧边栏、带「共 N 项」计数的筛选列表页、分步向导、`|` 标题的分区卡片、状态标签）。它位于 `frontend/src/App.tsx` 中的 `/v2/*` 路由组，外壳为 `v2/V2Shell.tsx`；认证、工作区 Provider 与 `lib/api.ts` 由所有页面共享，因此每次读写都走同样的后端路由与权限检查。
 
+原先的「经典」控制台已于 **2026-10-17 退役**（r13-a，用户决定「按你的建议删除对应的模块」）：其外壳（`layout/Shell.tsx`、`Sidebar`、`Topbar`、`nav.ts`）、`frontend/src/pages/*` 下的页面、按浏览器保存的控制台切换（`lib/ui-version.ts`，`launchpad_ui_version`）以及仅被这些页面使用的文案键均已删除（C5：删除而非开关）。
+
+- **经典路由重定向。** 每个经典 URL 仍然可用，重定向到对应的 V2 页面，深链由各模块的 `classicUrl` 辅助函数（`v2/pages/<module>/classicUrl.ts`、`lib/evaluation-url.ts`）带过去：`/` → `/v2`，`/agents` → `/v2/agents`，`/agents/:id` → `/v2/agents?view=detail&id=`，`/chat?agent=…&session=…` → `/v2/chat?…`，`/evaluation?view=…` → 对应的 `/v2/eval/*` 页面（未知 view 回到评估总览），`/registry`、`/knowledge-bases`、`/memory`、`/observability`、`/governance`、`/skill-lab`、`/users`、`/workspaces`、`/announcements`、`/videos`、`/settings/model-providers`、`/create/assistant` → 各自的 `/v2/...` 页面；`/create` → `/agents/new`（`?view=discover` 时为 `/agents/import`）；已下线的 V2 页面 `/v2/video-management` → `/v2/videos?view=manage`（其 `?view=new` / `?view=edit&id=` 深链转为 `&edit=`）。未知路径在外壳内渲染控制台的未找到页（`v2/pages/NotFound.tsx`）。
+- **尚无原生页面的 Agent 流程。** 四个流程暂无 V2 对应页，仍在原路由上、在 `<V2Shell classic />` 内渲染：不带参数的 `/agents/new`（三步向导与「系统预置」面板；带 `method=` / `gateway=` / `skill=` 意图时改为进入原生向导）、`/agents/import`（Runtime / Harness 发现）、**系统预置**的 `/agents/:id/edit`（其配置流程；其他 Agent 由 `v2EditPath` 送往原生 `?view=edit` 向导或 Studio 编辑器）以及 `/create/studio`（Studio 画布）。它们是 `frontend/src/pages/` 下仅存的文件（`CreateAgent.tsx`——已移除列表与详情模式、`CreateAgentStudio.tsx`、`create/*`），样式基于 `theme/tokens.css` 中的变量；`v2/v2-classic.css` 在 `body.v2-body` 上把这些变量改指向 V2 配色（使挂载到 body 的提示与弹窗同样生效），并在其内容容器 `.v2-classic` 下做形状微调。`theme/app.css` 只保留这些页面仍在使用的规则。
+
+- **进入控制台前的页面。** 登录／注册（`auth/AuthGate.tsx`）、会话与 Workspace 加载动画以及「未分配 Workspace」提示页（`workspace/WorkspaceProvider.tsx`）使用同一套外观（`v2/AuthFrame.tsx` + `v2/auth.css`）。
+- **样式。** `v2/v2.css` 的所有规则都限定在 `.v2`（外壳根节点）或 `body.v2-body` 下，后者在外壳挂载期间加到 `<body>` 上；V2 使用自己的组件库（`v2/ui.tsx`：按钮、标签、筛选下拉、搜索、表格与分页、卡片、向导步骤、弹窗、抽屉、描述列表、KPI、提示）。`frontend/src/components/` 下的组件服务于上述基于变量样式的 Agent 流程。
+- **Agent 管理（原生）。** `/v2/agents`（`v2/pages/Agents.tsx`）列出工作区内的 Agent，每行按权限规则显示操作；`?view=detail&id=` 展示基本信息、五阶段部署流水线与任务日志（部署中自动轮询）、AWS 版本与端点、BYOC 制品、转换来源和知识库；`?view=new` 是创建向导（`v2/pages/agents/AgentWizard.tsx`）。向导完整配置**托管 Harness**，提交的 `AgentSpecInput` 与 `/agents/new` 向导为该方式构建的完全一致（目录数据来自 `registryAttachables()`、托管知识库列表与记忆资源）；Strands、其他 Agent SDK 与自带代码转到该向导 `/agents/new?method=…`，向导据此直接打开已预选该方式的配置步骤。导入、系统预置与 Studio 画布仍在原路由上（见上）。`/agents` 与 `/agents/:id` 重定向到原生页面（`App.tsx`），因此其他模块的链接以及向导部署后的跳转都会落到原生页面。
+- **在线评估与实验（原生）。** `/v2/eval/online`（`v2/pages/Online.tsx`，共享规则在 `v2/online.ts`）管理全部在线评估配置，包括归属于 Agent、实验对照组（只读）与外部创建的配置，覆盖评分和洞察两种模式：列表支持按模式、归属、执行状态筛选，配置处于 CREATING/UPDATING/DELETING 时自动轮询；详情页在评分模式下展示服务端按评估器聚合的结果、趋势与评判记录，在洞察模式下展示定时与按需生成的洞察报告（抽屉查看详情）；新建与编辑表单支持过滤条件，保存时只提交变更的字段（`api.v2UpdateOnlineConfig`，PATCH）。`/v2/eval/experiments`（`v2/pages/Experiments.tsx`）**只保留运行时金丝雀**（N12-obs49，用户决定 2026-10-16："隐藏掉配置实验，只保留金丝雀实验"）：配置包实验页面（`v2/pages/experiments/*`——列表、`?view=new`、`?view=detail&id=` 及其阶段卡片）仍在代码树中但不再挂载；`?mode=configuration`、`?view=`、`?id=` 一律重定向到金丝雀列表（`lib/evaluation-url.ts` 的 `v2ExperimentsRedirect`），经典的 `?view=experiment&exp=…` 也映射到这里（`v2EvaluationTarget`）。模块的导航与页头显示为"金丝雀实验"。运行时金丝雀（`v2/pages/canary/`；`mode=canary` 仍可接受但不再必需）：包括列表、`canary=new`（选择当前版本 Agent，编辑候选版本提示词或 Studio 代码，并接收 `champion=` / `sourceExp=` 的发布交接参数），以及 `canary=<id>` 详情页：设置阶段加上每个放量档位一张卡片（90/10 → 50/50 → 1/99：发送流量、判定、放量或全量发布，未达显著时需二次确认），另有回滚与清理。**Harness 金丝雀**（`artifacts.kind = "harness"`，`optimization/canary_harness.py`）不铸造候选版本，而是对同一个托管 Harness 的两个已有版本作 A/B：`canary=new` 选择对照版本（默认第一个）与最新版本（`DEFAULT` 已在服务它）对比。Harness ARN 不能作为 `http.agentcoreRuntime` Gateway 目标（该字段校验 `runtime/` ARN），因此 Setup 固定两个 Harness 端点（`ctl<id6>` → 对照，`trt<id6>` → 实验），各用一个 HTTP **passthrough** 目标接入（`protocolType CUSTOM`，经网关角色以 SigV4 `bedrock-agentcore` 签名，端点为 `https://bedrock-agentcore.<region>.amazonaws.com/harnesses/invoke`，`harnessArn` 与 `qualifier` 作为静态查询参数），为专属网关开启追踪投递，并用该端点遥测上的在线评估为每个变体打分（`service.name = harness_<harnessName>.<endpoint>`，日志组 `/aws/bedrock-agentcore/runtimes/<backingRuntimeId>-<endpoint>`，会预先创建，因为 CreateOnlineEvaluationConfig 不接受不存在的日志组）。2026-09-30 实测：客户端把 InvokeHarness 的 JSON 请求体 POST 到 `<gatewayUrl>/<target>/`（加 `/invocations` 会 404；末尾的斜杠不可省略：裸的 `/<target>` 虽然也返回 200，但会绕过 A/B 测试的 `gatewayFilter` `/<target>/*`，所有会话都不会被归属和打分）；网关角色以 harness ARN 上的 `InvokeAgentRuntime` 鉴权（CDK 在 `harness/*` 上授予它和 `InvokeHarness`）；Harness 的 span 带有网关的 `routing_experiment_variant_name`，因此 `GetABTest` 能给出分变体结果。向 Harness 金丝雀回放数据集时改为**成对**进行（`canary_harness.PAIRED_MODE`）：每道题同时发给两个端点（带 `qualifier` 的 InvokeHarness，每侧一个新会话，偶发错误重试一次，失败的一侧记在该题上），网关的随机分流不会再让两个版本拿到不同的题目组合，也不需要重复回放同一份数据集。判定按会话 id 从两个变体的在线评估结果中读取分数（每个端点 100% 采样、不按变体过滤），等到 90% 的题两侧都打完分（上限 30 分钟，评审延迟约 10 分钟），再按评估器比较：两侧均值、平均差、候选版本更好/更差/持平的题数（考虑评估器方向），以及双侧配对符号翻转检验的 p 值（非零差值不超过 16 个时精确枚举，更多时用固定种子的蒙特卡罗）；逐题明细随判定保存。判定规则不变（`compute_verdict`）。要更多证据，应增加数据集里的题目，而不是增加回放次数。全量发布只改台账（实验版本已是 `DEFAULT`），并且与 Runtime 金丝雀不同，可以在 **50/50** 判定为 `treatment-wins` 或 `tie` 后直接执行（`canary_service.early_complete_allowed`；平局或不显著的胜出仍需二次确认，对照胜出和证据不足仍被阻止）：架构助手的金丝雀流量来自 Dataset 回放，1/99 只会把回放几乎全部送进实验版本，并不增加对比证据。90/10 一档同样可选：创建请求带 `start_stage: 1`（`canary=new` 和架构助手第 4 步中的“放量计划”复选框，默认勾选即先跑 90/10）时，A/B 测试直接以 50/50 开启——实验版本已是 `DEFAULT`，90/10 并不限制影响范围，只会让实验组样本很少；Runtime 金丝雀拒绝该参数（`canary.start_stage_harness_only`）。`setup.start_stage` 与 `complete.completed_at_stage` 记录从哪一档开始、从哪一档完成，详情页把范围之外的档位标为已跳过；回滚会重新发布对照版本的行为（按该版本 GetHarness → UpdateHarness，生成新版本）；清理还会删除两个 Harness 端点和追踪投递。金丝雀运行期间，平台对该 Agent 的非流式调用经由其网关（失败时回退到对照端点）。架构助手的“下一步”面板（`v2/pages/assistant/NextSteps.tsx`）把它作为第 3 步（基于该 Agent 在任意数据集上的一次无错误运行生成 AI 优化建议——AgentCore 或 `gepa_lite`，默认最新一次；其他运行生成的建议——包括已接受的——列在下方；接受时先在可编辑的对话框里审阅提示词，再用审阅后的文本以新版本重新发布 Harness）和第 4 步中的“金丝雀实验”（`HarnessCanary.tsx`）。选择 V2 后，经典的 `/evaluation?view=online|experiment` 会映射到这两个页面（`App.tsx` 中的 `EvaluationRoute`，`oe=` 转为 `view=detail&id=`，`exp=` 落到金丝雀列表）；V2 侧边栏不再进入经典评估页及其分区导航。
+- **原生 V2 页面。** 工作台（`/v2`）、Agent 管理（见上）与 Agent 评估模块：数据中心 `/v2/eval/data`（Agent 轨迹 = 可观测轨迹及轨迹 / 会话详情、数据集及记录编辑，以及“复制所选到新数据集”——按原样复制所选记录，含断言、每一轮与期望工具轨迹，并写入 `metadata.copied_from`——数据处理 Pipeline）、评估任务 `/v2/eval/tasks`、评估总览 `/v2/eval/insights`、评估器 `/v2/eval/evaluators`。子页面遵循控制台约定，用同一路由的 `?view=` 状态表示（`view=new|detail|edit|trace|dataset|pipeline…`）。侧边栏的每个入口都是原生 V2 页面；只有上述四个 Agent 流程仍在原路由上、在外壳内渲染。
 - **切换。** 经典版顶栏有「体验新版 V2」入口，V2 顶栏有「返回经典版」。选择以浏览器本地偏好保存（`lib/ui-version.ts`，键 `launchpad_ui_version`，通过 `useUiVersion()` 响应式读取）。**V2 为默认界面**：只有存储值为 `v1`（明确点过「返回经典版」）时才停留在经典版，否则首页 `/` 重定向到 `/v2`；打开任意 `/v2` 页面也会选中 V2。存储不可用或为空时视为 V2（切换仍对当前标签页生效）。
 - **进入控制台前的页面。** 登录／注册（`auth/AuthGate.tsx`）、会话与 Workspace 加载动画以及「未分配 Workspace」提示页（`workspace/WorkspaceProvider.tsx`）无论选择哪个界面，都使用 V2 外观（`v2/AuthFrame.tsx` + `v2/auth.css`）。
 - **V2 中的经典模块。** 经典路由组通过 `App.tsx` 中的 `ConsoleShell` 渲染：默认是经典 `<Shell />`，选择 V2 后改为 `<V2Shell classic />`。因此 `/chat`、`/agents/…`、`/registry` 在两套控制台中 URL 不变，模块间链接无需改动，切换时停留在当前页面（只有没有经典对应页的原生 `/v2` 页面会回到 `/`）。经典页面的样式完全基于 `theme/tokens.css` 中的变量（原先写死的底色与叠加色也改为变量：`--field`、`--code-bg`、`--on-amber`、`--amber-rgb`、`--tint-rgb`、`--bg-rgb` 等）；`v2/v2-classic.css` 在 `body.v2-body` 上把这些变量改指向 V2 配色（使挂载到 body 的提示与弹窗同样生效），并在经典页面的内容容器 `.v2-classic` 下做形状微调。
 - **样式隔离。** `v2/v2.css` 的所有规则都限定在 `.v2`（外壳根节点）或 `body.v2-body` 下；后者仅在 V2 外壳挂载期间加到 `<body>` 上，用于屏蔽经典版的深色背景与噪点。经典主题不受影响；V2 使用自己的组件库（`v2/ui.tsx`：按钮、标签、筛选下拉、搜索、表格与分页、卡片、向导步骤、弹窗、抽屉、描述列表、KPI、提示），不复用经典组件。
 - **Agent 管理（原生）。** `/v2/agents`（`v2/pages/Agents.tsx`）列出工作区内的 Agent，每行按经典版的权限规则显示操作；`?view=detail&id=` 展示基本信息、五阶段部署流水线与任务日志（部署中自动轮询）、AWS 版本与端点、BYOC 制品、转换来源和知识库；`?view=new` 是创建向导（`v2/pages/agents/AgentWizard.tsx`）。向导完整配置**托管 Harness**，提交的 `AgentSpecInput` 与经典向导为该方式构建的完全一致（目录数据来自 `registryAttachables()`、托管知识库列表与记忆资源）；Strands、其他 Agent SDK 与自带代码转到经典向导 `/agents/new?method=…`，经典向导据此直接打开已预选该方式的配置步骤。编辑、导入、系统预置与 Studio 画布仍使用经典页面。选择 V2 后，经典的 `/agents` 与 `/agents/:id` 会重定向到原生页面（`App.tsx` 中的 `AgentsRoute`），因此其他模块的链接以及经典向导部署后的跳转都会落到原生页面。
-- **在线评估与实验（原生）。** `/v2/eval/online`（`v2/pages/Online.tsx`，共享规则在 `v2/online.ts`）管理全部在线评估配置，包括归属于 Agent、实验对照组（只读）与外部创建的配置，覆盖评分和洞察两种模式：列表支持按模式、归属、执行状态筛选，配置处于 CREATING/UPDATING/DELETING 时自动轮询；详情页在评分模式下展示服务端按评估器聚合的结果、趋势与评判记录，在洞察模式下展示定时与按需生成的洞察报告（抽屉查看详情）；新建与编辑表单支持过滤条件，保存时只提交变更的字段（`api.v2UpdateOnlineConfig`，PATCH）。`/v2/eval/experiments`（`v2/pages/Experiments.tsx`）重做了配置实验：列表、`?view=new`（选择 Agent、轨迹就绪度、基线评估）以及 `?view=detail&id=`，每个步骤一张阶段卡片（推荐 → Bundle → 网关/A-B → 流量 → 判定/发布 → 清理），提交的操作与经典页面相同。已清理或失败的实验仍以只读方式展示每个阶段的结果（推荐对比、Bundle、网关/A-B、流量、判定指标、清理记录）：这些都是账本中的产物（`Experiment.artifacts`，按阶段合并写入，清理时不会删除），不依赖读取 AWS。每个实验的推荐选项状态放在 `lib/experiments.ts`，与经典页面共用。运行时金丝雀是第二个标签（`mode=canary`，`v2/pages/canary/`）：包括列表、`canary=new`（选择当前版本 Agent，编辑候选版本提示词或 Studio 代码，并接收实验发布后传来的 `champion=` / `sourceExp=`），以及 `canary=<id>` 详情页：设置阶段加上每个放量档位一张卡片（90/10 → 50/50 → 1/99：发送流量、判定、放量或全量发布，未达显著时需二次确认），另有回滚与清理。**Harness 金丝雀**（`artifacts.kind = "harness"`，`optimization/canary_harness.py`）不铸造候选版本，而是对同一个托管 Harness 的两个已有版本作 A/B：`canary=new` 选择对照版本（默认第一个）与最新版本（`DEFAULT` 已在服务它）对比。Harness ARN 不能作为 `http.agentcoreRuntime` Gateway 目标（该字段校验 `runtime/` ARN），因此 Setup 固定两个 Harness 端点（`ctl<id6>` → 对照，`trt<id6>` → 实验），各用一个 HTTP **passthrough** 目标接入（`protocolType CUSTOM`，经网关角色以 SigV4 `bedrock-agentcore` 签名，端点为 `https://bedrock-agentcore.<region>.amazonaws.com/harnesses/invoke`，`harnessArn` 与 `qualifier` 作为静态查询参数），为专属网关开启追踪投递，并用该端点遥测上的在线评估为每个变体打分（`service.name = harness_<harnessName>.<endpoint>`，日志组 `/aws/bedrock-agentcore/runtimes/<backingRuntimeId>-<endpoint>`，会预先创建，因为 CreateOnlineEvaluationConfig 不接受不存在的日志组）。2026-09-30 实测：客户端把 InvokeHarness 的 JSON 请求体 POST 到 `<gatewayUrl>/<target>/`（加 `/invocations` 会 404；末尾的斜杠不可省略：裸的 `/<target>` 虽然也返回 200，但会绕过 A/B 测试的 `gatewayFilter` `/<target>/*`，所有会话都不会被归属和打分）；网关角色以 harness ARN 上的 `InvokeAgentRuntime` 鉴权（CDK 在 `harness/*` 上授予它和 `InvokeHarness`）；Harness 的 span 带有网关的 `routing_experiment_variant_name`，因此 `GetABTest` 能给出分变体结果。向 Harness 金丝雀回放数据集时改为**成对**进行（`canary_harness.PAIRED_MODE`）：每道题同时发给两个端点（带 `qualifier` 的 InvokeHarness，每侧一个新会话，偶发错误重试一次，失败的一侧记在该题上），网关的随机分流不会再让两个版本拿到不同的题目组合，也不需要重复回放同一份数据集。判定按会话 id 从两个变体的在线评估结果中读取分数（每个端点 100% 采样、不按变体过滤），等到 90% 的题两侧都打完分（上限 30 分钟，评审延迟约 10 分钟），再按评估器比较：两侧均值、平均差、候选版本更好/更差/持平的题数（考虑评估器方向），以及双侧配对符号翻转检验的 p 值（非零差值不超过 16 个时精确枚举，更多时用固定种子的蒙特卡罗）；逐题明细随判定保存。判定规则不变（`compute_verdict`）。要更多证据，应增加数据集里的题目，而不是增加回放次数。全量发布只改台账（实验版本已是 `DEFAULT`），并且与 Runtime 金丝雀不同，可以在 **50/50** 判定为 `treatment-wins` 或 `tie` 后直接执行（`canary_service.early_complete_allowed`；平局或不显著的胜出仍需二次确认，对照胜出和证据不足仍被阻止）：架构助手的金丝雀流量来自 Dataset 回放，1/99 只会把回放几乎全部送进实验版本，并不增加对比证据。90/10 一档同样可选：创建请求带 `start_stage: 1`（`canary=new` 和架构助手第 4 步中的“放量计划”复选框，默认勾选即先跑 90/10）时，A/B 测试直接以 50/50 开启——实验版本已是 `DEFAULT`，90/10 并不限制影响范围，只会让实验组样本很少；Runtime 金丝雀拒绝该参数（`canary.start_stage_harness_only`）。`setup.start_stage` 与 `complete.completed_at_stage` 记录从哪一档开始、从哪一档完成，详情页把范围之外的档位标为已跳过；回滚会重新发布对照版本的行为（按该版本 GetHarness → UpdateHarness，生成新版本）；清理还会删除两个 Harness 端点和追踪投递。金丝雀运行期间，平台对该 Agent 的非流式调用经由其网关（失败时回退到对照端点）。架构助手的“下一步”面板（`v2/pages/assistant/NextSteps.tsx`）把它作为第 3 步（基于该 Agent 在任意数据集上的一次无错误运行生成 AI 优化建议——AgentCore 或 `gepa_lite`，默认最新一次；其他运行生成的建议——包括已接受的——列在下方；接受时先在可编辑的对话框里审阅提示词，再用审阅后的文本以新版本重新发布 Harness）和第 4 步中的“金丝雀实验”（`HarnessCanary.tsx`）。选择 V2 后，经典的 `/evaluation?view=online|experiment` 会映射到这两个页面（`App.tsx` 中的 `EvaluationRoute`，`oe=`/`exp=` 转为 `view=detail&id=`）；V2 侧边栏不再进入经典评估页及其分区导航。
+- **在线评估与金丝雀（原生）。** `/v2/eval/online`（`v2/pages/Online.tsx`，共享规则在 `v2/online.ts`）管理全部在线评估配置，包括归属于 Agent、实验对照组（只读）与外部创建的配置，覆盖评分和洞察两种模式：列表支持按模式、归属、执行状态筛选，配置处于 CREATING/UPDATING/DELETING 时自动轮询；详情页在评分模式下展示服务端按评估器聚合的结果、趋势与评判记录，在洞察模式下展示定时与按需生成的洞察报告（抽屉查看详情）；新建与编辑表单支持过滤条件，保存时只提交变更的字段（`api.v2UpdateOnlineConfig`，PATCH）。`/v2/eval/experiments`（`v2/pages/Experiments.tsx`）**只保留运行时金丝雀**（N12-obs49，用户决定 2026-10-16："隐藏掉配置实验，只保留金丝雀实验"）：配置包实验页面（`v2/pages/experiments/*`——列表、`?view=new`、`?view=detail&id=` 及其阶段卡片）仍在代码树中但不再挂载；`?mode=configuration`、`?view=`、`?id=` 一律重定向到金丝雀列表（`lib/evaluation-url.ts` 的 `v2ExperimentsRedirect`），经典的 `?view=experiment&exp=…` 也映射到这里（`v2EvaluationTarget`）。模块的导航与页头显示为"金丝雀实验"。运行时金丝雀（`v2/pages/canary/`；`mode=canary` 仍可接受但不再必需）：包括列表、`canary=new`（选择当前版本 Agent，编辑候选版本提示词或 Studio 代码，并接收 `champion=` / `sourceExp=` 的发布交接参数），以及 `canary=<id>` 详情页：设置阶段加上每个放量档位一张卡片（90/10 → 50/50 → 1/99：发送流量、判定、放量或全量发布，未达显著时需二次确认），另有回滚与清理。**Harness 金丝雀**（`artifacts.kind = "harness"`，`optimization/canary_harness.py`）不铸造候选版本，而是对同一个托管 Harness 的两个已有版本作 A/B：`canary=new` 选择对照版本（默认第一个）与最新版本（`DEFAULT` 已在服务它）对比。Harness ARN 不能作为 `http.agentcoreRuntime` Gateway 目标（该字段校验 `runtime/` ARN），因此 Setup 固定两个 Harness 端点（`ctl<id6>` → 对照，`trt<id6>` → 实验），各用一个 HTTP **passthrough** 目标接入（`protocolType CUSTOM`，经网关角色以 SigV4 `bedrock-agentcore` 签名，端点为 `https://bedrock-agentcore.<region>.amazonaws.com/harnesses/invoke`，`harnessArn` 与 `qualifier` 作为静态查询参数），为专属网关开启追踪投递，并用该端点遥测上的在线评估为每个变体打分（`service.name = harness_<harnessName>.<endpoint>`，日志组 `/aws/bedrock-agentcore/runtimes/<backingRuntimeId>-<endpoint>`，会预先创建，因为 CreateOnlineEvaluationConfig 不接受不存在的日志组）。2026-09-30 实测：客户端把 InvokeHarness 的 JSON 请求体 POST 到 `<gatewayUrl>/<target>/`（加 `/invocations` 会 404；末尾的斜杠不可省略：裸的 `/<target>` 虽然也返回 200，但会绕过 A/B 测试的 `gatewayFilter` `/<target>/*`，所有会话都不会被归属和打分）；网关角色以 harness ARN 上的 `InvokeAgentRuntime` 鉴权（CDK 在 `harness/*` 上授予它和 `InvokeHarness`）；Harness 的 span 带有网关的 `routing_experiment_variant_name`，因此 `GetABTest` 能给出分变体结果。向 Harness 金丝雀回放数据集时改为**成对**进行（`canary_harness.PAIRED_MODE`）：每道题同时发给两个端点（带 `qualifier` 的 InvokeHarness，每侧一个新会话，偶发错误重试一次，失败的一侧记在该题上），网关的随机分流不会再让两个版本拿到不同的题目组合，也不需要重复回放同一份数据集。判定按会话 id 从两个变体的在线评估结果中读取分数（每个端点 100% 采样、不按变体过滤），等到 90% 的题两侧都打完分（上限 30 分钟，评审延迟约 10 分钟），再按评估器比较：两侧均值、平均差、候选版本更好/更差/持平的题数（考虑评估器方向），以及双侧配对符号翻转检验的 p 值（非零差值不超过 16 个时精确枚举，更多时用固定种子的蒙特卡罗）；逐题明细随判定保存。判定规则不变（`compute_verdict`）。要更多证据，应增加数据集里的题目，而不是增加回放次数。全量发布只改台账（实验版本已是 `DEFAULT`），并且与 Runtime 金丝雀不同，可以在 **50/50** 判定为 `treatment-wins` 或 `tie` 后直接执行（`canary_service.early_complete_allowed`；平局或不显著的胜出仍需二次确认，对照胜出和证据不足仍被阻止）：架构助手的金丝雀流量来自 Dataset 回放，1/99 只会把回放几乎全部送进实验版本，并不增加对比证据。90/10 一档同样可选：创建请求带 `start_stage: 1`（`canary=new` 和架构助手第 4 步中的“放量计划”复选框，默认勾选即先跑 90/10）时，A/B 测试直接以 50/50 开启——实验版本已是 `DEFAULT`，90/10 并不限制影响范围，只会让实验组样本很少；Runtime 金丝雀拒绝该参数（`canary.start_stage_harness_only`）。`setup.start_stage` 与 `complete.completed_at_stage` 记录从哪一档开始、从哪一档完成，详情页把范围之外的档位标为已跳过；回滚会重新发布对照版本的行为（按该版本 GetHarness → UpdateHarness，生成新版本）；清理还会删除两个 Harness 端点和追踪投递。金丝雀运行期间，平台对该 Agent 的非流式调用经由其网关（失败时回退到对照端点）。架构助手的“下一步”面板（`v2/pages/assistant/NextSteps.tsx`）把它作为第 3 步（基于该 Agent 在任意数据集上的一次无错误运行生成 AI 优化建议——AgentCore 或 `gepa_lite`，默认最新一次；其他运行生成的建议——包括已接受的——列在下方；接受时先在可编辑的对话框里审阅提示词，再用审阅后的文本以新版本重新发布 Harness）和第 4 步中的“金丝雀实验”（`HarnessCanary.tsx`）。选择 V2 后，经典的 `/evaluation?view=online|experiment` 会映射到这两个页面（`App.tsx` 中的 `EvaluationRoute`，`oe=` 转为 `view=detail&id=`，`exp=` 落到金丝雀列表）；V2 侧边栏不再进入经典评估页及其分区导航。
 - **原生 V2 页面。** 工作台（`/v2`）、Agent 管理（见上）与 Agent 评估模块：数据中心 `/v2/eval/data`（Agent 轨迹 = 可观测轨迹及轨迹 / 会话详情、数据集及记录编辑，以及“复制所选到新数据集”——按原样复制所选记录，含断言、每一轮与期望工具轨迹，并写入 `metadata.copied_from`——数据处理 Pipeline）、评估任务 `/v2/eval/tasks`、评估总览 `/v2/eval/insights`、评估器 `/v2/eval/evaluators`。子页面遵循控制台约定，用同一路由的 `?view=` 状态表示（`view=new|detail|edit|trace|dataset|pipeline…`）。侧边栏其余入口（Agent 开发、运行、实验、系统管理）是在 V2 外壳中渲染的经典模块，直到完成原生重做。
 - **评估任务统一两类资源**（`v2/tasks.ts`）：批量评估运行是*历史*任务（时间窗口、手选会话或数据集回放，一次性评估；`name` / `description` 存在运行行上）；Agent 所属、scores 模式的在线评估配置是*持续*任务（采样比例、会话超时；其 description 作为任务名）。状态统一映射为排队中 / 运行中 / 已完成 / 失败 / 已停止 / 已暂停。历史任务可选评估类型：评估器打分，或洞察（失败归因 / 用户意图 / 执行摘要，即经典版新建运行的洞察模式，`POST /api/eval/runs` 的 `mode: "insights"`）。洞察任务的详情展示运行的聚类结果而非分数；聚类至少需要 3 个会话，因此手选会话必须不少于 3 个，时间窗口或数据集不足时给出提示。持续洞察仍在在线评估页面创建（它带有报告周期）。任务列表把评估类型单独作为一列（并提供筛选）；为保持在八列以内，运行策略放在数据来源下方、更新时间放在创建时间下方，操作列固定在右侧。
 - **「日志」数据源**（`v2/pages/tasks/LogStreamPicker.tsx`）：向导通过 `GET /api/eval/agents/{id}/log-streams` 列出 Agent 运行日志组在时间窗口内（默认 7 天）的日志流，并按关键字过滤——匹配日志流名称或日志内容（见数据处理 API）。每一行对应一个会话：代码运行时的 `[runtime-logs-<sessionId>]` 日志流；Harness 运行时按 microVM 命名日志流，则为该会话在 `otel-rt-logs` 中的切片。不属于单个会话的日志流默认隐藏、可切换显示，且不可选择。选中的会话以普通 `session_ids` 运行发起（不调用 Agent），并带 `session_source: "logs"`，列表中数据来源显示为「日志」。
@@ -1495,11 +1694,32 @@ AWS 调用。
   免费/临时邮箱黑名单强制执行,白名单非空时优先生效。
 
 `POST /api/auth/login` 校验任一来源并签发 HMAC 签名的 HttpOnly Cookie,负载为
-`version:subject:expiry`——12 小时,且不超过账户自身的 `expires_at`。**角色不放进
+`version:subject:expiry`——`LAUNCHPAD_AUTH_SESSION_TTL_SECONDS`(默认 12 小时,是活动
+不会延长的绝对有效期),且不超过账户自身的 `expires_at`。**角色不放进
 Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `users` 行为准),
 因此禁用、降权或到期在下一个请求即生效,无需等 Cookie 过期。Cookie 其余部分是无
-状态的,可跨后端重启;修改内置 admin 凭证会使**所有**会话失效,因为签名密钥由其
-派生。
+状态的,可跨后端重启。签名密钥是首次启动时生成并以 0600 持久化到 `data/session_secret`
+的随机 32 字节密钥(或 `LAUNCHPAD_SESSION_SECRET`;r12-g)——不是 admin 密码,因此密码
+泄露无法伪造 Cookie;轮换密钥(新值,或删除文件后重启)会一次性注销所有人。负载还携带
+**会话纪元**(`users.session_epoch`,每次修改/重置密码递增;内置 admin 为配置密码的摘要),
+因此新密码会立即结束该账户的其他会话。
+
+由于控制台可能位于开放的 NLB 之后,登录路由也是唯一防猜测的闸门(r12-g,N12-obs57;
+`services/login_guard.py`,进程内状态):**所提交的账户名**——无论是否存在,因此不泄露
+任何信息——连续 5 次密码错误后锁定 60 秒,之后每再失败一次翻倍,上限 30 分钟
+(`429 auth.locked` + `Retry-After`;登录成功或管理员 `PATCH /api/users/{id}
+{"unlock": true}` 即清除;内置 admin 作为应急凭证不受此锁约束);每个源 IP 的登录失败次数
+上限为 5 分钟 20 次(`429 auth.rate_limited`,只作用于之后的*失败*请求——正确密码或有效
+密钥从不被它拒绝),作为粗粒度的辅助控制:在 EIP 路径上对端是真实客户端(nginx
+`X-Forwarded-For`,uvicorn `--proxy-headers`),在 NLB 之后则是所有人共用的 NLB 私有 IP。每次锁定都会在 `launchpad.auth` 记录一行 `WARNING`。未知账户与密码错误
+使用同一个 401 错误码、同一文案并消耗同样的 PBKDF2 计算。注册与管理员重置密码执行密码
+策略(`auth_password_policy`:`strict` 为 12 个字符以上、不能与用户名/邮箱相同、不能是常见密码;
+`relaxed` 仅检查长度,下限 6;以 `GET /api/auth/status` 的 `password_policy` 告知控制台),从不重新校验已存哈希;
+自助注册按 IP 限速、受待审批队列上限约束(`409 auth.registration_backlog`),且不泄露
+哪些用户名或邮箱已存在。`/v1` 以同样方式按 IP 统计无效 `X-Api-Key` 尝试。账户管理拒绝
+降级、禁用、设为过期或删除最后一个有效管理员行(`409 users.last_admin`;内置 admin 不
+计入),也拒绝删除自己的账户(`409 users.self_delete`)。契约见
+`docs/cn/interfaces/users-and-ownership.md` §9。
 
 有两道守卫按顺序执行,回答的是不同的问题。
 
@@ -1530,7 +1750,7 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 
 分类原则:**admin** 用于会执行代码、改变已部署或云端状态、签发凭证、或改变治理策略的
 路由;**member** 用于读取,以及成员与智能体自身的交互。调用智能体
-(`/api/agents/{id}/invoke`、`/api/registry/a2a-demo`)刻意保持 member 可达——这与 Chat
+(`/api/agents/{id}/invoke`)刻意保持 member 可达——这与 Chat
 已经给每个成员的能力完全相同,Chat 开着却锁 invoke 保护不了任何东西。
 
 实际效果是 `member` 接近只读。在数据**尚未**按用户隔离的前提下这是有意为之:所有已登录
@@ -1596,8 +1816,9 @@ ingestion。
 | `detail&kb=<id>` | 概览（id、ARN、更新时间、描述就地编辑、删除）、已挂载的 Agent、数据源——桶/前缀、状态、最近的 ingestion 作业及其统计，以及可折叠的按数据源文档分页（`ListKnowledgeBaseDocuments`，按 token 分页，每行的索引状态还联结了 S3 侧的大小与上传时间）——以及检索 Playground（`POST …/query`，1–100 条结果，带分数与来源 URI）。只要还有动作在进行中，页面每 5 秒轮询一次；对已 `AVAILABLE` 但还没有作业的数据源自动触发首次同步；当一个 `ACTIVE` 知识库压根没有数据源时，给出告警并提供「补建数据源」按钮 |
 
 **数据源。** `_resolve_source` 接受两种模式。`upload` 指向平台 artifacts 桶的
-`kb/{kb_id}/` 前缀，也正是 `upload_files` 写入的位置——文件可以先于连接器落地；而
-数据源全在别处的知识库会以 `kb.no_upload_target` 拒绝上传。`existing` 取调用方给的
+`kb/{kb_id}/` 前缀，也正是 `upload_files` 写入的位置——文件可以先于连接器落地；没有
+上传模式数据源的知识库（最后一个被移除，或数据源全在别处）由上传本身自动创建一个，并在响应
+的 `data_source` 中报告（N17-obs242）。`existing` 取调用方给的
 桶与可选前缀，并对两者做校验（`_validate_external_source`）：桶名必须符合 S3 自身
 的命名规则，前缀必须是字面路径——因为二者会被直接插进下面的授权 ARN，桶名里的 `*`
 或 `/` 会把该授权从一个桶放大到整个账号。
@@ -1639,7 +1860,7 @@ ingestion 失败时才暴露。
   `agentcore_gateway` 工具挂上。`harness.py::_kb_prompt` 会追加一段
   `## Knowledge bases` 提示词，点名网关的 MCP 工具（`…___Retrieve`、
   `agentic-…___AgenticRetrieveStream`）。网关是惰性创建的：在第一个挂载知识库的
-  harness 部署（或显式的 `POST /api/knowledge-bases/ensure-gateway`）之前，没有任何
+  harness 部署之前，没有任何
   东西会去预置它。
 - **直连通道——方式A（container）与 `zip_runtime`。** 不经网关；生成的运行时自带两个
   工具，用 Agent 自己的执行角色直接调 Bedrock 数据面：`kb_search` → `Retrieve`
@@ -1751,15 +1972,11 @@ Strands 统计终端 LLM 操作(`chat` / `text_completion` /
 的查询都要求存在 `startTimeUnixNano`，避免带 trace 关联信息的非 Span 记录
 抬高 trace、延迟、错误、token 或工具调用统计。
 
-成本为**参考估算**:token 数 × `config/launchpad.yaml` 中的 `model_prices`
-(每百万 token 的美元价,按子串匹配 `gen_ai.request.model` 或原生
-`llm.model_name`;未知模型只显示 token 数,成本为 `—`)。界面以
-`≈ / EST` 标注。价格表通过 litellm 的公开
-价格文件保持更新(`app/services/model_prices.py`):每日守护线程 + 仪表盘的
-「⟳ 更新价格」按钮(`POST /api/observability/prices/refresh`)会为账户遥测中
-出现过的每个模型拉取精确条目(含 Bedrock 区域溢价与缓存读写价),刷新运维
-维护的短键,未匹配的键保持不动。来源 URL 与周期可配置
-(`model_prices_source_url`、`model_prices_refresh_hours`,设 `0` 关闭守护线程)。
+可观测性**只报告 token 数**（按模型、trace、span 与会话的输入 / 输出 / 缓存读 /
+缓存写）。原先随行的美元成本估算（来自 litellm 价格表 `model_prices` 的
+`est_cost_usd` 及其刷新器，R10 起已关闭）已于 R13 删除（N13-obs3）：成本报告将随
+按人预算族回归（差距报告 Family A，上游 #282 / #284 / #285），其价格由管理员维护的
+平台设置提供，而非抓取的公开文件。
 
 **各创建方式的遥测:** Strands(zip/studio)与 harness Agent 原生发射 gen_ai
 span。Claude Agent SDK 容器安装 AgentCore 已支持的
@@ -1806,10 +2023,40 @@ Logs Insights 查询(`filter ispresent(scope.name) and attributes.session.id =
 在台账行（`workspaces` 表）上携带它自己的一整套 AgentCore 资源映射。中枢最初的那个环境作为
 保留的 `default` workspace 存续，它的行在每次启动时镜像 `config/launchpad.yaml`;其他所有
 workspace 都以台账行为权威，并由一个控制台驱动、可恢复的 **bootstrap 作业**
-（`POST /api/workspaces/{id}/bootstrap`，十个幂等阶段:validate-access → iam → storage →
-codebuild → cognito → gateway → memory → registry → observability → finalize）来开通。
-`validate-access` 会拒绝一个已经承载了别人的 Launchpad 部署的区域，而 IAM 角色只有在带
-`launchpad:workspace` 标签时才会被接管。位于**另一个账号**的 workspace 会带上 `role_arn` +
+（`POST /api/workspaces/{id}/bootstrap`，CN 构建中共十二个幂等阶段：validate-access → iam →
+model-credential → storage → codebuild → gateway → registry → memory → skill-lab →
+observability → policy → finalize——没有 Cognito 阶段；`model-credential` 把 Global Bedrock API
+密钥作为 AgentCore Identity 凭证提供方放进 workspace 所在区域，密钥材料从不写入行或作业日志；
+`gateway` 创建带 IAM 入站鉴权、不含演示 target 的共享 MCP gateway（示例 target 是只有中枢才有的
+CDK 代码）；`registry` 记录本地 Registry 标识 `local-<workspace_id>` 并尽力导入默认记录；`memory`
+只在与中枢同账号同区域的 workspace 上继承自托管底座，其他地方记录 `memory_unavailable_reason`；
+`skill-lab` / `observability` / `policy` 失败时降级并留下原因，而不是让作业失败）来开通。
+`validate-access` 用中枢的凭证逐项探测后续阶段在 **workspace 所在区域**依赖的每个服务
+（AgentCore 控制面、S3、ECR、CodeBuild、IAM——其中 ECR、CodeBuild、IAM 按**名称**探测后续阶段将要
+创建的仓库、项目与区域执行角色，「不存在」视为可用，因此中枢按资源限定的运维策略能授权每一个探测；
+N17-obs130），任一服务拒绝时在创建任何资源之前就让作业失败
+——detail 写明服务、操作、区域与错误码——某服务在该区域没有端点时亦然（region not supported）；
+探测没有得到有效应答（传输超时、限流、5xx）时重试一次，仍失败则以 transient — retry 让阶段失败，
+写明服务、操作与脱敏后的原因，绝不判定为区域或权限问题（N17-obs132）；端点**已解析**却连不上
+（botocore `EndpointConnectionError`——中枢一侧的 DNS / 网络故障，受支持区域在故障期间抛出的也是它）
+同样重试一次，仍失败则以 `<service> endpoint (<service> · <region>) unreachable from this host after
+2 attempts … — network/DNS, not the region` 让阶段失败，主机名脱敏为服务 + 区域（N17-obs200；
+只有端点**解析**失败 `UnknownServiceError` / `NoRegionError` 与服务自身的「不在此区域」错误码才是区域判定）；
+它还会拒绝一个已经承载了别人的 Launchpad 部署的区域，而 IAM 角色只有在带
+`launchpad:workspace` 标签时才会被接管——这条规则现在也由中枢角色的策略强制：其 `iam:UpdateAssumeRolePolicy` 授权带
+`StringLike iam:ResourceTag/launchpad:workspace: "*"`（`IamAdoptWorkspaceRoles`）与 `…/launchpad:agent-id: "*"`
+（`IamAdoptAgentRoles`，按 agent 的角色）两个条件，两枚标签都在角色的 `CreateRole` 调用里就打上，
+因此中枢自己用 CDK 建的同名角色会被 IAM 本身拒绝改写信任策略（N17-obs201）。每个阶段在产出标识的当下就把它们记到 workspace 行上，
+因此一个失败的阶段留下的是：作业 `failed` 并带该阶段的 detail、workspace `failed`、资源映射与
+上一阶段结束时完全一致；下一次 `POST /api/workspaces/{id}/bootstrap` 即是续跑——上一个完整作业
+已完成的阶段作为 `succeeded` 带入，运行从第一个未完成的阶段继续。中途被打断的作业（后端重启）
+保持 `running`、其阶段 `running`；`resume_pending_jobs()` 在启动时接管它，从第一个未成功的阶段
+继续，并读取被打断那次已记录的标识，因此没有资源会被开通两次。作业占有 workspace 期间
+（`bootstrapping`）以及 `ready` 之后，再次 bootstrap 会被 `409 workspace.bootstrap_conflict`
+拒绝。请求体为 `{"validate_only": true}` 时，该路由只运行 `validate-access` 阶段：仅校验运行
+不开通任何资源，结束时把 workspace 交还为原来的状态，并且绝不会被后来的完整运行带入——作业的
+终态就是发布冒烟（`backend/scripts/e2e_workspace_region_smoke.py`）读取的访问结论。
+位于**另一个账号**的 workspace 会带上 `role_arn` +
 `external_id`:中枢扮演该角色（自动续期的一小时会话，按 `(account, region, role)` 缓存），
 并且为该 workspace 发出的每一次调用——bootstrap、CodeBuild 构建、invoke、CloudWatch 读取
 ——都用它签名。spoke 角色以纯 CloudFormation 形式提供
@@ -1845,6 +2092,33 @@ Users 页面按账号编辑（审批时会分配授权，`PATCH /api/users/{id}`
 并且只对从未真正可用过的 workspace 允许执行:状态为 `registered` 或 `failed`、没有 Agent、
 且不是 `default`。一次失败的运行已经开通出来的东西会留在目标账号里——响应中的
 `resource_keys` 会说明那是哪些资源种类。
+
+**成员可见性（Family B 第 2 步——移植上游 #262 / #263）。** 一个 workspace 要么是 `shared`
+（默认值，也是第 2 步之前唯一的行为：每位成员都能看到该 workspace 的全部资源），要么是
+`isolated`。模式保存在 `Workspace.settings["resource_visibility"]`，由管理员通过
+`GET`/`PUT /api/workspaces/{id}/settings/visibility`（中枢全局、仅管理员）或 V2 workspace
+详情页的 **成员可见性** 卡片切换，并随 workspace 行在每次请求时重新读取——切换不会迁移任何数据，
+自下一次请求起生效。隔离模式下，成员只有在资源的 `created_by`（第 1 步的 `users.id`）是自己、
+为 NULL（旧行、预置、bootstrap 资源、配置内置管理员、在控制台之外创建的资源）或指向一位*当前*
+管理员时才能看到它；管理员始终看到全部；创建者已被删除的行仅管理员可见。规则只写在
+`services/visibility.py` 一处（`Viewer` + `sees()` / `clause()`、`viewer_for_principal`、
+`viewer_for_key`）；每种资源既有的收口点——`_dataset_in`、`_run_in`、`_pipeline_in`、
+`online.get_config`、评估器查找、`_canary_in`、Skill Lab 的
+`jobs.get_job` / `tasksets.get_row`、`memory_ownership.require_managed`、知识库路由，以及
+Agent 的 `services/agent_access.py::agent_in`——都接受 `viewer: Viewer = Viewer.ALL`，因此部署
+流水线、恢复、worker、purge 与预置保持不过滤，只有路由传入 `require_viewer`。列表在 SQL 里先过滤再
+计数 / 分页；被隐藏的 id 返回该种类**既有**的 not-found，与不存在无法区分。Agent 在每个表面都遵循
+同一规则：列表 / 详情 / 版本 / 身份 / 调用 / 重新发布 / 删除、所有 `/api/chat/{id}*` 路由、`/v1`
+（密钥跟随其**创建者当前**的可见性——管理员、配置内置管理员与旧密钥不受限制）、可观测行与详情
+（含 Chat 链路追踪栏）、Memory 控制台的 actor（`<agent>__<human>`）、本地 Registry 的 A2A 记录、
+发现（`managed: true` 但不披露归属者）、`/api/jobs/{id}`、名称冲突的 409、知识库 / 记忆的使用方列表
+（`attached_agent_count` 保留真实数量）以及连接的引用方。spec 绑定在创建时逐项校验（每个知识库 /
+记忆），重新发布时只校验相对已存 spec **新增**的绑定，因此在共享模式下绑定的 Agent 仍可继续重新发布。
+架构助手的目录是会话**所有者**的视图，对共享时拍下的快照读取时同样如此。概览聚合（评估运行、活跃会话、
+A2A 资产、按 viewer 缓存的在线质量卡片）按 viewer 计算。CN 决策：第 1 步对 API 密钥与聊天会话的成员
+规则在两种模式下都成立；D20 策略保持共享（治理），仅过滤策略编辑器的 Agent 选择器；本地 Registry 的
+MCP / 技能记录与网关保持共享；可见性的 404 先于策略门禁的 403。契约见
+[docs/cn/interfaces/users-and-ownership.md §7](cn/interfaces/users-and-ownership.md)。
 
 ## Skill Lab —— 技能评估与训练（SkillOpt 集成）
 
@@ -1942,24 +2216,33 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 
 | 表 | 内容 |
 |---|---|
-| `agents` | Agent 记录——name、method、status、ARN、resource id、registry record id、version、spec |
+| `agents` | Agent 记录——name、method、status、ARN、resource id、registry record id、version、spec、创建者（`created_by` 用户 id + `created_by_name`；预置、发现导入的 runtime 与无法解析的旧 owner 为 NULL——#261 之前的 `owner` 列已删除） |
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
-| `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
+| `chat_sessions` | Chat 会话——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at`、`source`（`console` \| `public_api`：由哪个入口开启——Chat 控制台与 `POST /v1/agents/{id}/invoke[-stream]` 都经 `services/chat_ledger.py` 写入该行，N-SCN-obs1）、开启者（`created_by` 用户 id + `created_by_name`——控制台账号或 `/v1` 密钥的创建者；成员只列出自己的会话） |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
-| `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文) |
+| `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文)、创建者（`created_by` 用户 id + `created_by_name`，旧密钥为 NULL）、`last_used_at` |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |
 | `eval_datasets` / `eval_runs` | 评估数据集(legacy prompt 或 devguide scenario + 描述 + 最近一次 AWS 同步信息)与运行状态(分数或 insight 树;窗口运行以 `dataset_name="window:<N>h"` 编码范围) |
 | `online_eval_configs` | 控制台为某个 agent 创建的在线评估配置——只存标识(config id/ARN/名称、agent、service name、源日志组);状态、rule 与 evaluators 始终从 `GetOnlineEvaluationConfig` 读回。没有行的配置在读取时按名称归类(`exp_*`/`can_*` → 实验持有,其余为外部) |
-| `experiments` | 优化闭环——阶段 + 各阶段产物,可恢复 |
+| `experiments` | **遗留（N13-obs2）**——已退役的配置实验行；不做迁移，`routing` 不读取，启动时记一条计数日志，后续轮次删除 |
 
 **Job/event 模型。** 创建 Agent 返回 `202` 并带一个 `job_id`。部署 job 在后台线程
 运行,每次阶段切换向 `Job.log` 追加一条 JSONL 事件;`GET /api/jobs/{id}` 返回这些
 事件,`GET /api/agents/{id}` 返回 `Deployment.stages` 数组。随 job 完成,Agent 从
-`deploying → active`(或 `failed`)。在任何阶段之外抛出的失败（job 的 workspace 行已不
-存在、方式未注册、台账行缺失）会以同样的方式落到 Agent 上:`Job`、`Deployment` 与
-`Agent` 三者都被标记为 `failed` 并带上错误，一条 `error` 事件被追加到 `Job.log`，而管道
-的 `launchpad.deploy` logger 会把每一次阶段失败或 job 失败都报告到进程日志。权威的资源
+`deploying → active`(或 `failed`)。**失败的更新模式 job 会保留在线版本**（N10v3-bug7、
+N16-obs74 / N16-obs110）：重新发布（`POST /api/agents/{id}/redeploy`，202
+`{agent, job_id, deployment_id}`，该行翻为 `deploying`）在 Agent 已有在线版本、且失败未触及该
+版本时——`deploy` 阶段尚未运行（`generate` / `package` / `provision` 抛错）或已经完成
+（`register` 抛错）——`Job` 与 `Deployment` 标为 `failed`，但 `Agent` 回到 `active`、继续以上一
+版本提供服务，读模型带 `last_deploy_failed: true` / `last_deploy_error`（`Agent.error`），job
+日志写明（`the live version is untouched … keeps serving`）。首次部署、对 `failed` Agent 的冷重新
+发布（尚无任何版本在线）以及 `deploy` 阶段内部的失败仍把 Agent 标为 `failed`。在任何阶段之外
+抛出的失败（job 的 workspace 行已不存在、方式未注册、台账行缺失）遵循同一规则：`Job` 与
+`Deployment` 被标记为 `failed` 并带上错误，`Agent` 为 `failed` 或按上述保留规则留在 `active`，
+一条 `error` 事件被追加到 `Job.log`，而管道的 `launchpad.deploy` logger 会把每一次阶段失败或
+job 失败都报告到进程日志。重新发布的各条边（202 形状、`deploying` 翻转、从 `failed` 重新发布、
+删除后释放名称）是 `docs/cn/interfaces/agents.md` §4 的契约。权威的资源
 状态(runtime 状态、注册记录状态、评估/trace 数据)始终存放在 AWS;台账只保存标识符与
 派生的进度。
 
@@ -1985,6 +2268,18 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 信封离开后端;控制台通过 `apiErrors.*` i18n 块(`lib/api.ts` 的 `localizedMessage`)翻译 `code`,
 无对应文案时回退到 `message`。服务层预见到的失败以自有错误码抛出 `AppError`(`kb.not_found`、
 `agent.not_found`、`memory.unavailable`),它们永远优先——因为在 `ClientError` 逃逸之前就已抛出。
+
+**重启窗口（N17-obs470）。**部署期间后端约有 11 秒不可用，nginx 以自带 HTML 返回 502 / 503 / 504。
+这类响应没有信封，错误码为 `http.502` / `http.503` / `http.504`，控制台显示 `apiErrors.http.50x`
+（「控制台正在更新，请稍后几秒再试」）而不是状态文本；网络失败显示 `apiErrors.network`。类型化客户端
+（`request` / `requestEmpty`）的幂等 GET / HEAD 对此类响应或网络失败按短退避重试，最长
+`RESTART_RETRY_BUDGET_MS`（20 秒）；POST / PUT / DELETE 只发送一次、从不重试，页面保留表单。带信封的
+后端 503（`feature.unavailable` 等）是真实答复：从不重试、不改写。与此同时，外壳的健康探测在不可用时每
+3 秒重查，并显示不阻塞的「正在更新……」（`RestartingNotice`）；健康恢复且构建已变化时由新版本横幅
+（N17-obs466）接手。页面的读取随页面一起取消（N17-obs476）：`useLoad` 在
+`withSignal(signal, …)` 中运行取数函数，因此它发起的每个类型化客户端调用都带上页面的 `AbortSignal`，
+卸载或重新读取时请求及其重试一并中止；模块级共享缓存（`scale-label-catalog`、`model-defaults`、OAuth 回跳）
+通过 `detached(…)` 读取。
 
 没人预见的 AWS `ClientError`——URL 里写错的 id、IAM 缺口、限流——会在正在签名请求的任意路由上
 爆炸,所以只在一处映射而不是逐路由处理:全局 `ClientError` 处理器把 `ResourceNotFoundException`
@@ -2030,7 +2325,8 @@ id 供提示使用,并通过 `setSearchParams(..., { replace: true })` 一次性
 链接不会再次触发,页面随后就是一次普通访问。列表加载失败*不是*判定:该状态归
 `LoadError`,参数保留以便重试。已接入的界面:评估 `?view=datasets&ds=`(本地行在本地
 列表加载后判定,`cloud:` 行在云端列表加载后判定)、`?view=evaluators&ev=`、
-`?view=online&oe=`、`?view=experiment&exp=`,对话 `?agent=`(连同其伴随的 `?session=`
+`?view=online&oe=`、`?view=experiment&mode=canary&canary=`(配置实验的 `exp=` 形式会先重定向到
+金丝雀列表——N12-obs49；配置实验本身已于 N13-obs2 删除),对话 `?agent=`(连同其伴随的 `?session=`
 一并去掉),以及知识库 `?view=detail&kb=` —— 缺少 `kb` 时以同样方式提示
 (`staleLink.bodyMissing`),而不是永久 LOADING。对话是唯一不得挑选替代品的界面:选择器
 停在 `chatPage.pickAgent` 占位项(`value=""`)直到用户选择,因为自动选中的智能体会静默
@@ -2067,5 +2363,18 @@ Strands Studio(`▲ Publish` — 无节点;发布对话框中的名称规则)、
 生产模式把 UI 与 API 服务都绑定到 `0.0.0.0`。可通过 `LAUNCHPAD_HOST` 和
 `LAUNCHPAD_API_HOST` 覆盖绑定地址。
 
-根目录生命周期不再启动 `apps/studio/` 下的独立应用。平台控制台在
-`/create/studio` 提供受支持的原生画布。见 [studio-integration.md](studio-integration.md)。
+**生产入口（CN）。** 在 EC2 主机（`infra/ec2/launchpad-cn-ec2.yaml`）上，nginx 在
+`ConsolePort`（8443，自签名）终结 TLS，并把 `/api`、`/v1` 反向代理到后端（为 SSE 关闭
+缓冲）；主机安全组只允许 `AllowedCidr` 访问该端口，主机绑定一个弹性 IP。没有 CloudFront。
+可选地（N12-obs52，用户决策 2026-10-16，`infra/ec2/launchpad-console-nlb.yaml`），一台带
+**静态弹性 IP** 的 Network Load Balancer 位于默认主机之前：一个 8443 的 TCP 监听（TLS 透传，
+主机证书不变；80/443 被拒绝——ICP 备案），目标组以 `GET /api/health` 做健康检查，默认
+`AccessMode=OpenToInternet`（监听端口对任意来源开放——控制台登录是唯一的门）或
+`AllowedCidrs`；主机通过安全组上新增的一条规则放行 NLB，并且看到的是 NLB 的私网地址
+（关闭 `preserve_client_ip`）。NLB 350 s 的 TCP 空闲超时由 SSE 每 `HEARTBEAT_S` = 1 s 一次的
+`heartbeat` 事件覆盖。该栈只拥有 EIP（删除时保留——对外公布的地址不会消失）、NLB、其安全组和这条规则，
+因此先删它即可，主机不受影响；每个主机栈各配一个栈（每个主机栈都有自己的 VPC；t1 暂不接入）。运维手册：
+[docs/cn/interfaces/deploy.md §9](cn/interfaces/deploy.md#9-console-nlb-fixed-public-ip-n12-obs52)。
+
+平台控制台在 `/create/studio` 提供受支持的原生画布。见
+[studio-integration.md](studio-integration.md)。

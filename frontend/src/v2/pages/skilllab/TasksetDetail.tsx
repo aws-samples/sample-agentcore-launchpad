@@ -4,8 +4,9 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, ApiError, errorMessage, type SkillLabAssetDescriptor, type SkillLabTask } from "../../../lib/api";
 import { countsLabel, excerpt, fileCount, splitsFor } from "../../../lib/skillLabTasksets";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Alert,
   Button,
@@ -62,6 +63,7 @@ export function TasksetDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
+  const mayMutate = useMayMutate();
   // a missing set (deleted, or another workspace's) resolves to null, not an error
   const detail = useLoad(
     () =>
@@ -133,7 +135,7 @@ export function TasksetDetail({ id }: { id: string }) {
             <Button onClick={() => setParams({ tab: "train", view: "new", taskset: info.id })} testId="v2-taskset-train">
               {t("v2.skillLab.trainWith")}
             </Button>
-            {!info.sample && (
+            {!info.sample && mayMutate(info) && (
               <>
                 <Button onClick={() => setParams({ tab: "tasksets", view: "edit", id: info.id })} testId="v2-taskset-edit">
                   {t("v2.common.edit")}
@@ -147,6 +149,9 @@ export function TasksetDetail({ id }: { id: string }) {
         }
       />
       {info.sample && <Alert>{t("v2.skillLab.sampleReadOnly")}</Alert>}
+      {!info.sample && !mayMutate(info) && (
+        <Alert data-testid="v2-taskset-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(info) })}</Alert>
+      )}
       <Card title={t("v2.skillLab.overview")}>
         <Descriptions
           items={[
@@ -155,6 +160,7 @@ export function TasksetDetail({ id }: { id: string }) {
             { label: t("skillLab.tasksets.col.counts"), value: <span className="mono">{countsLabel(info.counts)}</span> },
             { label: t("skillLab.tasksets.field.description"), value: info.description || "—" },
             { label: t("v2.common.createdAt"), value: fmtTime(info.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(info) },
             { label: t("skillLab.tasksets.col.updated"), value: fmtTime(info.updated_at) },
           ]}
         />

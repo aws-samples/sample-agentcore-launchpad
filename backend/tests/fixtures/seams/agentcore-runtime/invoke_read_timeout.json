@@ -1,0 +1,17 @@
+{
+ "seam": "agentcore-runtime",
+ "case": "invoke_read_timeout",
+ "captured_at": "2026-10-19T09:15:23Z",
+ "notes": "Tiny read timeout on a fresh client — the shape the backend's agentcore_read_timeout_s guard sees.",
+ "response_or_error": {
+  "exception": "botocore.exceptions.ReadTimeoutError",
+  "str": "Read timeout on endpoint URL: \"https://bedrock-agentcore.cn-northwest-1.amazonaws.com.cn/runtimes/arn%3Aaws-cn%3Abedrock-agentcore%3Acn-northwest-1%3A000000000000%3Aruntime%2Fhr_helpdesk_wb006_XXXXXX-XXXXXXXXXX/invocations\"",
+  "kwargs": {
+   "endpoint_url": "https://bedrock-agentcore.cn-northwest-1.amazonaws.com.cn/runtimes/arn%3Aaws-cn%3Abedrock-agentcore%3Acn-northwest-1%3A000000000000%3Aruntime%2Fhr_helpdesk_wb006_XXXXXX-XXXXXXXXXX/invocations",
+   "error": "AWSHTTPSConnectionPool(host='bedrock-agentcore.cn-northwest-1.amazonaws.com.cn', port=443): Read timed out. (read timeout=0.05)"
+  }
+ },
+ "status": null,
+ "elapsed_s": 0.084,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

@@ -30,9 +30,9 @@ Unset fields fall back to the defaults shown in parentheses.
 | Field | Meaning |
 |---|---|
 | `label` | Display name; sanitize to derive the Python variable name |
-| `modelProvider` | `"AWS Bedrock"` (default) \| `"OpenAI"` \| `"Amazon Bedrock (Mantle)"` |
+| `modelProvider` | `"AWS Bedrock"` (default) \| `"OpenAI"` |
 | `modelId` | Bedrock model id (e.g. `global.anthropic.claude-sonnet-5`); used when provider is AWS Bedrock |
-| `modelName` | Model identifier used for the OpenAI and Mantle providers (e.g. `gpt-4o`) |
+| `modelName` | Model identifier used for the OpenAI provider (e.g. `gpt-4o`) |
 | `systemPrompt` | System prompt string (`"You are a helpful AI assistant."`) |
 | `temperature` | 0–1 float (0.7) |
 | `maxTokens` | int (4000) |
@@ -41,9 +41,8 @@ Unset fields fall back to the defaults shown in parentheses.
 | `reasoningEffort` | `"low"|"medium"|"high"|"xhigh"|"max"` (`"medium"`; legacy `"minimal"` normalizes to `"low"`); only meaningful with `thinkingEnabled` on non-Bedrock providers |
 | `cacheMessages` | bool (false). AWS Bedrock Claude only → add `cache_config=CacheConfig(strategy="auto")` to `BedrockModel(...)` and import `CacheConfig` from `strands.models` |
 | `cacheTools` | bool (false). AWS Bedrock Claude only → add `cache_tools="default"` to `BedrockModel(...)` |
-| `apiKey` | Never emit its value — always read keys from env (contract rule 8). On Mantle it is OPTIONAL and selects the auth form (see below) |
-| `baseUrl` | Optional custom endpoint (OpenAI); auto-set regional endpoint for Mantle (only used on Mantle's keyed branch) |
-| `region` | Mantle only; the region passed to `bedrock_mantle_config` (default `us-east-1`) |
+| `apiKey` | Never emit its value — always read keys from env (contract rule 8) |
+| `baseUrl` | Optional custom endpoint (OpenAI) |
 
 Model construction per provider:
 
@@ -55,19 +54,6 @@ Model construction per provider:
   `temperature=1`.
 - **OpenAI** → `OpenAIModel(client_args={"api_key": os.environ.get("OPENAI_API_KEY")[, "base_url": <baseUrl>]}, model_id=<modelName>, params={"max_tokens": ..., "temperature": ...})`.
   With `thinkingEnabled`: add `"reasoning_effort": <reasoningEffort>` to params.
-- **Amazon Bedrock (Mantle)** → `OpenAIResponsesModel(<auth>, model_id=<modelName>, params={"max_output_tokens": <maxTokens>, ...})`,
-  where `<auth>` depends on whether the node carries a non-empty `apiKey`:
-  - **no `apiKey` (the default)** → `bedrock_mantle_config={"region": <region or "us-east-1">}`.
-    The SDK mints a short-lived bearer token from the ambient AWS credential
-    chain (the runtime execution role) per request and derives the base URL
-    itself. Emit NO `client_args` and NO `BEDROCK_API_KEY`.
-  - **explicit `apiKey`** → `client_args={"api_key": os.environ.get("BEDROCK_API_KEY"), "base_url": <baseUrl>}`.
-
-  The two are mutually exclusive: `OpenAIResponsesModel` raises `ValueError` if
-  `client_args` carries `api_key`/`base_url` alongside `bedrock_mantle_config`.
-
-  With `thinkingEnabled`: use `"reasoning": {"effort": <reasoningEffort>}` in
-  params and OMIT temperature; otherwise use `"temperature": <temperature>`.
 
 ### `orchestrator-agent` — coordinates sub-agents
 

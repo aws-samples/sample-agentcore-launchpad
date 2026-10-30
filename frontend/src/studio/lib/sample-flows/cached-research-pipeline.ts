@@ -24,8 +24,8 @@ export const cachedResearchPipeline: SampleFlow = {
       data: {
         label: 'Planner',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a planning agent. Break the user request into a research plan.',
         maxTokens: 32000,
         streaming: false,
@@ -39,8 +39,8 @@ export const cachedResearchPipeline: SampleFlow = {
       data: {
         label: 'Researcher',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a research agent. Execute the research plan you receive and report findings.',
         maxTokens: 32000,
         streaming: false,
@@ -54,8 +54,8 @@ export const cachedResearchPipeline: SampleFlow = {
       data: {
         label: 'Reviewer',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a review agent. Critically review the plan you receive and point out gaps.',
         maxTokens: 32000,
         streaming: false,

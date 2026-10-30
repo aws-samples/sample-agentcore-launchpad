@@ -22,7 +22,7 @@ bootstrap job's `validate-access` stage is what proves they actually work.
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Request
@@ -39,8 +39,9 @@ from app.core.db import (
 )
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
-from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
-from app.services import aws_clients, workspace_bootstrap
+from app.routers.auth import ROLE_MEMBER, Identity, require_identity
+from app.services import api_keys as api_keys_service
+from app.services import aws_clients, visibility, workspace_bootstrap
 from app.services import users as users_service
 from app.services.workspace import (
     WorkspaceContext,
@@ -241,6 +242,8 @@ def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
         "cross_account": row.role_arn is not None,
         "bootstrap_status": row.bootstrap_status,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
+        # shared | isolated — who sees member-created resources (services/visibility.py)
+        "resource_visibility": visibility.mode(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -266,10 +269,19 @@ def _validated_region(region: str) -> str:
     if not _REGION.match(value):
         raise AppError(
             "workspace.invalid_region",
-            "region must be an AWS region name (e.g. us-west-2)",
+            "region must be an AWS region name (e.g. cn-northwest-1)",
             {"region": value},
             status_code=400,
         )
+    try:
+        aws_clients.partition_for_region(value)
+    except ValueError as exc:
+        raise AppError(
+            "workspace.region_unknown",
+            f"'{value}' is shaped like a region but AWS does not recognize it",
+            {"region": value},
+            status_code=422,
+        ) from exc
     return value
 
 
@@ -304,7 +316,7 @@ def _cross_account_fields(
     if match is None or len(role_arn) > _ROLE_ARN_MAX:
         raise AppError(
             "workspace.invalid_role_arn",
-            "role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)",
+            "role_arn must be an IAM role ARN (arn:<partition>:iam::<account>:role/<name>)",
             {"role_arn": role_arn},
             status_code=400,
         )
@@ -354,9 +366,10 @@ def hub_role_arn(caller_arn: str) -> str:
     """The IAM role ARN a spoke's trust policy must name, from a caller ARN.
 
     `sts:GetCallerIdentity` reports an assumed role as
-    `arn:aws:sts::<account>:assumed-role/<role>/<session>`, which is not a valid
-    trust-policy principal — the role's own `arn:aws:iam::<account>:role/<role>`
-    is. Anything already in `iam:` form (an IAM user hub, a role read some other
+    `arn:<partition>:sts::<account>:assumed-role/<role>/<session>`, which is not
+    a valid trust-policy principal — the role's own
+    `arn:<partition>:iam::<account>:role/<role>` is. Anything already in `iam:`
+    form (an IAM user hub, a role read some other
     way) is returned untouched.
 
     Caveat worth knowing when it disagrees with reality: the assumed-role form
@@ -374,7 +387,7 @@ def hub_role_arn(caller_arn: str) -> str:
 
 
 @router.get("/hub-identity")
-def hub_identity(_: Identity = Depends(require_admin)) -> dict[str, Any]:
+def hub_identity() -> dict[str, Any]:
     """The hub's own account and role — the two values a spoke stack is deployed with.
 
     Declared before the `/{workspace_id}` routes so the literal path wins, and
@@ -413,7 +426,6 @@ class WorkspacePreflight(BaseModel):
 @router.post("/preflight")
 def preflight_workspace(
     req: WorkspacePreflight,
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """Can this hub actually assume that role? Answered before registration.
 
@@ -461,7 +473,6 @@ def preflight_workspace(
 def create_workspace(
     req: WorkspaceCreate,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     # Validated as sent rather than normalized: the id travels back in every
     # `X-Workspace` header and in URLs, and a silently rewritten one turns into a
@@ -522,7 +533,6 @@ def update_workspace(
     workspace_id: str,
     req: WorkspacePatch,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """Rename only: account/region are the workspace's identity, and its
     resource map belongs to the bootstrap job."""
@@ -557,7 +567,6 @@ def _referencing_rows(db: Session, workspace_id: str) -> dict[str, int]:
 def delete_workspace(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """Detach-only decommission: the AWS resources it provisioned stay put.
 
@@ -652,7 +661,6 @@ def purge_workspace(
     workspace_id: str,
     dry_run: bool = False,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """Delete a failed or abandoned registration outright, rows and all.
 
@@ -733,11 +741,31 @@ def _bootstrap_conflict(row: Workspace) -> AppError:
     )
 
 
+class BootstrapRequest(BaseModel):
+    """The optional body of `POST /api/workspaces/{id}/bootstrap` (r17-ws).
+
+    No body (or an empty one) is the FULL run. `validate_only: true` — or, spelled out,
+    `stages: ["validate-access"]` — runs that one stage and provisions nothing: the
+    workspace row comes back in the status it had and the job's terminal status is the
+    verdict (`succeeded` = the hub's credentials can provision this workspace in its
+    region; `failed` = the stage detail names the service, operation and error code).
+    Any other `stages` subset is `422 workspace.bootstrap_stages_unsupported`.
+    """
+
+    stages: list[str] | None = None
+    validate_only: bool = False
+
+    def requested_stages(self) -> list[str] | None:
+        if self.validate_only:
+            return list(workspace_bootstrap.VALIDATE_ONLY_STAGES)
+        return list(self.stages) if self.stages is not None else None
+
+
 @router.post("/{workspace_id}/bootstrap", status_code=202)
 def bootstrap_workspace(
     workspace_id: str,
+    body: BootstrapRequest | None = None,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """Queue the staged bootstrap job for a registered workspace.
 
@@ -745,7 +773,18 @@ def bootstrap_workspace(
     operates *on* an environment that is not usable yet, and the target comes from
     the path rather than the `X-Workspace` header. Progress is polled through
     `GET /api/jobs/{job_id}` — its `payload.stages` carry the per-stage records.
+    With `{"validate_only": true}` only `validate-access` runs (`BootstrapRequest`).
     """
+    stages = body.requested_stages() if body is not None else None
+    if stages is not None and tuple(stages) != workspace_bootstrap.VALIDATE_ONLY_STAGES:
+        raise AppError(
+            "workspace.bootstrap_stages_unsupported",
+            "a partial bootstrap may run only the validate-access stage "
+            "(stages: [\"validate-access\"] or validate_only: true) — every later stage "
+            "records identifiers the following ones require",
+            {"stages": stages, "supported": list(workspace_bootstrap.VALIDATE_ONLY_STAGES)},
+            status_code=422,
+        )
     row = _requested_row(db, workspace_id)
     if row.id == DEFAULT_WORKSPACE_ID:
         raise AppError(
@@ -758,7 +797,7 @@ def bootstrap_workspace(
     if row.bootstrap_status in (STATUS_BOOTSTRAPPING, READY):
         raise _bootstrap_conflict(row)
     try:
-        job = workspace_bootstrap.create_bootstrap_job(db, row)
+        job = workspace_bootstrap.create_bootstrap_job(db, row, stages=stages)
     except workspace_bootstrap.BootstrapConflict as exc:
         # The check above lost a race with a concurrent request; the service's
         # conditional claim is what actually decides, so report its verdict.
@@ -768,6 +807,7 @@ def bootstrap_workspace(
         "job_id": job.id,
         "workspace_id": row.id,
         "bootstrap_status": row.bootstrap_status,
+        "mode": workspace_bootstrap.job_mode(job),
         "stages": workspace_bootstrap.job_stages(job),
     }
 
@@ -776,7 +816,6 @@ def bootstrap_workspace(
 def bootstrap_status(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """The latest bootstrap run for this workspace, if any.
 
@@ -795,6 +834,7 @@ def bootstrap_status(
         payload["job"] = {
             "id": job.id,
             "status": job.status,
+            "mode": workspace_bootstrap.job_mode(job),
             "stages": workspace_bootstrap.job_stages(job),
         }
     return payload
@@ -836,7 +876,6 @@ def list_grants(
     limit: int = _GRANTS_LIMIT_DEFAULT,
     offset: int = 0,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """The member accounts this workspace can be granted to, and which hold it.
 
@@ -924,7 +963,6 @@ def replace_grants(
     workspace_id: str,
     req: GrantsPatch,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
     """Grant and revoke this workspace for several accounts at once.
 
@@ -1004,6 +1042,10 @@ def replace_grants(
             )
             .delete(synchronize_session=False)
         )
+        # A revoked member's /v1 keys in THIS workspace stop working now; their keys
+        # elsewhere are untouched (the predicate is per key workspace) — #259.
+        for user_id in sorted(revoke):
+            api_keys_service.disable_offboarded_keys(db, user_id)
     db.commit()
     return {
         "workspace_id": row.id,
@@ -1013,3 +1055,37 @@ def replace_grants(
         "removed": int(removed),
         "granted_total": _granted_total(db, row.id),
     }
+
+
+# ── settings ───────────────────────────────────────────────────────────────
+
+
+class VisibilitySetting(BaseModel):
+    """Whether members see each other's resources (`services/visibility.py`)."""
+
+    resource_visibility: Literal["shared", "isolated"]
+
+
+def _visibility_out(row: Workspace) -> dict[str, Any]:
+    return {"resource_visibility": visibility.mode(row)}
+
+
+@router.get("/{workspace_id}/settings/visibility")
+def get_visibility(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return _visibility_out(_requested_row(db, workspace_id))
+
+
+@router.put("/{workspace_id}/settings/visibility")
+def put_visibility(
+    workspace_id: str,
+    req: VisibilitySetting,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Switch shared ⇄ isolated. Changes no resource and applies to the next
+    request: the workspace row is re-read on every request."""
+    row = _requested_row(db, workspace_id)
+    visibility.set_mode(db, row, req.resource_visibility)
+    return _visibility_out(row)

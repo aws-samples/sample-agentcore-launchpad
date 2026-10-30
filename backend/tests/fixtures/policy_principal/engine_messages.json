@@ -1,0 +1,167 @@
+{
+  "engine_decide_request": {
+    "ws": "default",
+    "session": "5f2b6c1d9e8a7b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4",
+    "record": true,
+    "action": "AgentCore::Action::\"hr-database___create_payout\"",
+    "resource": "AgentCore::Gateway::\"arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0\"",
+    "agent": {
+      "entity": "AgentCore::IamEntity::\"arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34\"",
+      "agent_id": "ag_hrhelp01",
+      "method": "zip_runtime",
+      "system": false
+    },
+    "principal": {
+      "entity": "AgentCore::User::\"hr-intern\"",
+      "parents": [
+        "AgentCore::Role::\"member\""
+      ],
+      "attrs": {
+        "username": "hr-intern",
+        "role": "member",
+        "user_id": "u_hrintern01"
+      }
+    },
+    "context": {
+      "input": {
+        "employee_id": "EMP-1024",
+        "amount": 420.0
+      },
+      "agent_id": "ag_hrhelp01",
+      "channel": "chat",
+      "expect": {
+        "policy_set_version": "ps-17",
+        "temporal_set_version": 3
+      }
+    },
+    "tsv": 3,
+    "session_started_at": 1793022000
+  },
+  "engine_decide_response": {
+    "decision": "deny",
+    "stage_a": "allow",
+    "stage_bt": "deny",
+    "determining": [
+      {
+        "policy_id": "pol_payoutadm",
+        "version": 2,
+        "mode": "active",
+        "stage": "bt"
+      }
+    ],
+    "log_only_would": null,
+    "event_seq": 1042,
+    "ts_ns": 1793022001000000000,
+    "store_epoch": "e3",
+    "policy_set_version": "ps-17",
+    "errors": []
+  },
+  "engine_respond_request": {
+    "ws": "default",
+    "session": "5f2b6c1d9e8a7b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4",
+    "action": "AgentCore::Action::\"hr-approvals___verify_identity\"",
+    "kind": "response",
+    "input": {
+      "employee_id": "EMP-1024",
+      "code": "<redacted>"
+    },
+    "output": {
+      "employee_id": "EMP-1024",
+      "verified": true
+    },
+    "principal": {
+      "entity": "AgentCore::User::\"hr-intern\"",
+      "parents": [
+        "AgentCore::Role::\"member\""
+      ],
+      "attrs": {
+        "username": "hr-intern",
+        "role": "member",
+        "user_id": "u_hrintern01"
+      }
+    },
+    "agent": {
+      "entity": "AgentCore::IamEntity::\"arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34\"",
+      "agent_id": "ag_hrhelp01",
+      "method": "zip_runtime",
+      "system": false
+    },
+    "resource": "AgentCore::Gateway::\"arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0\""
+  },
+  "engine_respond_response": {
+    "event_seq": 1043,
+    "ts_ns": 1793022002000000000
+  },
+  "engine_list_filter_request": {
+    "ws": "default",
+    "agent": {
+      "entity": "AgentCore::IamEntity::\"arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34\"",
+      "agent_id": "ag_hrhelp01",
+      "method": "zip_runtime",
+      "system": false
+    },
+    "principal": {
+      "entity": "AgentCore::User::\"hr-intern\"",
+      "parents": [
+        "AgentCore::Role::\"member\""
+      ],
+      "attrs": {
+        "username": "hr-intern",
+        "role": "member"
+      }
+    },
+    "actions": [
+      "AgentCore::Action::\"hr-database___get_employee\"",
+      "AgentCore::Action::\"hr-database___create_payout\""
+    ]
+  },
+  "engine_list_filter_response": {
+    "visible": [
+      "AgentCore::Action::\"hr-database___get_employee\""
+    ]
+  },
+  "engine_healthz": {
+    "ready": true,
+    "shard": 0,
+    "store_epoch": "e3",
+    "sets": {
+      "default": "ps-17"
+    }
+  },
+  "engine_error": {
+    "code": "session_invalidated",
+    "message": "temporal set v3 superseded by v4"
+  },
+  "engine_control_request": {
+    "op": "install",
+    "ws": "default",
+    "policy_set_version": "ps-17",
+    "temporal_set_version": 3,
+    "policies": [
+      {
+        "id": "pol_payoutadm",
+        "version": 2,
+        "mode": "active",
+        "stage": "bt",
+        "kind": "stateless",
+        "text": "forbid (principal, action == AgentCore::Action::\"hr-database___create_payout\", resource) unless { principal in AgentCore::Role::\"admin\" };"
+      }
+    ],
+    "schema": "namespace AgentCore { entity Gateway; }",
+    "event_schema": ""
+  },
+  "engine_control_response": {
+    "ok": true,
+    "errors": [],
+    "shards": [
+      {
+        "shard": 0,
+        "ready": true,
+        "store_epoch": "e3",
+        "sets": {
+          "default": "ps-17"
+        }
+      }
+    ]
+  }
+}

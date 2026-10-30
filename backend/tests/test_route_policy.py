@@ -9,14 +9,18 @@ Two things are asserted here, and the first is what makes the table trustworthy:
    caller and 403 to a member, and does not 403 an admin.
 """
 
+import functools
+import inspect
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
+from app.core import route_policy
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.core.errors import AppError
 from app.core.route_policy import (
     ADMIN,
     MEMBER,
@@ -38,24 +42,22 @@ MEMBER_CREDS = {
 }
 
 
+def _walk(routes) -> list:
+    """FastAPI 0.139 keeps included routers as `_IncludedRouter` wrappers instead of
+    flattening them into `app.routes`, so this recurses rather than iterating."""
+    found = []
+    for route in routes:
+        if type(route).__name__ == "_IncludedRouter":
+            found += _walk(route.original_router.routes)
+        else:
+            found.append(route)
+    return found
+
+
 def _api_routes(app) -> set[tuple[str, str]]:
-    """Every (method, path_format) the app actually serves under /api.
-
-    FastAPI 0.139 keeps included routers as `_IncludedRouter` wrappers instead of
-    flattening them into `app.routes`, so this recurses rather than iterating.
-    """
-
-    def walk(routes):
-        found = []
-        for route in routes:
-            if type(route).__name__ == "_IncludedRouter":
-                found += walk(route.original_router.routes)
-            else:
-                found.append(route)
-        return found
-
+    """Every (method, path_format) the app actually serves under /api."""
     pairs = set()
-    for route in walk(app.routes):
+    for route in _walk(app.routes):
         path = getattr(route, "path_format", None) or getattr(route, "path", "")
         if not (path == "/api" or path.startswith("/api/")):
             continue
@@ -192,6 +194,27 @@ class TestNoDrift:
         assert is_hub_global("/api/users") and is_hub_global("/api/users/{user_id}")
         assert not is_hub_global("/api/userspace")
         assert not is_hub_global("/api/authorizers")
+        # D21: the model registry is hub-global (its per-workspace flags name the workspace
+        # in the path); a look-alike prefix is not
+        assert is_hub_global("/api/settings/model-providers")
+        assert is_hub_global("/api/settings/model-providers/{provider_id}/models/{model_ref}")
+        assert not is_hub_global("/api/settingsx")
+
+    def test_model_registry_routes_are_member_crud_plus_two_admin_entries(self):
+        """N17-obs203 (user decision 2026-10-21) supersedes the D21 / plan §9.1 ruling: model
+        providers are owner-bound — every signed-in member may register, read, change and
+        delete their OWN providers (the handler adds the visibility 404 and the creator-or-admin
+        403), so the CRUD is MEMBER; the journal and the per-workspace flag matrix stay ADMIN.
+        Still no member-grantable `models.manage` permission — ownership is the rule."""
+        registry_routes = {k: v for k, v in ROUTE_POLICY.items()
+                           if k[1].startswith("/api/settings/model-providers")}
+        assert len(registry_routes) == 13
+        admin_only = {("GET", "/api/settings/model-providers/changes"),
+                      ("PUT", "/api/settings/model-providers/workspaces/{workspace_id}/models")}
+        assert {k for k, v in registry_routes.items() if v == ADMIN} == admin_only
+        assert {v for k, v in registry_routes.items() if k not in admin_only} == {MEMBER}
+        assert set(registry_routes) <= WORKSPACE_EXEMPT
+        assert "models.manage" not in users_service.AGENT_PERMISSIONS
 
     def test_public_routes_are_never_workspace_scoped(self):
         """A PUBLIC route has no identity, so there is nobody to resolve a
@@ -224,6 +247,130 @@ class TestAdminRoutesAreEnforced:
         response = member_session.request(method, _concrete(path_format))
         assert response.status_code == 403, response.text
         assert response.json()["code"] == "auth.forbidden"
+
+
+def _admin_api_routes(app) -> list:
+    """The served route objects (the routers' own `APIRoute`s) whose table entry is ADMIN."""
+    return [route for route in _walk(app.routes)
+            if any(ROUTE_POLICY.get((m, getattr(route, "path_format", ""))) == ADMIN
+                   for m in getattr(route, "methods", None) or [])]
+
+
+def _dependency_calls(dependant) -> list:
+    out = []
+    for sub in dependant.dependencies:
+        out.append(sub.call)
+        out += _dependency_calls(sub)
+    return out
+
+
+class TestAdminRoutesAreTableOnly:
+    """N17-obs284 (r17-s2, design review C6): the table is the only route-level admin check.
+    Up to cn/integration e1259c0e, 24 ADMIN handlers repeated it ("belt and braces"):
+    `require_admin(request)` in system_agents ×4, `Depends(require_admin)` in users ×4,
+    workspaces ×12, model_providers ×2 and model_roles ×2. They were deleted because the
+    app-level `enforce_route_policy` dependency already refuses a member first; these tests
+    prove that per route and keep the duplicates from coming back."""
+
+    def test_every_admin_route_is_in_the_sweep(self, gated_app):
+        swept = {(m, r.path_format) for r in _admin_api_routes(gated_app)
+                 for m in r.methods if ROUTE_POLICY.get((m, r.path_format)) == ADMIN}
+        assert swept == set(ADMIN_ROUTES)
+
+    def test_no_admin_handler_repeats_the_table(self, gated_app):
+        repeated = []
+        for route in _admin_api_routes(gated_app):
+            if auth.require_admin in _dependency_calls(route.dependant):
+                repeated.append(f"{route.path_format}: Depends(require_admin)")
+            if "require_admin(" in inspect.getsource(route.endpoint):
+                repeated.append(f"{route.path_format}: require_admin(request)")
+        assert not repeated, (
+            f"ADMIN routes re-check what ROUTE_POLICY already enforces: {repeated} — the table "
+            "is the only route-level admin check (core/route_policy.py docstring)"
+        )
+
+    @pytest.mark.parametrize(("method", "path_format"), ADMIN_ROUTES)
+    def test_the_table_refuses_a_member_before_the_route_runs(
+        self, gated_app, member_session, monkeypatch, method, path_format
+    ):
+        """Every route dependency and the handler are swapped for recorders; the table's
+        `require_admin` raises a sentinel code. A member must get exactly that sentinel and
+        nothing of the route may have run — the table is first and sufficient."""
+        ran: list[str] = []
+        for route in _admin_api_routes(gated_app):
+            original = route.endpoint
+
+            @functools.wraps(original)
+            def recorder(*_args, _name=route.path_format, **_kwargs):
+                ran.append(_name)
+                return {}
+
+            monkeypatch.setattr(route, "endpoint", recorder)
+
+        def table_refuses(request):
+            raise AppError("route_policy.sentinel", "refused by the table", status_code=403)
+
+        monkeypatch.setattr(route_policy, "require_admin", table_refuses)
+        response = member_session.request(method, _concrete(path_format))
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "route_policy.sentinel"
+        assert ran == []
+
+    def test_the_recorder_swap_reaches_the_handler(self, gated_app, admin_session, monkeypatch):
+        """Guards the sweep above: the endpoint swap really takes effect, so an empty
+        `ran` there means the handler did not run, not that the swap was ignored."""
+        ran: list[str] = []
+        route = next(r for r in _admin_api_routes(gated_app) if r.path_format == "/api/users")
+        original = route.endpoint
+
+        @functools.wraps(original)
+        def recorder(*_args, **_kwargs):
+            ran.append(route.path_format)
+            return {"items": []}
+
+        monkeypatch.setattr(route, "endpoint", recorder)
+        assert admin_session.get("/api/users").status_code == 200
+        assert ran == ["/api/users"]
+
+
+class TestRootPathDoesNotBypassTheGuards:
+    """N17-obs284 rev-r26 N1: with the per-route duplicates gone, `enforce_route_policy` is
+    the single route-level guard. Its /api test used to read `request.url.path`, which keeps
+    an ASGI `root_path` that routing strips, so a configured prefix would have skipped it for
+    every route (and the auth middleware's 401 the same way)."""
+
+    def test_the_app_sets_no_root_path_today(self):
+        assert create_app().root_path == ""
+
+    @pytest.fixture
+    def prefixed(self, gated_app):
+        gated_app.root_path = "/console"
+        with TestClient(gated_app, client=("127.0.0.1", 4321)) as client:
+            yield client
+
+    def test_a_member_is_still_refused_on_an_admin_route(self, prefixed):
+        prefixed.post("/console/api/auth/register", json=MEMBER_CREDS)
+        db = SessionLocal()
+        try:
+            user = users_service.find_by_username(db, MEMBER_CREDS["username"])
+            assert user is not None
+            user.status = users_service.STATUS_ACTIVE
+            user.expires_at = datetime.now(UTC) + timedelta(days=7)
+            db.commit()
+        finally:
+            db.close()
+        login = prefixed.post("/console/api/auth/login", json={
+            "username": MEMBER_CREDS["username"], "password": MEMBER_CREDS["password"]})
+        assert login.status_code == 200, login.text
+        for method, path_format in ADMIN_ROUTES:
+            response = prefixed.request(method, "/console" + _concrete(path_format))
+            assert response.status_code == 403, (method, path_format, response.text)
+            assert response.json()["code"] == "auth.forbidden"
+
+    def test_an_anonymous_caller_is_still_401(self, prefixed):
+        response = prefixed.get("/console/api/users")
+        assert response.status_code == 401, response.text
+        assert response.json()["code"] == "auth.required"
 
 
 class TestMemberRoutesStayReachable:

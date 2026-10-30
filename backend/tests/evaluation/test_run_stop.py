@@ -1,10 +1,10 @@
-"""Operator stop for evaluation runs (SE-009).
+"""Operator stop for evaluation runs (SE-009) on the worker (N12 E1-4).
 
-Three exits, one route: StopBatchEvaluation once a batch exists on AWS, a
-local queue cancel while the run is still pending, and an in-process stop flag
-while the dataset is being replayed (no batch yet). AWS STOPPED becomes the
-terminal ledger status ``stopped`` — never ``failed`` — with the scores the
-batch had already produced.
+Three exits, one route: a local queue cancel while the run is still pending, the cancel
+marker once a job is dispatched (the worker stops at its next checkpoint and writes
+``done.json`` STOPPED), and ``StopRuntimeSession`` after the grace period when the worker
+never answers. STOPPED becomes the terminal ledger status ``stopped`` — never ``failed`` —
+with the scores already ingested.
 """
 
 import threading
@@ -13,20 +13,12 @@ from unittest.mock import MagicMock
 
 import app.evaluation.service as svc
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation import agentcore_eval as ac
+from app.evaluation.jobs import JobDone, JobStatus
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import EvalRunQueue
 from tests.conftest import ws_ctx
-
-PARTIAL_RESULT = {
-    "status": "STOPPED",
-    "evaluationResults": {
-        "evaluatorSummaries": [
-            {"evaluatorId": "Builtin.Correctness", "statistics": {"averageScore": 0.75}},
-            {"evaluatorId": "Builtin.Helpfulness", "statistics": {}},  # never judged
-        ]
-    },
-}
+from tests.evaluation.fakes import FakeExecutor, strip_ci
+from tests.evaluation.test_runs_flow import GROUP, make_agent, stub_environment
 
 
 def make_run(**fields) -> str:
@@ -66,35 +58,41 @@ def wait_status(run_id: str, target: str, timeout: float = 5.0) -> EvalRun:
     raise AssertionError(f"run {run_id} never reached {target}: {get_run(run_id).status}")
 
 
-# ─── route: stop with a batch on AWS ─────────────────────────────────────────
-def test_eval_stop_evaluating_run_calls_stop_batch_evaluation(client, monkeypatch):
-    data = MagicMock()
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
-    run_id = make_run(status="evaluating", batch_eval_id="be-stop-1")
+def _fake_executor(monkeypatch) -> FakeExecutor:
+    fake = FakeExecutor()
+    monkeypatch.setattr(svc, "select_executor", lambda settings, job_type: fake)
+    monkeypatch.setattr(svc, "POLL_INTERVAL_S", 0.02)
+    return fake
+
+
+# ─── route: stop with a dispatched job ───────────────────────────────────────
+def test_eval_stop_evaluating_run_writes_the_cancel_marker(client, monkeypatch):
+    fake = _fake_executor(monkeypatch)
+    run_id = make_run(status="evaluating", batch_eval_id="job-stop-1")
 
     res = client.post(f"/api/eval/runs/{run_id}/stop")
 
     assert res.status_code == 202, res.text
-    data.stop_batch_evaluation.assert_called_once_with(batchEvaluationId="be-stop-1")
+    assert fake.cancelled == ["job-stop-1"]
     body = res.json()
     assert body["id"] == run_id
-    # The row follows the poller (STOPPING → STOPPED); the pending stop is
+    # The row follows the poller (the worker's STOPPED); the pending stop is
     # visible to the console so STOP is not offered twice.
     assert body["status"] == "evaluating"
     assert body["stop_requested"] is True
     assert client.get(f"/api/eval/runs/{run_id}").json()["stop_requested"] is True
+    svc.stop_flags.clear(run_id)
 
 
 def test_eval_stop_completed_run_is_409_conflict(client, monkeypatch):
-    data = MagicMock()
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
+    fake = _fake_executor(monkeypatch)
     for status in ("completed", "failed", "stopped"):
-        run_id = make_run(status=status, batch_eval_id="be-done")
+        run_id = make_run(status=status, batch_eval_id="job-done")
         res = client.post(f"/api/eval/runs/{run_id}/stop")
         assert res.status_code == 409, res.text
         assert res.json()["code"] == "run.not_active"
         assert status in res.json()["message"]
-    data.stop_batch_evaluation.assert_not_called()
+    assert fake.cancelled == []
 
 
 def test_eval_stop_unknown_run_is_404(client):
@@ -103,10 +101,9 @@ def test_eval_stop_unknown_run_is_404(client):
     assert res.json()["code"] == "run.not_found"
 
 
-# ─── route: queued run is cancelled locally, never reaches AWS ───────────────
-def test_eval_stop_cancels_queued_run_without_aws(client, monkeypatch):
-    data = MagicMock()
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
+# ─── route: queued run is cancelled locally, never dispatched ────────────────
+def test_eval_stop_cancels_queued_run_without_a_job(client, monkeypatch):
+    fake = _fake_executor(monkeypatch)
     # One slot, held by a blocker, so the run under test stays pending.
     queue = EvalRunQueue(max_concurrency=1)
     monkeypatch.setattr(svc, "run_queue", queue)
@@ -134,7 +131,7 @@ def test_eval_stop_cancels_queued_run_without_aws(client, monkeypatch):
     assert res.json()["error"] == "stopped by operator"
     assert res.json()["queue_position"] is None
     assert queue.state()["queued"] == []  # the banner counts only active runs
-    data.stop_batch_evaluation.assert_not_called()
+    assert fake.submitted == [] and fake.cancelled == []
     assert not svc.stop_requested(run_id)  # nothing left to read the flag
 
     release.set()
@@ -144,150 +141,140 @@ def test_eval_stop_cancels_queued_run_without_aws(client, monkeypatch):
     assert queue.state()["running"] == []
 
 
-# ─── replay in progress, no batch yet: the flag stops it before StartBatch ───
-def test_eval_stop_during_replay_never_starts_batch(monkeypatch):
-    data = MagicMock()
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
-    monkeypatch.setattr(svc, "_wait_for_fresh_telemetry", MagicMock())
-    run_id = make_run(status="queued", session_ids=[])
-    workspace = ws_ctx()
-    calls = {"n": 0}
+# ─── replay in progress: the marker stops the worker at its next checkpoint ─────
+def test_eval_stop_during_replay_stops_the_worker_between_invocations(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="stop-replay-agent")
+    db.close()
+    env, calls = stub_environment(monkeypatch)
+    run_id = make_run(status="queued", session_ids=[], agent_id=agent.id)
+    workspace = ws_ctx(id=DEFAULT_WORKSPACE_ID)
+    real_invoke = env.worker_env.invoke
 
-    def invoke_runtime_text(client, arn, prompt, session_id=None, runtime_user_id=None):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            # Operator clicks STOP while the first prompt is in flight: the run
-            # is `invoking` with no batch_eval_id, so only the flag can be set.
+    def invoke(prompt, session_id, session_spec):
+        if calls["n"] == 0:
+            # Operator clicks STOP while the first prompt is in flight: the job is
+            # dispatched, so the marker is written for it.
             run = svc.request_stop(run_id, workspace=workspace)
             assert run.status == "invoking"
-        return {"text": "42", "session_id": f"sess-{calls['n']}"}
+        return real_invoke(prompt, session_id, session_spec)
 
-    monkeypatch.setattr(svc.rt, "invoke_runtime_text", invoke_runtime_text)
-
-    svc.execute_run(
-        run_id,
-        workspace=workspace,
-        agent_arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/rt-1",
-        method="zip_runtime",
-        service_name="rt.DEFAULT",
-        log_group="/aws/bedrock-agentcore/runtimes/rt-1-DEFAULT",
+    env.worker_env.invoke = invoke
+    plan = svc.plan_run(
+        run_id, workspace=workspace, agent_arn=agent.arn, agent_id=agent.id, protocol="http",
+        service_name="rt.DEFAULT", log_group=GROUP, log_groups=["aws/spans", GROUP],
         items=[{"prompt": "1"}, {"prompt": "2"}, {"prompt": "3"}],
-        evaluators=["Builtin.Correctness"],
-        mode="evaluators",
-        wait_seconds=0,
+        evaluators=["Builtin.Correctness"], mode="evaluators", wait_seconds=0,
+        existing_session_ids=None, time_range=None, insights=None, actor_model_id=None,
+        runtime_user_id=None,
     )
+    svc.execute_run(run_id, workspace=workspace, plan=plan)
 
     run = get_run(run_id)
     assert run.status == "stopped"
     assert run.error == "stopped by operator"
-    assert calls["n"] == 1  # the loop checked the flag before prompt 2
-    data.start_batch_evaluation.assert_not_called()
-    data.stop_batch_evaluation.assert_not_called()
+    assert calls["n"] == 1  # the worker checked the marker before prompt 2
+    assert env.store.get(f"evaluations/{run_id}/cancel") == b"cancel"
+    done = env.executor.done(workspace, run_id)
+    assert done.state == "STOPPED"
     assert not svc.stop_requested(run_id)  # flag cleared with the run
 
 
-def test_eval_stop_requested_right_after_batch_start_is_forwarded(monkeypatch):
-    """The narrow race: STOP lands after the last flag check but before the
-    batch id is on the row — the worker forwards it to AWS itself."""
-    data = MagicMock()
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
-    run_id = make_run(status="queued")
-    workspace = ws_ctx()
-
-    def start_batch(**kwargs):
-        svc.request_stop(run_id, workspace=workspace)  # row: evaluating, no batch id
-        return {"batchEvaluationId": "be-race"}
-
-    data.start_batch_evaluation.side_effect = start_batch
-    data.get_batch_evaluation.side_effect = [{"status": "STOPPING"}, PARTIAL_RESULT]
-    monkeypatch.setattr(ac.time, "sleep", lambda _s: None)
-
-    svc.execute_run(
-        run_id,
-        workspace=workspace,
-        agent_arn="arn",
-        method="zip_runtime",
-        service_name="rt.DEFAULT",
-        log_group="lg",
-        items=[],
-        evaluators=["Builtin.Correctness"],
-        mode="evaluators",
-        wait_seconds=0,
-        existing_session_ids=["s1", "s2"],
-    )
-
-    data.stop_batch_evaluation.assert_called_once_with(batchEvaluationId="be-race")
-    run = get_run(run_id)
-    assert run.status == "stopped"
-    assert run.batch_eval_id == "be-race"
-    assert run.scores == [{"evaluatorId": "Builtin.Correctness", "score": 0.75}]
+def test_eval_stop_before_dispatch_never_submits(monkeypatch):
+    fake = _fake_executor(monkeypatch)
+    run_id = make_run(status="queued", session_ids=[])
+    svc.stop_flags.request(run_id)
+    plan = svc.RunPlan(run_id=run_id, job_type="batch_eval", target={}, sessions=[],
+                       replay=False, wait={})
+    svc.execute_run(run_id, workspace=ws_ctx(), plan=plan)
+    assert get_run(run_id).status == "stopped" and fake.submitted == []
+    assert not svc.stop_requested(run_id)
 
 
-# ─── poller: STOPPING keeps polling, STOPPED is terminal + partial scores ─────
-def test_eval_stop_poller_treats_stopping_as_running_and_stopped_as_terminal(monkeypatch):
-    data = MagicMock()
-    data.get_batch_evaluation.side_effect = [
-        {"status": "IN_PROGRESS"},
-        {"status": "STOPPING"},
-        PARTIAL_RESULT,
-    ]
-    result = ac.poll_batch_evaluation(data, batch_id="be-1", interval=0)
-    assert result["status"] == "STOPPED"
-    assert data.get_batch_evaluation.call_count == 3
-
-
+# ─── poller: the worker's STOPPED is terminal + partial scores ────────────────
 def test_eval_stop_finish_maps_stopped_to_stopped_with_partial_scores():
-    run_id = make_run(status="evaluating", batch_eval_id="be-2")
-    svc._finish_from_result(run_id, "evaluators", PARTIAL_RESULT)
+    from app.evaluation import results_store
+
+    run_id = make_run(status="evaluating", batch_eval_id="job-2")
+    with SessionLocal() as db:
+        results_store.persist(db, DEFAULT_WORKSPACE_ID, source="run", owner_id=run_id, records=[
+            {"session_id": "s1", "evaluator_id": "Builtin.Correctness", "score": 0.75},
+            {"session_id": "s1", "evaluator_id": "Builtin.Helpfulness", "score": None,
+             "error_type": "RuntimeError", "error_message": "stopped mid-judgement"},
+        ])
+    svc._finish(run_id, "evaluators", [JobDone(state="STOPPED", error="stopped by operator",
+                                               result_count=2)],
+                workspace=ws_ctx(), executor=FakeExecutor(), job_ids=["job-2"])
     run = get_run(run_id)
     assert run.status == "stopped"
-    assert run.scores == [{"evaluatorId": "Builtin.Correctness", "score": 0.75}]
+    assert strip_ci(run.scores) == [{"evaluatorId": "Builtin.Correctness", "score": 0.75,
+        "count": 1, "n": 1, "unit": "turn"}]
     assert run.error == "stopped by operator"
 
 
-def test_eval_stop_finish_keeps_insight_trees_and_error_details():
-    run_id = make_run(status="evaluating", batch_eval_id="be-3", mode="insights")
-    svc._finish_from_result(
-        run_id,
-        "insights",
-        {
-            "status": "STOPPED",
-            "errorDetails": ["2 of 5 sessions were not evaluated"],
-            "failureAnalysisResult": {"failures": [{"category": "Tool misuse"}]},
-        },
+def test_eval_stop_finish_keeps_insight_trees():
+    run_id = make_run(status="evaluating", batch_eval_id="job-3", mode="insights")
+    fake = FakeExecutor()
+    svc._finish(
+        run_id, "insights",
+        [JobDone(state="STOPPED", error="stopped by operator",
+                 summary={"insights": {"failures": [{"category": "Tool misuse"}]}})],
+        workspace=ws_ctx(), executor=fake, job_ids=["job-3"],
     )
     run = get_run(run_id)
     assert run.status == "stopped"
     assert run.insights == {"failures": [{"category": "Tool misuse"}]}
-    assert run.error == "stopped by operator — 2 of 5 sessions were not evaluated"
+    assert run.error == "stopped by operator"
 
 
 def test_eval_stop_reconcile_after_restart_lands_stopped(monkeypatch):
-    """An evaluating run whose batch was stopped while the backend was down is
-    re-polled on startup and settles as `stopped`, not `failed`."""
-    run_id = make_run(status="evaluating", batch_eval_id="be-4")
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
-    monkeypatch.setattr(
-        svc.ac, "poll_batch_evaluation", lambda client, batch_id, **_: PARTIAL_RESULT
-    )
+    """An evaluating run whose job was stopped while the backend was down is re-attached
+    on startup and settles as `stopped`, not `failed`."""
+    fake = _fake_executor(monkeypatch)
+    run_id = make_run(status="evaluating", batch_eval_id="job-4")
+    fake.complete("job-4", [{"session_id": "s1", "evaluator_id": "Builtin.Correctness",
+                             "score": 0.75}])
+    fake.dones["job-4"] = JobDone(state="STOPPED", error="stopped by operator", result_count=1)
+    fake.statuses["job-4"] = JobStatus(phase="evaluating", state="STOPPED")
     assert run_id in svc.resume_interrupted_runs()
     run = wait_status(run_id, "stopped")
-    assert run.scores == [{"evaluatorId": "Builtin.Correctness", "score": 0.75}]
+    assert strip_ci(run.scores) == [{"evaluatorId": "Builtin.Correctness", "score": 0.75,
+        "count": 1, "n": 1, "unit": "turn"}]
 
 
 def test_eval_stop_stopped_runs_are_terminal_for_resume():
-    run_id = make_run(status="stopped", batch_eval_id="be-5", error="stopped by operator")
+    run_id = make_run(status="stopped", batch_eval_id="job-5", error="stopped by operator")
     assert svc.resume_interrupted_runs() == []
     run = get_run(run_id)
     assert run.status == "stopped"
     assert run.error == "stopped by operator"
 
 
-def test_eval_stop_wrapper_shape():
-    client = MagicMock()
-    client.stop_batch_evaluation.return_value = {
-        "batchEvaluationId": "be-6",
-        "status": "STOPPING",
-    }
-    assert ac.stop_batch_evaluation(client, batch_id="be-6")["status"] == "STOPPING"
-    client.stop_batch_evaluation.assert_called_once_with(batchEvaluationId="be-6")
+def test_eval_stop_grace_period_ends_the_worker_session(monkeypatch):
+    """A worker that never writes STOPPED after the cancel marker is stopped hard
+    (StopRuntimeSession) once the grace period is over; the row is `stopped`."""
+    fake = _fake_executor(monkeypatch)
+    stopped: list[str] = []
+    fake.stop_session = lambda ws, job_id: stopped.append(job_id) or True  # type: ignore[attr-defined]
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(svc, "_now", lambda: clock["t"])
+    monkeypatch.setattr(svc, "_sleep", lambda s: clock.__setitem__("t", clock["t"] + 30.0))
+    run_id = make_run(status="queued", session_ids=[])
+    fake.statuses[run_id] = JobStatus(phase="evaluating")
+    svc.stop_flags.request(run_id)
+    plan = svc.RunPlan(run_id=run_id, job_type="batch_eval", target={},
+                       sessions=[{"session_id": "s1"}], replay=False, wait={})
+    svc.stop_flags.clear(run_id)
+    # the stop lands right after dispatch
+    real_submit = fake.submit
+
+    def submit(ws, job):
+        out = real_submit(ws, job)
+        svc.stop_flags.request(run_id)
+        return out
+
+    fake.submit = submit  # type: ignore[method-assign]
+    svc.execute_run(run_id, workspace=ws_ctx(), plan=plan)
+    assert fake.cancelled == [run_id] and stopped == [run_id]
+    run = get_run(run_id)
+    assert run.status == "stopped" and run.error == "stopped by operator"

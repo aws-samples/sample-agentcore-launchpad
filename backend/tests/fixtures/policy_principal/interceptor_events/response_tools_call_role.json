@@ -1,0 +1,68 @@
+{
+ "recorded": "P0 probe 2026-10-26 (cn-northwest-1), anonymised; header secrets were redacted at source",
+ "phase": "RESPONSE",
+ "client_context": {
+  "custom": {
+   "GATEWAY_ARN": "arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0",
+   "GATEWAY_ACCOUNT_ID": "123456789012",
+   "REQUEST_ID": "850011a5-fa02-467c-b306-24bfbe8b63f5",
+   "SOURCE_IP": "198.51.100.7"
+  },
+  "env": null
+ },
+ "event": {
+  "interceptorInputVersion": "1.0",
+  "mcp": {
+   "gatewayRequest": {
+    "path": "/mcp",
+    "httpMethod": "POST",
+    "headers": {},
+    "body": {
+     "id": "601925c0",
+     "jsonrpc": "2.0",
+     "method": "tools/call",
+     "params": {
+      "name": "hr-database___echo",
+      "_meta": {
+       "launchpad/principal": "__TEST_TOKEN__",
+       "probe_mode": "pass"
+      },
+      "arguments": {
+       "probe_mode": "pass",
+       "amount_cents": 1234,
+       "text": "hello B-role-noheaders"
+      }
+     }
+    },
+    "context": {
+     "identity": {
+      "awsPrincipalArn": "arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34"
+     }
+    }
+   },
+   "gatewayResponse": {
+    "path": "/mcp",
+    "httpMethod": "POST",
+    "headers": {},
+    "body": {
+     "jsonrpc": "2.0",
+     "id": "601925c0",
+     "result": {
+      "isError": false,
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"echo\":{\"probe_mode\":\"pass\",\"amount_cents\":1234,\"text\":\"hello B-role-noheaders\"},\"approved\":true,\"amount_cents\":1234}"
+       }
+      ]
+     }
+    },
+    "statusCode": 200,
+    "isStreamingResponse": false
+   },
+   "rawGatewayRequest": {
+    "body": "<raw body contains a probe token; see parsed body>"
+   }
+  }
+ }
+}

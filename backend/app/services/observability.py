@@ -7,30 +7,35 @@ once a minute per (view, range). Tokens-by-model comes from the
 mockup); top tools and all trace/session rollups cover both the legacy shared
 aws/spans destination and unified per-runtime log groups.
 
-Cost figures are advisory estimates: token counts × config `model_prices`
-(USD per 1M tokens, substring-matched on the model id; unknown model → None).
+Token counts are reported as-is; no USD cost is derived from them (R13 — cost
+reporting returns with the budgets family, using admin-maintained prices).
 """
 
 import json
+import logging
 import re
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import ClientError
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.db import SessionLocal
 from app.core.errors import AppError
-from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
-from app.optimization.models import Experiment
-from app.services import memory, memory_ownership
-from app.services.agentcore import evaluation as agentcore_evaluation
-from app.services.agentcore.client import data_client
+from app.services import memory_backend, memory_ownership, runtime_sessions, visibility
+from app.services.strands_eval.redaction import redact_attributes
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger("launchpad.observability")
+RecordsGuard = Callable[[str, list[dict[str, Any]]], None]
 
 SPANS_LOG_GROUP = "aws/spans"
 RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
@@ -38,7 +43,27 @@ SPANS_SOURCE = (
     "SOURCE logGroups(namePrefix: "
     f"['{SPANS_LOG_GROUP}', '{RUNTIME_LOG_GROUP_PREFIX}'])"
 )
+
+
+def _spans_source() -> str:
+    """SOURCE clause for every Logs Insights query, narrowed by
+    `Settings.observability_spans_source` (spec N5). Under the default "both" this
+    returns the exact same string as the module constant `SPANS_SOURCE`, so every
+    pre-existing test asserting against that constant stays true unchanged."""
+    mode = get_settings().observability_spans_source
+    if mode == "spans":
+        prefixes = [SPANS_LOG_GROUP]
+    elif mode == "runtime_logs":
+        prefixes = [RUNTIME_LOG_GROUP_PREFIX]
+    else:
+        return SPANS_SOURCE
+    quoted = ", ".join(f"'{p}'" for p in prefixes)
+    return f"SOURCE logGroups(namePrefix: [{quoted}])"
+
+
 RANGE_HOURS = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
+# SCORE NOW (N12 E1-5): one session, at most this many evaluators, in-process (CA-8).
+MAX_ON_DEMAND_EVALUATORS = 5
 BIN_BY_RANGE = {"1h": "5m", "6h": "15m", "24h": "1h", "7d": "6h"}
 # List caps: the UI paginates client-side (50/100/200 per page), so fetch a
 # deeper window per Logs Insights query; row counts this size are cheap.
@@ -49,15 +74,9 @@ SPANS_PER_TRACE = 500
 # On-demand scoring sends a whole session to Evaluate (model cap 20k spans);
 # a bounded Logs Insights fetch keeps one call's payload and scan predictable.
 SESSION_SPANS_LIMIT = 2000
-MAX_ON_DEMAND_EVALUATORS = 5
 CACHE_TTL_SECONDS = 60.0
 QUERY_DEADLINE_SECONDS = 55
 NANOS_PER_MS = 1_000_000
-
-# Anthropic-convention multipliers applied when a price entry has no explicit
-# cache_read / cache_write rate — advisory, like every cost figure here.
-CACHE_READ_FACTOR = 0.1
-CACHE_WRITE_FACTOR = 1.25
 
 # The router enforces these shapes too; re-checked here (defense in depth)
 # because the ids are interpolated into Logs Insights query strings.
@@ -240,8 +259,13 @@ def run_insights_queries(
 # verified against live data; naive sums count 2-3x). Native Claude SDK spans
 # instead put the aggregate usage on their OpenInference AGENT root.
 _MODEL_FIELD = "coalesce(attributes.gen_ai.request.model, attributes.llm.model_name)"
+# The UNCACHED prompt tokens in both conventions (N17-obs439, see `_token_usage`):
+# gen_ai.usage.input_tokens already excludes the cache counts; OpenInference's prompt count
+# includes them, so they are taken off it.
 _INPUT_TOKENS_FIELD = (
-    "coalesce(attributes.gen_ai.usage.input_tokens, attributes.llm.token_count.prompt)"
+    "coalesce(attributes.gen_ai.usage.input_tokens, attributes.llm.token_count.prompt"
+    " - coalesce(attributes.llm.token_count.prompt_details.cache_read, 0)"
+    " - coalesce(attributes.llm.token_count.prompt_details.cache_write, 0))"
 )
 _OUTPUT_TOKENS_FIELD = (
     "coalesce(attributes.gen_ai.usage.output_tokens, attributes.llm.token_count.completion)"
@@ -260,18 +284,32 @@ _NATIVE_AGENT_FIELD = (
 _OPERATION_FIELD = 'coalesce(attributes.gen_ai.operation.name, "")'
 
 # The `x * is_llm` multiplication is Logs Insights' conditional sum.
-_IS_LLM_FIELDS = f"""fields {_MODEL_FIELD} as telemetry_model,
-       ((strcontains({_OPERATION_FIELD}, "chat")
+# N17-obs439: the Strands terminal provider span (gen_ai.system=aws.bedrock) carries input /
+# output only — the call's cache reads / writes (and total_tokens) are on its Strands wrapper
+# chat span. So the cache counts are ALSO summed over the wrapper chat spans
+# (`wrap_cache_*`, `is_wrap_call`) and `_cache_tokens` prefers the provider sums, falling back
+# to the wrapper's — the same rule `q_tokens_by_model` applies to input / output.
+_CALL_OPERATION = f"""(strcontains({_OPERATION_FIELD}, "chat")
         + strcontains({_OPERATION_FIELD}, "text_completion")
-        + strcontains({_OPERATION_FIELD}, "generate_content"))
-        * (1 - strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents"))
+        + strcontains({_OPERATION_FIELD}, "generate_content"))"""
+_IS_WRAPPER = 'strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents")'
+_IS_LLM_FIELDS = f"""fields {_MODEL_FIELD} as telemetry_model,
+       ({_CALL_OPERATION}
+        * (1 - {_IS_WRAPPER})
         * (1 - {_NATIVE_AGENT_FIELD})
         + {_NATIVE_AGENT_FIELD}) as is_llm,
+       {_CALL_OPERATION} * {_IS_WRAPPER} * (1 - {_NATIVE_AGENT_FIELD}) as is_wrap_call,
        strcontains(status.code, "ERROR") as is_error
 | fields {_INPUT_TOKENS_FIELD} * is_llm as llm_in,
          {_OUTPUT_TOKENS_FIELD} * is_llm as llm_out,
          {_CACHE_READ_FIELD} * is_llm as llm_cache_read,
-         {_CACHE_WRITE_FIELD} * is_llm as llm_cache_write"""
+         {_CACHE_WRITE_FIELD} * is_llm as llm_cache_write,
+         {_CACHE_READ_FIELD} * is_wrap_call as wrap_cache_read,
+         {_CACHE_WRITE_FIELD} * is_wrap_call as wrap_cache_write"""
+_CACHE_STATS = """sum(llm_cache_read) as cache_read,
+        sum(llm_cache_write) as cache_write,
+        sum(wrap_cache_read) as wrapper_cache_read,
+        sum(wrap_cache_write) as wrapper_cache_write"""
 
 
 def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) -> str:
@@ -281,18 +319,18 @@ def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) 
     if session_id:
         filters.append(f'attributes.session.id = "{session_id}"')
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter {" and ".join(filters)}
 | {_IS_LLM_FIELDS}
 | stats count(*) as span_count, sum(is_llm) as llm_count,
         sum(llm_in) as tokens_in,
         sum(llm_out) as tokens_out,
-        sum(llm_cache_read) as cache_read,
-        sum(llm_cache_write) as cache_write,
+        {_CACHE_STATS},
         sum(is_error) as error_count,
         min(startTimeUnixNano) as start_ns, max(endTimeUnixNano) as end_ns,
         latest(attributes.session.id) as session_id,
         latest(resource.attributes.service.name) as service,
+        count_distinct(resource.attributes.service.name) as service_count,
         latest(telemetry_model) as model,
         count_distinct(telemetry_model) as model_count
   by traceId
@@ -314,26 +352,56 @@ def q_root_spans(trace_ids: list[str] | None = None, limit: int = 3 * TRACE_LIMI
         quoted = ", ".join(f'"{t}"' for t in trace_ids)
         filters.insert(0, f"traceId in [{quoted}]")
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter {" and ".join(filters)}
 | fields name, traceId, resource.attributes.service.name as service,
+         attributes.session.id as session_id,
+         resource.attributes.session.id as resource_session_id,
          durationNano, startTimeUnixNano, status.code as status_code
 | sort startTimeUnixNano desc
 | limit {limit}
 """
 
 
-def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
+def _q_provenance(predicate: str) -> str:
+    """One complete-window source summary, never a newest-N trace sample.
+
+    Include both supported sources and content records: even a spans-only view
+    discovers runtime content groups, and actual readers may enrich from them.
+    """
     return f"""
 {SPANS_SOURCE}
+| filter {predicate}
+| stats count(*) as record_count,
+        count(resource.attributes.service.name) as attributed_count,
+        count_distinct(resource.attributes.service.name) as service_count,
+        latest(resource.attributes.service.name) as service
+"""
+
+
+def q_session_provenance(session_id: str) -> str:
+    _require(SESSION_ID_RE, session_id, "session id")
+    return _q_provenance(f'attributes.session.id = "{session_id}"')
+
+
+def q_trace_provenance(trace_id: str) -> str:
+    _require(TRACE_ID_RE, trace_id, "trace id")
+    return _q_provenance(f'traceId = "{trace_id}"')
+
+
+def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
+    return f"""
+{_spans_source()}
 | filter ispresent(startTimeUnixNano) and ispresent(attributes.session.id)
 | {_IS_LLM_FIELDS}
 | stats count_distinct(traceId) as traces, sum(is_llm) as llm_calls,
         sum(llm_in) as tokens_in,
         sum(llm_out) as tokens_out,
+        {_CACHE_STATS},
         sum(is_error) as errors,
         min(startTimeUnixNano) as first_ns, max(endTimeUnixNano) as last_ns,
         latest(resource.attributes.service.name) as service,
+        count_distinct(resource.attributes.service.name) as service_count,
         latest(telemetry_model) as model
   by attributes.session.id as session_id
 | sort last_ns desc
@@ -343,7 +411,7 @@ def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
 
 def q_dashboard_series(range_key: str) -> str:
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
@@ -356,7 +424,7 @@ def q_dashboard_series(range_key: str) -> str:
 
 def q_dashboard_totals() -> str:
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
@@ -366,7 +434,7 @@ def q_dashboard_totals() -> str:
 
 def q_dashboard_distincts() -> str:
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter ispresent(startTimeUnixNano) and ispresent(attributes.session.id)
 | stats count_distinct(attributes.session.id) as sessions,
         count_distinct(resource.attributes.service.name) as agents
@@ -375,7 +443,7 @@ def q_dashboard_distincts() -> str:
 
 def q_top_tools(limit: int = 10) -> str:
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter ispresent(startTimeUnixNano)
     and (ispresent(attributes.gen_ai.tool.name) or ispresent(attributes.tool.name))
 | fields coalesce(attributes.gen_ai.tool.name, attributes.tool.name) as tool,
@@ -391,13 +459,13 @@ def q_tokens_by_model(limit: int = 25) -> str:
     """Per-model token sums from spans — the one source every agent kind feeds.
 
     Sums provider (non-wrapper) LLM spans, but also carries the Strands wrapper
-    sums per model: non-Bedrock providers (e.g. Mantle ``openai.*`` models) emit
-    the wrapper span ONLY, so a model whose provider sums are zero falls back to
-    its wrapper sums in ``_tokens_by_model_rows`` — the group-by mirror of the
-    per-trace "prefer non-wrapper, fall back to wrapper" rollup rule.
+    sums per model: a non-Bedrock provider may emit the wrapper span ONLY, so a
+    model whose provider sums are zero falls back to its wrapper sums in
+    ``_tokens_by_model_rows`` — the group-by mirror of the per-trace "prefer
+    non-wrapper, fall back to wrapper" rollup rule.
     """
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter ispresent(startTimeUnixNano)
     and (ispresent(attributes.gen_ai.request.model) or ispresent(attributes.llm.model_name))
 | fields {_MODEL_FIELD} as telemetry_model,
@@ -409,18 +477,42 @@ def q_tokens_by_model(limit: int = 25) -> str:
        strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents") as is_wrapper
 | fields {_INPUT_TOKENS_FIELD} * is_call * (1 - is_wrapper) as llm_in,
          {_OUTPUT_TOKENS_FIELD} * is_call * (1 - is_wrapper) as llm_out,
+         {_CACHE_READ_FIELD} * is_call * (1 - is_wrapper) as llm_cache_read,
+         {_CACHE_WRITE_FIELD} * is_call * (1 - is_wrapper) as llm_cache_write,
          {_INPUT_TOKENS_FIELD} * is_call * is_wrapper as wrap_in,
-         {_OUTPUT_TOKENS_FIELD} * is_call * is_wrapper as wrap_out
+         {_OUTPUT_TOKENS_FIELD} * is_call * is_wrapper as wrap_out,
+         {_CACHE_READ_FIELD} * is_call * is_wrapper as wrap_cache_read,
+         {_CACHE_WRITE_FIELD} * is_call * is_wrapper as wrap_cache_write
 | stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
-        sum(wrap_in) as wrapper_in, sum(wrap_out) as wrapper_out
+        sum(wrap_in) as wrapper_in, sum(wrap_out) as wrapper_out,
+        {_CACHE_STATS}
   by telemetry_model as model
 | limit {limit}
 """
 
 
+def _cache_tokens(row: dict[str, str]) -> tuple[float, float]:
+    """N17-obs439: ``(cache_read, cache_write)`` of an aggregate row — the provider spans'
+    sums, else the Strands wrapper chat spans' (a bedrock provider span carries none)."""
+    read = _num(row, "cache_read") or _num(row, "wrapper_cache_read")
+    write = _num(row, "cache_write") or _num(row, "wrapper_cache_write")
+    return read, write
+
+
+def _tokens(tokens_in: float, tokens_out: float, cache_read: float = 0.0,
+            cache_write: float = 0.0) -> dict[str, int]:
+    """The console's token shape. ``input`` is the providers' ``inputTokens``, which leaves out
+    prompt-cache reads AND writes; ``total`` = input + output + cache reads + cache writes —
+    what Bedrock's own ``totalTokens`` adds up to on every real Kimi / GLM span record checked
+    (N17-obs439: 55 research17 records, 6 with cache writes, and live spans 2026-10-25)."""
+    out = {"input": round(tokens_in), "output": round(tokens_out),
+           "cache_read": round(cache_read), "cache_write": round(cache_write)}
+    out["total"] = out["input"] + out["output"] + out["cache_read"] + out["cache_write"]
+    return out
+
+
 def _tokens_by_model_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
     """Project q_tokens_by_model rows into the tokens_by_model response shape."""
-    prices = get_settings().model_prices
     out: list[dict[str, Any]] = []
     for row in rows:
         tokens_in, tokens_out = _num(row, "tokens_in"), _num(row, "tokens_out")
@@ -429,15 +521,7 @@ def _tokens_by_model_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
         if not (tokens_in or tokens_out):
             continue
         model = row.get("model") or "unknown"
-        out.append(
-            {
-                "model": model,
-                "input": round(tokens_in),
-                "output": round(tokens_out),
-                "total": round(tokens_in + tokens_out),
-                "est_cost_usd": estimate_cost(model, tokens_in, tokens_out, prices=prices),
-            }
-        )
+        out.append({"model": model, **_tokens(tokens_in, tokens_out, *_cache_tokens(row))})
     out.sort(key=lambda r: -r["total"])
     return out
 
@@ -445,7 +529,7 @@ def _tokens_by_model_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
 def q_trace_spans(trace_id: str) -> str:
     _require(TRACE_ID_RE, trace_id, "trace id")
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter traceId = "{trace_id}" and ispresent(startTimeUnixNano)
 | fields @message
 | limit {SPANS_PER_TRACE}
@@ -459,7 +543,7 @@ def q_session_spans(session_id: str) -> str:
     spans, and Evaluate rejects them."""
     _require(SESSION_ID_RE, session_id, "session id")
     return f"""
-{SPANS_SOURCE}
+{_spans_source()}
 | filter ispresent(scope.name) and ispresent(attributes.session.id)
     and attributes.session.id = "{session_id}"
 | fields @message
@@ -494,46 +578,6 @@ def _ns_to_iso(ns: float | None) -> str | None:
     if not ns:
         return None
     return datetime.fromtimestamp(ns / 1e9, tz=UTC).isoformat(timespec="seconds")
-
-
-# ── Cost estimator ──────────────────────────────────────────────────────────
-
-
-def match_price(model: str | None, prices: dict[str, Any]) -> dict[str, float] | None:
-    """Longest price-map key that is a substring of the model id."""
-    if not model:
-        return None
-    best: tuple[int, dict[str, float]] | None = None
-    for key, entry in prices.items():
-        if key in model and isinstance(entry, dict):
-            if best is None or len(key) > best[0]:
-                best = (len(key), entry)
-    return best[1] if best else None
-
-
-def estimate_cost(
-    model: str | None,
-    tokens_in: float,
-    tokens_out: float,
-    cache_read: float = 0.0,
-    cache_write: float = 0.0,
-    prices: dict[str, Any] | None = None,
-) -> float | None:
-    prices = get_settings().model_prices if prices is None else prices
-    entry = match_price(model, prices)
-    if not entry:
-        return None
-    rate_in = float(entry.get("input", 0.0))
-    rate_out = float(entry.get("output", 0.0))
-    rate_cache_read = float(entry.get("cache_read", rate_in * CACHE_READ_FACTOR))
-    rate_cache_write = float(entry.get("cache_write", rate_in * CACHE_WRITE_FACTOR))
-    cost = (
-        tokens_in * rate_in
-        + tokens_out * rate_out
-        + cache_read * rate_cache_read
-        + cache_write * rate_cache_write
-    ) / 1e6
-    return round(cost, 6)
 
 
 # ── Category mapper (mockup contract: llm/tool/memory/gateway/http/agent) ──
@@ -662,35 +706,44 @@ def _span_ns(span: dict[str, Any], key: str) -> float | None:
 
 
 def _token_usage(attrs: dict[str, Any]) -> dict[str, float] | None:
+    """A span's tokens with ``input`` = the UNCACHED prompt tokens, in both conventions
+    (N17-obs439):
+
+    - ``gen_ai.usage.*`` (Strands / Bedrock): ``input_tokens`` already excludes the cache
+      reads and writes, which are reported beside it (``total_tokens`` = input + output +
+      cache read + cache write on every real record checked);
+    - OpenInference ``llm.token_count.*``: ``prompt`` counts the WHOLE prompt and the
+      ``prompt_details.cache_*`` are its breakdown (OpenInference semantic conventions), so the
+      uncached input is prompt − cache. Spec-based: no OpenInference span with cache counts
+      has been recorded on this platform yet.
+    """
+    cache_read = _attr(attrs, "gen_ai.usage.cache_read_input_tokens",
+                       "llm.token_count.prompt_details.cache_read")
+    cache_write = _attr(attrs, "gen_ai.usage.cache_write_input_tokens",
+                        "llm.token_count.prompt_details.cache_write")
+    tokens_in = _attr(attrs, "gen_ai.usage.input_tokens")
+    if tokens_in is None and _attr(attrs, "llm.token_count.prompt") is not None:
+        prompt = float(_attr(attrs, "llm.token_count.prompt") or 0)
+        tokens_in = max(prompt - float(cache_read or 0) - float(cache_write or 0), 0.0)
     values = {
-        "input": _attr(
-            attrs,
-            "gen_ai.usage.input_tokens",
-            "llm.token_count.prompt",
-        ),
-        "output": _attr(
-            attrs,
-            "gen_ai.usage.output_tokens",
-            "llm.token_count.completion",
-        ),
-        "cache_read": _attr(
-            attrs,
-            "gen_ai.usage.cache_read_input_tokens",
-            "llm.token_count.prompt_details.cache_read",
-        ),
-        "cache_write": _attr(
-            attrs,
-            "gen_ai.usage.cache_write_input_tokens",
-            "llm.token_count.prompt_details.cache_write",
-        ),
+        "input": tokens_in,
+        "output": _attr(attrs, "gen_ai.usage.output_tokens", "llm.token_count.completion"),
+        "cache_read": cache_read,
+        "cache_write": cache_write,
     }
     if all(value is None for value in values.values()):
         return None
     return {key: float(value or 0) for key, value in values.items()}
 
 
-def build_span_tree(raw_spans: list[dict[str, Any]],
-                    prices: dict[str, Any] | None = None) -> dict[str, Any]:
+def _resource_attrs(span: dict[str, Any]) -> dict[str, Any]:
+    """`span.resource.attributes` when both levels are objects, else `{}` (N16-obs53)."""
+    resource = span.get("resource")
+    attrs = resource.get("attributes") if isinstance(resource, dict) else None
+    return attrs if isinstance(attrs, dict) else {}
+
+
+def build_span_tree(raw_spans: list[dict[str, Any]]) -> dict[str, Any]:
     """Nest spans by parentSpanId; annotate offsets/durations as ms + percentages."""
     starts = [s for s in (_span_ns(sp, "startTimeUnixNano") for sp in raw_spans) if s]
     ends = [e for e in (_span_ns(sp, "endTimeUnixNano") for sp in raw_spans) if e]
@@ -700,8 +753,25 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
 
     flat: list[dict[str, Any]] = []
     nodes: dict[str, dict[str, Any]] = {}
+    # N16-obs53: a row whose `attributes` / `status` / `resource` is not an object (a
+    # correlated log record, a truncated export) is rendered with empty ones, never a 500 —
+    # and COUNTED, so a shorter-looking trace never passes for a clean one (rev-r16)
+    malformed = {"attrs": 0, "status": 0, "resource": 0}
     for span in raw_spans:
-        attrs = span.get("attributes") or {}
+        attrs = span.get("attributes")
+        if attrs is not None and not isinstance(attrs, dict):
+            malformed["attrs"] += 1
+        attrs = attrs if isinstance(attrs, dict) else {}
+        status = span.get("status")
+        if status is not None and not isinstance(status, dict):
+            malformed["status"] += 1
+        status_code = status.get("code", "UNSET") if isinstance(status, dict) else "UNSET"
+        resource = span.get("resource")
+        if resource is not None and not (
+            isinstance(resource, dict)
+            and (resource.get("attributes") is None or isinstance(resource.get("attributes"), dict))
+        ):
+            malformed["resource"] += 1
         name = str(span.get("name") or "span")
         kind = span.get("kind")
         start = _span_ns(span, "startTimeUnixNano")
@@ -719,7 +789,7 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
             "name": name[:120],
             "category": categorize_span(name, attrs, kind),
             "kind": kind,
-            "status": (span.get("status") or {}).get("code", "UNSET"),
+            "status": status_code,
             "start_offset_ms": round(offset_ns / NANOS_PER_MS, 1),
             "duration_ms": round(duration_ns / NANOS_PER_MS, 1),
             "offset_pct": round(offset_ns / total_ns * 100, 2),
@@ -728,12 +798,10 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
             "finish_reason": finish,
             "tool_name": _attr(attrs, "gen_ai.tool.name", "tool.name"),
             "tokens": tokens,
-            "est_cost_usd": (
-                estimate_cost(model, tokens["input"], tokens["output"],
-                              tokens["cache_read"], tokens["cache_write"], prices=prices)
-                if tokens and model else None
-            ),
-            "attributes": attrs,
+            # N17-obs307: credential-like attributes (ADOT's botocore spans carry
+            # `aws.auth.account.access_key`) are masked before they reach the response
+            # or the trace cache
+            "attributes": redact_attributes(attrs),
         }
         flat.append(row)
         if row["span_id"]:
@@ -747,6 +815,27 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
             parent["children"].append(node)
         else:
             roots.append(node)
+    # N16-obs52: spans whose parent pointers form a cycle reach no root; promote the
+    # first-arrived member of each unreachable group to a root so the waterfall keeps every
+    # span (its back-pointing child is detached from it to break the cycle)
+    reachable: set[int] = set()
+    stack = list(roots)
+    while stack:
+        node = stack.pop()
+        if id(node) not in reachable:
+            reachable.add(id(node))
+            stack.extend(node["children"])
+    for node in nodes.values():
+        if id(node) not in reachable:
+            parent = nodes[node["parent_span_id"]]
+            parent["children"] = [c for c in parent["children"] if c is not node]
+            roots.append(node)
+            stack = [node]
+            while stack:
+                cur = stack.pop()
+                if id(cur) not in reachable:
+                    reachable.add(id(cur))
+                    stack.extend(cur["children"])
 
     def annotate(node: dict[str, Any], depth: int) -> None:
         node["depth"] = depth
@@ -763,6 +852,7 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
         "duration_ms": round(total_ns / NANOS_PER_MS, 1),
         "tree": roots,
         "spans": flat,
+        "malformed": malformed,
     }
 
 
@@ -878,12 +968,26 @@ def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]
     return {k: v for k, v in by_span.items() if v.get("input") or v.get("output")}
 
 
+def record_session_ids(record: dict[str, Any]) -> set[str]:
+    """All explicit session claims on an actual OTel document."""
+    resource = record.get("resource")
+    resource = resource if isinstance(resource, dict) else {}
+    sessions = set()
+    for attrs in (record.get("attributes"), resource.get("attributes"), resource):
+        if not isinstance(attrs, dict):
+            continue
+        nested = attrs.get("session")
+        for sid in (attrs.get("session.id"),
+                    nested.get("id") if isinstance(nested, dict) else None):
+            if isinstance(sid, str) and sid:
+                sessions.add(sid)
+    return sessions
+
+
 def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
     groups: set[str] = set()
     for span in raw_spans:
-        names = ((span.get("resource") or {}).get("attributes") or {}).get(
-            "aws.log.group.names"
-        )
+        names = _resource_attrs(span).get("aws.log.group.names")
         if isinstance(names, str):
             groups.update(g.strip() for g in names.split(",") if g.strip())
     return sorted(groups)[:5]
@@ -935,19 +1039,11 @@ def query_token_usage_metrics(
             per_model.setdefault(model, {})[token_type] = (
                 per_model.get(model, {}).get(token_type, 0.0) + total
             )
-    prices = get_settings().model_prices
     rows = []
     for model, usage in per_model.items():
         tokens_in, tokens_out = usage.get("input", 0.0), usage.get("output", 0.0)
-        rows.append(
-            {
-                "model": model,
-                "input": round(tokens_in),
-                "output": round(tokens_out),
-                "total": round(tokens_in + tokens_out),
-                "est_cost_usd": estimate_cost(model, tokens_in, tokens_out, prices=prices),
-            }
-        )
+        # the metric carries no cache token type: cache counts read 0 here
+        rows.append({"model": model, **_tokens(tokens_in, tokens_out)})
     rows.sort(key=lambda r: -r["total"])
     return rows
 
@@ -961,13 +1057,7 @@ def _trace_row(
     map_agent: Callable[[str | None], str],
 ) -> dict[str, Any]:
     start_ns, end_ns = _num(agg, "start_ns"), _num(agg, "end_ns")
-    tokens = {
-        "input": round(_num(agg, "tokens_in")),
-        "output": round(_num(agg, "tokens_out")),
-        "cache_read": round(_num(agg, "cache_read")),
-        "cache_write": round(_num(agg, "cache_write")),
-    }
-    tokens["total"] = tokens["input"] + tokens["output"]
+    tokens = _tokens(_num(agg, "tokens_in"), _num(agg, "tokens_out"), *_cache_tokens(agg))
     model = agg.get("model") or None
     service = agg.get("service") or (root or {}).get("service")
     duration_ns = _num(root or {}, "durationNano") or (end_ns - start_ns)
@@ -975,7 +1065,17 @@ def _trace_row(
         "trace_id": agg.get("traceId"),
         "time": _ns_to_iso(start_ns),
         "root_operation": (root or {}).get("name") or "trace",
+        # A trace-id join may enrich a local aggregate with an external A2A root.
+        # Keep its own provenance in the cache; the member response authorizes it
+        # separately and can fall back to the aggregate without losing local data.
+        "_root_enrichment": {
+            "service": root.get("service"),
+            "session_ids": [root[key] for key in ("session_id", "resource_session_id")
+                            if root.get(key)],
+            "aggregate_duration_ms": round((end_ns - start_ns) / NANOS_PER_MS, 1),
+        } if root else None,
         "service": service,
+        "service_count": int(_num(agg, "service_count")),
         "agent": map_agent(service),
         "session_id": agg.get("session_id"),
         "duration_ms": round(duration_ns / NANOS_PER_MS, 1),
@@ -986,32 +1086,22 @@ def _trace_row(
         "model": model,
         "multi_model": _num(agg, "model_count") > 1,
         "tokens": tokens,
-        "est_cost_usd": estimate_cost(
-            model, tokens["input"], tokens["output"],
-            tokens["cache_read"], tokens["cache_write"],
-        ),
     }
 
 
 def _session_row(row: dict[str, str], map_agent: Callable[[str | None], str],
                  platform_ids: set[str]) -> dict[str, Any]:
-    tokens_in, tokens_out = _num(row, "tokens_in"), _num(row, "tokens_out")
-    model = row.get("model") or None
     service = row.get("service")
     session_id = row.get("session_id") or ""
     return {
         "session_id": session_id,
         "service": service,
+        "service_count": int(_num(row, "service_count")),
         "agent": map_agent(service),
         "traces": int(_num(row, "traces")),
         "llm_calls": int(_num(row, "llm_calls")),
         "errors": int(_num(row, "errors")),
-        "tokens": {
-            "input": round(tokens_in),
-            "output": round(tokens_out),
-            "total": round(tokens_in + tokens_out),
-        },
-        "est_cost_usd": estimate_cost(model, tokens_in, tokens_out),
+        "tokens": _tokens(_num(row, "tokens_in"), _num(row, "tokens_out"), *_cache_tokens(row)),
         "first": _ns_to_iso(_num(row, "first_ns")),
         "last": _ns_to_iso(_num(row, "last_ns")),
         "platform": session_id in platform_ids,
@@ -1053,9 +1143,8 @@ def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = Fal
                 # Metrics are one tile/chart — a CloudWatch failure must not
                 # take down the dashboard when the Logs Insights data succeeded.
                 tokens_by_model = []
-        tokens_in = sum(r["input"] for r in tokens_by_model)
-        tokens_out = sum(r["output"] for r in tokens_by_model)
-        costs = [r["est_cost_usd"] for r in tokens_by_model if r["est_cost_usd"] is not None]
+        tokens_tile = _tokens(*(sum(r.get(k, 0) for r in tokens_by_model)
+                                for k in ("input", "output", "cache_read", "cache_write")))
         series = [
             {
                 "bucket": row.get("bucket"),
@@ -1079,7 +1168,6 @@ def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = Fal
         ]
         return {
             "range": range_key,
-            "prices_meta": get_settings().model_prices_meta or None,
             "tiles": {
                 "traces": {"total": trace_total, "ok": trace_total - errors, "error": errors},
                 "sessions": {
@@ -1091,12 +1179,7 @@ def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = Fal
                     "p50_ms": round(_num(totals, "p50_nano") / NANOS_PER_MS, 1),
                     "p95_ms": round(_num(totals, "p95_nano") / NANOS_PER_MS, 1),
                 },
-                "tokens": {
-                    "input": tokens_in,
-                    "output": tokens_out,
-                    "total": tokens_in + tokens_out,
-                    "est_cost_usd": round(sum(costs), 4) if costs else None,
-                },
+                "tokens": tokens_tile,
             },
             "series": series,
             "tokens_by_model": tokens_by_model,
@@ -1125,6 +1208,14 @@ def list_traces(range_key: str, db: Session, workspace: WorkspaceContext,
             _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
             for agg in results["aggregates"]
         ]
+        # per-user policy: a trace of a derived per-principal runtime session (`lpp-…`) is
+        # listed under its conversation, the derived id kept beside it (additive key)
+        derived = runtime_sessions.conversation_of(
+            db, workspace.id, [r.get("session_id") or "" for r in rows])
+        for row in rows:
+            caller = derived.get(row.get("session_id") or "")
+            if caller:
+                row["runtime_session_id"], row["session_id"] = row["session_id"], caller
         return {"range": range_key, "traces": rows, "count": len(rows), "limit": TRACE_LIMIT}
 
     return cached(f"traces:{workspace.id}:{range_key}", force, build)
@@ -1139,16 +1230,31 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
             {"spans": q_trace_spans(trace_id)}, hours, logs=logs, workspace=workspace
         )
         raw_spans = []
+        skipped_rows = 0
         for row in results["spans"]:
             try:
-                raw_spans.append(json.loads(row.get("@message", "")))
+                parsed = json.loads(row.get("@message", ""))
             except (TypeError, ValueError):
+                skipped_rows += 1  # a plain-text log line in the span query result
                 continue
+            if isinstance(parsed, dict):
+                raw_spans.append(parsed)
+            else:  # N16-obs53: a non-object JSON row is not a span
+                skipped_rows += 1
         tree = build_span_tree(raw_spans)
         spans = tree["spans"]
+        # rev-r16: every row skipped or field coerced is counted into `meta.malformed` and
+        # logged once per trace (shapes only — never row content)
+        malformed = {"rows": skipped_rows, **tree["malformed"]}
+        if any(malformed.values()):
+            logger.warning(
+                "trace %s: malformed span rows in the Logs Insights result — %s",
+                trace_id, ", ".join(f"{k}={v}" for k, v in malformed.items() if v),
+            )
         # gen_ai message events (prompts/completions) live in the agents' own
         # runtime log groups, referenced by the spans themselves; best-effort.
         messages_by_span: dict[str, dict[str, Any]] = {}
+        raw_events: list[dict[str, Any]] = []
         log_groups = _span_log_groups(raw_spans)
         if log_groups:
             try:
@@ -1156,16 +1262,25 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
                     {"events": q_trace_message_events(trace_id)},
                     hours, logs=logs, log_groups=log_groups, workspace=workspace,
                 )["events"]
+                for event_row in event_rows:
+                    try:
+                        record = json.loads(event_row.get("@message") or "")
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(record, dict):
+                        raw_events.append(record)
                 messages_by_span = parse_message_events(event_rows)
             except Exception:  # best-effort enrichment — never fail the trace
                 messages_by_span = {}
         for span in spans:
             span["messages"] = messages_by_span.get(span["span_id"] or "")
         # Every session id this trace's spans OR content events were recorded under.
+        source_records = raw_spans + raw_events
         session_ids = sorted({
             sid for sid in (
                 [s["attributes"].get("session.id") for s in spans]
                 + [sid for m in messages_by_span.values() for sid in (m.get("session_ids") or [])]
+                + [sid for record in source_records for sid in record_session_ids(record)]
             ) if isinstance(sid, str) and sid
         })
         # Strands emits each LLM call as a wrapper span (system=strands-agents)
@@ -1185,19 +1300,23 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
             s for s in with_tokens
             if s["attributes"].get("gen_ai.system") != "strands-agents"
         ] or with_tokens
-        tokens = {
-            "input": round(sum(s["tokens"]["input"] for s in llm_spans)),
-            "output": round(sum(s["tokens"]["output"] for s in llm_spans)),
-            "cache_read": round(sum(s["tokens"]["cache_read"] for s in llm_spans)),
-            "cache_write": round(sum(s["tokens"]["cache_write"] for s in llm_spans)),
-        }
-        tokens["total"] = tokens["input"] + tokens["output"]
-        costs = [s["est_cost_usd"] for s in llm_spans if s["est_cost_usd"] is not None]
+        # N17-obs439: the bedrock provider span carries no cache counts — they are on its
+        # Strands wrapper; a component the providers report none of falls back to the wrappers
+        wrappers = [s for s in with_tokens
+                    if s["attributes"].get("gen_ai.system") == "strands-agents"
+                    and s["category"] == "llm"]
+
+        def component(key: str) -> float:
+            return (sum(s["tokens"][key] for s in llm_spans)
+                    or sum(s["tokens"][key] for s in wrappers))
+
+        tokens = _tokens(component("input"), component("output"),
+                         component("cache_read"), component("cache_write"))
         service = next(
             (
-                (sp.get("resource") or {}).get("attributes", {}).get("service.name")
+                _resource_attrs(sp).get("service.name")
                 for sp in raw_spans
-                if (sp.get("resource") or {}).get("attributes", {}).get("service.name")
+                if _resource_attrs(sp).get("service.name")
             ),
             None,
         )
@@ -1208,12 +1327,20 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
         )
         map_agent = build_agent_mapper(db, workspace.id)
         root = tree["tree"][0] if tree["tree"] else None
+        source_services = [_resource_attrs(record).get("service.name")
+                           for record in source_records]
         return {
             "trace_id": trace_id,
             "range": range_key,
             "meta": {
                 "root_operation": root["name"] if root else None,
                 "service": service,
+                "services": sorted({name for name in source_services if isinstance(name, str)}),
+                # Validate every actual source after a cache hit too. A successful
+                # earlier metadata probe cannot authorize newly arrived content.
+                "provenance_complete": bool(source_records) and all(
+                    isinstance(name, str) and bool(name) for name in source_services
+                ) and all(record.get("traceId") == trace_id for record in source_records),
                 "agent": map_agent(service),
                 "session_id": session_id,
                 "session_ids": session_ids,
@@ -1223,7 +1350,9 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
                 "llm_count": len(llm_spans),
                 "status": "error" if any(s["status"] == "ERROR" for s in spans) else "ok",
                 "tokens": tokens,
-                "est_cost_usd": round(sum(costs), 6) if costs else None,
+                # additive (N16-obs53 / rev-r16): rows skipped and fields coerced while
+                # building this trace; all zero for a clean export
+                "malformed": malformed,
             },
             "tree": tree["tree"],
             "spans": spans,
@@ -1251,6 +1380,10 @@ def list_sessions(range_key: str, db: Session, workspace: WorkspaceContext,
             .all()
         }
         rows = [_session_row(r, map_agent, platform_ids) for r in results["sessions"]]
+        # per-user policy: derived per-principal runtime sessions (`lpp-…`) are shown under
+        # the conversation they belong to, never as separate sessions
+        rows = runtime_sessions.fold_session_rows(rows, runtime_sessions.conversation_of(
+            db, workspace_id, [r["session_id"] for r in rows]))
         return {"range": range_key, "sessions": rows, "count": len(rows),
                 "limit": SESSION_LIMIT}
 
@@ -1272,16 +1405,23 @@ def _agent_from_traces(
 
 def get_session(session_id: str, range_key: str, db: Session,
                 workspace: WorkspaceContext, force: bool = False,
-                logs: Any = None) -> dict[str, Any]:
+                logs: Any = None, viewer: Viewer = Viewer.ALL,
+                records_guard: RecordsGuard | None = None,
+                source_session_ids: list[str] | None = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
 
+    # per-user policy: the conversation's derived per-principal runtime sessions carry its
+    # spans too (none while the carrier never ran a turn in it — one ledger read)
+    sources = source_session_ids if source_session_ids is not None else (
+        runtime_sessions.source_session_ids(db, workspace.id, session_id, viewer))
+    derived = sources[1:]
+
     def build() -> dict[str, Any]:
-        aggregates = run_insights_queries(
-            {"aggregates": q_trace_aggregates(session_id=session_id)},
-            hours,
-            logs=logs,
-            workspace=workspace,
-        )["aggregates"]
+        queries = {"aggregates": q_trace_aggregates(session_id=session_id)}
+        for index, extra in enumerate(derived):
+            queries[f"aggregates{index}"] = q_trace_aggregates(session_id=extra)
+        found = run_insights_queries(queries, hours, logs=logs, workspace=workspace)
+        aggregates = [row for key in queries for row in found.get(key) or []]
         trace_ids = [row["traceId"] for row in aggregates if row.get("traceId")]
         # Second pass, roots of THESE traces only; chunked so each query string
         # stays well under the Logs Insights length cap, chunks run concurrently.
@@ -1300,17 +1440,13 @@ def get_session(session_id: str, range_key: str, db: Session,
             _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
             for agg in aggregates
         ]
-        tokens = {
-            "input": sum(r["tokens"]["input"] for r in rows),
-            "output": sum(r["tokens"]["output"] for r in rows),
-        }
-        tokens["total"] = tokens["input"] + tokens["output"]
-        costs = [r["est_cost_usd"] for r in rows if r["est_cost_usd"] is not None]
+        tokens = _tokens(*(sum(r["tokens"][k] for r in rows)
+                           for k in ("input", "output", "cache_read", "cache_write")))
         times = [r["time"] for r in rows if r["time"]]
-        # Online evaluation scores ride along in the same cache entry but run
-        # as their own Logs Insights call: a failure there degrades to
-        # {unavailable: true} instead of taking the traces down. Local import —
-        # the online module imports this one for the query runner.
+        # Online evaluation scores ride along in the same cache entry but are their own
+        # ledger read (N12 E2-3): a failure there degrades to {unavailable: true}
+        # instead of taking the traces down. Local import — the online module imports
+        # this one for the range table.
         from app.evaluation import online as online_eval
 
         online_scores = online_eval.session_online_scores(
@@ -1325,7 +1461,6 @@ def get_session(session_id: str, range_key: str, db: Session,
                 "llm_calls": sum(r["llm_count"] for r in rows),
                 "errors": sum(r["error_count"] for r in rows),
                 "tokens": tokens,
-                "est_cost_usd": round(sum(costs), 6) if costs else None,
                 "first": min(times) if times else None,
                 "last": max(times) if times else None,
             },
@@ -1333,7 +1468,8 @@ def get_session(session_id: str, range_key: str, db: Session,
             "online_scores": online_scores,
         }
 
-    payload = cached(f"session:{workspace.id}:{session_id}:{range_key}", force, build)
+    cache_key = f"session:{workspace.id}:{session_id}:{range_key}:{json.dumps(derived)}"
+    payload = cached(cache_key, force, build)
     # Transcript is attached outside the cache: memory errors must degrade to
     # {available: false} on every request, never poison the cached span data.
     # It runs AFTER the trace query because sessions with no ledger row carry
@@ -1343,18 +1479,36 @@ def get_session(session_id: str, range_key: str, db: Session,
         session_id,
         workspace,
         agent=_agent_from_traces(db, workspace.id, payload["traces"]),
+        started_at=_iso_datetime((payload.get("summary") or {}).get("first")),
+        viewer=viewer,
+        records_guard=records_guard,
     )
     return {**payload, "transcript": transcript}
 
 
+def _iso_datetime(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
 def get_session_transcript(
-    session_id: str, db: Session, workspace: WorkspaceContext, agent_id: str | None = None
+    session_id: str,
+    db: Session,
+    workspace: WorkspaceContext,
+    agent_id: str | None = None,
+    started_at: datetime | None = None,
+    viewer: Viewer = Viewer.ALL,
+    records_guard: RecordsGuard | None = None,
 ) -> dict[str, Any]:
     """The session's conversation alone — no Logs Insights pass.
 
     For views that already know the session's agent (an evaluation result row):
     `get_session` would spend seconds on span aggregates just to recover the
     agent that `session_transcript` falls back on for unattributed sessions.
+    `started_at` (its first span) lets a session no ledger row claims fall back to
+    that agent's content logs (upstream #287).
     """
     agent = None
     if agent_id:
@@ -1363,7 +1517,10 @@ def get_session_transcript(
             agent = None
     return {
         "session_id": session_id,
-        "transcript": session_transcript(db, session_id, workspace, agent=agent),
+        "transcript": session_transcript(
+            db, session_id, workspace, agent=agent, started_at=started_at, viewer=viewer,
+            records_guard=records_guard,
+        ),
     }
 
 
@@ -1420,58 +1577,41 @@ def _chat_ledger_turns(
             "role": "USER" if message.role == "user" else "ASSISTANT",
             "text": message.text[:4000],
             "at": _event_iso(message.created_at),
+            # N-SCN-bug4: additive; the answer the runtime closed at the model's token limit
+            **({"truncated": True} if getattr(message, "truncated", False) else {}),
         }
         for message in rows
     ]
 
 
-def _eval_run_for_session(
-    db: Session, workspace_id: str, session_id: str
-) -> EvalRun | None:
-    """The eval run that PRODUCED this session, if any. Insights re-runs reuse
-    an earlier run's session_ids, so the oldest match is the creator (its
-    created_at anchors the content-log time window). session_ids is a JSON
-    column, so membership is checked in Python over recent runs (small table)."""
-    rows = (
-        db.query(EvalRun)
-        .filter(EvalRun.workspace_id == workspace_id)
-        .order_by(EvalRun.created_at.desc())
-        .limit(500)
-        .all()
-    )
-    matches = [r for r in rows if session_id in (r.session_ids or [])]
-    return matches[-1] if matches else None  # desc scan → last match is the oldest
+def _turns_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Conversational turns from memory events, oldest first.
 
-
-# ── Eval transcript from OTEL content logs (runtime-backed agents) ───────────
-# Runtime methods write no memory events during eval runs, but their ADOT
-# sidecar streams per-span gen_ai content records into the runtime log group
-# (stream otel-rt-logs) — the same content StartBatchEvaluation reads.
-# byoc included: its runtime writes the same log group; whether the member's own
-# code emits gen_ai content records is up to their instrumentation.
-RUNTIME_LOG_METHODS = {"zip_runtime", "studio", "container", "byoc"}
-
-
-def _eval_content_log_group(agent: Agent, workspace: WorkspaceContext) -> str | None:
-    """The log group holding an agent's otel-rt-logs content records, or None.
-
-    A harness logs under its hidden BACKING runtime (id ≠ harnessId), found by
-    prefix in `resolve_telemetry`; without memory enabled that is the only copy
-    of its eval conversations. No telemetry group yet degrades to None.
+    Tool-only turns (no text part) are dropped — see `_turn_text`.
     """
-    if not agent.resource_id:
-        return None
-    if agent.method in RUNTIME_LOG_METHODS:
-        return f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
-    if agent.method != "harness":
-        return None
-    # Local import — the evaluation service sits above this module.
-    from app.evaluation.service import resolve_telemetry
+    turns = []
+    for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
+        for part in event.get("payload", []):
+            conv = part.get("conversational")
+            if not conv:
+                continue
+            text = _turn_text(conv.get("content", {}).get("text", ""))
+            if text is None:
+                continue  # tool-use/tool-result turn — not conversational display
+            turns.append(
+                {
+                    "role": conv.get("role"),
+                    "text": text[:4000],
+                    "at": _event_iso(event.get("eventTimestamp")),
+                }
+            )
+    return turns
 
-    try:
-        return resolve_telemetry(agent, workspace)[1]
-    except (AppError, ClientError):
-        return None
+
+# ── eval-session content logs (N12 E2 — restored from the Global baseline) ──────
+# The recommendation evidence (`optimization/providers/evidence.py`) rebuilds an eval
+# session's conversation and tool calls from the runtime's otel-rt-logs content records
+# when Memory does not hold them.
 
 
 def _part_list_text(raw: Any) -> str | None:
@@ -1523,6 +1663,7 @@ def _content_records(
     started_at: datetime | None,
     workspace: WorkspaceContext,
     logs: Any = None,
+    records_guard: RecordsGuard | None = None,
 ) -> list[dict[str, Any]]:
     """The session's gen_ai content records (otel-rt-logs), oldest first.
 
@@ -1554,8 +1695,16 @@ def _content_records(
                 rec = json.loads(event["message"])
             except ValueError:
                 continue
-            if (rec.get("attributes") or {}).get("session.id") == session_id:
-                records.append(rec)
+            # N17-obs520: the substring filter also matches the runtime's plain
+            # application log lines (`bedrock_agentcore.app`, a bare `sessionId`, no
+            # resource attributes); they are not telemetry and are skipped, so only
+            # actual content records reach the member guard — which stays fail-closed.
+            attrs = rec.get("attributes") if isinstance(rec, dict) else None
+            if not isinstance(attrs, dict) or attrs.get("session.id") != session_id:
+                continue
+            if records_guard:
+                records_guard(session_id, [rec])
+            records.append(rec)
         token = resp.get("nextToken")
         if not token:
             break
@@ -1662,6 +1811,7 @@ def eval_turns_from_content_logs(
     started_at: datetime | None,
     workspace: WorkspaceContext,
     logs: Any = None,
+    records_guard: RecordsGuard | None = None,
 ) -> list[dict[str, Any]]:
     """USER/ASSISTANT turns for an eval session, rebuilt from content logs.
 
@@ -1672,7 +1822,8 @@ def eval_turns_from_content_logs(
     startTime (the run's creation time) is load-bearing — without it the scan
     exhausts its page budget on old log data and returns nothing.
     """
-    records = _content_records(log_group, session_id, started_at, workspace, logs)
+    records = _content_records(log_group, session_id, started_at, workspace, logs,
+                               records_guard=records_guard)
 
     invocations: dict[str, dict[str, Any]] = {}
     for rec in sorted(records, key=lambda r: r.get("timeUnixNano") or 0):
@@ -1704,98 +1855,135 @@ def eval_turns_from_content_logs(
     return turns
 
 
-def _turns_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Conversational turns from memory events, oldest first.
-
-    Tool-only turns (no text part) are dropped — see `_turn_text`.
-    """
-    turns = []
-    for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
-        for part in event.get("payload", []):
-            conv = part.get("conversational")
-            if not conv:
-                continue
-            text = _turn_text(conv.get("content", {}).get("text", ""))
-            if text is None:
-                continue  # tool-use/tool-result turn — not conversational display
-            turns.append(
-                {
-                    "role": conv.get("role"),
-                    "text": text[:4000],
-                    "at": _event_iso(event.get("eventTimestamp")),
-                }
-            )
-    return turns
-
-
 NOT_PLATFORM_SESSION = {"available": False, "reason": "not_platform_session"}
 
 
-def _experiment_for_session(
-    db: Session, workspace_id: str, session_id: str
-) -> Experiment | None:
-    """The experiment whose gateway traffic minted this session id, if still
-    recorded. Stepwise re-runs OVERWRITE artifacts["traffic"], so a miss means
-    "not attributable", never "not experiment traffic" — labeling only."""
+def _eval_content_log_group(agent: Agent, workspace: WorkspaceContext) -> str | None:
+    """The log group holding an agent's otel-rt-logs content records, or None.
+
+    CN: every evaluable method is a Runtime (the self-built 方式B harness included), so
+    the group is the runtime's own; a discovered or undeployed agent degrades to None.
+    """
+    # local import — the evaluation service sits above this module
+    from app.evaluation.service import EVAL_SUPPORTED_METHODS
+
+    if not agent.resource_id or agent.method not in EVAL_SUPPORTED_METHODS:
+        return None
+    return f"{RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-DEFAULT"
+
+
+def replay_run_of(db: Session, workspace_id: str | None, session_id: str) -> Any:
+    """The evaluation run that replayed `session_id` — a dataset scenario's pre-assigned
+    session, a key of the run's `scenario_map` — or None (N17-obs432). An id only listed
+    in `session_ids` (an explicit-session run scores a session someone else drove) is not
+    the run's. The newest run wins should two ever claim one id."""
+    # local import — the evaluation package sits above this module
+    from app.evaluation.models import EvalRun
+
     rows = (
-        db.query(Experiment)
-        .filter(Experiment.workspace_id == workspace_id)
-        .order_by(Experiment.created_at.desc())
-        .limit(200)
+        db.query(EvalRun)
+        .filter(
+            EvalRun.workspace_id == workspace_id,
+            cast(EvalRun.scenario_map, String).contains(f'"{session_id}"', autoescape=True),
+        )
+        .order_by(EvalRun.created_at.desc())
         .all()
     )
-    for experiment in rows:
-        traffic = (experiment.artifacts or {}).get("traffic")
-        if isinstance(traffic, dict) and session_id in (traffic.get("session_ids") or []):
-            return experiment
-    return None
+    return next((run for run in rows if session_id in (run.scenario_map or {})), None)
 
 
 def _external_transcript(
-    db: Session, session_id: str, workspace: WorkspaceContext, agent: Agent | None
+    db: Session,
+    session_id: str,
+    workspace: WorkspaceContext,
+    agent: Agent | None,
+    started_at: datetime | None = None,
+    viewer: Viewer = Viewer.ALL,
+    records_guard: RecordsGuard | None = None,
 ) -> dict[str, Any]:
-    """Transcript for a session that is in NO platform ledger — experiment
-    gateway traffic, a `/v1` caller, or any other direct runtime invoke.
+    """Transcript for a session that is in NO platform ledger — a `/v1` caller, or
+    any other direct runtime invoke.
 
     Memory has no "which actor owns this session" lookup, so probe a bounded
     candidate set: the traced agent's scoped actors first (unambiguous), then
     the bare "default" actor that the gateway→runtime hop leaves in place.
+    Nothing in Memory (an agent with memory disabled, no backend registered) and
+    the session's start known: the agent's runtime content logs, the same records
+    the evaluation worker reads (upstream #287).
+
+    A session an evaluation run replayed (`replay_run_of`, N17-obs432) is the platform's
+    own: the run names the agent it drove and, absent the caller's first-span time, the
+    content-log start (its creation — the replay follows it); `source` is then `eval`
+    with the run's id. Only a run `viewer` may see is used. The turns are always the
+    agent's own records — never the dataset's expected answers.
     """
-    try:
-        candidates = (
-            memory.list_actor_ids(workspace, prefix=f"{agent.id}{memory.SCOPE_SEP}")
-            if agent is not None
-            else []
-        )
-        candidates.append("default")
-        for actor_id in candidates:
-            turns = _turns_from_events(
-                memory.list_events(workspace, actor_id, session_id, 100)
-            )
-            if not turns:
-                continue
-            experiment = _experiment_for_session(db, workspace.id, session_id)
-            return {
-                "available": True,
-                "actor_id": actor_id,
-                "agent_id": agent.id if agent else None,
-                "agent_name": agent.name if agent else None,
-                "source": "experiment" if experiment else "external",
-                "origin": "memory",
-                "run_id": None,
-                "experiment_id": experiment.id if experiment else None,
-                "experiment_name": experiment.name if experiment else None,
-                "turns": turns,
-                # Long-term namespaces are keyed on the actor alone, and these
-                # actors are shared across agents/runs — the count would say
-                # nothing about this session (same reason eval skips it).
-                "long_term_records": None,
-            }
-    except Exception:
-        # Memory unreachable / not bootstrapped: this session was already
-        # unattributable, so degrade to the plain empty state.
+    run = replay_run_of(db, workspace.id, session_id)
+    if run is not None and not visibility.sees(viewer, db, run.created_by):
+        run = None
+    if run is not None:
+        run_agent = db.get(Agent, run.agent_id) if run.agent_id else None
+        if run_agent is not None and run_agent.workspace_id == workspace.id:
+            agent = run_agent
+        started_at = started_at or run.created_at
+    turns: list[dict[str, Any]] = []
+    actor_id: str | None = None
+    origin = "memory"
+    backend = memory_backend.backend_or_none()
+    if backend is not None:
+        try:
+            candidates: list[str] = []
+            if agent is not None:
+                prefix = f"{agent.id}{memory_backend.SCOPE_SEP}"
+                page = backend.list_actors(workspace)
+                candidates = [
+                    str(item.get("actor_id") or "")
+                    for item in page.get("items") or []
+                    if str(item.get("actor_id") or "").startswith(prefix)
+                ]
+            candidates.append("default")
+            for candidate in candidates:
+                page = backend.list_events(workspace, candidate, session_id, True, None, 100)
+                turns = _turns_from_events(page.get("items") or [])
+                if turns:
+                    actor_id = candidate
+                    break
+        except Exception:
+            # Memory unreachable / not bootstrapped: the session was already
+            # unattributable — only the content logs below can still say something.
+            turns = []
+    if not turns and agent is not None and started_at is not None:
+        try:
+            log_group = _eval_content_log_group(agent, workspace)
+            if log_group:
+                turns = eval_turns_from_content_logs(
+                    log_group, session_id, started_at, workspace,
+                    **({"records_guard": records_guard} if records_guard is not None else {}),
+                )
+                origin = "logs"
+        except AppError as exc:
+            if exc.code == "observability.session_not_found":
+                raise
+            turns = []
+        except Exception:
+            turns = []
+    if not turns:
+        if backend is None:
+            return {**NOT_PLATFORM_SESSION, "reason": "memory backend not registered"}
         return dict(NOT_PLATFORM_SESSION)
-    return dict(NOT_PLATFORM_SESSION)
+    return {
+        "available": True,
+        "actor_id": actor_id,
+        "agent_id": agent.id if agent else None,
+        "agent_name": agent.name if agent else None,
+        "source": "eval" if run is not None else "external",
+        "origin": origin,
+        "run_id": run.id if run is not None else None,
+        "turns": turns,
+        # Long-term namespaces are keyed on the actor alone, and these
+        # actors are shared across agents/runs — the count would say
+        # nothing about this session (same reason eval skips it).
+        "long_term_records": None,
+    }
 
 
 def session_transcript(
@@ -1803,7 +1991,17 @@ def session_transcript(
     session_id: str,
     workspace: WorkspaceContext,
     agent: Agent | None = None,
+    *,
+    started_at: datetime | None = None,
+    long_term: bool = True,
+    viewer: Viewer = Viewer.ALL,
+    records_guard: RecordsGuard | None = None,
 ) -> dict[str, Any]:
+    """`started_at` — the session's first span — lets a session no ledger row
+    claims fall back to the agent's content logs; `long_term=False` skips the
+    chat session's long-term record count (two Memory reads a preview row does
+    not show). Upstream #287. `viewer` gates the evaluation run a replayed session
+    is read through (N17-obs432)."""
     row = (
         db.query(ChatSession)
         .filter(
@@ -1812,88 +2010,72 @@ def session_transcript(
         )
         .first()
     )
-    run = None if row else _eval_run_for_session(db, workspace.id, session_id)
-    if row is None and run is None:
-        # Not chat, not eval — try memory directly (`agent` comes from the
+    if row is None:
+        # Not a chat session — try memory directly (`agent` comes from the
         # session's traces, which is the only agent signal such sessions carry).
-        return _external_transcript(db, session_id, workspace, agent)
-    if row is not None:
-        agent = db.get(Agent, row.agent_id)
-        # Memory is written under an agent-scoped actor (memory.scoped_actor);
-        # the ledger stores the bare human actor, so re-scope for the read.
-        mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
-        agent_id, actor_display = row.agent_id, row.actor_id
-    else:
-        # Eval-run sessions: replays pass the BARE "default" actor straight to
-        # the runtime — harness runtimes persist the conversation under it
-        # (runtime-backed agents write no memory events, so turns come back
-        # empty for them).
-        agent = db.get(Agent, run.agent_id)
-        mem_actor = "default"
-        agent_id, actor_display = run.agent_id, mem_actor
+        return _external_transcript(db, session_id, workspace, agent, started_at, viewer,
+                                    records_guard=records_guard)
+    agent = db.get(Agent, row.agent_id)
+    # Memory is written under an agent-scoped actor (memory_backend.scoped_actor);
+    # the ledger stores the bare human actor, so re-scope for the read.
+    mem_actor = memory_backend.scoped_actor(row.agent_id, row.actor_id)
+    agent_id, actor_display = row.agent_id, row.actor_id
     memory_error: Exception | None = None
     events: list[dict[str, Any]] = []
     # an agent whose spec pins its own memory writes its turns there — read only
-    # from a memory this workspace manages (issue #55)
-    mem_override: str | None = None
+    # from a memory this workspace manages (issue #55); a foreign pin refuses the read
     try:
-        mem_override = memory_ownership.readable_spec_memory_id(
-            db, workspace, agent.spec if agent else None
-        )
+        memory_ownership.readable_spec_memory_id(db, workspace, agent.spec if agent else None)
         readable = True
     except AppError as exc:
         memory_error, readable = exc, False
+    backend = memory_backend.backend_or_none()
+    if readable and backend is None:
+        readable = False
+        memory_error = RuntimeError("memory backend not registered")
     if readable:
         try:
-            events = memory.list_events(
-                workspace, mem_actor, session_id, max_results=100, memory_id=mem_override
-            )
+            # A spec-pinned store is the backend's concern: the N6 backend resolves
+            # the agent's store from the scoped actor it indexes.
+            page = backend.list_events(workspace, mem_actor, session_id, True, None, 100)
+            events = page.get("items") or []
         except Exception as exc:
-            memory_error = exc  # chat may fall back to its ledger; eval to content logs
+            memory_error = exc  # chat may fall back to its ledger
     turns = _turns_from_events(events)
     origin = "memory"
-    if row is not None:
-        ledger_turns = _chat_ledger_turns(db, workspace.id, row.agent_id, session_id)
-        memory_signature = [(turn["role"], turn["text"]) for turn in turns]
-        ledger_signature = [(turn["role"], turn["text"]) for turn in ledger_turns]
-        if ledger_turns and ledger_signature != memory_signature:
-            # ChatMessage is the exact rendered conversation. Reconcile from it
-            # when eventual consistency or actor drift leaves Memory incomplete.
-            turns = ledger_turns
-            origin = "ledger"
-        elif memory_error is not None:
-            return {
-                "available": False,
-                "reason": "memory_unavailable",
-                "detail": f"{type(memory_error).__name__}: {memory_error}"[:200],
-                "actor_id": actor_display,
-            }
-
-    # Runtime-backed agents (and harnesses with memory disabled) write no memory
-    # events during eval runs — rebuild the conversation from the runtime's OTEL
-    # content logs instead.
-    if not turns and run is not None and agent is not None:
-        log_group = _eval_content_log_group(agent, workspace)
-        if log_group:
-            turns = eval_turns_from_content_logs(
-                log_group, session_id, run.created_at, workspace
-            )
-            if turns:
-                origin = "logs"
-    # Long-term records only make sense for chat sessions — eval traffic all
-    # shares the bare "default" actor, so its namespaces aggregate across
-    # every agent's runs and say nothing about this session.
-    long_term = None
-    if row is not None and readable:
+    ledger_turns = _chat_ledger_turns(db, workspace.id, row.agent_id, session_id)
+    memory_signature = [(turn["role"], turn["text"]) for turn in turns]
+    ledger_signature = [(turn["role"], turn["text"]) for turn in ledger_turns]
+    if ledger_turns and ledger_signature != memory_signature:
+        # ChatMessage is the exact rendered conversation. Reconcile from it
+        # when eventual consistency or actor drift leaves Memory incomplete.
+        turns = ledger_turns
+        origin = "ledger"
+    elif memory_error is not None:
+        return {
+            "available": False,
+            "reason": (
+                "memory backend not registered" if backend is None else "memory_unavailable"
+            ),
+            "detail": f"{type(memory_error).__name__}: {memory_error}"[:200],
+            "actor_id": actor_display,
+        }
+    elif ledger_turns:
+        # same conversation in Memory and in the ledger: Memory does not carry the
+        # N-SCN-bug4 `truncated` marker, so the ledger's flags ride along positionally
+        for turn, ledger_turn in zip(turns, ledger_turns, strict=True):
+            if ledger_turn.get("truncated"):
+                turn["truncated"] = True
+    # Long-term records only make sense when Memory is actually readable here.
+    long_term_records = None
+    if readable and long_term:
         try:
-            long_term = sum(
+            long_term_records = sum(
                 len(
-                    memory.list_records(
-                        workspace,
-                        f"{ns}/{mem_actor}",
-                        max_results=20,
-                        memory_id=mem_override,
-                    )
+                    backend.list_records(
+                        workspace, f"{ns}/{mem_actor}", None, None, 20
+                    ).get("items")
+                    or []
                 )
                 for ns in ("/preferences", "/facts")
             )
@@ -1903,69 +2085,189 @@ def session_transcript(
         "available": True,
         "actor_id": actor_display,
         "agent_id": agent_id,
-        "agent_name": agent.name if agent else (run.agent_name if run else None),
-        "source": "chat" if row else "eval",
+        "agent_name": agent.name if agent else None,
+        "source": "chat",
         "origin": origin,
-        "run_id": run.id if run else None,
+        "run_id": None,
         "turns": turns,
-        "long_term_records": long_term,
+        "long_term_records": long_term_records,
     }
 
 
-# ── On-demand session scoring (data-plane Evaluate) ────────────────────────
+# ── Session previews (the task wizard's trajectory picker, upstream #287) ────
+
+MAX_PREVIEW_SESSIONS = 20
+PREVIEW_WORKERS = 8
+PREVIEW_TEXT_CAP = 600
 
 
-def fetch_session_spans(
-    session_id: str, hours: int, *, logs: Any = None,
-    workspace: WorkspaceContext | None = None,
-) -> list[dict[str, Any]]:
-    """The session's raw span documents, parsed from ``@message``.
+def session_transcripts(
+    sessions: dict[str, datetime | None],
+    workspace: WorkspaceContext,
+    agent_id: str | None = None,
+    viewer: Viewer = Viewer.ALL,
+    records_guard: RecordsGuard | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Each session's transcript (no long-term count), read in parallel.
 
-    Rows whose message is not a JSON object (structured log lines, stdout that
-    shares a unified log group) are skipped — Evaluate accepts span documents
-    only.
+    `sessions` maps a session id to its first span time (the content-log
+    fallback's start, see `session_transcript`). Same sources as the single
+    read — chat ledger, Memory, content logs — one worker per session with its
+    own DB session (a SQLAlchemy Session is not thread-safe). `agent_id`
+    attributes sessions no ledger row claims; another workspace's id is dropped.
+    One session's failed read degrades to an unavailable transcript, never
+    fails the batch.
     """
-    rows = run_insights_queries(
-        {"spans": q_session_spans(session_id)}, hours, logs=logs, workspace=workspace
-    )["spans"]
-    spans: list[dict[str, Any]] = []
-    for row in rows:
-        raw = row.get("@message")
-        if not raw:
-            continue
+    def one(session_id: str) -> dict[str, Any]:
+        db = SessionLocal()
         try:
-            doc = json.loads(raw)
+            agent = db.get(Agent, agent_id) if agent_id else None
+            if agent is not None and agent.workspace_id != workspace.id:
+                agent = None
+            return session_transcript(
+                db, session_id, workspace, agent=agent,
+                started_at=sessions[session_id], long_term=False, viewer=viewer,
+                records_guard=records_guard,
+            )
+        except AppError as exc:
+            return {"available": False, "reason": "not_found"
+                    if exc.code == "observability.session_not_found" else "read_failed"}
+        except Exception:
+            return {"available": False, "reason": "read_failed"}
+        finally:
+            db.close()
+
+    ids = list(sessions)
+    if not ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(PREVIEW_WORKERS, len(ids))) as pool:
+        return dict(zip(ids, pool.map(one, ids), strict=True))
+
+
+def transcript_preview(session_id: str, transcript: dict[str, Any]) -> dict[str, Any]:
+    """One picker row: the first user input and the last agent reply (a thread
+    list's "first input / last output"), clipped, plus the user-turn count."""
+    turns = (transcript.get("turns") or []) if transcript.get("available") else []
+
+    def texts(role: str) -> list[str]:
+        return [
+            str(turn.get("text") or "").strip()
+            for turn in turns
+            if str(turn.get("role") or "").lower() == role and str(turn.get("text") or "").strip()
+        ]
+
+    inputs, replies = texts("user"), texts("assistant")
+    reason = None
+    if not inputs and not replies:
+        reason = transcript.get("reason") or "no_turns"
+    return {
+        "session_id": session_id,
+        "available": reason is None,
+        "reason": reason,
+        "input": inputs[0][:PREVIEW_TEXT_CAP] if inputs else None,
+        "output": replies[-1][:PREVIEW_TEXT_CAP] if replies else None,
+        "user_turns": len(inputs),
+    }
+
+
+# ─── SCORE NOW (N12 E1-5): one session scored synchronously on the evaluation engine ────
+def session_log_groups(
+    session_id: str, hours: int, *, workspace: WorkspaceContext, logs: Any = None,
+) -> tuple[list[str], int]:
+    """(log groups the session's spans live in, span record count) — the runtime group(s)
+    the records name (``resource.attributes.aws.log.group.names``) plus ``aws/spans`` when
+    Transaction Search is on. Empty when no span of the session landed in the range."""
+    _require(SESSION_ID_RE, session_id, "session id")
+    sid = json.dumps(session_id)
+    query = (
+        f"{_spans_source()}\n"
+        f"| filter attributes.session.id = {sid}\n"
+        "| stats count(*) as records by resource.attributes.aws.log.group.names as log_group"
+    )
+    rows = run_insights_queries({"groups": query}, hours, logs=logs, workspace=workspace)["groups"]
+    groups: list[str] = []
+    count = 0
+    for row in rows:
+        try:
+            count += int(float(row.get("records") or 0))
         except (TypeError, ValueError):
-            continue
-        if isinstance(doc, dict):
-            spans.append(doc)
-    return spans
+            pass
+        group = str(row.get("log_group") or "").strip()
+        if group and group not in groups:
+            groups.append(group)
+    if not groups:
+        return [], count
+    runtime_groups = sorted(g for g in groups if g != SPANS_LOG_GROUP)
+    if get_settings().observability_spans_source == "runtime_logs":
+        return runtime_groups or groups, count
+    return runtime_groups + [SPANS_LOG_GROUP], count
+
+
+def _ondemand_tokens(usage: Any) -> dict[str, int | None] | None:
+    if not isinstance(usage, dict):
+        return None
+    return {"input": usage.get("inputTokens"), "output": usage.get("outputTokens"),
+            "total": usage.get("totalTokens")}
+
+
+def _ondemand_result(record: dict[str, Any], workspace: WorkspaceContext) -> dict[str, Any]:
+    """The console's stable SCORE NOW row (the baseline ``normalize_result`` keys)."""
+    evaluator_id = str(record.get("evaluator_id"))
+    trace_id = record.get("trace_id")
+    return {
+        "evaluator_id": evaluator_id,
+        "evaluator_name": evaluator_id.split(".", 1)[-1] if evaluator_id.startswith("Builtin.")
+        else evaluator_id,
+        "evaluator_arn": workspace.arn("bedrock-agentcore", f"evaluator/{evaluator_id}"),
+        "value": record.get("score"),
+        "label": record.get("label"),
+        "explanation": record.get("explanation"),
+        "span_context": {"traceId": trace_id} if trace_id else None,
+        # P8.3: the unit's judge tokens in the console's {input, output, total} shape | null
+        "token_usage": _ondemand_tokens(record.get("token_usage")),
+        "error_code": record.get("error_type"),
+        "error_message": record.get("error_message"),
+    }
 
 
 def evaluate_session(
     session_id: str, range_key: str, evaluator_ids: list[str],
-    workspace: WorkspaceContext, *, logs: Any = None, data: Any = None,
+    workspace: WorkspaceContext, *, logs: Any = None, engine: Any = None,
+    records_guard: RecordsGuard | None = None,
+    source_session_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Score one session synchronously with each evaluator via ``Evaluate``.
+    """Score one session synchronously with each evaluator on the evaluation engine.
 
-    Not cached and not persisted: every call re-reads the spans and re-runs the
-    judges (one model inference per evaluator). A result carrying
-    ``errorCode`` is returned as an error row; an AWS ``ClientError`` from
-    ``Evaluate`` (e.g. ``ValidationException`` on unsupported spans) propagates
-    to the shared 4xx envelope handler.
+    Not cached and not persisted (``persist=False``): every call re-reads the spans and
+    re-runs the judges. A failed judgement is returned as an error row; an unknown
+    evaluator is 422; a judge whose prompt reads ground truth is refused (a live session
+    carries none); no spans yet → 409 ``observability.session_spans_missing``.
     """
+    from app.evaluation import engine as engine_slot
+    from app.evaluation import evaluators_local
+    from app.evaluation.managed import managed_reference_gap
+
     hours = RANGE_HOURS[range_key]
     ids = list(dict.fromkeys(evaluator_ids))  # de-dupe, keep order
-    # a managed code evaluator whose rules read reference inputs cannot score a live
-    # session (no ground truth here) — refused before any span read or Evaluate call
-    from app.assistant.evaluation_assets import managed_reference_gap
-    from app.core.db import SessionLocal
-
-    _db = SessionLocal()
+    if not ids or len(ids) > MAX_ON_DEMAND_EVALUATORS:
+        raise AppError(
+            "observability.too_many_evaluators",
+            f"choose between 1 and {MAX_ON_DEMAND_EVALUATORS} evaluators",
+            status_code=422,
+        )
+    db = SessionLocal()
     try:
-        gap = managed_reference_gap(_db, getattr(workspace, "id", None), ids, set())
+        gap = managed_reference_gap(db, getattr(workspace, "id", None), ids, set())
+        definitions = evaluators_local.resolve_definitions(db, workspace, ids)
     finally:
-        _db.close()
+        db.close()
+    # a judge whose prompt reads ground truth cannot score a live session (no reference
+    # here) — refused before any span read or judge call
+    for definition in definitions:
+        placeholders = evaluators_local.ground_truth_placeholders(
+            str(definition.get("instructions") or ""))
+        if placeholders:
+            gap.setdefault(str(definition["id"]), []).extend(placeholders)
     if gap:
         raise AppError(
             "observability.evaluator_needs_ground_truth",
@@ -1973,14 +2275,21 @@ def evaluate_session(
             + " — a live session carries no such reference; run it on its Dataset instead",
             {"evaluators": gap}, status_code=422,
         )
-    if not ids or len(ids) > MAX_ON_DEMAND_EVALUATORS:
-        raise AppError(
-            "observability.too_many_evaluators",
-            f"choose between 1 and {MAX_ON_DEMAND_EVALUATORS} evaluators",
-            status_code=422,
-        )
-    spans = fetch_session_spans(session_id, hours, logs=logs, workspace=workspace)
-    if not spans:
+    # Internal, server-resolved sources only; never supplied by the HTTP body.
+    # Score each real runtime trajectory independently, retaining the logical
+    # conversation as owner_id. Never rewrite raw session identities or combine
+    # different principals into a synthetic trajectory.
+    sources = list(dict.fromkeys(source_session_ids or [session_id]))
+    log_groups: list[str] = []
+    span_count = 0
+    active_sources: list[str] = []
+    for source_id in sources:
+        groups, count = session_log_groups(source_id, hours, workspace=workspace, logs=logs)
+        if groups:
+            active_sources.append(source_id)
+            log_groups.extend(group for group in groups if group not in log_groups)
+            span_count += count
+    if not log_groups:
         raise AppError(
             "observability.session_spans_missing",
             f"no span records found for session {session_id} in the last {range_key}",
@@ -1994,28 +2303,39 @@ def evaluate_session(
             },
             status_code=409,
         )
-    client = data if data is not None else data_client(workspace)
-    results: list[dict[str, Any]] = []
-    for evaluator_id in ids:
-        raw_results = agentcore_evaluation.evaluate_session_spans(
-            client, evaluator_id=evaluator_id, spans=spans
-        )
-        if not raw_results:
-            results.append(
-                agentcore_evaluation.normalize_result(
-                    {"errorCode": "NoResult",
-                     "errorMessage": "Evaluate returned no result for this evaluator"},
-                    evaluator_id=evaluator_id,
-                )
-            )
-            continue
-        results.extend(
-            agentcore_evaluation.normalize_result(r, evaluator_id=evaluator_id)
-            for r in raw_results
-        )
+    engine = engine if engine is not None else engine_slot.get_engine()
+    # eval accuracy item 1: the extraction is reconciled with the chat ledger's answers when
+    # the session is a platform chat session (else the check reads "unverifiable")
+    from app.evaluation.extraction_refs import references_for
+
+    checks: dict[str, dict[str, Any]] = {}
+    records = engine.evaluate_sessions(
+        workspace, source="ondemand", owner_id=session_id, session_ids=active_sources,
+        log_groups=log_groups, evaluator_ids=ids, ground_truth=None, judge_model_id=None,
+        stop=None, progress=None, persist=False,
+        references=references_for(getattr(workspace, "id", None), active_sources),
+        on_check=checks.__setitem__,
+        **({"records_guard": records_guard} if records_guard is not None else {}),
+    )
+    results = [_ondemand_result(record, workspace) for record in records]
+    if source_session_ids is not None:
+        for result, record in zip(results, records, strict=True):
+            result["span_context"] = {
+                **(result["span_context"] or {}), "sessionId": record.get("session_id"),
+            }
     return {
         "session_id": session_id,
         "range": range_key,
-        "span_count": len(spans),
+        "span_count": span_count,
         "results": results,
+        # additive: {status: ok|mismatch|unverifiable, source, turns_checked, mismatches[],
+        # mismatch_count, anomalies}; null when the session's data could not be extracted
+        "extraction_check": (checks.get(active_sources[0]) if len(active_sources) == 1
+                             else None),
+        **({
+            "source_session_ids": active_sources,
+            # Preserve individual checks rather than inventing a combined score or
+            # applying the complete chat ledger to each partial runtime trajectory.
+            "extraction_checks": {sid: checks.get(sid) for sid in active_sources},
+        } if source_session_ids is not None else {}),
     }

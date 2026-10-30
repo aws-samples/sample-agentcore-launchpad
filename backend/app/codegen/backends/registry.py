@@ -2,18 +2,17 @@
 
 Ported from strands_studio_ui ``backend/codegen/backends/registry.py``
 (origin/main); only the import paths changed (``codegen`` -> ``app.codegen``).
-Future backends (Codex / Kiro) add one module + one entry here; the service
-layer stays unchanged.
+Add a backend with one module + one entry here; the service layer stays
+unchanged.
 """
 
 
 from app.codegen import config
 from app.codegen.backends.base import CodingAgentBackend
-from app.codegen.backends.claude_sdk import ClaudeSdkBackend
+from app.codegen.backends.kimi import KimiBackend
 
 _BACKENDS: dict[str, type[CodingAgentBackend]] = {
-    "claude": ClaudeSdkBackend,
-    # future: "codex": CodexBackend, "kiro": KiroBackend
+    "kimi": KimiBackend,
 }
 
 

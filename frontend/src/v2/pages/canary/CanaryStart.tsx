@@ -3,15 +3,19 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage } from "../../../lib/api";
+import { capabilityReasonText } from "../../../lib/capability-reason";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
-import { versionOptions } from "./common";
-import { RampPlan } from "./RampPlan";
+import { CanaryEvaluatorFields } from "./CanaryEvaluators";
+import { canaryEligible, readCanarySeed, sessionsPerArm } from "./common";
+import { useCanaryEvaluators } from "./evaluatorChoice";
 
 /**
  * 新建金丝雀: the champion agent and the candidate edit (system prompt, plus the
- * code for a Studio agent). `champion=` / `sourceExp=` carry an experiment's
- * promote hand-off; picking another agent drops the source experiment.
+ * code for a Studio agent), and the evaluators both versions are scored by plus the
+ * primary evaluator that decides the verdict (N12-obs46). `champion=` preselects the agent;
+ * `rec=` names the prompt recommendation whose 「用金丝雀验证」 opened the page (N17-obs309) —
+ * its prompt seeds the candidate once for that champion and stays editable.
  */
 export function CanaryStart() {
   const { t } = useTranslation();
@@ -20,14 +24,24 @@ export function CanaryStart() {
   const handoffChampion = params.get("champion") ?? "";
   const agentsLoad = useLoad(() => api.listAgents(), "agents");
   const active = useMemo(() => (agentsLoad.data?.agents ?? []).filter((a) => a.status === "active"), [agentsLoad.data]);
-  const eligible = active.filter((a) => a.canary_capability.eligible);
-  const unsupported = active.filter((a) => !a.canary_capability.eligible);
+  const eligible = active.filter(canaryEligible);
+  const unsupported = active.filter((a) => !canaryEligible(a));
+  const [handoffPrompt] = useState(() => readCanarySeed(params.get("rec")));
+  // picking another champion drops the hand-off (picking it back re-reads its spec)
+  const [leftHandoff, setLeftHandoff] = useState(false);
   const [agentId, setAgentId] = useState(handoffChampion);
-  const [sourceExp, setSourceExp] = useState(params.get("sourceExp") ?? "");
   const [prompt, setPrompt] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const evaluators = useCanaryEvaluators();
+  // R3-d: the experiment design — the planned sessions per arm, shown before start
+  const [design, setDesign] = useState({ mde: "0.2", sd: "0.3", alpha: "0.05", power: "0.8" });
+  const designInput = {
+    mde: Number(design.mde), sd: Number(design.sd), alpha: Number(design.alpha),
+    power: Number(design.power),
+  };
+  const plannedN = sessionsPerArm(designInput);
 
   // default to the first eligible agent once the list is in (a hand-off keeps its champion)
   useEffect(() => {
@@ -36,34 +50,19 @@ export function CanaryStart() {
 
   const agent = active.find((a) => a.id === agentId) ?? null;
   const isStudio = agent?.method === "studio";
-  // a Harness canary A/Bs two existing versions: control (any earlier) vs the latest
-  const isHarness = agent?.method === "harness";
-  const versionsLoad = useLoad(
-    () => (isHarness && agentId ? api.agentVersions(agentId) : Promise.resolve(null)),
-    `canary-versions:${isHarness ? agentId : ""}`,
-  );
-  const versions = useMemo(
-    () => [...new Set((versionsLoad.data?.versions ?? []).map((v) => v.version).filter((v): v is string => !!v))]
-      .sort((a, b) => Number(a) - Number(b)),
-    [versionsLoad.data],
-  );
-  const latest = versions[versions.length - 1] ?? "";
-  const earlier = versions.filter((v) => v !== latest);
-  const [control, setControl] = useState("");
-  const [runFirst, setRunFirst] = useState(true);
-  useEffect(() => {
-    setControl((prev) => (earlier.includes(prev) ? prev : (earlier[0] ?? "")));
-  }, [earlier.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   // the candidate starts from the champion's current spec; switching agents re-seeds it
   useEffect(() => {
     const spec = (agent?.spec ?? {}) as { system_prompt?: unknown; code?: unknown };
-    setPrompt(typeof spec.system_prompt === "string" ? spec.system_prompt : "");
+    if (agent && handoffPrompt !== null && !leftHandoff && agent.id === handoffChampion) {
+      setPrompt(handoffPrompt);
+    } else {
+      setPrompt(typeof spec.system_prompt === "string" ? spec.system_prompt : "");
+    }
     setCode(typeof spec.code === "string" ? spec.code : "");
-  }, [agent]);
+  }, [agent, handoffChampion, handoffPrompt, leftHandoff]);
 
-  const hasEdit = isHarness ? !!control && !!latest : !!prompt.trim() || (isStudio && !!code.trim());
-  const reason = (a: (typeof active)[number]) =>
-    a.canary_capability.reason_code ? t(`canaryPage.reason.${a.canary_capability.reason_code}`) : a.canary_capability.reason;
+  const hasEdit = !!prompt.trim() || (isStudio && !!code.trim());
+  const reason = (a: (typeof active)[number]) => capabilityReasonText(t, "canaryPage", a.canary_capability);
 
   const create = async () => {
     setError(null);
@@ -72,11 +71,9 @@ export function CanaryStart() {
       const candidate: { system_prompt?: string; code?: string } = {};
       if (prompt.trim()) candidate.system_prompt = prompt;
       if (isStudio && code.trim()) candidate.code = code;
-      const row = await api.createRuntimeCanary(
-        isHarness
-          ? { agent_id: agentId, harness_versions: { control, treatment: latest }, start_stage: runFirst ? 0 : 1 }
-          : { agent_id: agentId, candidate, ...(sourceExp ? { source_experiment_id: sourceExp } : {}) },
-      );
+      const row = await api.createRuntimeCanary({
+        agent_id: agentId, candidate, ...evaluators.body, design: designInput,
+      });
       toast("success", t("v2.canary.created", { name: row.name }));
       setParams({ mode: "canary", canary: row.id });
     } catch (err) {
@@ -92,13 +89,18 @@ export function CanaryStart() {
         title={t("canaryPage.create")}
         onBack={() => setParams({ mode: "canary" })}
         end={
-          <Button kind="primary" disabled={busy || !agentId || !hasEdit} onClick={() => void create()} testId="v2-canary-create">
+          <Button
+            kind="primary"
+            disabled={busy || !agentId || !hasEdit || evaluators.selected.length === 0
+              || plannedN === null}
+            onClick={() => void create()}
+            testId="v2-canary-create"
+          >
             {t("canaryPage.create")}
           </Button>
         }
       />
       <Alert>{t("canaryPage.createHint")}</Alert>
-      {sourceExp && <Alert tone="success">{t("canaryPage.handoffSource", { id: sourceExp })}</Alert>}
       {error && <Alert tone="error">{error}</Alert>}
       <Card title={t("v2.canary.championTitle")}>
         <div className="v2-form">
@@ -106,8 +108,8 @@ export function CanaryStart() {
             <Select
               value={agentId}
               onChange={(v) => {
+                if (v !== agentId) setLeftHandoff(true);
                 setAgentId(v);
-                if (sourceExp && v !== handoffChampion) setSourceExp("");
               }}
               testId="v2-canary-agent"
               placeholder={t("canaryPage.pickAgent")}
@@ -119,25 +121,6 @@ export function CanaryStart() {
           </Field>
         </div>
       </Card>
-      {isHarness ? (
-        <Card title={t("v2.canary.candidateTitle")} sub={t("assistantNext.canary.body")}>
-          <div className="v2-form">
-            {versionsLoad.error && <Alert tone="error">{versionsLoad.error}</Alert>}
-            {!versionsLoad.loading && versions.length < 2 && <Alert tone="warn">{t("assistantNext.canary.needsTwoVersions")}</Alert>}
-            <Field label={t("assistantNext.canary.control")} required>
-              <Select
-                value={control}
-                options={versionOptions(earlier, t("assistantNext.canary.firstSuffix"))}
-                disabled={earlier.length === 0}
-                onChange={setControl}
-                testId="v2-canary-control-version"
-              />
-            </Field>
-            <span className="v2-muted">{t("assistantNext.canary.treatment", { v: latest || "—" })}</span>
-            <RampPlan runFirst={runFirst} onChange={setRunFirst} />
-          </div>
-        </Card>
-      ) : (
       <Card title={t("v2.canary.candidateTitle")} sub={t("canaryPage.candidateHint")}>
         <div className="v2-form">
           <Field label={t("canaryPage.candidatePrompt")}>
@@ -164,7 +147,45 @@ export function CanaryStart() {
           )}
         </div>
       </Card>
-      )}
+      <Card
+        title={t("v2.canary.eval.title")}
+        sub={t("v2.canary.eval.summary", { evaluators: evaluators.names || "—", primary: evaluators.primaryName })}
+      >
+        <CanaryEvaluatorFields choice={evaluators} disabled={busy} />
+      </Card>
+      <Card title={t("v2.canary.design.title")} sub={t("v2.canary.design.hint")}>
+        <div className="v2-form">
+          {(["mde", "sd", "alpha", "power"] as const).map((key) => (
+            <Field
+              key={key}
+              label={t(`v2.canary.design.${key}`)}
+              hint={key === "mde" || key === "sd" ? t(`v2.canary.design.${key}Hint`) : undefined}
+            >
+              <input
+                className="v2-input"
+                type="number"
+                step={key === "alpha" ? 0.01 : 0.05}
+                min={0}
+                max={1}
+                value={design[key]}
+                onChange={(e) => setDesign((d) => ({ ...d, [key]: e.target.value }))}
+                data-testid={`v2-canary-design-${key}`}
+              />
+            </Field>
+          ))}
+          {plannedN === null ? (
+            <Alert tone="error">{t("v2.canary.design.invalid")}</Alert>
+          ) : (
+            <Alert>
+              <strong data-testid="v2-canary-design-planned">
+                {t("v2.canary.design.planned", { n: plannedN })}
+              </strong>
+              {" · "}
+              {t("v2.canary.design.plannedHint")}
+            </Alert>
+          )}
+        </div>
+      </Card>
     </>
   );
 }

@@ -1,0 +1,13 @@
+diff --git a/frontend/src/v2/pages/Evaluators.tsx b/frontend/src/v2/pages/Evaluators.tsx
+index ee196d77..7a99ef97 100644
+--- a/frontend/src/v2/pages/Evaluators.tsx
++++ b/frontend/src/v2/pages/Evaluators.tsx
+@@ -537,7 +537,7 @@ function EvaluatorEditor({ id }: { id: string | null }) {
+                   className="v2-input mono"
+                   value={draft.lambda_arn}
+                   onChange={(e) => set({ lambda_arn: e.target.value })}
+-                  placeholder="arn:aws:lambda:us-west-2:123456789012:function:my-evaluator"
++                  placeholder="arn:<partition>:lambda:<region>:<account>:function:<name>"
+                 />
+               </Field>
+               <Field label={t("v2.evaluators.timeout")}>

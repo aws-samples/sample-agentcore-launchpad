@@ -1,0 +1,76 @@
+[
+ {
+  "name": "257f17b16cbb-ends_after_tool",
+  "base": "257f17b16cbb",
+  "transform": "ends_after_tool",
+  "why": "the turn dies after its tool calls: the user saw the preamble, never the HR record (G1)",
+  "expected": {
+   "turns": [
+    {
+     "trace_id": "6adb6b831ebaf2d814d705ab06170938",
+     "user_prompt": "我下个月去成都出差 5 天，请问住宿标准是多少？",
+     "answer": "我来帮您查询成都的住宿标准。住宿上限通常与职级和城市分级相关，我先查一下差旅标准和您的职级信息。",
+     "tools": [
+      "kb_search",
+      "launchpad_gw_hr-database___get_employee"
+     ]
+    }
+   ],
+   "console_deviations": []
+  }
+ },
+ {
+  "name": "257f17b16cbb-empty_final",
+  "base": "257f17b16cbb",
+  "transform": "empty_final",
+  "why": "reasoning-only end: the answer is empty, never the preamble (G2)",
+  "expected": {
+   "turns": [
+    {
+     "trace_id": "6adb6b831ebaf2d814d705ab06170938",
+     "user_prompt": "我下个月去成都出差 5 天，请问住宿标准是多少？",
+     "answer": "",
+     "tools": [
+      "kb_search",
+      "launchpad_gw_hr-database___get_employee"
+     ]
+    }
+   ],
+   "console_deviations": [
+    {
+     "turn": 1,
+     "field": "answer",
+     "console": "我来帮您查询成都的住宿标准。住宿上限通常与职级和城市分级相关，我先查一下差旅标准和您的职级信息。",
+     "reason": "console fallback reads replayed history / a tool result when the turn has no end_turn answer (N17-obs315 MT1/G1)"
+    }
+   ]
+  }
+ },
+ {
+  "name": "35f49b824328-collide",
+  "base": "35f49b824328",
+  "transform": "collide",
+  "why": "every turn-2 span id repeats a turn-1 id (snapshot-restored microVM, MT2)",
+  "expected": {
+   "turns": [
+    {
+     "trace_id": "6adb67d83792cf4a691659b869771fff",
+     "user_prompt": "去上海出差住宿标准是多少？",
+     "answer": "上海属于**一线城市**，住宿标准为每晚上限（人民币元，含税），按职级区分：\n\n| 职级 | 上海（一线城市）每晚上限 |\n|---|---|\n| P1 | 450 元 |\n| P2 | 550 元 |\n| P3 | 650 元 |\n| M1 | 800 元 |\n| M2 | 1000 元 |\n\n**需要注意的几点：**\n- 住宿按实际发生金额报销，**不超过上限**；超出部分由员工自理。确需超标的，须在出差前取得部门负责人**书面审批**。\n- 住宿晚数 = 出差天数 − 1。\n- 报销时需提供**增值税发票 + 酒店水单**，发票抬头为 Octank（中国）信息技术有限公司。\n\n如果你告诉我你的职级（或员工编号），我可以帮你确认适用的具体标准，还可以帮你计算整趟出差的住宿额度。\n\n*来源：travel-expense-kb / octank-travel-standard.md（OCT-FIN-TRV-2026，第 2、3 节）*",
+     "tools": [
+      "kb_search"
+     ]
+    },
+    {
+     "trace_id": "6adb67fa60772d8a7d5bb2f824ecbd5a",
+     "user_prompt": "我是 EMP-4096，常驻上海，下周从上海去北京出差 3 天，补贴一共多少？",
+     "answer": "你好，Wei Zhang！查询结果如下：\n\n**你的差旅职级**：HR 系统岗位为 engineer → 对应 **P2**\n\n**补贴计算**（北京为一线城市，出差 3 天，出发与返回当天均计入）：\n\n| 项目 | 标准 | 天数 | 小计 |\n|---|---|---|---|\n| 伙食补贴（P1–P3） | 100 元/天 | 3 | 300 元 |\n| 市内交通补贴（一线城市，所有职级） | 80 元/天 | 3 | 240 元 |\n| **补贴合计** | | | **540 元** |\n\n> 补贴为包干发放，**无需票据**。\n\n**顺带提醒**（不属于补贴，是住宿报销额度）：北京住宿 P2 上限 550 元/晚（含税），出差 3 天可报销住宿晚数 = 3 − 1 = **2 晚**，即住宿额度最高 1100 元，需增值税发票 + 酒店水单。\n\n*来源：travel-expense-kb / octank-travel-standard.md（第 1.1、2、3、4 节）*",
+     "tools": [
+      "launchpad_gw_hr-database___get_employee"
+     ]
+    }
+   ],
+   "console_deviations": []
+  }
+ }
+]

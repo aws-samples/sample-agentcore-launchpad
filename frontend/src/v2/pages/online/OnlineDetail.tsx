@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import {
@@ -13,12 +13,12 @@ import {
   type V2Range,
 } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
-import { evaluatorLabel } from "../../../lib/evaluators";
-import { fmtTime, normalizedScore, RANGES, rangeLabel, scoreTone } from "../../format";
+import { creatorLabel, fmtTime, normalizedScore, RANGES, rangeLabel, scoreTone } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
 import {
   agentLabel,
+  canPauseArm,
   canToggle,
   configName,
   filterText,
@@ -27,6 +27,7 @@ import {
   isTransient,
   modeOf,
   OWNER_TONE,
+  pauseOwner,
   POLL_MS,
   reportActive,
   reportKey,
@@ -35,6 +36,7 @@ import {
 } from "../../online";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../../ResultsView";
 import { rowsFromOnline, summarize } from "../../results";
+import { ScaleLabel } from "../../ScaleLabel";
 import { taskFromOnline } from "../../tasks";
 import {
   Alert,
@@ -51,6 +53,9 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { EvaluatorName } from "../../EvaluatorName";
+import { useMayMutate } from "../../ownership";
+import { awsStatusLabel } from "../../awsStatus";
 
 function Sparkline({ points, evaluatorId }: { points: OnlineEvalResultsPoint[]; evaluatorId: string }) {
   const values = points.map((p) => p.mean).filter((v): v is number => v != null);
@@ -112,7 +117,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
               title: t("v2.evaluators.colName"),
               render: (e: OnlineEvalResultsEvaluator) => (
                 <>
-                  {evaluatorLabel(t, e.evaluator_id)}
+                  <EvaluatorName id={e.evaluator_id} />
                   <span className="sub">{e.level ? t(`v2.level.${e.level}`, { defaultValue: e.level }) : ""}</span>
                 </>
               ),
@@ -147,7 +152,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
                 <div className="v2-tags">
                   {Object.entries(e.labels).map(([label, n]) => (
                     <Tag key={label} tone="outline">
-                      {label} {n}
+                      <ScaleLabel evaluatorId={e.evaluator_id} label={label} /> {n}
                     </Tag>
                   ))}
                 </div>
@@ -170,6 +175,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
           onRetry={results.reload}
           range={range}
           showTask={false}
+          filterable
           exportName={`online-${row.config_id}`}
         />
       </Card>
@@ -200,7 +206,7 @@ function ReportDrawer({ configId, report, onClose }: { configId: string; report:
           <Descriptions
             one
             items={[
-              { label: t("v2.tasks.colStatus"), value: <Tag tone={reportTone(d.status)}>{d.status ?? "—"}</Tag> },
+              { label: t("v2.tasks.colStatus"), value: <Tag tone={reportTone(d.status)} title={d.status ?? undefined}>{awsStatusLabel(t, d.status)}</Tag> },
               { label: t("v2.online.colSessions"), value: d.sessions.total ?? "—" },
               { label: t("v2.online.window"), value: d.time_range ? `${fmtTime(d.time_range.startTime)} → ${fmtTime(d.time_range.endTime)}` : "—" },
             ]}
@@ -314,7 +320,7 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
               return <Tag tone={origin === "console" ? "blue" : origin === "aws_scheduled" ? "green" : "gray"}>{t(`v2.online.origin.${origin}`)}</Tag>;
             },
           },
-          { key: "status", title: t("v2.tasks.colStatus"), render: (r: OnlineEvalReportRow) => <Tag tone={reportTone(r.status)}>{r.status ?? "—"}</Tag> },
+          { key: "status", title: t("v2.tasks.colStatus"), render: (r: OnlineEvalReportRow) => <Tag tone={reportTone(r.status)} title={r.status ?? undefined}>{awsStatusLabel(t, r.status)}</Tag> },
           {
             key: "sessions",
             title: t("v2.online.colSessions"),
@@ -355,6 +361,7 @@ export function OnlineDetail({ id }: { id: string }) {
   const toast = useV2Toast();
   const { can } = useAuth();
   const mayRun = can("eval.run");
+  const mayMutate = useMayMutate(); // N17-obs440: creator-or-admin actions
   const [tick, setTick] = useState(0);
   const config = useLoad(() => api.v2OnlineConfig(id), `online-config:${id}:${tick}`);
   const [confirm, setConfirm] = useState<"pause" | "resume" | "delete" | null>(null);
@@ -400,14 +407,16 @@ export function OnlineDetail({ id }: { id: string }) {
   }
   if (!row) return null;
   const mode = modeOf(row);
+  const ownerLocked = !mayMutate(row);
+  const hint = ownerLocked ? t("v2.common.creatorOnly") : undefined;
 
   return (
     <>
       <FlowHeader
         title={
-          <span className="v2-row">
+          <span className="v2-row" title={row.name ?? row.config_id}>
             {configName(row)}
-            <Tag tone={statusTone(row.status)}>{row.status ?? "—"}</Tag>
+            <Tag tone={statusTone(row.status)} title={row.status ?? undefined}>{awsStatusLabel(t, row.status)}</Tag>
             <Tag tone={row.execution_status === "ENABLED" ? "green" : "gray"} dot>
               {t(`v2.online.exec.${row.execution_status === "ENABLED" ? "on" : "off"}`)}
             </Tag>
@@ -418,24 +427,35 @@ export function OnlineDetail({ id }: { id: string }) {
           <>
             <Button onClick={() => setTick((n) => n + 1)}>{t("v2.common.refresh")}</Button>
             {canToggle(row) && row.execution_status === "ENABLED" && (
-              <Button disabled={busy || transient} onClick={() => setConfirm("pause")}>
+              <Button disabled={busy || transient || ownerLocked} title={hint} onClick={() => setConfirm("pause")}>
+                {t("v2.tasks.pause")}
+              </Button>
+            )}
+            {canPauseArm(row) && (
+              <Button
+                disabled={busy || transient || !mayMutate(pauseOwner(row))}
+                title={mayMutate(pauseOwner(row)) ? undefined : t("v2.common.creatorOnly")}
+                onClick={() => setConfirm("pause")}
+                testId="v2-online-pause-arm"
+              >
                 {t("v2.tasks.pause")}
               </Button>
             )}
             {canToggle(row) && row.execution_status === "DISABLED" && (
-              <Button disabled={busy || transient || !mayRun} onClick={() => setConfirm("resume")}>
+              <Button disabled={busy || transient || !mayRun || ownerLocked} title={hint} onClick={() => setConfirm("resume")}>
                 {t("v2.tasks.resume")}
               </Button>
             )}
             {canToggle(row) && (
-              <Button kind="danger" disabled={busy || row.status === "DELETING" || !mayRun} onClick={() => setConfirm("delete")}>
+              <Button kind="danger" disabled={busy || row.status === "DELETING" || !mayRun || ownerLocked} title={hint} onClick={() => setConfirm("delete")}>
                 {t("v2.common.delete")}
               </Button>
             )}
             {isEditable(row) && (
               <Button
                 kind="primary"
-                disabled={busy || transient || !mayRun}
+                disabled={busy || transient || !mayRun || ownerLocked}
+                title={hint}
                 onClick={() => setParams({ view: "edit", id: row.config_id })}
                 testId="v2-online-edit"
               >
@@ -445,12 +465,13 @@ export function OnlineDetail({ id }: { id: string }) {
           </>
         }
       />
+      {ownerLocked && canToggle(row) && (
+        <Alert testId="v2-online-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(row) })}</Alert>
+      )}
       {row.failure_reason && <Alert tone="error">{row.failure_reason}</Alert>}
       {row.duplicate_enabled && <Alert tone="warn">{t("v2.online.duplicateWarn")}</Alert>}
       {row.owner === "experiment" && (
-        <Alert action={<Link to="/v2/eval/experiments" className="v2-link">{t("v2.online.openExperiments")}</Link>}>
-          {t("v2.online.experimentReadonly")}
-        </Alert>
+        <Alert>{t("v2.online.experimentReadonly")}</Alert>
       )}
       {row.owner === "external" && (
         <Alert>
@@ -460,7 +481,7 @@ export function OnlineDetail({ id }: { id: string }) {
       <Card title={t("v2.taskDetail.overview")} testId="v2-online-overview">
         <Descriptions
           items={[
-            { label: t("v2.tasks.colName"), value: configName(row) },
+            { label: t("v2.tasks.colName"), value: <span title={row.name ?? row.config_id}>{configName(row)}</span> },
             { label: "ID", value: <span className="mono">{row.config_id}</span> },
             { label: t("v2.tasks.colAgent"), value: agentLabel(row) },
             { label: t("v2.online.colOwner"), value: <Tag tone={OWNER_TONE[row.owner]}>{t(`v2.online.owner.${row.owner}`)}</Tag> },
@@ -471,7 +492,7 @@ export function OnlineDetail({ id }: { id: string }) {
                 <div className="v2-tags">
                   {(mode === "insights" ? row.insights : row.evaluators).map((e) => (
                     <Tag key={e} tone="outline">
-                      {mode === "insights" ? insightLabel(t, e) : evaluatorLabel(t, e)}
+                      {mode === "insights" ? insightLabel(t, e) : <EvaluatorName id={e} />}
                     </Tag>
                   ))}
                 </div>
@@ -498,6 +519,7 @@ export function OnlineDetail({ id }: { id: string }) {
             { label: t("v2.online.resultsLogGroup"), value: <span className="mono">{row.results_log_group}</span> },
             { label: t("v2.tasks.colCreated"), value: fmtTime(row.created_at) },
             { label: t("v2.tasks.colUpdated"), value: fmtTime(row.updated_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(row) },
             { label: t("v2.tasks.description"), value: row.description || "—" },
           ]}
         />

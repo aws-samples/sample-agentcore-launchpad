@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import type { MemoryOverview, MemorySibling, MemoryStrategy } from "../../../lib/api";
+import { awsStatusLabel } from "../../awsStatus";
 import { fmtTime } from "../../format";
 import { Button, Card, type Column, Descriptions, Kpi, LinkButton, Table, Tag } from "../../ui";
 import { shortId, statusTone } from "./common";
@@ -30,7 +31,7 @@ export function OverviewTab({ overview, onReload }: { overview: MemoryOverview; 
       title: t("v2.memory.colStatus"),
       render: (s) => (
         <Tag tone={statusTone(s.status)} dot>
-          {s.status ?? "—"}
+          {awsStatusLabel(t, s.status)}
         </Tag>
       ),
     },
@@ -66,7 +67,7 @@ export function OverviewTab({ overview, onReload }: { overview: MemoryOverview; 
       title: t("v2.memory.colStatus"),
       render: (m) => (
         <Tag tone={statusTone(m.status)} dot>
-          {m.status ?? "—"}
+          {awsStatusLabel(t, m.status)}
         </Tag>
       ),
     },
@@ -110,7 +111,7 @@ export function OverviewTab({ overview, onReload }: { overview: MemoryOverview; 
         />
         <Kpi
           label={t("v2.memory.kpi.status")}
-          value={mem.status ?? "—"}
+          value={awsStatusLabel(t, mem.status)}
           tone={statusTone(mem.status) === "red" ? "bad" : statusTone(mem.status) === "green" ? "good" : undefined}
           sub={mem.failure_reason ?? t("memoryPage.overview.statusFoot")}
         />

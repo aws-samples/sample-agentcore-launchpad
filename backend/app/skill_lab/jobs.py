@@ -11,6 +11,7 @@ jobs can be picked up again (`resume_job` — the trainer checkpoints per step).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -26,9 +27,11 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation.queue import EvalRunQueue
+from app.services import creators, visibility
 from app.services.local_exec import kill_process_group
+from app.services.visibility import Viewer
 from app.services.workspace import context_for_workspace
-from app.skill_lab import artifacts, runner, task_assets
+from app.skill_lab import artifacts, runner, task_assets, verdict
 from app.skill_lab import tasksets as taskset_svc
 from app.skill_lab.models import SkillLabJob
 
@@ -58,20 +61,34 @@ def job_out(row: SkillLabJob) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        **creators.fields(row),
     }
 
 
-def get_job(db: Session, workspace_id: str, job_id: str) -> SkillLabJob:
+def _not_found(job_id: str) -> AppError:
+    return AppError("skill_lab.job_not_found", f"job '{job_id}' not found", status_code=404)
+
+
+def get_job(
+    db: Session, workspace_id: str, job_id: str, *, viewer: Viewer = Viewer.ALL
+) -> SkillLabJob:
+    """The job, or 404 — a foreign row and one workspace isolation hides from
+    ``viewer`` read alike. The runner and the startup sweep pass the default."""
     row = db.get(SkillLabJob, job_id)
     if row is None or row.workspace_id != workspace_id:
-        raise AppError("skill_lab.job_not_found", f"job '{job_id}' not found", status_code=404)
+        raise _not_found(job_id)
+    visibility.require_seen(viewer, db, row.created_by, _not_found(job_id))
     return row
 
 
-def list_jobs(db: Session, workspace_id: str, type_filter: str | None = None) -> list[dict]:
+def list_jobs(
+    db: Session, workspace_id: str, type_filter: str | None = None, *,
+    viewer: Viewer = Viewer.ALL,
+) -> list[dict]:
     query = (
         select(SkillLabJob)
         .where(SkillLabJob.workspace_id == workspace_id)
+        .where(visibility.clause(viewer, SkillLabJob.created_by))  # workspace isolation
         .order_by(SkillLabJob.created_at.desc())
     )
     if type_filter:
@@ -80,10 +97,12 @@ def list_jobs(db: Session, workspace_id: str, type_filter: str | None = None) ->
 
 
 def _resolve_tasks_file(
-    db: Session, workspace_id: str, taskset_id: str, split: str | None
+    db: Session, workspace_id: str, taskset_id: str, split: str | None, *,
+    viewer: Viewer = Viewer.ALL,
 ) -> tuple[Path, str, str]:
-    """(file path, resolved split, taskset name); split preference test→val→train."""
-    row = taskset_svc.get_row(db, workspace_id, taskset_id)
+    """(file path, resolved split, taskset name); split preference test→val→train.
+    A task set the caller cannot see (workspace isolation) is a missing one."""
+    row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
     directory = taskset_svc.taskset_dir(row.id)
     if row.mode == "single":
         if split:
@@ -153,15 +172,18 @@ def submit_eval_job(
     taskset_id: str,
     split: str | None = None,
     params: dict[str, Any] | None = None,
+    creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     # The per-taskset lock keeps the source stable through snapshot copy and
     # the first commit that makes this job row visible. Delete then either
     # runs first or observes the committed reference and refuses.
     with taskset_svc.taskset_operation(taskset_id):
         runner.require_worker(workspace)
+        runner.require_model_credential(workspace)
         merged_params = runner.clamp_params(params)
         tasks_file, resolved_split, taskset_name = _resolve_tasks_file(
-            db, workspace_id, taskset_id, split
+            db, workspace_id, taskset_id, split, viewer=viewer,
         )
 
         row = SkillLabJob(
@@ -172,6 +194,7 @@ def submit_eval_job(
             split=resolved_split,
             params=merged_params,
         )
+        creators.stamp(row, creator)
         db.add(row)
         db.flush()
         directory = artifacts.job_dir(row.id)
@@ -209,6 +232,8 @@ def submit_train_job(
     skill_source: dict[str, Any],
     taskset_id: str,
     params: dict[str, Any] | None = None,
+    creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """Submit training after atomically snapshotting the whole task set."""
     # The per-taskset lock keeps the source stable through snapshot copy and
@@ -216,8 +241,9 @@ def submit_train_job(
     # runs first or observes the committed reference and refuses.
     with taskset_svc.taskset_operation(taskset_id):
         runner.require_worker(workspace)
+        runner.require_model_credential(workspace)
         merged_params = runner.clamp_train_params(params)
-        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
+        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
 
         row = SkillLabJob(
             workspace_id=workspace_id,
@@ -227,6 +253,7 @@ def submit_train_job(
             split="",
             params=merged_params,
         )
+        creators.stamp(row, creator)
         db.add(row)
         db.flush()
         directory = artifacts.job_dir(row.id)
@@ -398,6 +425,8 @@ def submit_taskgen_job(
     target_split: str | None = None,
     params: dict[str, Any] | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """AI task-set generation (studio parity): an exec-backend agent authors
     tasks for the selected skill(s) on the AgentCore worker; the result is a
@@ -407,6 +436,7 @@ def submit_taskgen_job(
     job and materialized into the generation work directory, so the agent authors
     tasks against real documents instead of pasted text."""
     runner.require_worker(workspace)
+    runner.require_model_credential(workspace)
     merged_params = runner.clamp_taskgen_params(params)
     if (taskset_id is None) != (target_split is None):
         raise AppError(
@@ -418,7 +448,7 @@ def submit_taskgen_job(
     ts_row = None
     tasks_by_split: dict[str, Any] = {}
     if taskset_id is not None:
-        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
+        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id, viewer=viewer)
         # Refuse at submit time, not at apply time: generating against a
         # read-only sample would only ever dead-end at apply-expansion.
         taskset_svc._reject_sample_write(ts_row)
@@ -448,6 +478,7 @@ def submit_taskgen_job(
         split=target_split or "",
         params=merged_params,
     )
+    creators.stamp(row, creator)
     db.add(row)
     db.flush()
     directory = artifacts.job_dir(row.id)
@@ -701,8 +732,10 @@ def _bind_taskgen_attachments(
     return bound, sources
 
 
-def _finished_taskgen_job(db: Session, workspace_id: str, job_id: str) -> SkillLabJob:
-    row = get_job(db, workspace_id, job_id)
+def _finished_taskgen_job(
+    db: Session, workspace_id: str, job_id: str, *, viewer: Viewer = Viewer.ALL
+) -> SkillLabJob:
+    row = get_job(db, workspace_id, job_id, viewer=viewer)
     if row.type != "taskgen":
         raise AppError(
             "skill_lab.not_a_taskgen_job",
@@ -725,6 +758,8 @@ def import_taskgen_taskset(
     *,
     name: str,
     edits: list[dict[str, Any]] | None = None,
+    creator: creators.Creator | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """Save a taskgen job's reviewed output as a NEW single-mode task set.
 
@@ -733,7 +768,7 @@ def import_taskgen_taskset(
     taskset service's validated staging swap — the same validator subprocess as
     an upload — so the import can never plant a file the eval/train CLIs would
     refuse. Nothing is written and the job stays un-imported when any check fails."""
-    row = _finished_taskgen_job(db, workspace_id, job_id)
+    row = _finished_taskgen_job(db, workspace_id, job_id, viewer=viewer)
     if (row.params or {}).get("imported_taskset_id"):
         raise AppError(
             "skill_lab.already_imported",
@@ -758,6 +793,7 @@ def import_taskgen_taskset(
         mode="single",
         tasks_by_split={"tasks": tasks},
         extra_sources=extra_sources,
+        creator=creator,
     )
     row.params = {**(row.params or {}), "imported_taskset_id": info["id"]}
     db.commit()
@@ -770,6 +806,7 @@ def apply_taskgen_expansion(
     job_id: str,
     *,
     edits: list[dict[str, Any]] | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """Append a taskgen expansion job's output to its target task set/split.
 
@@ -778,7 +815,7 @@ def apply_taskgen_expansion(
     staging swap). The id-collision re-check runs on the EDITED ids against every
     current split — the CLI checked its own snapshot, but the task set may have
     changed since, and a reviewer may have renamed a row onto an existing id."""
-    row = _finished_taskgen_job(db, workspace_id, job_id)
+    row = _finished_taskgen_job(db, workspace_id, job_id, viewer=viewer)
     if not row.taskset_id:
         raise AppError(
             "skill_lab.not_an_expansion_job",
@@ -835,13 +872,16 @@ def apply_taskgen_expansion(
     return {"job": job_out(row), "taskset": info}
 
 
-def resume_job(db: Session, workspace_id: str, workspace: Any, job_id: str) -> dict[str, Any]:
+def resume_job(
+    db: Session, workspace_id: str, workspace: Any, job_id: str, *, viewer: Viewer = Viewer.ALL
+) -> dict[str, Any]:
     """Re-enqueue an interrupted/failed TRAIN job — train.py resumes from
     out/runtime_state.json after the last completed step, so this is the same
     command over the same on-disk config/out, not new machinery. Eval jobs are
     cheap: re-submit instead."""
     runner.require_worker(workspace)
-    row = get_job(db, workspace_id, job_id)
+    runner.require_model_credential(workspace)
+    row = get_job(db, workspace_id, job_id, viewer=viewer)
     if row.type != "train":
         raise AppError(
             "skill_lab.job_not_resumable",
@@ -910,15 +950,36 @@ def publish_job(
     job_id: str,
     *,
     reapprove: bool = False,
+    viewer: Viewer = Viewer.ALL,
+    is_admin: bool = False,
+    identity: Any = None,
 ) -> dict[str, Any]:
     """Push best_skill.md back onto the source Registry record as a bumped
     minor version via update_record(skill_md=...) — the PUT path works for
     every source kind, unlike /reimport (git/url-only). Any update settles the
     record into DRAFT; with `reapprove` a previously-APPROVED record is
-    re-approved (refresh_a2a_cards pattern)."""
+    re-approved through the lifecycle (DRAFT → submit → approve,
+    `registry_console.reapprove_record`; N10v4-bug3 — a bare "approve" from
+    DRAFT is a 409 `registry.invalid_transition`), idempotent when the update
+    left it APPROVED already. N17-obs248: only an administrator's publish
+    (`is_admin`) re-approves; a member's publish re-submits the record
+    (→ PENDING_APPROVAL, ``pending_approval: true``) for an administrator to approve.
+
+    N16-obs44 — publish is idempotent on content: when the rendered skill is
+    byte-identical to the record's latest version (its SKILL.md descriptor, or
+    this job's own last publish while the record is still at that version) the
+    call answers 200 with the existing version and ``unchanged: true`` — no
+    `update_record`, no new minor version, no re-settle into DRAFT, nothing to
+    re-approve. Changed content mints a new version as before.
+
+    N17-obs263 — ``identity`` (the caller) must be the SOURCE record's creator or an
+    administrator (``registry_console.require_record_mutable``, 403 ``registry.forbidden``
+    with ``action: "publish"``); the job's own creator-or-admin gate runs in the router.
+    Training on a record the caller may only read stays allowed; publishing onto it is
+    refused before any split or write (``None`` = no caller = refused)."""
     from app.services import registry_console
 
-    row = get_job(db, workspace_id, job_id)
+    row = get_job(db, workspace_id, job_id, viewer=viewer)
     if row.type != "train" or row.status != "succeeded":
         raise AppError(
             "skill_lab.publish_unsupported",
@@ -952,8 +1013,32 @@ def publish_job(
 
     refuse_protected_mutation(workspace, record_id, "edit")
     before = registry_console.console_get(workspace, record_id)
+    # N17-obs263: publish rewrites the SOURCE record (bytes under skills/<name>/, an
+    # APPROVED record drops to DRAFT) — the record's creator-or-admin rule applies, not
+    # just the job's. Refused before the idempotence check, the multi-file split and any
+    # write, so a forbidden caller learns nothing about the record's content.
+    registry_console.require_record_mutable(before, identity, record_id, "publish")
     status_before = str(before.get("status") or "")
     trainable = list((row.params or {}).get("trainable_files") or [])
+    digest = _skill_digest(diff["best"])
+    version_before = str(before.get("recordVersion") or "")
+    if _already_published(row, before, diff["best"], digest, single_file=not trainable):
+        result = {
+            "record_id": record_id,
+            "name": source.get("name"),
+            "new_version": version_before,
+            "status_before": status_before,
+            "status_after": status_before,
+            "reapproved": False,
+            "pending_approval": status_before == "PENDING_APPROVAL",
+            "unchanged": True,
+        }
+        with open(artifacts.job_dir(job_id) / "log.txt", "a", encoding="utf-8") as log:
+            log.write(
+                f"\n[publish] {result['name']} unchanged — v{version_before} already carries "
+                f"this best_skill.md (status {status_before})\n"
+            )
+        return result
     if trainable:
         # best_skill.md is a multi-doc bundle — split it back onto a copy of
         # the original skill dir (kept in the job dir since submit) and push
@@ -966,9 +1051,9 @@ def publish_job(
     status_after = str(updated.get("status") or "")
     reapproved = False
     if reapprove and status_before == "APPROVED" and status_after != "APPROVED":
-        updated = registry_console.console_action(workspace, record_id, "approve")
+        updated = registry_console.reapprove_record(workspace, record_id, is_admin=is_admin)
         status_after = str(updated.get("status") or status_after)
-        reapproved = True
+        reapproved = status_after == "APPROVED"
     result = {
         "record_id": record_id,
         "name": source.get("name"),
@@ -976,14 +1061,60 @@ def publish_job(
         "status_before": status_before,
         "status_after": status_after,
         "reapproved": reapproved,
+        "pending_approval": status_after == "PENDING_APPROVAL",
+        "unchanged": False,
     }
+    # N16-obs44: remember what this job pushed, so the same content is not a second version
+    row.params = {
+        **(row.params or {}),
+        "published": {
+            "digest": digest,
+            "version": result["new_version"],
+            "at": datetime.now(UTC).isoformat(),
+        },
+    }
+    db.commit()
     with open(artifacts.job_dir(job_id) / "log.txt", "a", encoding="utf-8") as log:
         log.write(
             f"\n[publish] {result['name']} -> v{result['new_version']} "
             f"(status {status_before} -> {status_after}"
-            f"{', re-approved' if reapproved else ''})\n"
+            f"{', re-approved' if reapproved else ''}"
+            f"{', submitted for administrator approval' if result['pending_approval'] else ''})\n"
         )
     return result
+
+
+def _skill_digest(rendered: str) -> str:
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _record_skill_md(record: dict[str, Any]) -> str | None:
+    """The record's current SKILL.md text, when its descriptors carry it inline."""
+    try:
+        text = record["descriptors"]["agentSkills"]["skillMd"]["inlineContent"]
+    except (KeyError, TypeError):
+        return None
+    return text if isinstance(text, str) else None
+
+
+def _already_published(
+    row: SkillLabJob, record: dict[str, Any], rendered: str, digest: str, *, single_file: bool,
+) -> bool:
+    """N16-obs44: the record's latest version already IS this best_skill.md — either its
+    SKILL.md descriptor is byte-identical (single-file publish; any job, any process), or
+    this job's last publish (``params.published``) pushed this digest and the record is
+    still at that version (nobody edited it since — the only check a multi-file bundle
+    allows, the supporting files are not in the record)."""
+    if single_file and _record_skill_md(record) == rendered:
+        return True
+    memo = (row.params or {}).get("published")
+    if not isinstance(memo, dict):
+        return False
+    return (
+        memo.get("digest") == digest
+        and str(memo.get("version") or "") == str(record.get("recordVersion") or "")
+        and bool(memo.get("version"))
+    )
 
 
 def _set_status(job_id: str, **values: Any) -> SkillLabJob | None:
@@ -1020,6 +1151,7 @@ def _run_job(job_id: str, command: list[str]) -> None:
         if row is None or row.status != "queued":
             return  # cancelled while queued, or swept
         workspace_id = row.workspace_id or ""
+        job_type = row.type
     finally:
         db.close()
 
@@ -1054,7 +1186,13 @@ def _run_job(job_id: str, command: list[str]) -> None:
     if _cancel_requested(job_id):
         _set_status(job_id, status="cancelled", finished_at=datetime.now(UTC))
     elif returncode == 0:
-        _set_status(job_id, status="succeeded", finished_at=datetime.now(UTC))
+        # N10v3-bug3: exit code 0 is the CLI's verdict on itself, not on the run — a
+        # run in which every rollout errored is a failed job with a readable reason.
+        reason = verdict.all_rollouts_failed_reason(job_id, job_type)
+        if reason:
+            _set_status(job_id, status="failed", error=reason, finished_at=datetime.now(UTC))
+        else:
+            _set_status(job_id, status="succeeded", finished_at=datetime.now(UTC))
     else:
         tail = artifacts.log_tail(job_id)[-800:]
         _set_status(
@@ -1071,8 +1209,10 @@ def _run_job(job_id: str, command: list[str]) -> None:
         logger.info("skill-lab janitor skipped for %s", job_id)
 
 
-def cancel_job(db: Session, workspace_id: str, job_id: str) -> dict[str, Any]:
-    row = get_job(db, workspace_id, job_id)
+def cancel_job(
+    db: Session, workspace_id: str, job_id: str, *, viewer: Viewer = Viewer.ALL
+) -> dict[str, Any]:
+    row = get_job(db, workspace_id, job_id, viewer=viewer)
     if row.status == "queued":
         row.status = "cancelled"
         row.cancel_requested = True
@@ -1092,11 +1232,13 @@ def cancel_job(db: Session, workspace_id: str, job_id: str) -> dict[str, Any]:
     if proc is not None:
         kill_process_group(proc)
     db.expire_all()
-    return job_out(get_job(db, workspace_id, job_id))
+    return job_out(get_job(db, workspace_id, job_id, viewer=viewer))
 
 
-def delete_job(db: Session, workspace_id: str, job_id: str) -> None:
-    row = get_job(db, workspace_id, job_id)
+def delete_job(
+    db: Session, workspace_id: str, job_id: str, *, viewer: Viewer = Viewer.ALL
+) -> None:
+    row = get_job(db, workspace_id, job_id, viewer=viewer)
     if row.status not in TERMINAL_STATUSES:
         raise AppError(
             "skill_lab.job_not_deletable",

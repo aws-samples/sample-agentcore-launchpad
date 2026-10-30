@@ -1,4 +1,4 @@
-import { Check, Loader2, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Loader2, Play, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -21,9 +21,10 @@ import { useWorkspace } from "../../../workspace/workspace-context";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Spin, Tag } from "../../ui";
-import { ExternalTag, HubTag, StatusTag } from "./tags";
+import { ExternalTag, HubTag, StatusTag, VisibilityTag } from "./tags";
 import { GrantsCard } from "./GrantsCard";
-import { InboundDefaultCard } from "./InboundDefaultCard";
+import { VisibilityCard } from "./VisibilityCard";
+import { zonedClock } from "../../../lib/timestamps";
 
 const POLL_MS = 2000;
 
@@ -49,7 +50,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const row = list.data?.workspaces.find((w) => w.id === workspaceId) ?? null;
 
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState<"bootstrap" | "detach" | "purge" | null>(null);
+  const [confirm, setConfirm] = useState<"bootstrap" | "validate" | "detach" | "purge" | null>(null);
   /** the dry run behind the purge dialog: what a purge would take with it */
   const [purgePreview, setPurgePreview] = useState<WorkspacePurgeResult | null>(null);
   const [jobId, setJobId] = useState<string | null>(() => readBootstrapJobIds()[workspaceId] ?? null);
@@ -108,15 +109,20 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     return () => window.clearInterval(timer);
   }, [jobDone, jobId, poll]);
 
-  const startBootstrap = async () => {
+  /** The full run, or — `validateOnly` — the `validate-access` stage alone: nothing
+   *  provisioned, the row keeps its status, the job's result is the verdict (r17-ws). */
+  const startBootstrap = async (validateOnly = false) => {
     if (!row) return;
     setBusy(true);
     try {
-      const ack = await api.bootstrapWorkspace(row.id);
+      const ack = await api.bootstrapWorkspace(row.id, validateOnly ? { validateOnly: true } : undefined);
       rememberBootstrapJobId(row.id, ack.job_id);
       setJobId(ack.job_id);
       setJob(null);
-      toast("success", t("workspacesPage.bootstrapQueued", { name: row.name }));
+      toast(
+        "success",
+        t(validateOnly ? "workspacesPage.validateQueued" : "workspacesPage.bootstrapQueued", { name: row.name }),
+      );
       await reload();
     } catch (err) {
       toast("error", errorMessage(err));
@@ -295,6 +301,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
               </Button>
             )}
             <Button
+              disabled={!canBootstrap}
+              title={bootstrapDisabledReason}
+              onClick={() => setConfirm("validate")}
+              testId="v2-ws-validate-access"
+            >
+              <ShieldCheck size={14} aria-hidden="true" />
+              {t("v2.workspaces.validateAccess")}
+            </Button>
+            <Button
               kind="primary"
               disabled={!canBootstrap}
               title={bootstrapDisabledReason}
@@ -347,6 +362,10 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                   ]
                 : []),
               { label: t("v2.workspaces.grantedMembers"), value: grantedTotal ?? "—" },
+              {
+                label: t("v2.workspaces.visibility.title"),
+                value: <VisibilityTag mode={row.resource_visibility ?? "shared"} />,
+              },
               { label: t("v2.workspaces.col.created"), value: fmtTime(row.created_at) },
               { label: t("v2.workspaces.updated"), value: fmtTime(row.updated_at) },
             ]}
@@ -370,7 +389,11 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       {!row.is_default && (
         <Card
           title={t("v2.workspaces.stagesTitle")}
-          sub={jobId ? `job #${jobId.slice(0, 8)}` : t("workspacesPage.detail.noRun")}
+          sub={
+            jobId
+              ? `job #${jobId.slice(0, 8)}${job?.payload?.mode === "validate-only" ? ` · ${t("v2.workspaces.validateOnlyRun")}` : ""}`
+              : t("workspacesPage.detail.noRun")
+          }
           end={job ? <Tag tone={job.status === "failed" ? "red" : job.status === "succeeded" ? "green" : "blue"}>{t(`v2.workspaces.jobStatus.${job.status}`, job.status)}</Tag> : undefined}
           testId="v2-ws-bootstrap-card"
         >
@@ -398,7 +421,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
               <div className="v2-pre v2-workspaces-log" data-testid="v2-ws-job-log">
                 {job.events.map((event, index) => (
                   <div key={index}>
-                    <span className="v2-muted">{event.ts.slice(11, 19)}</span>{" "}
+                    <span className="v2-muted">{zonedClock(event.ts)}</span>{" "}
                     <span className={event.level === "error" ? "v2-workspaces-err" : "v2-workspaces-stage"}>
                       {event.stage}
                     </span>{" "}
@@ -412,7 +435,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       )}
 
       <GrantsCard workspaceId={workspaceId} onTotal={setGrantedTotal} />
-      {(row.is_default || row.bootstrap_status === "ready") && <InboundDefaultCard workspaceId={workspaceId} />}
+      <VisibilityCard workspaceId={workspaceId} onSaved={() => void reload()} />
 
       <Confirm
         open={confirm === "bootstrap"}
@@ -421,6 +444,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
         confirmLabel={t(resume ? "v2.workspaces.bootstrapResume" : "v2.workspaces.bootstrapRun")}
         busy={busy}
         onConfirm={() => void startBootstrap()}
+        onClose={() => setConfirm(null)}
+      />
+      <Confirm
+        open={confirm === "validate"}
+        title={t("v2.workspaces.validateAccess")}
+        body={t("v2.workspaces.validateAccessConfirm", { name: row.name, account: row.account_id, region: row.region })}
+        confirmLabel={t("v2.workspaces.validateAccess")}
+        busy={busy}
+        onConfirm={() => void startBootstrap(true)}
         onClose={() => setConfirm(null)}
       />
       <Confirm

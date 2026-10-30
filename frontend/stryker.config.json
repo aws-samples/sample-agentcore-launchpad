@@ -1,0 +1,61 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Mutation-testing baseline (round 16, N16-obs60). NOT part of `make verify`; run `make mutation-frontend`. Only the validation / rendering helpers named in plans/BUG-DISCOVERY-PLAN.md §4 are mutated, and only their directly related test files run. Read: docs/cn/interfaces/testing.md § 'Mutation testing & discovery KPIs'; baseline: docs/cn/reports/mutation-baseline-2026-10-19.md.",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vite.config.ts",
+    "related": true
+  },
+  "mutate": [
+    "src/lib/agent-spec.ts",
+    "src/lib/assistant.ts",
+    "src/lib/memory.ts",
+    "src/lib/model-defaults.ts",
+    "src/v2/scorecard.ts",
+    "src/v2/compare.ts",
+    "src/v2/ownership.ts"
+  ],
+  "testFiles": [
+    "src/lib/agent-spec.test.ts",
+    "src/lib/assistant-turn.test.ts",
+    "src/lib/assistant-clear.test.ts",
+    "src/lib/assistant-proposal-edit.test.ts",
+    "src/lib/memory.test.ts",
+    "src/lib/model-defaults.test.ts",
+    "src/lib/identity-ui.test.ts",
+    "src/v2/scorecard.test.ts",
+    "src/v2/compare.test.ts",
+    "src/v2/ownership.test.ts"
+  ],
+  "coverageAnalysis": "perTest",
+  "disableTypeChecks": true,
+  "ignoreStatic": true,
+  "concurrency": 8,
+  "timeoutMS": 10000,
+  "cleanTempDir": "always",
+  "reporters": [
+    "clear-text",
+    "progress",
+    "json",
+    "html"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "htmlReporter": {
+    "fileName": "reports/mutation/mutation.html"
+  },
+  "clearTextReporter": {
+    "allowColor": false,
+    "reportTests": false,
+    "reportMutants": true,
+    "reportScoreTable": true,
+    "logTests": false
+  },
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": null
+  },
+  "_comment_static": "ignoreStatic: Stryker's vitest runner reported every static mutant (module-level constants and regexes, 255 of 2820) as survived with zero covering tests even where a test provably catches the hand-applied mutation (N16-obs62: the AGENT_NAME_RE anchors); until that is understood they are excluded from the score rather than counted as survivors. Static mutants are listed as 'Ignored' in the report."
+}

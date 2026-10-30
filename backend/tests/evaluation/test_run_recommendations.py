@@ -1,38 +1,38 @@
-"""Recommendations started from an evaluation run (V2 评估任务 → 优化建议).
+"""Recommendations started from an evaluation run (V2 评估任务 → 优化建议) — N12 E2-4.
 
-The run's batch evaluation pins the traces; the inputs come from a live GetHarness
-for a Managed Harness, from the Launchpad spec otherwise, and from the operator
-when neither can supply them.
+The run's ``eval_results`` rows are the evidence; the inputs come from the Launchpad
+spec or the operator; the provider runs as a worker job submitted through the executor
+seam (``recommendation_id`` == job id), and every read of a non-terminal row polls it.
 """
 
-import json
-from unittest.mock import MagicMock
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.core.errors import AppError
+from app.evaluation import jobs
 from app.evaluation import recommendations as recs
-from app.evaluation.models import EvalRun
+from app.evaluation.jobs import JobDone, JobStatus
+from app.evaluation.models import EvalEvaluator, EvalRecommendation, EvalResult, EvalRun
 from app.models.ledger import Agent
+from app.optimization.providers import evidence as ev
+from tests.evaluation.fakes import FakeExecutor
 
-BATCH_ARN = "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluation/be-1"
-
-
-@pytest.fixture(autouse=True)
-def _fresh_catalog_cache():
-    """The gateway / evaluator catalogs are cached per process; one test's stubbed
-    catalog must never answer another's."""
-    recs.clear_catalog_cache()
-    yield
-    recs.clear_catalog_cache()
-GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:1:gateway/gw-abc"
+MODEL = "global.zai.glm-5.3"
+SESSIONS = ["sess-0001", "sess-0002", "sess-0003"]
+SCORES = {"sess-0001": 0.2, "sess-0002": 0.9, "sess-0003": 0.5}
 
 
 def _agent(**fields) -> str:
     db = SessionLocal()
     try:
+        defaults = {"method": "zip_runtime", "resource_id": "rt-1", "spec": {}}
         agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=fields.pop("name", "rec-agent"),
-                      status="active", **fields)
+                      status="active", **{**defaults, **fields})
         db.add(agent)
         db.commit()
         return agent.id
@@ -40,159 +40,75 @@ def _agent(**fields) -> str:
         db.close()
 
 
-def _run(agent_id: str = "", **fields) -> str:
+def _results(run_id: str, session_ids=SESSIONS, evaluator="Builtin.Correctness",
+             scores: dict[str, float] | None = None) -> None:
+    db = SessionLocal()
+    try:
+        for sid in session_ids:
+            score = (scores or SCORES).get(sid, 0.5)
+            db.add(EvalResult(
+                id=jobs.record_id(run_id, sid, evaluator, 0), workspace_id=DEFAULT_WORKSPACE_ID,
+                source="run", run_id=run_id, session_id=sid, trace_id="t" * 32,
+                evaluator_id=evaluator, level="TRACE", score=score, label="ok",
+                explanation=f"because {sid}",
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _run(agent_id: str = "", *, results: bool = True, **fields) -> str:
     db = SessionLocal()
     try:
         run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
                       agent_name="rec-agent", **{
                           "mode": "evaluators", "status": "completed",
-                          "batch_eval_id": "be-1", "evaluators": ["Builtin.Correctness"],
-                          **fields})
+                          "evaluators": ["Builtin.Correctness"],
+                          "session_ids": list(SESSIONS), **fields})
         db.add(run)
         db.commit()
-        return run.id
+        run_id = run.id
     finally:
         db.close()
+    if results and fields.get("session_ids", SESSIONS):
+        _results(run_id, fields.get("session_ids", SESSIONS))
+    return run_id
 
 
-def _harness_control() -> MagicMock:
-    control = MagicMock()
-    control.get_harness.return_value = {"harness": {
-        "systemPrompt": [{"text": "You are the HR assistant."}, {"text": "Cite policy."}],
-        "allowedTools": ["@leave_calc", "@launchpad_gw/hr-database___get_*", "shell"],
-        "tools": [
-            {"type": "inline_function", "name": "leave_calc",
-             "config": {"inlineFunction": {"description": "Compute leave balance."}}},
-            {"type": "inline_function", "name": "not_allowed",
-             "config": {"inlineFunction": {"description": "Never selected."}}},
-            {"type": "agentcore_gateway", "name": "launchpad_gw",
-             "config": {"agentCoreGateway": {"gatewayArn": GW_ARN}}},
-            {"type": "remote_mcp", "name": "docs",
-             "config": {"remoteMcp": {"url": "https://example.com/mcp"}}},
-        ],
-    }}
-    control.list_gateway_targets.return_value = {"items": [{"targetId": "t1"}]}
-    control.get_gateway_target.return_value = {
-        "targetId": "t1", "name": "hr-database",
-        "targetConfiguration": {"mcp": {"lambda": {"toolSchema": {"inlinePayload": [
-            {"name": "get_employee", "description": "Look up one employee."},
-            {"name": "create_payout", "description": "Pay someone."},
-        ]}}}},
-    }
-    return control
+def _stub(monkeypatch, executor: FakeExecutor | None = None) -> FakeExecutor:
+    """No AWS: the executor seam, inline threads, scripted transcripts / tool evidence."""
+    executor = executor or FakeExecutor()
+    monkeypatch.setattr(recs, "select_executor", lambda _settings, job_type: executor)
+    monkeypatch.setattr(recs, "_spawn", lambda fn: fn())
+    monkeypatch.setattr(ev, "default_transcript", lambda db, ws, agent: (
+        lambda sid: [{"role": "USER", "text": f"q {sid}", "at": "2026-01-01T00:00:00"},
+                     {"role": "ASSISTANT", "text": f"a {sid}", "at": "2026-01-01T00:00:05"}]))
+    monkeypatch.setattr(ev, "default_tool_turns", lambda ws, agent, started: (
+        lambda sid: [{"role": "TOOL_CALL", "id": "c1", "name": "lookup", "input": {"q": 1}},
+                     {"role": "TOOL_RESULT", "id": "c1", "name": "lookup", "status": "success",
+                      "text": "found"}]))
+    monkeypatch.setattr(ev, "default_tool_spans", lambda ws, since: (lambda sids: {}))
+    recs._live_provider_jobs.clear()
+    return executor
 
 
-def _span(session_id: str, tool: str) -> dict:
-    return {"name": f"execute_tool {tool}", "scope": {"name": "strands.telemetry"},
-            "attributes": {"session.id": session_id, "gen_ai.tool.name": tool}}
-
-
-def _stub(monkeypatch, control=None, data=None, spans=None):
-    """AWS stubs; ``spans`` maps session id → span docs the Logs Insights query returns."""
-    control = control or MagicMock()
-    if not isinstance(control.list_evaluators.return_value, dict):
-        # an unset MagicMock answers a truthy nextToken — pagination would never end
-        control.list_evaluators.return_value = {"evaluators": []}
-    data = data or MagicMock()
-    data.get_batch_evaluation.return_value = {"batchEvaluationArn": BATCH_ARN}
-    monkeypatch.setattr(recs, "control_client", lambda _ws: control)
-    monkeypatch.setattr(recs, "data_client", lambda _ws: data)
-    queries: list[dict] = []
-
-    def insights(queries_in, hours, **_kw):
-        queries.append({"sessions": sorted(queries_in), "hours": hours})
-        return {sid: [{"@message": json.dumps(doc)} for doc in (spans or {}).get(sid, [])]
-                + [{"@message": "plain log line"}] for sid in queries_in}
-
-    monkeypatch.setattr("app.services.observability.run_insights_queries", insights)
-    data.queries = queries
-    return control, data
-
-
-# ─── allowedTools grammar ───────────────────────────────────────────────────
-@pytest.mark.parametrize(("allowed", "alias", "tool", "expected"), [
-    (None, "gw", "t___x", True),
-    ([], "gw", "t___x", True),
-    (["*"], "gw", "t___x", True),
-    (["@gw"], "gw", "t___x", True),
-    (["@gw/t___*"], "gw", "t___x", True),
-    (["@gw/t___*"], "gw", "other___x", False),
-    (["@g*"], "gw", "t___x", True),
-    (["gw"], "gw", "t___x", False),  # a plain name selects builtins only
-    (["@calc"], "calc", None, True),
-    (["@calc"], "other", None, False),
-])
-def test_allowed_tools_selection(allowed, alias, tool, expected):
-    assert recs._selected(allowed, alias, tool) is expected
+def _rows(client, run_id):
+    return client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"]
 
 
 # ─── inputs ─────────────────────────────────────────────────────────────────
-def test_harness_inputs_come_from_get_harness(client, monkeypatch):
-    agent_id = _agent(method="harness", resource_id="hr_harness-1",
-                      spec={"system_prompt": "stale spec prompt"})
-    control, _ = _stub(monkeypatch, control=_harness_control())
-
-    body = client.get(f"/api/eval/runs/{_run(agent_id)}/recommendation-inputs").json()
-
-    assert body["source"] == "harness"
-    # the deployed prompt, not the ledger spec's copy
-    assert body["system_prompt"] == "You are the HR assistant.\nCite policy."
-    assert {t["name"]: t["description"] for t in body["tools"]} == {
-        "leave_calc": "Compute leave balance.",
-        "hr-database___get_employee": "Look up one employee.",
-    }
-    assert body["notes"] == [{"code": "remote_mcp_runtime_only", "tool": "docs", "detail": ""}]
-    assert control.list_gateway_targets.call_args.kwargs["gatewayIdentifier"] == "gw-abc"
-    assert body["eligible"] is True
-
-
-def test_unreadable_gateway_is_a_note_not_a_failure(client, monkeypatch):
-    agent_id = _agent(method="harness", resource_id="hr_harness-1")
-    control = _harness_control()
-    control.list_gateway_targets.side_effect = RuntimeError("AccessDenied")
-    _stub(monkeypatch, control=control)
-
-    body = client.get(f"/api/eval/runs/{_run(agent_id)}/recommendation-inputs").json()
-
-    assert [t["name"] for t in body["tools"]] == ["leave_calc"]
-    assert body["notes"][0]["code"] == "gateway_unreadable"
-
-
-@pytest.mark.parametrize(("spec", "source"), [
-    ({"system_prompt": "Prompt kept in the ledger."}, "spec"),
-    ({"name": "gone"}, "manual"),
-])
-def test_a_deleted_harness_falls_back_instead_of_failing(client, monkeypatch, spec, source):
-    """Measured on prod 2026-09-30: runs outlive their Harness. The card must still
-    offer input boxes (the traces are intact), not a 502."""
-    agent_id = _agent(method="harness", resource_id="gone_harness-1", spec=spec)
-    control = MagicMock()
-    control.get_harness.side_effect = RuntimeError(
-        "ResourceNotFoundException: Agent with name gone_harness-1 not found.")
-    _stub(monkeypatch, control=control)
-
-    res = client.get(f"/api/eval/runs/{_run(agent_id)}/recommendation-inputs")
-
-    assert res.status_code == 200
-    body = res.json()
-    assert body["source"] == source
-    assert body["eligible"] is True
-    assert [n["code"] for n in body["notes"]] == ["harness_unreadable"]
-    assert "ResourceNotFoundException" in body["notes"][0]["detail"]
-
-
 def test_runtime_agent_inputs_come_from_the_spec(client, monkeypatch):
     agent_id = _agent(method="zip_runtime", resource_id="rt-1", spec={
         "system_prompt": "Be concise.",
         "tools": [{"type": "builtin", "name": "calculator", "description": "Do math."}],
     })
     _stub(monkeypatch)
-
     body = client.get(f"/api/eval/runs/{_run(agent_id)}/recommendation-inputs").json()
-
     assert body["source"] == "spec"
     assert body["system_prompt"] == "Be concise."
     assert [t["name"] for t in body["tools"]] == ["calculator"]
+    assert body["eligible"] is True and body["tools_eligible"] is True
+    assert body["agent_method"] == "zip_runtime"
 
 
 def test_byoc_and_log_source_runs_need_manual_inputs(client, monkeypatch):
@@ -205,40 +121,31 @@ def test_byoc_and_log_source_runs_need_manual_inputs(client, monkeypatch):
         assert body["system_prompt"] == "" and body["tools"] == []
 
 
-def _judge(evaluator_id: str, *, instructions="Rate the answer.", categorical=False):
-    scale = ({"categorical": [{"label": "pass"}]} if categorical
-             else {"numerical": [{"value": 1.0, "label": "pass"}]})
-    return {"evaluatorId": evaluator_id, "evaluatorArn": f"arn:x:evaluator/{evaluator_id}",
-            "evaluatorConfig": {"llmAsAJudge": {"instructions": instructions,
-                                                "ratingScale": scale}}}
+def _judge(db, evaluator_id, *, name=None, instructions="Rate the answer.", scale=None,
+           status="ACTIVE", definition="judge"):
+    row = EvalEvaluator(
+        id=evaluator_id, workspace_id=DEFAULT_WORKSPACE_ID, name=name or evaluator_id,
+        definition=definition, instructions=instructions,
+        rating_scale=scale if scale is not None else [{"label": "pass", "value": 1.0}],
+        level="TRACE", status=status,
+    )
+    db.add(row)
+    db.commit()
 
 
-def _account(control):
-    control.list_evaluators.return_value = {"evaluators": [
-        {"evaluatorId": "Builtin.Helpfulness", "evaluatorType": "Builtin", "status": "ACTIVE"},
-        {"evaluatorId": "ThirdParty.DeepEval.TaskCompletion", "evaluatorType": "ThirdParty",
-         "evaluatorName": "TaskCompletion", "level": "TRACE", "status": "ACTIVE"},
-        {"evaluatorId": "ThirdParty.DeepEval.Toxicity", "evaluatorType": "ThirdParty",
-         "level": "TRACE", "status": "ACTIVE"},
-        {"evaluatorId": "judge-num", "evaluatorType": "Custom", "evaluatorName": "tone",
-         "level": "TRACE", "status": "ACTIVE"},
-        {"evaluatorId": "judge-cat", "evaluatorType": "Custom", "level": "TRACE",
-         "status": "ACTIVE"},
-        {"evaluatorId": "judge-gt", "evaluatorType": "Custom", "level": "TRACE",
-         "status": "ACTIVE"},
-        {"evaluatorId": "judge-new", "evaluatorType": "Custom", "status": "CREATING"},
-    ]}
-    details = {
-        "judge-num": _judge("judge-num"),
-        "judge-cat": _judge("judge-cat", categorical=True),
-        "judge-gt": _judge("judge-gt", instructions="Compare with {expected_response}."),
-    }
-    control.get_evaluator.side_effect = lambda evaluatorId: details[evaluatorId]
-    return control
+def _seed_custom_evaluators():
+    db = SessionLocal()
+    _judge(db, "judge-num", name="tone")
+    _judge(db, "judge-cat", scale=[{"label": "pass"}, {"label": "fail"}])
+    _judge(db, "judge-gt", instructions="Compare with {expected_response}.")
+    _judge(db, "judge-new", status="CREATING")
+    _judge(db, "judge-code", definition="code", instructions=None, scale=[])
+    db.close()
 
 
 def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monkeypatch):
-    control, _ = _stub(monkeypatch, control=_account(MagicMock()))
+    _stub(monkeypatch)
+    _seed_custom_evaluators()
     run_id = _run("", evaluators=["Builtin.Refusal", "judge-num", "Builtin.Correctness",
                                   "judge-gt", "judge-deleted"])
 
@@ -251,10 +158,9 @@ def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monke
                          "Builtin.GoalSuccessRate", "Builtin.Helpfulness"]
     assert {o["id"] for o in body["evaluators"] if o["recommended"]} == {
         "Builtin.GoalSuccessRate", "Builtin.Helpfulness"}
-    assert options["judge-num"]["group"] == "run"
-    assert options["judge-num"]["name"] == "tone"
+    assert options["judge-num"]["group"] == "run" and options["judge-num"]["name"] == "tone"
     assert options["Builtin.Faithfulness"]["group"] == "builtin"
-    assert options["ThirdParty.DeepEval.TaskCompletion"]["group"] == "third_party"
+    assert options["judge-code"]["group"] == "custom"
     assert body["default_evaluator"] == "Builtin.GoalSuccessRate"
     # nothing that cannot produce a usable signal from traces alone
     assert {e["id"]: e["reason"] for e in body["excluded_evaluators"]} == {
@@ -264,174 +170,96 @@ def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monke
         "Builtin.TrajectoryExactOrderMatch": "ground_truth",
         "Builtin.TrajectoryInOrderMatch": "ground_truth",
         "Builtin.TrajectoryAnyOrderMatch": "ground_truth",
-        "ThirdParty.DeepEval.Toxicity": "lower_is_better",
         "judge-cat": "categorical",
     }
-    assert "judge-new" not in options  # not ACTIVE yet
-    # a managed third-party evaluator has no config to screen — never read back
-    assert "ThirdParty.DeepEval.TaskCompletion" not in {
-        c.kwargs["evaluatorId"] for c in control.get_evaluator.call_args_list}
+    assert "judge-new" not in options  # not ACTIVE
 
 
 def test_an_insights_run_still_offers_every_evaluator(client, monkeypatch):
-    _stub(monkeypatch, control=_account(MagicMock()))
+    _stub(monkeypatch)
+    _seed_custom_evaluators()
     run_id = _run("", mode="insights", evaluators=["Builtin.Insight.FailureAnalysis"])
-
     body = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
-
     ids = [o["id"] for o in body["evaluators"]]
     assert ids[:2] == ["Builtin.GoalSuccessRate", "Builtin.Helpfulness"]
     assert "judge-num" in ids and "Builtin.Faithfulness" in ids
     assert "run" not in {o["group"] for o in body["evaluators"]}
 
 
-def test_an_unlistable_account_still_offers_the_builtins(client, monkeypatch):
-    control = MagicMock()
-    control.list_evaluators.side_effect = RuntimeError("AccessDenied")
-    _stub(monkeypatch, control=control)
-
-    body = client.get(f"/api/eval/runs/{_run('')}/recommendation-inputs").json()
-
-    # the run's own built-in stays in its group; no account evaluator can be listed
-    assert {o["group"] for o in body["evaluators"]} == {"run", "builtin"}
-    assert "Builtin.GoalSuccessRate" in {o["id"] for o in body["evaluators"]}
-
-
-@pytest.mark.parametrize(("evaluator", "code"), [
-    ("Builtin.Refusal", "recommendation.evaluator_lower_is_better"),
-    ("Builtin.TrajectoryInOrderMatch", "recommendation.evaluator_ground_truth"),
-    ("judge-gt", "recommendation.evaluator_ground_truth"),
+@pytest.mark.parametrize(("evaluator", "code", "status"), [
+    ("Builtin.Refusal", "recommendation.evaluator_lower_is_better", 422),
+    ("Builtin.TrajectoryInOrderMatch", "recommendation.evaluator_ground_truth", 422),
+    ("judge-gt", "recommendation.evaluator_ground_truth", 422),
+    ("judge-cat", "recommendation.evaluator_categorical", 422),
+    ("judge-ghost", "recommendation.evaluator_unknown", 400),
+    ("Builtin.Nope", "recommendation.evaluator_unknown", 400),
 ])
-def test_start_refuses_what_the_options_hide(client, monkeypatch, evaluator, code):
-    _, data = _stub(monkeypatch, control=_account(MagicMock()))
-
-    res = client.post(f"/api/eval/runs/{_run('')}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "x", "evaluator": evaluator})
-
-    assert res.status_code == 422
+def test_start_refuses_what_the_options_hide(client, monkeypatch, evaluator, code, status):
+    # N17-obs453: only a provider that optimises toward a target evaluator takes one
+    executor = _stub(monkeypatch)
+    monkeypatch.setattr(get_settings(), "prompt_opt_harness_optimizer_enabled", True)
+    _seed_custom_evaluators()
+    res = client.post(f"/api/eval/runs/{_run(_agent())}/recommendations", json={
+        "kinds": ["system_prompt"], "system_prompt": "x", "evaluator": evaluator,
+        "provider": "harness_optimizer"})
+    assert res.status_code == status
     assert res.json()["code"] == code
-    data.start_recommendation.assert_not_called()
-
-
-def test_catalogs_are_cached_but_the_harness_is_read_live(client, monkeypatch):
-    agent_id = _agent(method="harness", resource_id="hr_harness-1")
-    control = _account(_harness_control())
-    _stub(monkeypatch, control=control)
-    run_id = _run(agent_id)
-
-    first = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
-    second = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
-
-    assert first["tools"] == second["tools"] and first["evaluators"] == second["evaluators"]
-    # one catalog read for two card loads …
-    assert control.list_gateway_targets.call_count == 1
-    assert control.get_gateway_target.call_count == 1
-    assert control.list_evaluators.call_count == 1
-    # … while the Harness (prompt, tool list) is read every time: edits show at once
-    assert control.get_harness.call_count == 2
-
-
-def test_the_catalog_cache_expires(client, monkeypatch):
-    control = _account(MagicMock())
-    _stub(monkeypatch, control=control)
-    run_id = _run("")
-    clock = [1000.0]
-    monkeypatch.setattr(recs.time, "monotonic", lambda: clock[0])
-
-    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
-    clock[0] += recs.CATALOG_TTL_S - 1
-    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
-    assert control.list_evaluators.call_count == 1
-    clock[0] += 2
-    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
-    assert control.list_evaluators.call_count == 2
-
-
-def test_a_failed_catalog_read_is_not_cached(client, monkeypatch):
-    control = MagicMock()
-    control.list_evaluators.side_effect = [RuntimeError("Throttling"),
-                                           {"evaluators": []}]
-    _stub(monkeypatch, control=control)
-    run_id = _run("")
-
-    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
-    client.get(f"/api/eval/runs/{run_id}/recommendation-inputs")
-
-    assert control.list_evaluators.call_count == 2  # the failure was retried
-
-
-def test_gateway_targets_are_read_in_parallel(monkeypatch):
-    """A shared KB gateway has 15+ targets; reading them one by one cost ~5 s."""
-    import threading
-
-    control = MagicMock()
-    control.list_gateway_targets.return_value = {
-        "items": [{"targetId": f"t{i}"} for i in range(6)]}
-    barrier = threading.Barrier(6, timeout=5)  # only passes if all 6 run at once
-
-    def get_target(gatewayIdentifier, targetId):
-        barrier.wait()
-        return {"targetId": targetId, "name": f"kb{targetId}",
-                "targetConfiguration": {"mcp": {"lambda": {"toolSchema": {"inlinePayload": [
-                    {"name": "Retrieve", "description": f"KB {targetId}"}]}}}}}
-
-    control.get_gateway_target.side_effect = get_target
-    ws = MagicMock(id="w1", account_id="1", region="us-west-2")
-
-    actions = recs._gateway_actions(control, ws, "gw-1")
-
-    assert sorted(a["name"] for a in actions) == [f"kbt{i}___Retrieve" for i in range(6)]
-
-
-def test_catalog_cache_keys_on_workspace_and_gateway():
-    calls = []
-
-    def load(tag):
-        return lambda: calls.append(tag) or tag
-
-    a = recs._cached(("gateway", "w1", "1", "us-west-2", "gw-1"), load("a"))
-    b = recs._cached(("gateway", "w1", "1", "us-west-2", "gw-2"), load("b"))
-    c = recs._cached(("gateway", "w2", "1", "us-east-1", "gw-1"), load("c"))
-    again = recs._cached(("gateway", "w1", "1", "us-west-2", "gw-1"), load("x"))
-
-    assert (a, b, c, again) == ("a", "b", "c", "a")
-    assert calls == ["a", "b", "c"]
+    assert executor.submitted == []
 
 
 # ─── start ──────────────────────────────────────────────────────────────────
-def test_start_pins_the_batch_and_the_chosen_evaluator(client, monkeypatch):
-    spans = {sid: [_span(sid, "lookup")] for sid in ("sess-0001", "sess-0002")}
-    _, data = _stub(monkeypatch, spans=spans)
-    data.start_recommendation.side_effect = [{"recommendationId": "rec-sp"},
-                                             {"recommendationId": "rec-td"}]
-    run_id = _run("", session_ids=["sess-0001", "sess-0002"])
+def test_start_submits_one_worker_job_per_kind(client, monkeypatch):
+    executor = _stub(monkeypatch)
+    agent_id = _agent(method="zip_runtime", resource_id="rt-1", spec={"system_prompt": "Help."})
+    run_id = _run(agent_id)
+    _results(run_id, ["sess-0001"], evaluator="Builtin.Helpfulness", scores={"sess-0001": 1.0})
+    # another run's rows must never leak into this run's evidence
+    _results(_run(agent_id, results=False), ["sess-0009"])
 
     res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
         "kinds": ["system_prompt", "tool_descriptions"], "input_source": "manual",
         "system_prompt": "  Help users.  ", "evaluator": "Builtin.Helpfulness",
         "tools": [{"name": "lookup", "description": "Find an order."}],
     })
-
     assert res.status_code == 201, res.text
     rows = res.json()["recommendations"]
-    assert [(r["kind"], r["recommendation_id"]) for r in rows] == [
-        ("system_prompt", "rec-sp"), ("tool_descriptions", "rec-td")]
-    sp, td = (c.kwargs for c in data.start_recommendation.call_args_list)
-    sp_config = sp["recommendationConfig"]["systemPromptRecommendationConfig"]
-    assert sp_config["systemPrompt"] == {"text": "Help users."}
-    assert sp_config["agentTraces"] == {"batchEvaluation": {"batchEvaluationArn": BATCH_ARN}}
-    assert sp_config["evaluationConfig"]["evaluators"] == [
-        {"evaluatorArn": "arn:aws:bedrock-agentcore:::evaluator/Builtin.Helpfulness"}]
-    td_config = td["recommendationConfig"]["toolDescriptionRecommendationConfig"]
-    assert td_config["toolDescription"]["toolDescriptionText"]["tools"] == [
-        {"toolName": "lookup", "toolDescription": {"text": "Find an order."}}]
-    # a tool job refuses a batchEvaluation source (live 2026-09-30): the same
-    # sessions' spans go inline instead, non-JSON log rows dropped
-    assert td_config["agentTraces"] == {
-        "sessionSpans": spans["sess-0001"] + spans["sess-0002"]}
-    assert [q["sessions"] for q in data.queries] == [["sess-0001", "sess-0002"]]
-    assert recs.SPAN_LOOKBACK_MARGIN_H <= data.queries[0]["hours"] <= recs.SPAN_LOOKBACK_MAX_H
-    assert all(len(c.kwargs["name"]) <= 48 for c in data.start_recommendation.call_args_list)
+    assert [r["kind"] for r in rows] == ["system_prompt", "tool_descriptions"]
+    assert all(r["status"] == "IN_PROGRESS" for r in rows)
+    assert all(r["recommendation_id"].startswith("provider-gepa_lite-") for r in rows)
+    assert all(r["name"] == f"gepa_lite · {MODEL}" for r in rows)
+    assert rows[0]["system_prompt"] == "Help users."
+    # N17-obs453: gepa_lite reads every evaluator of the run and takes no target — the sent
+    # evaluator is not stored as if it had been optimised against
+    assert rows[0]["evaluator"] is None and rows[0]["optimized_toward"] is None
+    assert rows[1]["tools"] == {"lookup": "Find an order."} and rows[1]["evaluator"] is None
+    assert rows[0]["result"] == {"provider": "gepa_lite", "provider_model_id": MODEL}
+    # the background thread (inline here) recorded the submission on the row
+    assert _rows(client, run_id)[0]["result"]["progress"] == "submitted to the evaluation worker"
+
+    assert [j.job_type for j in executor.submitted] == ["recommend", "recommend"]
+    assert [j.job_id for j in executor.submitted] == [r["recommendation_id"] for r in rows]
+    sp, td = (j.spec for j in executor.submitted)
+    assert sp["provider"] == "gepa_lite" and sp["model_id"] == MODEL
+    assert sp["components"] == ["system_prompt"] and sp["current_prompt"] == "Help users."
+    assert sp["max_chars"] == recs.PROMPT_MAX_CHARS
+    assert sp["max_tokens"] == get_settings().prompt_opt_max_tokens
+    assert sp["trace_source"] == {"kind": "eval_results", "run_id": run_id}
+    # evidence: this run's eval_results only, worst session first, transcripts attached
+    # sess-0001 = mean(0.2, 1.0) = 0.6 → worst first is 0003 (0.5), 0001 (0.6), 0002 (0.9)
+    assert [e["session_id"] for e in sp["evidence"]] == ["sess-0003", "sess-0001", "sess-0002"]
+    assert sp["stats"]["records"] == 4 and sp["stats"]["sessions_scored"] == 3
+    by_sid = {e["session_id"]: e for e in sp["evidence"]}
+    assert {r["evaluator_id"] for r in by_sid["sess-0001"]["records"]} == {
+        "Builtin.Correctness", "Builtin.Helpfulness"}
+    assert [t["role"] for t in by_sid["sess-0001"]["turns"]] == ["user", "assistant"]
+    assert td["components"] == ["tool_descriptions"]
+    assert td["tools"] == {"lookup": "Find an order."}
+    assert td["stats"]["tool_calls_seen"] == 3  # the stubbed content-log turn per session
+    assert [t["role"] for t in td["evidence"][0]["turns"]] == [
+        "user", "assistant", "tool_call", "tool_result"]
+    job = executor.submitted[0]
+    assert job.sink["prefix"] == jobs.job_prefix(job.job_id, 1)
+    assert job.workspace["region"]
 
 
 @pytest.mark.parametrize(("payload", "code"), [
@@ -440,220 +268,214 @@ def test_start_pins_the_batch_and_the_chosen_evaluator(client, monkeypatch):
     ({"kinds": ["tool_descriptions"], "tools": [{"name": "a", "description": ""}]},
      "recommendation.tool_description_required"),
 ])
-def test_missing_inputs_are_refused_before_any_aws_call(client, monkeypatch, payload, code):
-    _, data = _stub(monkeypatch)
-
-    res = client.post(f"/api/eval/runs/{_run('')}/recommendations", json=payload)
-
+def test_missing_inputs_are_refused_before_any_job(client, monkeypatch, payload, code):
+    executor = _stub(monkeypatch)
+    res = client.post(f"/api/eval/runs/{_run(_agent())}/recommendations", json=payload)
     assert res.status_code == 422
     assert res.json()["code"] == code
-    data.start_recommendation.assert_not_called()
+    assert executor.submitted == []
 
 
-def test_an_unfinished_run_cannot_seed_a_recommendation(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    run_id = _run("", status="evaluating")
-
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+def test_an_unfinished_run_or_one_without_results_cannot_seed_a_recommendation(
+    client, monkeypatch,
+):
+    executor = _stub(monkeypatch)
+    res = client.post(f"/api/eval/runs/{_run(_agent(), status='evaluating')}/recommendations",
                       json={"kinds": ["system_prompt"], "system_prompt": "x"})
+    assert res.status_code == 409 and res.json()["code"] == "recommendation.run_not_completed"
+    bare = _run(_agent(), results=False)
+    res = client.post(f"/api/eval/runs/{bare}/recommendations",
+                      json={"kinds": ["system_prompt"], "system_prompt": "x"})
+    assert res.status_code == 409 and res.json()["code"] == "recommendation.run_no_batch"
+    inputs = client.get(f"/api/eval/runs/{bare}/recommendation-inputs").json()
+    assert inputs["eligible"] is False and inputs["reason_code"] == "run_no_batch"
+    assert executor.submitted == []
 
-    assert res.status_code == 409
-    assert res.json()["code"] == "recommendation.run_not_completed"
-    data.start_recommendation.assert_not_called()
 
-
-def test_a_categorical_judge_is_refused(client, monkeypatch):
-    control, data = _stub(monkeypatch)
-    control.get_evaluator.return_value = {"evaluatorArn": "arn:x", "evaluatorConfig": {
-        "llmAsAJudge": {"ratingScale": {"categorical": [{"label": "pass"}]}}}}
-
-    res = client.post(f"/api/eval/runs/{_run('')}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "x", "evaluator": "judge-cat"})
-
+def test_provider_gating(client, monkeypatch):
+    executor = _stub(monkeypatch)
+    run_id = _run(_agent())
+    base = {"kinds": ["system_prompt"], "system_prompt": "x"}
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+                      json={**base, "provider": "mystery"})
+    assert res.status_code == 422  # the request Literal refuses it
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+                      json={**base, "provider": "harness_optimizer"})
     assert res.status_code == 422
-    assert res.json()["code"] == "recommendation.evaluator_categorical"
-    data.start_recommendation.assert_not_called()
-
-
-def test_a_numeric_custom_judge_is_passed_by_its_arn(client, monkeypatch):
-    control, data = _stub(monkeypatch)
-    control.get_evaluator.return_value = {
-        "evaluatorArn": "arn:aws:bedrock-agentcore:us-west-2:1:evaluator/judge-num",
-        "evaluatorConfig": {"llmAsAJudge": {"ratingScale": {"numerical": [{"value": 1}]}}}}
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
-
-    res = client.post(f"/api/eval/runs/{_run('')}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "x", "evaluator": "judge-num"})
-
+    assert res.json()["code"] == "recommendation.provider_disabled"
+    monkeypatch.setattr(get_settings(), "prompt_opt_harness_optimizer_enabled", True)
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
+        "kinds": ["tool_descriptions"], "tools": [{"name": "t", "description": "d"}],
+        "provider": "harness_optimizer"})
+    assert res.status_code == 422
+    assert res.json()["code"] == "recommendation.kind_unsupported_by_provider"
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+                      json={**base, "provider": "harness_optimizer"})
+    assert res.status_code == 201, res.text
+    assert executor.submitted[-1].job_type == "optimize"
+    assert executor.submitted[-1].spec["provider"] == "harness_optimizer"
+    assert executor.submitted[-1].spec["epochs"] == get_settings().prompt_opt_epochs
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+                      json={**base, "model_id": "global.anthropic.claude-opus-5"})
+    assert res.status_code == 422 and res.json()["code"] == "model.not_allowed"
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+                      json={**base, "model_id": "global.moonshotai.kimi-k3"})
     assert res.status_code == 201
-    config = data.start_recommendation.call_args.kwargs["recommendationConfig"]
-    assert config["systemPromptRecommendationConfig"]["evaluationConfig"]["evaluators"] == [
-        {"evaluatorArn": "arn:aws:bedrock-agentcore:us-west-2:1:evaluator/judge-num"}]
+    assert executor.submitted[-1].spec["model_id"] == "global.moonshotai.kimi-k3"
+
+
+def test_a_recommendation_needs_an_agent_run(client, monkeypatch):
+    _stub(monkeypatch)
+    res = client.post(f"/api/eval/runs/{_run('')}/recommendations",
+                      json={"kinds": ["system_prompt"], "system_prompt": "Old."})
+    assert res.status_code == 422
+    assert res.json()["code"] == "recommendation.provider_needs_agent"
+
+
+def test_a_missing_worker_is_refused_before_any_row_exists(client, monkeypatch):
+    _stub(monkeypatch)
+
+    def no_worker(_settings, job_type):
+        raise AppError("evaluation.worker_missing", "no worker", status_code=503)
+
+    monkeypatch.setattr(recs, "select_executor", no_worker)
+    run_id = _run(_agent())
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations",
+                      json={"kinds": ["system_prompt"], "system_prompt": "Old."})
+    assert res.status_code == 503 and res.json()["code"] == "evaluation.worker_missing"
+    assert _rows(client, run_id) == []
+
+
+def test_an_evidence_failure_lands_on_the_row(client, monkeypatch):
+    executor = _stub(monkeypatch)
+
+    def boom(db, ws, agent):
+        raise RuntimeError("memory down")
+
+    monkeypatch.setattr(ev, "default_transcript", boom)
+    run_id = _run(_agent())
+    client.post(f"/api/eval/runs/{run_id}/recommendations",
+                json={"kinds": ["system_prompt"], "system_prompt": "Old."})
+    row = _rows(client, run_id)[0]
+    assert row["status"] == "FAILED" and "memory down" in row["error"]
+    assert executor.submitted == []
 
 
 # ─── refresh ────────────────────────────────────────────────────────────────
-def test_reading_refreshes_until_the_job_completes(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
-    run_id = _run("")
-    client.post(f"/api/eval/runs/{run_id}/recommendations",
-                json={"kinds": ["system_prompt"], "system_prompt": "Old."})
+def _started(client, monkeypatch, kinds=("system_prompt",), **extra):
+    executor = _stub(monkeypatch)
+    run_id = _run(_agent())
+    body = {"kinds": list(kinds), "system_prompt": "Old.",
+            "tools": [{"name": "lookup", "description": "d"}], **extra}
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json=body)
+    assert res.status_code == 201, res.text
+    return executor, run_id, res.json()["recommendations"]
 
-    data.get_recommendation.return_value = {"status": "IN_PROGRESS"}
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-    assert row["status"] == "IN_PROGRESS" and row["result"] == {}
 
-    data.get_recommendation.return_value = {"status": "COMPLETED", "recommendationResult": {
-        "systemPromptRecommendationResult": {"recommendedSystemPrompt": "New.",
-                                             "explanation": "Sharper."}}}
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-    assert row["status"] == "COMPLETED"
-    assert row["result"] == {"recommended_prompt": "New.", "explanation": "Sharper."}
-
-    # terminal: never read from AWS again
-    calls = data.get_recommendation.call_count
-    client.get(f"/api/eval/runs/{run_id}/recommendations")
-    assert data.get_recommendation.call_count == calls
+def test_reading_mirrors_worker_progress_until_done(client, monkeypatch):
+    executor, run_id, (row,) = _started(client, monkeypatch)
+    job_id = row["recommendation_id"]
+    executor.statuses[job_id] = JobStatus(
+        phase="evaluating", progress={"done": 0, "total": 1, "message": "reflecting…"})
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "IN_PROGRESS" and listed["result"]["progress"] == "reflecting…"
+    executor.complete(job_id, [], summary={"recommendation": {
+        "status": "COMPLETED", "recommended_prompt": "New.", "explanation": "Sharper.",
+        "meta": {"calls": 1, "evidence_sessions": 3}}})
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "COMPLETED" and listed["error"] is None
+    assert listed["result"] == {"provider": "gepa_lite", "provider_model_id": MODEL,
+                                "recommended_prompt": "New.", "explanation": "Sharper.",
+                                "provider_meta": {"calls": 1, "evidence_sessions": 3}}
+    # terminal: the executor is never consulted again
+    executor.dones.clear()
+    executor.statuses.clear()
+    assert _rows(client, run_id)[0]["status"] == "COMPLETED"
 
 
 def test_a_completed_job_without_text_reads_as_failed(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
-    run_id = _run("")
-    client.post(f"/api/eval/runs/{run_id}/recommendations",
-                json={"kinds": ["system_prompt"], "system_prompt": "Old."})
-    data.get_recommendation.return_value = {"status": "COMPLETED", "recommendationResult": {
-        "systemPromptRecommendationResult": {"errorCode": "INSUFFICIENT_TRACES",
-                                             "errorMessage": "need more sessions"}}}
-
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-
-    assert row["status"] == "FAILED"
-    assert row["error"] == "INSUFFICIENT_TRACES: need more sessions"
-    assert row["result"] == {}
+    executor, run_id, (row,) = _started(client, monkeypatch)
+    executor.complete(row["recommendation_id"], [], summary={"recommendation": {
+        "status": "FAILED", "error": "no scored sessions in the selected run", "meta": {}}})
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "FAILED"
+    assert listed["error"] == "no scored sessions in the selected run"
+    assert "recommended_prompt" not in listed["result"]
 
 
-def test_tools_the_job_still_rejects_are_dropped_on_one_retry(client, monkeypatch):
-    # "unused" is mentioned (so the loose pre-filter keeps it) but never called
-    mention = {"name": "chat", "scope": {"name": "s"}, "attributes": {
-        "session.id": "sess-0001", "gen_ai.prompt": "do not call unused"}}
-    _, data = _stub(monkeypatch, spans={"sess-0001": [_span("sess-0001", "used"), mention]})
-    data.start_recommendation.side_effect = [{"recommendationId": "rec-1"},
-                                             {"recommendationId": "rec-2"}]
-    run_id = _run("", session_ids=["sess-0001"])
-    client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["tool_descriptions"],
-        "tools": [{"name": "used", "description": "a"}, {"name": "unused", "description": "b"}],
-    })
-    data.get_recommendation.return_value = {"status": "FAILED", "recommendationResult": {
-        "toolDescriptionRecommendationResult": {
-            "errorCode": "ValidationException",
-            "errorMessage": "Tools not found in the sampled agent traces: ['unused']"}}}
-
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-
-    assert row["status"] == "PENDING"
-    assert row["recommendation_id"] == "rec-2"
-    assert row["skipped_tools"] == ["unused"]
-    assert row["tools"] == {"used": "a"}
-    assert row["name"].endswith(recs.RETRY_SUFFIX)
-    retried = data.start_recommendation.call_args.kwargs
-    assert retried["name"] == row["name"]
-    listed = retried["recommendationConfig"]["toolDescriptionRecommendationConfig"][
-        "toolDescription"]["toolDescriptionText"]["tools"]
-    assert [t["toolName"] for t in listed] == ["used"]
-
-    data.get_recommendation.return_value = {"status": "COMPLETED", "recommendationResult": {
-        "toolDescriptionRecommendationResult": {"tools": [
-            {"toolName": "used", "recommendedToolDescription": "Better a.",
-             "explanation": "Clearer."}]}}}
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-    assert row["status"] == "COMPLETED"
-    assert row["result"] == {"tools": {"used": {"description": "Better a.",
-                                                "explanation": "Clearer."}}}
+def test_a_failed_worker_job_reads_as_failed(client, monkeypatch):
+    executor, run_id, (row,) = _started(client, monkeypatch)
+    executor.dones[row["recommendation_id"]] = JobDone(state="FAILED",
+                                                      error="RuntimeError: bearer missing")
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "FAILED" and "bearer missing" in listed["error"]
 
 
-def test_a_second_rejection_is_final(client, monkeypatch):
-    _, data = _stub(monkeypatch, spans={"sess-0001": [_span("sess-0001", "a b c")]})
-    data.start_recommendation.side_effect = [{"recommendationId": "rec-1"},
-                                             {"recommendationId": "rec-2"}]
-    run_id = _run("", session_ids=["sess-0001"])
-    client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["tool_descriptions"],
-        "tools": [{"name": n, "description": n} for n in ("a", "b", "c")]})
-
-    def reject(name):
-        return {"status": "FAILED", "recommendationResult": {
-            "toolDescriptionRecommendationResult": {"errorMessage":
-                f"Tools not found in the sampled agent traces: ['{name}']"}}}
-
-    data.get_recommendation.return_value = reject("c")
-    client.get(f"/api/eval/runs/{run_id}/recommendations")
-    data.get_recommendation.return_value = reject("b")
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-
-    assert row["status"] == "FAILED"
-    assert data.start_recommendation.call_count == 2
+def test_tool_recommendations_are_mapped_per_tool(client, monkeypatch):
+    executor, run_id, (row,) = _started(client, monkeypatch, kinds=("tool_descriptions",))
+    executor.complete(row["recommendation_id"], [], summary={"recommendation": {
+        "status": "FAILED", "error": "instruction frozen — tool descriptions only",
+        "tool_status": "COMPLETED", "tool_descriptions": {"lookup": "Better d."},
+        "tool_explanation": "- clearer", "meta": {"tool_calls_seen": 3}}})
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "COMPLETED"
+    assert listed["result"]["tools"] == {"lookup": {"description": "Better d.",
+                                                    "explanation": "- clearer"}}
+    assert listed["result"]["provider_meta"] == {"tool_calls_seen": 3}
 
 
-def test_untraced_tools_are_skipped_before_the_job_starts(client, monkeypatch):
-    _, data = _stub(monkeypatch, spans={"sess-0001": [_span("sess-0001", "kb___Retrieve")]})
-    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
-    run_id = _run("", session_ids=["sess-0001"])
-
-    row = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["tool_descriptions"],
-        "tools": [{"name": "kb___Retrieve", "description": "Search the KB."},
-                  {"name": "other_kb___Retrieve", "description": "Another KB."}],
-    }).json()["recommendations"][0]
-
-    assert row["tools"] == {"kb___Retrieve": "Search the KB."}
-    assert row["skipped_tools"] == ["other_kb___Retrieve"]
-    # the tool-only path never needs the batch
-    data.get_batch_evaluation.assert_not_called()
+def test_tool_side_settled_by_the_precheck_reads_as_failed(client, monkeypatch):
+    executor, run_id, (row,) = _started(client, monkeypatch, kinds=("tool_descriptions",))
+    executor.complete(row["recommendation_id"], [], summary={"recommendation": {
+        "status": "FAILED", "tool_status": "no-tool-calls",
+        "tool_error": "no tool calls in the selected run", "tool_descriptions": {}}})
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "FAILED" and "no tool calls" in listed["error"]
 
 
-@pytest.mark.parametrize(("session_ids", "spans", "tools", "status", "code"), [
-    ([], {}, ["lookup_order"], 409, "recommendation.run_no_sessions"),
-    (["sess-0001"], {}, ["lookup_order"], 409, "recommendation.no_spans"),
-    (["sess-0001"], {"sess-0001": [_span("sess-0001", "other_tool")]}, ["lookup_order"],
-     422, "recommendation.tools_not_traced"),
-])
-def test_tool_jobs_need_traced_sessions(
-    client, monkeypatch, session_ids, spans, tools, status, code,
-):
-    _, data = _stub(monkeypatch, spans=spans)
-    run_id = _run("", session_ids=session_ids)
-
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["system_prompt", "tool_descriptions"], "system_prompt": "x",
-        "tools": [{"name": n, "description": "d"} for n in tools]})
-
-    assert res.status_code == status
-    assert res.json()["code"] == code
-    # refused before either kind started — never a half-started pair
-    data.start_recommendation.assert_not_called()
+def test_a_stale_worker_job_reads_as_lost(client, monkeypatch):
+    executor, run_id, (row,) = _started(client, monkeypatch)
+    stale_s = get_settings().eval_job_stale_s
+    old = (datetime.now(UTC) - timedelta(seconds=stale_s + 60)).isoformat()
+    executor.statuses[row["recommendation_id"]] = JobStatus(phase="evaluating", updated_at=old)
+    listed = _rows(client, run_id)[0]
+    assert listed["status"] == "FAILED" and "lost" in listed["error"]
 
 
-def test_a_window_run_offers_prompt_recommendations_only(client, monkeypatch):
+def test_a_row_left_running_by_a_restart_reads_as_interrupted(client, monkeypatch):
     _stub(monkeypatch)
+    run_id = _run(_agent())
+    db = SessionLocal()
+    db.add(EvalRecommendation(
+        workspace_id=DEFAULT_WORKSPACE_ID, run_id=run_id, name="gepa_lite · m",
+        recommendation_id="provider-gepa_lite-abcdef012345", kind="system_prompt",
+        status="IN_PROGRESS", result={"provider": "gepa_lite"}))
+    db.add(EvalRecommendation(
+        workspace_id=DEFAULT_WORKSPACE_ID, run_id=run_id, name="rec_sp",
+        recommendation_id="rec-aws-legacy", kind="system_prompt", status="PENDING"))
+    db.commit()
+    db.close()
+    rows = {r["recommendation_id"]: r for r in _rows(client, run_id)}
+    assert rows["provider-gepa_lite-abcdef012345"]["status"] == "FAILED"
+    assert "interrupted" in rows["provider-gepa_lite-abcdef012345"]["error"]
+    assert rows["rec-aws-legacy"]["status"] == "FAILED"
+    assert "Global AgentCore job" in rows["rec-aws-legacy"]["error"]
 
-    body = client.get(f"/api/eval/runs/{_run('', session_ids=[])}/recommendation-inputs").json()
 
-    assert body["eligible"] is True
-    assert body["tools_eligible"] is False
+def test_a_live_row_without_worker_status_yet_stays_in_progress(client, monkeypatch):
+    executor, run_id, (row,) = _started(client, monkeypatch)
+    executor.statuses.clear()  # the worker has not written status.json yet (cold start)
+    assert _rows(client, run_id)[0]["status"] == "IN_PROGRESS"
 
 
 def test_another_workspaces_run_is_not_found(client, monkeypatch):
     _stub(monkeypatch)
     db = SessionLocal()
-    run = EvalRun(workspace_id="other-ws", agent_id="", agent_name="x",
-                  status="completed", batch_eval_id="be-9")
+    run = EvalRun(workspace_id="other-ws", agent_id="", agent_name="x", status="completed")
     db.add(run)
     db.commit()
     run_id = run.id
     db.close()
-
     assert client.get(f"/api/eval/runs/{run_id}/recommendations").status_code == 404
     assert client.post(f"/api/eval/runs/{run_id}/recommendations",
                        json={"kinds": ["system_prompt"], "system_prompt": "x"}
@@ -666,18 +488,16 @@ def _harness_agent(**fields) -> str:
 
     spec = AgentSpec(name="rec-agent", method="harness", system_prompt="old prompt").model_dump()
     return _agent(method="harness", spec=spec, version="1",
-                  arn="arn:aws:bedrock-agentcore:us-west-2:1:harness/rec_agent-abcdefghij",
+                  arn="arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/rec_agent-abcdefghij",
                   resource_id="rec_agent-abcdefghij", **fields)
 
 
 def _rec(run_id: str, **fields) -> str:
-    from app.evaluation.models import EvalRecommendation
-
     db = SessionLocal()
     try:
         row = EvalRecommendation(workspace_id=DEFAULT_WORKSPACE_ID, run_id=run_id,
-                                 name="rec_sp", **{
-                                     "recommendation_id": "rec-aws-1",
+                                 name="gepa_lite · m", **{
+                                     "recommendation_id": "provider-gepa_lite-aaaaaaaaaaaa",
                                      "kind": "system_prompt", "status": "COMPLETED",
                                      "result": {"recommended_prompt": "new prompt"},
                                      **fields})
@@ -717,7 +537,6 @@ def test_accept_republishes_the_harness_with_the_recommended_prompt(client, monk
         assert agent.status == "deploying"
     finally:
         db.close()
-    # accepted once
     again = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
     assert again.status_code == 409
     assert again.json()["code"] == "recommendation.already_accepted"
@@ -727,18 +546,27 @@ def test_accept_republishes_the_harness_with_the_recommended_prompt(client, monk
 def test_accept_drops_the_kb_section_the_deployer_appends(client, monkeypatch):
     """The recommendation revised the LIVE prompt (spec prompt + the platform's KB
     section); storing that verbatim made the next deploy append the section twice."""
-    from app.deployer.harness import _kb_prompt
     from app.schemas.agent import AgentSpec
+    from app.templates.kb_support import kb_prompt_section, mounted_kbs
 
     _stub(monkeypatch)
     _no_deploy(monkeypatch)
+    from app.models.ledger import KnowledgeBase
+
     spec = AgentSpec(name="rec-agent", method="harness", system_prompt="old prompt",
                      knowledge_bases=[{"kb_id": "KB12345678", "name": "earnings"}])
+    db = SessionLocal()  # round 16: a re-publish refuses a KB this workspace has no row for
+    try:
+        db.add(KnowledgeBase(kb_id="KB12345678", workspace_id=DEFAULT_WORKSPACE_ID,
+                             name="earnings", status="ACTIVE"))
+        db.commit()
+    finally:
+        db.close()
     agent_id = _agent(method="harness", spec=spec.model_dump(), version="1",
-                      arn="arn:aws:bedrock-agentcore:us-west-2:1:harness/rec_agent-abcdefghij",
+                      arn="arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/rec_agent-abc",
                       resource_id="rec_agent-abcdefghij")
     run_id = _run(agent_id)
-    live = "revised prompt" + _kb_prompt(spec)
+    live = "revised prompt" + kb_prompt_section(mounted_kbs(spec))
     rec_id = _rec(run_id, result={"recommended_prompt": live})
 
     res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
@@ -752,14 +580,15 @@ def test_accept_drops_the_kb_section_the_deployer_appends(client, monkeypatch):
 
 
 def test_strip_generated_prompt_tolerates_a_reflowed_kb_section():
-    from app.deployer.harness import strip_generated_prompt
+    from app.evaluation.generated_prompt import strip_generated_prompt
     from app.schemas.agent import AgentSpec
 
     spec = AgentSpec(name="rec-agent", method="harness", system_prompt="p",
                      knowledge_bases=[{"kb_id": "KB12345678", "name": "earnings"}])
-    reflowed = ("keep me\n## Knowledge bases\nRetrieval tools are mounted for you. (edited)\n"
-                "- earnings …\nGround answers on retrieved content and cite sources when you "
-                "use them.\nand this tail")
+    reflowed = ("keep me\n## Knowledge bases\nTwo retrieval tools are mounted for you. "
+                "(edited)\n- earnings …\nGround answers on the retrieved passages and cite "
+                "their sources; say so explicitly when retrieval returns nothing relevant."
+                "\nand this tail")
     assert strip_generated_prompt(spec, reflowed) == "keep me\nand this tail"
     assert strip_generated_prompt(spec, "no section") == "no section"
 
@@ -783,17 +612,91 @@ def test_accept_refuses_what_cannot_become_a_version(client, monkeypatch, rec_fi
     assert started == []
 
 
-def test_accept_needs_a_platform_harness(client, monkeypatch):
+# ─── N12-obs44: accept is gated on ONE predicate, shared with the console ───────
+def _spec_agent(method: str, **fields) -> str:
+    from app.schemas.agent import AgentSpec
+
+    spec = AgentSpec(name="rec-agent", method=method, system_prompt="old prompt").model_dump()
+    return _agent(method=method, spec={**spec, **fields.pop("spec_extra", {})}, version="1",
+                  resource_id="rec_agent-abcdefghij", **fields)
+
+
+def test_accept_republishes_a_strands_zip_runtime_agent_too(client, monkeypatch):
+    # live (obs44): the V2 card hid ACCEPT for a zip_runtime agent although the Strands
+    # template takes its prompt from the spec exactly like the Harness does
     _stub(monkeypatch)
     started = _no_deploy(monkeypatch)
-    run_id = _run(_agent(method="zip_runtime", spec={"system_prompt": "x"}))
-    rec_id = _rec(run_id)
+    agent_id = _spec_agent("zip_runtime")
+    run_id = _run(agent_id)
+    inputs = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
+    assert inputs["agent_method"] == "zip_runtime"
+    assert inputs["accept_eligible"] is True and inputs["accept_ineligible_reason"] is None
 
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{_rec(run_id)}/accept")
+
+    assert res.status_code == 202, res.text
+    assert started == [res.json()["job_id"]]
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, agent_id)
+        assert agent.spec["system_prompt"] == "new prompt" and agent.status == "deploying"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(("agent_fields", "reason"), [
+    ({"method": "studio", "spec": {"system_prompt": "x", "code": "print(1)"}}, "method"),
+    ({"method": "byoc", "spec": {"name": "byo"}}, "method"),
+    ({"method": "discovered_runtime", "spec": {}}, "method"),
+    ({"method": "harness", "spec": {"system_prompt": "x"}, "system_key": "frontdesk"},
+     "system_preset"),
+    ({"method": "zip_runtime", "spec": {"system_prompt": "x", "code_bundle": {"key": "k"}}},
+     "converted_locked"),
+])
+def test_accept_refuses_an_agent_whose_prompt_a_republish_would_not_change(
+    client, monkeypatch, agent_fields, reason,
+):
+    _stub(monkeypatch)
+    started = _no_deploy(monkeypatch)
+    run_id = _run(_agent(**agent_fields))
+    # the read model the console gates the button on says the same thing, up front
+    inputs = client.get(f"/api/eval/runs/{run_id}/recommendation-inputs").json()
+    assert inputs["accept_eligible"] is False
+    assert inputs["accept_ineligible_reason"] == reason
+
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{_rec(run_id)}/accept")
 
     assert res.status_code == 400
     assert res.json()["code"] == "recommendation.accept_not_harness"
+    assert res.json()["detail"]["reason"] == reason
     assert started == []
+
+
+def test_prompt_accept_ineligibility_mirrors_the_republish_guards():
+    from types import SimpleNamespace as A
+
+    assert recs.prompt_accept_ineligibility(None) == "agent_missing"
+    for method in sorted(recs.PROMPT_REPUBLISHABLE_METHODS):
+        assert recs.prompt_accept_ineligibility(
+            A(method=method, system_key=None, spec={"system_prompt": "p"})) is None
+    assert recs.PROMPT_REPUBLISHABLE_METHODS == {"harness", "zip_runtime"}
+    assert recs.prompt_accept_ineligibility(
+        A(method="studio", system_key=None, spec={})) == "method"
+    assert recs.prompt_accept_ineligibility(
+        A(method="harness", system_key="preset", spec={})) == "system_preset"
+    assert recs.prompt_accept_ineligibility(
+        A(method="zip_runtime", system_key=None, spec={"code_bundle": {"key": "k"}})
+    ) == "converted_locked"
+    # method is checked first: a system preset of an ineligible method is "method"
+    assert recs.prompt_accept_ineligibility(A(method="byoc", system_key="p", spec={})) == "method"
+
+
+def test_recommendation_inputs_without_an_agent_are_not_acceptable(client, monkeypatch):
+    _stub(monkeypatch)
+    inputs = client.get(f"/api/eval/runs/{_run('')}/recommendation-inputs").json()
+    assert inputs["agent_method"] is None
+    assert inputs["accept_eligible"] is False
+    assert inputs["accept_ineligible_reason"] == "agent_missing"
 
 
 def test_accept_of_another_runs_recommendation_is_not_found(client, monkeypatch):
@@ -807,135 +710,6 @@ def test_accept_of_another_runs_recommendation_is_not_found(client, monkeypatch)
     assert res.status_code == 404
 
 
-# ─── 3rd-party provider (GEPA-lite) ─────────────────────────────────────────
-SOURCE = {"kind": "batch_evaluation", "run_id": "r", "batch_eval_id": "be-1",
-          "results_log_group": "/aws/bedrock-agentcore/evaluations/x", "results_log_stream": "s"}
-
-
-def _provider_stubs(monkeypatch, outcome: dict | Exception) -> list[dict]:
-    """Run the provider thread inline; ``outcome`` is what the reflection returns."""
-    from app.optimization import service as opt_service
-
-    calls: list[dict] = []
-    monkeypatch.setattr(recs, "_spawn", lambda fn: fn())
-    monkeypatch.setattr(opt_service, "resolve_recommend_source", lambda *_a: dict(SOURCE))
-
-    def reflect(exp_id, agent, workspace, progress, **kw):
-        calls.append({"agent": agent, **kw})
-        progress("reflecting…")
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    monkeypatch.setattr(opt_service, "_third_party_prompt_recommendation", reflect)
-    return calls
-
-
-def test_a_provider_recommendation_never_starts_an_aws_job(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    calls = _provider_stubs(monkeypatch, {
-        "system_prompt_status": "COMPLETED", "recommended_prompt": "Better prompt.",
-        "explanation": "fixed the date rule", "provider_meta": {"evidence_sessions": 6},
-    })
-    agent_id = _harness_agent()
-    run_id = _run(agent_id)
-
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["system_prompt"], "input_source": "harness", "system_prompt": "Old.",
-        "provider": "gepa_lite", "model_id": "global.anthropic.claude-sonnet-5",
-    })
-
-    assert res.status_code == 201, res.text
-    row = res.json()["recommendations"][0]
-    assert row["recommendation_id"].startswith(recs.PROVIDER_JOB_PREFIX + "gepa_lite-")
-    data.start_recommendation.assert_not_called()
-    assert calls[0]["provider_id"] == "gepa_lite"
-    assert calls[0]["model_id"] == "global.anthropic.claude-sonnet-5"
-    assert calls[0]["agent"]["system_prompt"] == "Old."
-    assert calls[0]["source"] == SOURCE
-    listed = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-    assert listed["status"] == "COMPLETED"
-    assert listed["result"]["recommended_prompt"] == "Better prompt."
-    assert listed["result"]["provider"] == "gepa_lite"
-    assert listed["result"]["provider_model_id"] == "global.anthropic.claude-sonnet-5"
-    assert listed["evaluator"] is None
-    data.get_recommendation.assert_not_called()
-
-
-@pytest.mark.parametrize("outcome", [
-    {"system_prompt_status": "FAILED", "system_prompt_error": "no scored sessions"},
-    RuntimeError("bedrock throttled"),
-])
-def test_a_failed_provider_run_reads_as_failed(client, monkeypatch, outcome):
-    _stub(monkeypatch)
-    _provider_stubs(monkeypatch, outcome)
-    run_id = _run(_harness_agent())
-
-    client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "gepa_lite"})
-
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-    assert row["status"] == "FAILED"
-    assert ("no scored sessions" in row["error"]) or ("bedrock throttled" in row["error"])
-    assert "recommended_prompt" not in row["result"]
-
-
-def test_a_provider_row_left_running_by_a_restart_reads_as_interrupted(client, monkeypatch):
-    _, data = _stub(monkeypatch)
-    run_id = _run(_harness_agent())
-    _rec(run_id, recommendation_id=recs.PROVIDER_JOB_PREFIX + "gepa_lite-abc",
-         status="IN_PROGRESS", result={"provider": "gepa_lite"})
-
-    row = client.get(f"/api/eval/runs/{run_id}/recommendations").json()["recommendations"][0]
-
-    assert row["status"] == "FAILED"
-    assert "interrupted" in row["error"]
-    data.get_recommendation.assert_not_called()
-
-
-def test_a_provider_needs_an_agent_run(client, monkeypatch):
-    _stub(monkeypatch)
-    _provider_stubs(monkeypatch, {})
-    run_id = _run("")
-
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "gepa_lite"})
-
-    assert res.status_code == 422
-    assert res.json()["code"] == "recommendation.provider_needs_agent"
-
-
-def test_an_unknown_provider_is_refused(client, monkeypatch):
-    _stub(monkeypatch)
-    run_id = _run(_harness_agent())
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "mystery"})
-    assert res.status_code == 422
-
-
-def test_a_provider_recommendation_can_be_accepted(client, monkeypatch):
-    _stub(monkeypatch)
-    started = _no_deploy(monkeypatch)
-    _provider_stubs(monkeypatch, {"system_prompt_status": "COMPLETED",
-                                  "recommended_prompt": "Better prompt."})
-    agent_id = _harness_agent()
-    run_id = _run(agent_id)
-    rec_id = client.post(f"/api/eval/runs/{run_id}/recommendations", json={
-        "kinds": ["system_prompt"], "system_prompt": "Old.", "provider": "gepa_lite",
-    }).json()["recommendations"][0]["id"]
-
-    res = client.post(f"/api/eval/runs/{run_id}/recommendations/{rec_id}/accept")
-
-    assert res.status_code == 202, res.text
-    assert len(started) == 1
-    db = SessionLocal()
-    try:
-        assert db.get(Agent, agent_id).spec["system_prompt"] == "Better prompt."
-    finally:
-        db.close()
-
-
-# ─── accept a reviewed (edited) prompt ──────────────────────────────────────
 def test_accept_publishes_the_reviewed_prompt_and_records_the_edit(client, monkeypatch):
     _stub(monkeypatch)
     started = _no_deploy(monkeypatch)
@@ -982,3 +756,29 @@ def test_an_empty_reviewed_prompt_is_refused(client, monkeypatch):
     assert res.status_code == 422
     assert res.json()["code"] == "recommendation.accept_prompt_empty"
     assert started == []
+
+
+@pytest.mark.siliconflow
+def test_an_unconfigured_provider_model_is_refused_before_the_job_is_queued(client,
+                                                                            monkeypatch):
+    """N-R6-obs1: the optimizer would only fail inside the worker without the key."""
+    sf = "siliconflow.zai-org/GLM-5.3"
+    monkeypatch.delenv("LAUNCHPAD_SILICONFLOW_API_KEY", raising=False)
+    executor = _stub(monkeypatch)
+    run_id = _run(_agent())
+    base = {"kinds": ["system_prompt"], "system_prompt": "x"}
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={**base, "model_id": sf})
+    assert res.status_code == 422, res.text
+    assert res.json()["code"] == "model.provider_unconfigured"
+    assert "launchpad-siliconflow-api-key" in res.json()["message"]
+    assert executor.submitted == []
+    # the discovery payload says which models the picker must disable
+    providers = {p["id"]: p
+                 for p in client.get("/api/eval/recommendation-providers").json()["providers"]}
+    for prov in providers.values():
+        for m in prov["models"]:
+            assert m["available"] is (not m["model_id"].startswith("siliconflow."))
+    monkeypatch.setenv("LAUNCHPAD_SILICONFLOW_API_KEY", "k")
+    res = client.post(f"/api/eval/runs/{run_id}/recommendations", json={**base, "model_id": sf})
+    assert res.status_code == 201, res.text
+    assert executor.submitted[-1].spec["model_id"] == sf

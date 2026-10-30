@@ -15,9 +15,9 @@ from sqlalchemy import select
 import app.routers.workspaces as workspaces_router
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation.models import EvalDataset
 from app.main import create_app
-from app.models.ledger import Agent, Job, PolicyChange, UserWorkspace, Workspace
+from app.models.assistant import AssistantConversation
+from app.models.ledger import Agent, Job, UserWorkspace, Workspace
 from app.routers.workspaces import _referencing_rows
 from app.services import users as users_service
 
@@ -100,6 +100,15 @@ class TestRegistration:
         assert response.status_code in (400, 422)
         if response.status_code == 400:
             assert response.json()["code"] == "workspace.invalid_region"
+
+    def test_region_must_resolve_to_a_real_partition(self, admin):
+        """`xx-fake-1` matches the region shape regex but botocore's endpoint data
+        has never heard of it — this must come back as a clean 422 AppError, not a
+        500 raised deep inside ARN construction (`UnknownRegionError` leaking out of
+        `aws_clients.partition_for_region`)."""
+        response = admin.post("/api/workspaces", json={**NEW, "region": "xx-fake-1"})
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "workspace.region_unknown"
 
     def test_account_id_must_be_an_account_id(self, admin):
         response = admin.post("/api/workspaces", json={**NEW, "account_id": "4444"})
@@ -290,28 +299,28 @@ class TestRenameAndDelete:
             db.close()
 
     def test_delete_is_blocked_by_a_row_in_any_scoped_table(self, admin):
-        """Not just agents: an evaluation dataset (no agent, no AWS resource) is
+        """Not just agents: an assistant conversation (no agent, no AWS resource) is
         enough, and the 409 names the table so the operator knows what to clear."""
         assert admin.post("/api/workspaces", json=NEW).status_code == 201
         db = SessionLocal()
         try:
-            dataset = EvalDataset(
-                workspace_id=NEW["id"], name="leftover", items=[{"prompt": "p"}]
+            conversation = AssistantConversation(
+                workspace_id=NEW["id"], owner="leftover-owner",
             )
-            db.add(dataset)
+            db.add(conversation)
             db.commit()
-            dataset_id = dataset.id
+            conversation_id = conversation.id
         finally:
             db.close()
 
         blocked = admin.delete(f"/api/workspaces/{NEW['id']}")
         assert blocked.status_code == 409
         assert blocked.json()["code"] == "workspace.in_use"
-        assert blocked.json()["detail"]["rows"] == {"eval_datasets": 1}
+        assert blocked.json()["detail"]["rows"] == {"assistant_conversations": 1}
 
         db = SessionLocal()
         try:
-            db.delete(db.get(EvalDataset, dataset_id))
+            db.delete(db.get(AssistantConversation, conversation_id))
             db.commit()
         finally:
             db.close()
@@ -602,40 +611,6 @@ class TestPurge:
         db = SessionLocal()
         try:
             assert db.get(Agent, agent_id) is None
-        finally:
-            db.close()
-
-    def test_an_audit_row_purges_although_the_orm_refuses_to_delete_one(self, admin):
-        """`PolicyChange` carries an immutability listener, so the raw per-table
-        DELETE is what makes the audit trail purgeable at all — an ORM delete
-        would raise and leave the workspace undetachable forever."""
-        self._failed_registration(admin)
-        db = SessionLocal()
-        try:
-            change = PolicyChange(
-                workspace_id=NEW["id"],
-                gateway_id="gw-abc",
-                gateway_arn="arn:aws:bedrock-agentcore:us-west-1:1:gateway/gw-abc",
-                gateway_name="left-behind-gw",
-                operation="engine_attach",
-                status="succeeded",
-                before={},
-                requested={"mode": "ENFORCE"},
-                operator="operator",
-            )
-            db.add(change)
-            db.commit()
-        finally:
-            db.close()
-
-        purged = admin.post(f"/api/workspaces/{NEW['id']}/purge")
-
-        assert purged.status_code == 200, purged.text
-        assert purged.json()["rows"] == {"policy_changes": 1, "jobs": 1}
-        db = SessionLocal()
-        try:
-            left = db.query(PolicyChange).filter(PolicyChange.workspace_id == NEW["id"]).count()
-            assert left == 0
         finally:
             db.close()
 

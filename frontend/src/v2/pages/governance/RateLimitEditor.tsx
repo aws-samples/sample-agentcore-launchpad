@@ -23,6 +23,7 @@ import {
 } from "../../../lib/governanceRateLimits";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, LinkButton, Select, Spin, Tag } from "../../ui";
+import { awsStatusLabel } from "../../awsStatus";
 
 const PERIODS: GovernanceRatePeriod[] = ["second", "minute"];
 
@@ -53,14 +54,14 @@ export function RateLimitEditor({ gatewayId, limitId }: { gatewayId: string; lim
     }
   }, [existing, hydrated]);
 
-  const back = () => setParams({ view: "gateway", gateway: gatewayId, section: "rateLimits" });
+  const back = () => setParams({ view: "gateway", gateway: gatewayId, section: "rate-limits" });
   const creating = !limitId;
   const draftBlockers = useMemo(() => validateDraft(draft), [draft]);
   const blockers = draftBlockers.map((code) => t(`governance.rateLimits.blockers.${code}`));
   if (gateway && !gateway.managed) blockers.unshift(t("governance.blockers.notManaged"));
   if (gateway && !isGatewayReady(gateway)) blockers.unshift(t("governance.blockers.gatewayNotReady"));
   if (existing && existing.status.toUpperCase() !== "ACTIVE") {
-    blockers.unshift(t("governance.rateLimits.blockers.statusNotActive", { status: existing.status }));
+    blockers.unshift(t("governance.rateLimits.blockers.statusNotActive", { status: awsStatusLabel(t, existing.status) }));
   }
 
   const addKey = (key: string) => {

@@ -1,0 +1,124 @@
+{
+  "name": "itsm-exam-8-cn",
+  "locale": "zh-CN",
+  "description": "CN重建的8道教学优化题，不是Global原始题包；另有保留验收题。",
+  "items": [
+    {
+      "scenario_id": "H01",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "质量文档库QDocs的编辑权限怎么申请？",
+          "expected_response": "在AccessHub只申请编辑者；通过QD-301后等2小时；直属经理和质量系统负责人审批。"
+        }
+      ],
+      "assertions": [
+        "说明AccessHub和QD-301",
+        "说明考试后等待2小时",
+        "只申请编辑者一个角色"
+      ]
+    },
+    {
+      "scenario_id": "H02",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "公司VPN连接失败，重连也不行，怎么办？",
+          "expected_response": "记录错误码、客户端版本和时间，仍失败建单转网络支持组，不索取密码。"
+        }
+      ],
+      "assertions": [
+        "说明收集错误码和客户端版本",
+        "说明转网络支持组",
+        "不索取密码"
+      ]
+    },
+    {
+      "scenario_id": "H03",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "企业微信CRM同步失败，要准备什么材料？",
+          "expected_response": "企业微信版本、发生时间、错误提示、截图；建议升级4.1及以上；仍失败转CRM支持组。"
+        }
+      ],
+      "assertions": [
+        "说明版本、时间、错误和截图",
+        "说明4.1及以上",
+        "说明CRM支持组"
+      ]
+    },
+    {
+      "scenario_id": "H04",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "讲者平台在企业微信里打不开，会是什么原因？",
+          "expected_response": "仅支持电脑浏览器；企业微信低于4.1或没有角色权限都可能导致异常，逐项排查。"
+        }
+      ],
+      "assertions": [
+        "说明电脑浏览器",
+        "同时说明版本和权限两种原因"
+      ]
+    },
+    {
+      "scenario_id": "H09",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "活动核销要在什么时候完成，准备哪些材料？",
+          "expected_response": "结束后10个工作日内；审批号、发票、签到表、议程、费用明细，人数与签到表一致。"
+        }
+      ],
+      "assertions": [
+        "说明10个工作日",
+        "列出所需材料",
+        "说明人数与签到表一致"
+      ]
+    },
+    {
+      "scenario_id": "T01",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "我是lab01，我的QDocs权限申请到哪一步了？请查询工单。",
+          "expected_response": "查询本人申请RITM0010001，目前pending_approval等待直属经理审批。"
+        }
+      ],
+      "assertions": [
+        "实际调用工单工具",
+        "给出本人单号和当前审批状态"
+      ]
+    },
+    {
+      "scenario_id": "T02",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "我是lab01，帮我查那张挂起的CRM单，需要补充什么？",
+          "expected_response": "查询INC0020001，补充企业微信版本、错误截图和发生时间；挂起超过5个工作日不补充自动关闭。"
+        }
+      ],
+      "assertions": [
+        "实际查询本人挂起工单",
+        "完整列出材料",
+        "提醒5个工作日超时关闭"
+      ]
+    },
+    {
+      "scenario_id": "T03",
+      "split": "tuning",
+      "turns": [
+        {
+          "input": "我是lab01，INC0020001目前在哪个支持组？只查询不要修改。",
+          "expected_response": "调用工单详情，当前为CRM支持组，挂起待补材料，不执行写操作。"
+        }
+      ],
+      "assertions": [
+        "给出CRM支持组",
+        "不修改工单"
+      ]
+    }
+  ]
+}

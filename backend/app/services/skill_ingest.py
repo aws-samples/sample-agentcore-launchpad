@@ -8,7 +8,7 @@ stable ``skillDefinition`` / ``skillMd`` inline contract to this layer. The
 multi-file bundle lives in ``s3://{artifacts_bucket}/skills/{name}/`` and the
 deploy-time packager (``deployer/zip_runtime.py``) downloads the whole prefix.
 This module is the producer side: every source resolves to a staging directory
-and metadata, validated once, before ``registry_console.register_skill_bundle``
+and metadata, validated once, before a registry backend stores the record
 uploads the files and creates the record.
 
 The acquirer seam (``bundle_from_*``) is designed so later sources — git shallow
@@ -35,7 +35,8 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 import yaml
 
-from app.core.errors import AppError
+from app.core.errors import AppError, redacted_error
+from app.services import s3_sweep
 
 _logger = logging.getLogger("launchpad.registry")
 
@@ -152,7 +153,7 @@ class SkillBundle:
 def parse_frontmatter(markdown: str) -> dict[str, Any]:
     """Parse a leading ``---`` YAML frontmatter block; ``{}`` when absent/broken.
 
-    Shared with registry_console (which re-exports it for backward compat).
+    Shared with the registry router's import path.
     """
     if not markdown.startswith("---"):
         return {}
@@ -904,3 +905,41 @@ def install_git() -> dict[str, Any]:
                 "hint": info["hint"]}
     _logger.info("git-install succeeded: git %s", version)
     return {"ok": True, "git_version": version}
+
+
+def upload_bundle_files(
+    bundle: SkillBundle,
+    bucket: str,
+    prefix: str,
+    s3: Any,
+    *,
+    uploaded: list[str] | None = None,
+) -> list[str]:
+    """Upload every file under ``bundle.root`` to ``{prefix}{rel}``. Keys are
+    appended to ``uploaded`` AS they land so a mid-batch failure leaves the
+    caller an exact cleanup list. Shared by the registry funnel and the
+    attach-without-record path (/api/agent-skills)."""
+    keys = uploaded if uploaded is not None else []
+    for rel in bundle.files:
+        key = f"{prefix}{rel}"
+        s3.upload_file(str(bundle.root / rel), bucket, key)
+        keys.append(key)
+    return keys
+
+
+def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> None:
+    """Best-effort orphan cleanup after a failed upload / registration: the caller re-raises
+    its ORIGINAL failure, so nothing here may raise — but a refused key is no longer silent
+    (N17-obs118): the shared reporting deleter (`s3_sweep.delete_keys`, `DeleteObjects` with
+    its `Errors[]` read) leaves one WARNING line naming the count and the S3 code."""
+    if not keys:
+        return
+    try:
+        result = s3_sweep.delete_keys(s3, bucket, keys)
+    except Exception as exc:  # noqa: BLE001 — cleanup must never mask the original failure
+        _logger.warning("skill_ingest: orphan cleanup of %d key(s) under s3://%s failed: %s",
+                        len(keys), bucket, redacted_error(exc))
+        return
+    if not result.complete:
+        _logger.warning("skill_ingest: orphan cleanup under s3://%s left residue: %s",
+                        bucket, result.summary())

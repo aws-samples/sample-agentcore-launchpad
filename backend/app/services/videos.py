@@ -1,4 +1,11 @@
-"""Hub-global video catalog: fixed V2 sections, editable drafts, published snapshots."""
+"""Hub-global video catalog: fixed V2 sections, editable drafts, published snapshots.
+
+CN port note: the build owns no media stack. Every media field is a permanent HTTPS CDN
+URL the administrator enters; the backend never uploads, proxies or probes it. The
+bundled `videos.initial.json` is a one-time import manifest and ships EMPTY here (the
+Global recordings show the Global console); a manifest entry names its V2 section with
+`sectionId`, so an operator can still seed a fresh ledger through it.
+"""
 
 import ipaddress
 import json
@@ -24,26 +31,6 @@ _V2_MEDIA_REVISION = re.compile(r"/media/[^/]+/[0-9]{8}-v2(?:-[^/]*)?/")
 
 ConsoleVersion = Literal["v2", "classic"]
 
-# One-time migration of the bundled directory into its matching V2 navigation section.
-_LEGACY_SECTIONS = {
-    "agent-development-harness": "agents",
-    "architect-assistant": "assistant",
-    "architect-assistant-runtime-ab": "assistant",
-    "agent-management": "agents",
-    "agent-management-byoc": "agents",
-    "registry": "registry",
-    "memory": "memory",
-    "observability": "observability",
-    "evaluation-datasets": "eval-data",
-    "evaluation-runs": "eval-tasks",
-    "evaluation-ab": "eval-experiments",
-    "evaluation-online": "eval-online",
-    "evaluation-evaluators": "eval-evaluators",
-    "skill-tasksets": "skill-lab",
-    "skill-evaluation": "skill-lab",
-    "skill-optimization": "skill-lab",
-}
-
 
 @lru_cache
 def taxonomy() -> dict[str, Any]:
@@ -59,7 +46,18 @@ def taxonomy() -> dict[str, Any]:
     return data
 
 
+# Retired section ids → the section that absorbed them (R13 N13-obs5: the My connections page
+# became the `?view=mine` tab of Connections). Applied on read like the area correction —
+# stored snapshots are never rewritten; the next publish stores the canonical id.
+_SECTION_ALIASES: dict[str, str] = {"my-connections": "connections"}
+
+
+def canonical_section_id(section_id: str) -> str:
+    return _SECTION_ALIASES.get(section_id, section_id)
+
+
 def _section(section_id: str) -> dict[str, Any] | None:
+    section_id = canonical_section_id(section_id)
     return next((item for item in taxonomy()["sections"] if item["id"] == section_id), None)
 
 
@@ -115,9 +113,12 @@ def _aligned(content: dict[str, Any]) -> dict[str, Any]:
     corrected at the API boundary and on publish, never rewritten on read.
     """
     section = _section(str(content.get("section_id") or ""))
-    if section is None or content.get("category_id") == section["categoryId"]:
+    if section is None:
         return content
-    return {**content, "category_id": section["categoryId"]}
+    if content.get("section_id") == section["id"] and content.get("category_id") == (
+            section["categoryId"]):
+        return content
+    return {**content, "section_id": section["id"], "category_id": section["categoryId"]}
 
 
 def _present_content(content: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -224,17 +225,21 @@ def _legacy_content(video: dict[str, Any], section_id: str, order: int) -> dict[
     ))
 
 
-def seed_legacy_catalog(bind) -> None:
-    """Import the existing bundled catalog once; later restarts never overwrite admin edits."""
+def seed_legacy_catalog(bind, manifest_path: Path = _LEGACY_PATH) -> None:
+    """Import the bundled manifest once; later restarts never overwrite admin edits.
+
+    The marker row is written even when the manifest is empty (the CN default), so an
+    administrator who later removes every video keeps an empty directory on restart.
+    """
     with Session(bind=bind) as db:
         if db.get(VideoCatalogSeed, 1) is not None:
             return
         if not db.query(Video).first():
-            legacy = json.loads(_LEGACY_PATH.read_text(encoding="utf-8"))
+            legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
             videos = legacy["videos"]
-            missing = {video["id"] for video in videos} - _LEGACY_SECTIONS.keys()
+            missing = sorted(video["id"] for video in videos if not video.get("sectionId"))
             if missing:
-                raise RuntimeError(f"Legacy video section mapping missing: {sorted(missing)}")
+                raise RuntimeError(f"Legacy video entries without a V2 sectionId: {missing}")
             playlist_order = {
                 video_id: index * 10
                 for index, video_id in enumerate(
@@ -244,7 +249,7 @@ def seed_legacy_catalog(bind) -> None:
             }
             for video in videos:
                 content = _legacy_content(
-                    video, _LEGACY_SECTIONS[video["id"]], playlist_order[video["id"]],
+                    video, video["sectionId"], playlist_order.get(video["id"], 1000),
                 )
                 db.add(Video(
                     id=video["id"], content=content, published_content=deepcopy(content),
@@ -315,7 +320,7 @@ def published_catalog(db: Session) -> dict[str, Any]:
                     published=True)
     by_section: dict[str, list[Video]] = {}
     for row in rows:
-        by_section.setdefault(row.published_content["section_id"], []).append(row)
+        by_section.setdefault(_aligned(row.published_content)["section_id"], []).append(row)
     sections = [item for item in taxonomy()["sections"] if item["id"] in by_section]
     category_ids = {item["categoryId"] for item in sections}
     return {

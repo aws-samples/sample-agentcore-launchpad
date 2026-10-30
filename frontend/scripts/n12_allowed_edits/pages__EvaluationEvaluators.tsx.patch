@@ -1,0 +1,13 @@
+diff --git a/frontend/src/pages/EvaluationEvaluators.tsx b/frontend/src/pages/EvaluationEvaluators.tsx
+index 2bcf2ce2..7575e18b 100644
+--- a/frontend/src/pages/EvaluationEvaluators.tsx
++++ b/frontend/src/pages/EvaluationEvaluators.tsx
+@@ -520,7 +520,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
+               className="input mono"
+               data-testid="code-lambda-arn"
+               value={lambdaArn}
+-              placeholder="arn:aws:lambda:us-west-2:123456789012:function:my-evaluator"
++              placeholder="arn:<partition>:lambda:<region>:<account>:function:<name>"
+               onChange={(e) => setLambdaArn(e.target.value)}
+             />
+             <div className="mono dim" style={{ fontSize: 9.5, marginTop: 4 }}>

@@ -37,14 +37,6 @@ DRAFT_GAP = {
         {"id": "GT-2", "input": "b", "expected_response": "y", "source": "customer_pain_point"},
     ],
     "evaluator_recommendations": [],
-    "evaluation_plan": {
-        "evaluators": [{"kind": "existing", "key": "traj", "title": "trajectory",
-                        "evaluator_id": "Builtin.TrajectoryInOrderMatch",
-                        "golden_test_ids": []}],
-        "scenarios": [{"scenario_id": "s1", "golden_test_id": "GT-1", "turns": [{"input": "a"}],
-                       "expected_trajectory": ["shell"], "assertions": ["must answer"]}],
-        "recommendation_keys": {}, "blocked_golden_tests": [],
-    },
 }
 
 
@@ -55,34 +47,6 @@ def _patch(obj) -> str:
 
 def _proposal_event(events) -> dict:
     return next(d for k, d in events if k == "proposal")
-
-
-# ---------------------------------------------------------------------------
-# C: the evaluation draft is validated when the proposal is recorded
-# ---------------------------------------------------------------------------
-
-
-def test_recording_reports_what_preparing_the_plan_would_report():
-    content, _display, errors = contract.validate(DRAFT_GAP, CATALOG)
-    assert content is None
-    assert errors == [
-        "evaluation_plan (as drafted for review): evaluators.traj: scenario 'GT-2' has no "
-        "expected_trajectory — a reference-driven evaluator is applied to every session, so "
-        "every scenario must carry it"
-    ]
-    blocked = json.loads(json.dumps(DRAFT_GAP))
-    blocked["evaluation_plan"]["blocked_golden_tests"] = [
-        {"golden_test_id": "GT-2", "reason": "scored manually"}]
-    assert contract.validate(blocked, CATALOG)[2] == []
-
-
-def test_recording_checks_trajectories_against_the_runtime_catalog():
-    wrong = json.loads(json.dumps(DRAFT_GAP))
-    wrong["evaluation_plan"]["blocked_golden_tests"] = [
-        {"golden_test_id": "GT-2", "reason": "scored manually"}]
-    wrong["evaluation_plan"]["scenarios"][0]["expected_trajectory"] = ["not_a_tool"]
-    errors = contract.validate(wrong, CATALOG)[2]
-    assert len(errors) == 1 and "not in the selected runtime catalog" in errors[0]
 
 
 def test_review_the_member_owes_a_drafted_scenario_is_not_a_proposal_error():
@@ -189,12 +153,15 @@ def test_a_change_revises_the_stored_proposal_and_the_replay_carries_it_once(
 
     # the second call's preamble held the stored JSON of revision 1 exactly once, and
     # the replayed first reply no longer carried its block
-    sent = "\n".join(m["content"][0]["text"] for m in harness.calls[1]["messages"])
+    sent = "\n".join(m["content"][0]["text"] for m in harness.messages_of(1))
     stored = json.dumps(first["content"], ensure_ascii=False, separators=(",", ":"))
     assert f"## Current stored proposal — revision {first['revision']} (draft)" in sent
     assert sent.count(stored) == 1
     assert f"```{contract.PROPOSAL_FENCE}\n" not in sent
-    assert service.REPLAY_PROPOSAL_MARKER in sent
+    # N17-obs468: the block goes without a placeholder in the reply (the model imitated it);
+    # the preamble says past blocks are removed
+    assert service.REPLAY_PROPOSAL_MARKER not in sent
+    assert service.REPLAY_BLOCK_NOTE in sent
     assert "never mention patches" in " ".join(sent.split())
 
 
@@ -212,8 +179,8 @@ def test_a_change_corrects_an_invalid_revision_in_place(client, ready, harness):
     assert fixed["status"] == "draft"
     assert fixed["content"]["name"] == "hr-helpdesk"
     # the invalid revision was the base and its errors were shown with it
-    sent = harness.calls[1]["messages"][-1]["content"][0]["text"]
-    assert f"revision {bad['revision']} (invalid)" in harness.calls[1]["messages"][0][
+    sent = harness.messages_of(1)[-1]["content"][0]["text"]
+    assert f"revision {bad['revision']} (invalid)" in harness.messages_of(1)[0][
         "content"][0]["text"]
     assert sent.startswith("Launchpad rejected the proposal block")
 

@@ -1,5 +1,5 @@
 import { Plus, ShieldAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -37,12 +37,15 @@ function directoryLabel(taxonomy: VideoTaxonomy, content: VideoContent, locale: 
 
 /** Admin-only boundary is above this component; the API independently enforces it. */
 function VideoList({
+  header,
   catalog,
   loading,
   error,
   onRetry,
   onOpen,
 }: {
+  /** the library's page header with the 观看 / 管理 tabs */
+  header: ReactNode;
   catalog: ManagedVideoCatalog | null;
   loading: boolean;
   error: string | null;
@@ -97,7 +100,7 @@ function VideoList({
   ];
   return (
     <>
-      <PageHeader title={t("videoManage.title")} desc={t("videoManage.description")} />
+      {header}
       {error && catalog && <Alert tone="error" action={<Button onClick={onRetry}>{t("v2.common.retry")}</Button>}>{error}</Alert>}
       <Card>
         <div className="v2-toolbar">
@@ -426,7 +429,12 @@ function VideoEditor({
   );
 }
 
-export function V2VideoManagement() {
+/**
+ * 视频管理 — the administrator's 管理 tab of the Videos page (`/v2/videos?view=manage`,
+ * N15-obs14; `/v2/video-management` redirects here). `&edit=new` opens a blank draft,
+ * `&edit=<id>` the editor. A member deep-linking the tab gets the admin-required card.
+ */
+export function V2VideoManagement({ header }: { header: ReactNode }) {
   const { isAdmin } = useAuth();
   const { t } = useTranslation();
   if (!isAdmin) {
@@ -442,16 +450,17 @@ export function V2VideoManagement() {
       </>
     );
   }
-  return <Manager />;
+  return <Manager header={header} />;
 }
 
-function Manager() {
+const MANAGE = { view: "manage" };
+
+function Manager({ header }: { header: ReactNode }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const catalog = useLoad(() => api.manageVideos(), "video-management");
-  const view = params.get("view");
-  const selected = view === "new" ? NEW : view === "edit" ? params.get("id") : null;
-  const back = useCallback(() => setParams({}), [setParams]);
+  const selected = params.get("edit");
+  const back = useCallback(() => setParams(MANAGE), [setParams]);
   if (selected) {
     if (!catalog.data) {
       return catalog.loading ? <Spin /> : (
@@ -466,18 +475,19 @@ function Manager() {
         id={selected}
         taxonomy={catalog.data.taxonomy}
         onBack={back}
-        onCreated={(id) => setParams({ view: "edit", id }, { replace: true })}
+        onCreated={(id) => setParams({ ...MANAGE, edit: id }, { replace: true })}
         onChanged={catalog.reload}
       />
     );
   }
   return (
     <VideoList
+      header={header}
       catalog={catalog.data}
       loading={catalog.loading}
       error={catalog.error}
       onRetry={catalog.reload}
-      onOpen={(id) => setParams(id === NEW ? { view: "new" } : { view: "edit", id })}
+      onOpen={(id) => setParams({ ...MANAGE, edit: id })}
     />
   );
 }

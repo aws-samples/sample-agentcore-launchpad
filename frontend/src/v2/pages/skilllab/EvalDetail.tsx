@@ -4,8 +4,9 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJobInfo, type SkillLabJobResults } from "../../../lib/api";
 import { elapsed, isLiveJob, LIVE_STATUSES, tasksetLabel } from "../../../lib/skillLab";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Spin, Tag } from "../../ui";
 import { ArtifactBrowser } from "./ArtifactBrowser";
 import { GoneCard, JobStatusTag } from "./common";
@@ -32,7 +33,7 @@ export function JobOverview({ job, extra = [] }: { job: SkillLabJobInfo; extra?:
       ),
     },
     { label: t("skillLab.eval.col.taskset"), value: tasksetLabel(job) },
-    { label: t("skillLab.backend.field"), value: <span className="mono">{job.params.target_backend ?? "claude_code_exec"}</span> },
+    { label: t("skillLab.backend.field"), value: <span className="mono">{job.params.target_backend ?? "opencode_exec"}</span> },
     { label: t("skillLab.eval.wizard.field.targetModel"), value: <span className="mono">{job.params.target_model}</span> },
     {
       label: job.type === "train" ? t("skillLab.train.wizard.field.judgeModel") : t("skillLab.eval.wizard.field.judgeModel"),
@@ -52,6 +53,7 @@ export function JobOverview({ job, extra = [] }: { job: SkillLabJobInfo; extra?:
       ),
     },
     { label: t("skillLab.eval.col.created"), value: fmtTime(job.created_at) },
+    { label: t("v2.common.creator"), value: creatorLabel(job) },
     { label: t("skillLab.eval.field.elapsed"), value: elapsed(job) },
     { label: t("v2.skillLab.finishedAt"), value: fmtTime(job.finished_at) },
     ...extra,
@@ -67,7 +69,7 @@ export function LiveProgress({ job }: { job: SkillLabJobInfo }) {
       title={t("skillLab.eval.progress")}
       end={
         <span className="v2-row">
-          <Tag tone="blue">{job.progress || job.status}</Tag>
+          <Tag tone="blue">{job.progress || t(`skillLab.eval.status.${job.status}`, { defaultValue: job.status })}</Tag>
           {job.status === "queued" && job.queue_position > 0 && (
             <span className="v2-muted">{t("skillLab.eval.queuedAt", { n: job.queue_position })}</span>
           )}
@@ -84,6 +86,7 @@ export function EvalDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
+  const mayMutate = useMayMutate();
   const { job, setJob, missing, error } = useJob(id);
   const [results, setResults] = useState<SkillLabJobResults | null>(null);
   const [resultsPending, setResultsPending] = useState(true);
@@ -122,6 +125,7 @@ export function EvalDetail({ id }: { id: string }) {
   if (missing) return <GoneCard title={t("skillLab.eval.gone.title")} body={t("skillLab.eval.gone.body")} onBack={back} />;
   if (!job) return error ? <Alert tone="error">{error}</Alert> : <Spin />;
   const live = isLiveJob(job);
+  const owner = mayMutate(job); // creator-or-admin on cancel / delete (r13-g)
 
   const act = async () => {
     setBusy(true);
@@ -153,7 +157,7 @@ export function EvalDetail({ id }: { id: string }) {
         }
         onBack={back}
         end={
-          live ? (
+          !owner ? undefined : live ? (
             <Button kind="danger" disabled={busy} onClick={() => setConfirm("cancel")} testId="v2-eval-cancel">
               {t("v2.skillLab.cancelRun")}
             </Button>
@@ -173,6 +177,10 @@ export function EvalDetail({ id }: { id: string }) {
         <JobOverview job={job} />
       </Card>
       {live && <LiveProgress job={job} />}
+      {/* N10v3-bug3: errored rollouts that were still scored (as zeros) must not look like a clean run */}
+      {!live && results !== null && (results.summary.errored ?? 0) > 0 && (
+        <Alert tone="warn">{t("skillLab.eval.erroredNote", { count: results.summary.errored })}</Alert>
+      )}
       {!live &&
         (results !== null ? (
           <EvalResults results={results} />

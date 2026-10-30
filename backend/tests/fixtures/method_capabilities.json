@@ -1,0 +1,90 @@
+{
+  "byoc": {
+    "builtin_tools": [],
+    "byoc_kinds": [
+      "code_zip",
+      "container_image",
+      "container_source"
+    ],
+    "knowledge_bases": false,
+    "memory": true,
+    "native_tools": [],
+    "protocols": [
+      "http"
+    ],
+    "requires": [
+      "artifacts_bucket"
+    ],
+    "tool_auth_modes": [
+      "as_agent",
+      "as_user"
+    ],
+    "tool_types": []
+  },
+  "harness": {
+    "builtin_tools": [
+      "browser",
+      "code-interpreter"
+    ],
+    "byoc_kinds": [],
+    "knowledge_bases": true,
+    "memory": true,
+    "native_tools": [
+      "file_operations",
+      "shell"
+    ],
+    "protocols": [
+      "http"
+    ],
+    "requires": [
+      "artifacts_bucket"
+    ],
+    "tool_auth_modes": [],
+    "tool_types": [
+      "a2a",
+      "builtin",
+      "gateway",
+      "mcp"
+    ]
+  },
+  "studio": {
+    "builtin_tools": [],
+    "byoc_kinds": [],
+    "knowledge_bases": false,
+    "memory": true,
+    "native_tools": [],
+    "protocols": [
+      "http"
+    ],
+    "requires": [
+      "artifacts_bucket"
+    ],
+    "tool_auth_modes": [],
+    "tool_types": [
+      "gateway"
+    ]
+  },
+  "zip_runtime": {
+    "builtin_tools": [],
+    "byoc_kinds": [],
+    "knowledge_bases": true,
+    "memory": true,
+    "native_tools": [],
+    "protocols": [
+      "a2a",
+      "http"
+    ],
+    "requires": [
+      "artifacts_bucket"
+    ],
+    "tool_auth_modes": [
+      "as_agent",
+      "as_user"
+    ],
+    "tool_types": [
+      "a2a",
+      "gateway",
+      "rest"
+    ]
+  }
+}

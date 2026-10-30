@@ -9,17 +9,18 @@ import {
   type AgentInfo,
   type AgentVersionsInfo,
   api,
+  ApiError,
   type DeploymentInfo,
   errorMessage,
-  type InboundAuth,
   type JobInfo,
   type StageInfo,
 } from "../../lib/api";
-import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
-import { fmtTime } from "../format";
+import { jobPolicyCompileFailed } from "../../lib/policy-job";
+import { creatorLabel, fmtTime } from "../format";
+import { useMayMutate } from "../ownership";
 import { AgentIdentity } from "./agents/AgentIdentity";
-import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
+import { TraceStatusTag } from "./agents/TraceStatus";
 import { v2EditPath } from "./agents/classicUrl";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
@@ -41,12 +42,14 @@ import {
   Tag,
   type TagTone,
 } from "../ui";
+import { entryShown } from "../hiddenSurfaces";
+import { awsStatusLabel, wordStatusPrefix } from "../awsStatus";
+import { zonedClock } from "../../lib/timestamps";
 
 type Method = AgentInfo["method"];
 
 const METHOD_TONE: Record<Method, TagTone> = {
   harness: "orange",
-  container: "blue",
   zip_runtime: "green",
   studio: "green",
   byoc: "blue",
@@ -66,11 +69,13 @@ const STAGE_TONE: Record<StageInfo["status"], TagTone> = {
   running: "blue",
   failed: "red",
   pending: "outline",
+  cancelled: "gray", // N16-obs83: the agent was deleted while the job ran
+  interrupted: "orange", // N17-obs113: stopped with the backend; resumes at the next start
 };
 
 const editPath = v2EditPath;
 
-const EDITABLE_METHODS: Method[] = ["harness", "zip_runtime", "container", "byoc"];
+const EDITABLE_METHODS: Method[] = ["harness", "zip_runtime", "byoc"];
 
 /** `?view=edit&id=` — reads the agent fresh, then opens the wizard on its stored spec. */
 function AgentEdit({ id }: { id: string }) {
@@ -122,44 +127,92 @@ function versionLabel(agent: AgentInfo): string {
 }
 
 /** Row permissions, mirroring the classic list: editing re-publishes; a system
- *  preset is edited by administrators only and never deleted or converted here. */
+ *  preset is edited by administrators only and never deleted here. `creatorOnly` mirrors
+ *  the server's creator-or-admin gate on redeploy / delete (`require_agent_creator`,
+ *  N15-obs9): the role may allow the action, but the row belongs to another member (or to
+ *  nobody — an administrator's); a discovered runtime detaches for any `agents.delete` holder. */
 function useAgentPermissions() {
   const { can, isAdmin } = useAuth();
+  const mayMutate = useMayMutate();
   const canDeploy = can("agents.deploy");
   const canDelete = can("agents.delete");
-  const canConvert = can("agents.convert");
   return {
     canEdit: (a: AgentInfo) =>
       a.method !== "discovered_runtime" && canDeploy && a.status !== "deploying" && (!a.system || isAdmin),
     canDelete: (a: AgentInfo) => canDelete && !a.system,
-    canConvert: (a: AgentInfo) =>
-      a.method === "harness" && a.status === "active" && canConvert && !a.system,
+    creatorOnly: (a: AgentInfo) => a.method !== "discovered_runtime" && !mayMutate(a),
   };
 }
 
-/** Delete / convert confirmations shared by the list and the detail page. */
-function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentInfo) => void) {
+/** The canaries a refused delete names (`409 agent.in_use {canaries}`, N16-obs111). */
+interface BlockingCanary {
+  id: string;
+  name: string;
+  status: string;
+  stage: string;
+}
+
+/** The ACTIVE evaluation runs a refused delete names (`409 agent.in_use {runs}`, N17-obs18). */
+interface BlockingRun {
+  id: string;
+  name: string | null;
+  status: string;
+}
+
+interface BlockingReferrers {
+  canaries: BlockingCanary[];
+  runs: BlockingRun[];
+}
+
+function blockingReferrers(err: unknown): BlockingReferrers | null {
+  if (!(err instanceof ApiError) || err.code !== "agent.in_use") return null;
+  const detail = err.detail as { canaries?: BlockingCanary[]; runs?: BlockingRun[] } | null | undefined;
+  return { canaries: detail?.canaries ?? [], runs: detail?.runs ?? [] };
+}
+
+/** The run detail page (`/v2/eval/tasks?view=detail&id=<run>`, where stop lives). */
+function runDetailPath(id: string): string {
+  return `/v2/eval/tasks?view=detail&id=${encodeURIComponent(id)}`;
+}
+
+/** The canary detail page (`V2Experiments`: `?canary=<id>` opens `CanaryDetail`). */
+function canaryDetailPath(id: string): string {
+  return `/v2/eval/experiments?mode=canary&canary=${encodeURIComponent(id)}`;
+}
+
+/** Delete confirmation shared by the list and the detail page. */
+function useAgentActions(onDone: (action: "deleted", agent: AgentInfo) => void) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const [pending, setPending] = useState<{ kind: "delete" | "convert"; agent: AgentInfo } | null>(null);
+  const [pending, setPending] = useState<{ kind: "delete"; agent: AgentInfo } | null>(null);
   const [busy, setBusy] = useState(false);
+  // N16-obs111 / N17-obs18: a delete refused with `409 agent.in_use` keeps the dialog open and
+  // names the running canaries (linked to their detail page, where cleanup / rollback /
+  // complete live) and the ACTIVE evaluation runs (linked to the run detail, where stop lives)
+  const [blocked, setBlocked] = useState<BlockingReferrers | null>(null);
+
+  const close = () => {
+    setPending(null);
+    setBlocked(null);
+  };
 
   const run = async () => {
     if (!pending) return;
     setBusy(true);
     try {
-      if (pending.kind === "delete") {
-        await api.deleteAgent(pending.agent.id);
-        toast("success", t("v2.agents.deleted", { name: pending.agent.name }));
-        onDone("deleted", pending.agent);
-      } else {
-        const res = await api.convertAgent(pending.agent.id);
-        toast("success", t("v2.agents.convertStarted", { name: res.agent.name }));
-        onDone("converted", res.agent);
-      }
-      setPending(null);
+      await api.deleteAgent(pending.agent.id);
+      toast("success", t("v2.agents.deleted", { name: pending.agent.name }));
+      onDone("deleted", pending.agent);
+      close();
     } catch (err) {
-      toast("error", errorMessage(err));
+      const referrers = blockingReferrers(err);
+      if (referrers) {
+        // N17-obs3: the dialog lists the blocking canaries / runs — it IS the message; no
+        // generic toast above it
+        setBlocked(referrers);
+      } else {
+        toast("error", errorMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -169,37 +222,65 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
   const dialog = (
     <Confirm
       open={pending !== null}
-      title={
-        pending?.kind === "convert"
-          ? t("v2.agents.convertTitle")
-          : external
-            ? t("v2.agents.removeTitle")
-            : t("v2.agents.deleteTitle")
+      title={external ? t("v2.agents.removeTitle") : t("v2.agents.deleteTitle")}
+      body={
+        <>
+          {t(external ? "v2.agents.removeBody" : "v2.agents.deleteBody", { name: pending?.agent.name ?? "" })}
+          {blocked && (
+            <div data-testid="v2-agent-delete-blocked" style={{ marginTop: 12 }}>
+              <Alert tone="warn">
+                {blocked.canaries.length > 0 && (
+                  <>
+                    {t("v2.agents.deleteBlockedByCanaries", { count: blocked.canaries.length })}
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                      {blocked.canaries.map((c) => (
+                        <li key={c.id}>
+                          <Link to={canaryDetailPath(c.id)} onClick={close} data-testid={`v2-agent-delete-blocked-canary-${c.id}`}>
+                            {t("v2.agents.deleteBlockedCanaryLink", {
+                              name: c.name,
+                              status: t(`v2.canary.status.${c.status}`, { defaultValue: c.status }),
+                              stage: t(`v2.canary.stage.${c.stage}`, { defaultValue: c.stage }),
+                            })}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {blocked.runs.length > 0 && (
+                  <div style={{ marginTop: blocked.canaries.length > 0 ? 8 : 0 }}>
+                    {t("v2.agents.deleteBlockedByRuns", { count: blocked.runs.length })}
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                      {blocked.runs.map((r) => (
+                        <li key={r.id}>
+                          <Link to={runDetailPath(r.id)} onClick={close} data-testid={`v2-agent-delete-blocked-run-${r.id}`}>
+                            {t("v2.agents.deleteBlockedRunLink", {
+                              name: r.name ?? r.id,
+                              status: awsStatusLabel(t, r.status),
+                            })}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </Alert>
+            </div>
+          )}
+        </>
       }
-      body={t(
-        pending?.kind === "convert"
-          ? "v2.agents.convertBody"
-          : external
-            ? "v2.agents.removeBody"
-            : "v2.agents.deleteBody",
-        { name: pending?.agent.name ?? "" },
-      )}
-      confirmLabel={
-        pending?.kind === "convert"
-          ? t("v2.agents.convert")
-          : external
-            ? t("v2.agents.remove")
-            : t("v2.common.delete")
-      }
+      confirmLabel={external ? t("v2.agents.remove") : t("v2.common.delete")}
       danger={pending?.kind === "delete"}
       busy={busy}
       onConfirm={() => void run()}
-      onClose={() => setPending(null)}
+      onClose={close}
     />
   );
   return {
-    askDelete: (agent: AgentInfo) => setPending({ kind: "delete", agent }),
-    askConvert: (agent: AgentInfo) => setPending({ kind: "convert", agent }),
+    askDelete: (agent: AgentInfo) => {
+      setBlocked(null);
+      setPending({ kind: "delete", agent });
+    },
     dialog,
   };
 }
@@ -270,13 +351,35 @@ function AgentList() {
       key: "status",
       title: t("v2.agents.colStatus"),
       render: (a) => (
-        <Tag tone={STATUS_TONE[a.status] ?? "gray"} dot title={a.status === "failed" ? (a.error ?? undefined) : undefined}>
-          {t(`status.${a.status}`, { defaultValue: a.status })}
-        </Tag>
+        <span className="v2-row">
+          <Tag tone={STATUS_TONE[a.status] ?? "gray"} dot title={a.status === "failed" ? (a.error ?? undefined) : undefined}>
+            {t(`status.${a.status}`, { defaultValue: a.status })}
+          </Tag>
+          {a.last_deploy_failed && (
+            <Tag tone="orange" title={a.last_deploy_error ?? undefined} testId={`v2-agent-redeploy-failed-${a.name}`}>
+              {t("v2.agents.lastDeployFailed")}
+            </Tag>
+          )}
+          {a.policy_stale && (
+            <Tag tone="orange" title={t("v2.agents.policyStaleHint")} testId={`v2-agent-policy-stale-${a.name}`}>
+              {t("v2.agents.policyStale")}
+            </Tag>
+          )}
+          {/* D21 (M1-d): this agent's catalog model row changed since its last deploy */}
+          {a.catalog_hint?.changed && (
+            <Tag
+              tone="orange"
+              title={t("v2.agents.catalogHintTitle", { deployed: a.catalog_hint.deployed, current: a.catalog_hint.current })}
+              testId={`v2-agent-catalog-hint-${a.name}`}
+            >
+              {t("v2.agents.catalogHint")}
+            </Tag>
+          )}
+        </span>
       ),
     },
     { key: "version", title: t("v2.agents.colVersion"), render: (a) => <span className="mono">{versionLabel(a)}</span> },
-    { key: "owner", title: t("v2.agents.colOwner"), render: (a) => a.owner || "—" },
+    { key: "creator", title: t("v2.common.creator"), render: (a) => creatorLabel(a) },
     { key: "updated", title: t("v2.agents.colUpdated"), className: "nowrap", render: (a) => fmtTime(a.updated_at) },
     {
       key: "ops",
@@ -288,15 +391,12 @@ function AgentList() {
             <LinkButton onClick={() => navigate(`/chat?agent=${a.id}`)}>{t("v2.agents.chat")}</LinkButton>
           )}
           <LinkButton onClick={() => open(a)}>{t("v2.common.view")}</LinkButton>
-          {perms.canEdit(a) && (
+          {perms.canEdit(a) && !perms.creatorOnly(a) && (
             <LinkButton onClick={() => navigate(editPath(a))} testId={`v2-agent-edit-${a.name}`}>
               {t("v2.common.edit")}
             </LinkButton>
           )}
-          {perms.canConvert(a) && (
-            <LinkButton onClick={() => actions.askConvert(a)}>{t("v2.agents.convert")}</LinkButton>
-          )}
-          {perms.canDelete(a) && (
+          {perms.canDelete(a) && !perms.creatorOnly(a) && (
             <LinkButton danger onClick={() => actions.askDelete(a)} testId={`v2-agent-delete-${a.name}`}>
               {a.method === "discovered_runtime" ? t("v2.agents.remove") : t("v2.common.delete")}
             </LinkButton>
@@ -328,10 +428,12 @@ function AgentList() {
             <Plus size={14} aria-hidden="true" />
             {t("v2.agents.new")}
           </Button>
-          <Button onClick={() => navigate("/agents/import")}>
-            <Download size={14} aria-hidden="true" />
-            {t("v2.agents.import")}
-          </Button>
+          {entryShown("import") && (
+            <Button onClick={() => navigate("/agents/import")}>
+              <Download size={14} aria-hidden="true" />
+              {t("v2.agents.import")}
+            </Button>
+          )}
           <FilterSelect
             label={t("v2.agents.colMethod")}
             value={method}
@@ -380,22 +482,28 @@ function DeployProgress({ deployment, job }: { deployment: DeploymentInfo; job: 
       <div className="v2-stages">
         {deployment.stages.map((s, i) => (
           <div key={s.name} className={`v2-stage ${s.status}`}>
-            <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
+            <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" || s.status === "cancelled" ? "✕" : i + 1}</span>
             <div className="b">
               <div className="t">
                 {t(`create.stages.${s.name}`, { defaultValue: s.name })}
                 <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
               </div>
-              <div className="d">{s.detail || "—"}</div>
+              <div className="d">{s.detail ? wordStatusPrefix(t, s.detail) : "—"}</div>
             </div>
           </div>
         ))}
       </div>
       {job?.error && <Alert tone="error">{job.error}</Alert>}
+      {jobPolicyCompileFailed(job) && (
+        // a 409 policy.compile_failed stopped the deploy — fix or retire the policy
+        <Alert tone="warn" action={<Link className="v2-link" to="/v2/policy">{t("v2.agents.policyStaleOpen")}</Link>}>
+          <span data-testid="v2-agent-policy-compile-failed">{t("v2.agents.policyCompileFailedHint")}</span>
+        </Alert>
+      )}
       <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
       <pre className="v2-pre" data-testid="v2-agent-log">
         {job?.events.length
-          ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
+          ? job.events.map((e) => `${zonedClock(e.ts)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
           : t("v2.agents.logEmpty")}
       </pre>
     </Card>
@@ -420,7 +528,7 @@ function VersionsCard({ agentId }: { agentId: string }) {
           <Table
             columns={[
               { key: "v", title: t("v2.agents.colVersion"), render: (r) => <span className="mono">{r.version ?? "—"}</span> },
-              { key: "s", title: t("v2.agents.colStatus"), render: (r) => r.status ?? "—" },
+              { key: "s", title: t("v2.agents.colStatus"), render: (r) => awsStatusLabel(t, r.status) },
               { key: "u", title: t("v2.agents.colUpdated"), className: "nowrap", render: (r) => fmtTime(r.last_updated_at) },
             ]}
             rows={data.versions}
@@ -443,7 +551,7 @@ function VersionsCard({ agentId }: { agentId: string }) {
               {
                 key: "s",
                 title: t("v2.agents.colStatus"),
-                render: (r) => <span title={r.failure_reason ?? undefined}>{r.status ?? "—"}</span>,
+                render: (r) => <span title={r.failure_reason ?? undefined}>{awsStatusLabel(t, r.status)}</span>,
               },
             ]}
             rows={data.endpoints}
@@ -461,6 +569,8 @@ interface ByocSummary {
   image_uri?: string | null;
   entrypoint?: string | null;
   allowed_models?: string[];
+  /** server-stamped (N17-obs465): the member's image and the deployed trace-layer image */
+  telemetry?: { member_image?: string; layer_image?: string; cn_exporter?: string };
 }
 
 function AgentDetail({ id }: { id: string }) {
@@ -494,7 +604,14 @@ function AgentDetail({ id }: { id: string }) {
           if (live) setJob(j);
         }
       } catch (err) {
-        if (live) setError(errorMessage(err));
+        if (!live) return;
+        setError(errorMessage(err));
+        // N16-obs76: Refresh after a delete (this tab or another) answered 404 but kept
+        // the stale ACTIVE view — the agent is gone, so is its data; the notice takes over
+        if (err instanceof ApiError && err.code === "agent.not_found") {
+          setAgent(null);
+          setJob(null);
+        }
       }
     };
     void load();
@@ -523,9 +640,12 @@ function AgentDetail({ id }: { id: string }) {
   const notes = (spec.conversion_notes as Record<string, string> | undefined) ?? {};
   const byoc = agent.method === "byoc" ? ((spec.byoc as ByocSummary | undefined) ?? null) : null;
   const hasResource = !!agent.arn && agent.method !== "discovered_runtime";
+  // the server's creator-or-admin rule on redeploy / delete (N15-obs9): disable + hint, never a 403
+  const creatorOnly = perms.creatorOnly(agent);
 
   return (
     <>
+      {error && <Alert tone="error">{error}</Alert>}
       <FlowHeader
         title={
           <span className="v2-row">
@@ -548,26 +668,65 @@ function AgentDetail({ id }: { id: string }) {
                 {t("v2.agents.identity.open")}
               </Button>
             )}
-            {perms.canConvert(agent) && (
-              <Button onClick={() => actions.askConvert(agent)}>{t("v2.agents.convert")}</Button>
-            )}
             {perms.canDelete(agent) && (
-              <Button kind="danger" onClick={() => actions.askDelete(agent)}>
+              <Button
+                kind="danger"
+                disabled={creatorOnly}
+                title={creatorOnly ? t("v2.common.creatorOnly") : undefined}
+                onClick={() => actions.askDelete(agent)}
+                testId="v2-agent-delete"
+              >
                 {agent.method === "discovered_runtime" ? t("v2.agents.remove") : t("v2.common.delete")}
               </Button>
             )}
             {perms.canEdit(agent) && (
-              <Button kind="primary" onClick={() => navigate(editPath(agent))} testId="v2-agent-edit">
+              <Button
+                kind="primary"
+                disabled={creatorOnly}
+                title={creatorOnly ? t("v2.common.creatorOnly") : undefined}
+                onClick={() => navigate(editPath(agent))}
+                testId="v2-agent-edit"
+              >
                 {t("v2.common.edit")}
               </Button>
             )}
           </>
         }
       />
+      {creatorOnly && (perms.canDelete(agent) || perms.canEdit(agent)) && (
+        <Alert>
+          <span data-testid="v2-agent-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(agent) })}</span>
+        </Alert>
+      )}
       {agent.status === "failed" && agent.error && <Alert tone="error">{agent.error}</Alert>}
+      {agent.last_deploy_failed && (
+        <Alert tone="warn">
+          {t("v2.agents.lastDeployFailedDetail")}{" "}
+          <span className="mono">{agent.last_deploy_error}</span>
+        </Alert>
+      )}
+      {agent.kb_stale && (
+        <Alert tone="warn" data-testid="v2-agent-kb-stale">
+          {t("v2.agents.kbStaleDetail")}{" "}
+          <span className="mono">{(agent.last_strip?.kb_ids ?? []).join(", ")}</span>
+        </Alert>
+      )}
       {agent.system && (
         <Alert>
           {t("v2.agents.systemNote", { label: agent.system.label, version: agent.system.skill_version ?? "—" })}
+        </Alert>
+      )}
+      {agent.policy_stale && (
+        <Alert tone="warn" action={<Link className="v2-link" to="/v2/policy">{t("v2.agents.policyStaleOpen")}</Link>}>
+          {t("v2.agents.policyStaleDetail")}
+        </Alert>
+      )}
+      {/* D21 (M1-d): deployed with catalog vN · current vM — Redeploy when the model row changed */}
+      {agent.catalog_hint?.changed && (
+        <Alert tone="warn">
+          <span data-testid="v2-agent-catalog-hint">
+            {t("v2.agents.catalogHintDetail", { deployed: agent.catalog_hint.deployed, current: agent.catalog_hint.current })}
+          </span>
         </Alert>
       )}
       <Card title={t("v2.agents.basic")} testId="v2-agent-basic">
@@ -580,12 +739,24 @@ function AgentDetail({ id }: { id: string }) {
               value: <Tag tone={METHOD_TONE[agent.method] ?? "gray"}>{methodLabel(agent.method)}</Tag>,
             },
             { label: t("v2.agents.colVersion"), value: <span className="mono">{versionLabel(agent)}</span> },
+            // Global parity (amendment 9): the only policy fact of a deploy — whether the live
+            // version carries the user token the Gateway interceptor decides on
+            ...(agent.policy_carrier != null
+              ? [{
+                  label: t("v2.agents.policyCarrier"),
+                  value: (
+                    <Tag tone={agent.policy_carrier ? "green" : "gray"} title={t("v2.agents.policyCarrierHint")} testId="v2-agent-policy-carrier">
+                      {t(agent.policy_carrier ? "v2.agents.policyCarrierYes" : "v2.agents.policyCarrierNo")}
+                    </Tag>
+                  ),
+                }]
+              : []),
             { label: t("v2.agents.model"), value: spec.model_id ? <span className="mono">{String(spec.model_id)}</span> : "—" },
             {
               label: t("v2.agents.protocol"),
               value: String(spec.protocol ?? "http").toUpperCase(),
             },
-            { label: t("v2.agents.colOwner"), value: agent.owner || "—" },
+            { label: t("v2.common.creator"), value: creatorLabel(agent) },
             { label: t("v2.common.createdAt"), value: fmtTime(agent.created_at) },
             { label: t("v2.agents.colUpdated"), value: fmtTime(agent.updated_at) },
             {
@@ -599,23 +770,13 @@ function AgentDetail({ id }: { id: string }) {
               ),
             },
             { label: "ARN", value: agent.arn ? <span className="mono">{agent.arn}</span> : "—" },
+            ...(hasResource
+              ? [{ label: t("inboundAuth.modeLabel"), value: <Tag tone="blue">{t("inboundAuth.mode.iam")}</Tag> }]
+              : []),
           ]}
         />
       </Card>
       {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} />}
-      {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
-        <InboundSwitchCard
-          agentId={agent.id}
-          mode={agent.inbound_auth_mode ?? "iam"}
-          pinned={((spec.inbound_auth as InboundAuth | null | undefined)?.mode as "iam" | "jwt" | undefined) ?? null}
-          capable
-          canSwitch={perms.canEdit(agent)}
-          busy={deploying}
-          jwt={agent.inbound_auth_config?.jwt ?? null}
-          invokeUrl={bearerInvokeUrl(agent.arn)}
-          onSwitched={() => setNonce((n) => n + 1)}
-        />
-      )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>
@@ -623,6 +784,15 @@ function AgentDetail({ id }: { id: string }) {
             items={[
               { label: t("v2.agents.byocKind"), value: <span className="mono">{byoc.artifact_kind ?? "—"}</span> },
               { label: t("v2.agents.byocImage"), value: byoc.image_uri ? <span className="mono">{byoc.image_uri}</span> : "—" },
+              ...(byoc.telemetry?.layer_image
+                ? [
+                    { label: t("v2.agents.byocMemberImage"), value: <span className="mono">{byoc.telemetry.member_image || "—"}</span> },
+                    { label: t("v2.agents.byocLayerImage"), value: <span className="mono">{byoc.telemetry.layer_image}</span> },
+                  ]
+                : []),
+              ...(byoc.artifact_kind !== "code_zip" && hasResource
+                ? [{ label: t("v2.agents.traceStatus.label"), value: <TraceStatusTag agentId={agent.id} /> }]
+                : []),
               { label: t("v2.agents.byocEntrypoint"), value: byoc.entrypoint ?? "—" },
               {
                 label: t("v2.agents.byocModels"),

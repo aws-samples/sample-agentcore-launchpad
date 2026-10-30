@@ -6,6 +6,7 @@ import { saveBlob, sizeLabel } from "../../../lib/skillLab";
 import { parentDir } from "../../../lib/skillLabArtifacts";
 import { Alert, Button, LinkButton, Modal, Segmented, Table, Tag } from "../../ui";
 import { ArtifactMarkdown } from "./ArtifactMarkdown";
+import { formatInZone } from "../../../lib/timestamps";
 
 type DirListing = Extract<SkillLabArtifactListing, { kind: "dir" }>;
 type FileListing = Exclude<SkillLabArtifactListing, { kind: "dir" }>;
@@ -28,7 +29,7 @@ interface Entry {
 
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
-const clock = (at: number) => new Date(at).toLocaleTimeString();
+const clock = (at: number) => formatInZone(new Date(at), undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
 /**
  * Browser over a job's `out/` tree (results.json, report.md, one rollout dir

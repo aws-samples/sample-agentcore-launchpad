@@ -38,6 +38,45 @@ class WorkspaceContext:
     # by hand (tests, the hub bootstrap probe), which target the default row.
     id: str = DEFAULT_WORKSPACE_ID
 
+    @property
+    def partition(self) -> str:
+        """`aws` | `aws-cn` | `aws-us-gov`, derived from `region`."""
+        return aws_clients.partition_for_region(self.region)
+
+    @property
+    def dns_suffix(self) -> str:
+        """`amazonaws.com` (aws) or `amazonaws.com.cn` (aws-cn)."""
+        return aws_clients.dns_suffix_for_partition(self.partition)
+
+    @property
+    def console_host(self) -> str:
+        """Management Console host for deep links (`console.amazonaws.cn` in aws-cn) —
+        not derivable from `dns_suffix`; the per-partition table lives in
+        `aws_clients.console_host_for_partition`."""
+        return aws_clients.console_host_for_partition(self.partition)
+
+    def service_principal(self, service: str) -> str:
+        """Partition-invariant IAM service principal (``<service>`` + ``amazonaws.com``)."""
+        return aws_clients.service_principal(service)
+
+    def arn(
+        self,
+        service: str,
+        resource: str,
+        region: str | None = None,
+        account: str | None = None,
+    ) -> str:
+        """`arn:{partition}:{service}:{region}:{account}:{resource}`.
+
+        `region` / `account` default to this context's values. Pass `""` to leave a
+        segment empty (S3 buckets, IAM roles, foundation models) and `"*"` for a
+        wildcard. This is the only sanctioned way to build an ARN in backend code
+        (spec C2; `scripts/cn_lint.sh` enforces it).
+        """
+        reg = self.region if region is None else region
+        acct = self.account_id if account is None else account
+        return f"arn:{self.partition}:{service}:{reg}:{acct}:{resource}"
+
     def client(self, service: str, cache_token: str | None = None, **cfg: Any) -> Any:
         return aws_clients.client(service, self, cache_token=cache_token, **cfg)
 
@@ -178,7 +217,7 @@ def default_workspace_context() -> WorkspaceContext:
     """The single implicit workspace, read live from settings.
 
     Deliberately uncached: ``get_settings.cache_clear()`` is called at runtime
-    (price refresher, kb_gateway) and a second-level cache would keep serving the
+    (price refresher, bootstrap rewrites) and a second-level cache would keep serving the
     superseded region/resource map.
     """
     settings = get_settings()

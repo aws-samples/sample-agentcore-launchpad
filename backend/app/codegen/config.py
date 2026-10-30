@@ -29,8 +29,8 @@ IMPORT_SMOKE_TIMEOUT_S = 20
 
 
 def get_backend_name() -> str:
-    """Selected coding-agent backend (settings.codegen_backend, default 'claude')."""
-    return (get_settings().codegen_backend or "claude").strip().lower()
+    """Selected coding-agent backend (settings.codegen_backend, default 'kimi')."""
+    return (get_settings().codegen_backend or "kimi").strip().lower()
 
 
 def get_model() -> str:

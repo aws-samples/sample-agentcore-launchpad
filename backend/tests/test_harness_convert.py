@@ -1,62 +1,20 @@
-"""Harness → runtime conversion: graft anchors, env discovery, requirements
-flattening, bundle packaging, and the /convert endpoint contract."""
+"""Harness → runtime graft library: graft anchors, env/requirements helpers,
+bundle packaging, and the self-built Harness renderers (N7)."""
 
-import json
+import ast
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-import app.routers.agents as agents_router
 import app.services.harness_convert as hc
-from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.core.errors import AppError
-from app.deployer.zip_runtime import (
-    _method_requirements,
-    platform_requirements,
-    write_bundle_files,
-)
-from app.models.ledger import Agent
+from app.deployer.zip_runtime import write_bundle_files
 from app.schemas.agent import AgentSpec
-
-from .conftest import ws_ctx
 
 FIXTURES = Path(__file__).parent / "fixtures"
 MAIN_PY = (FIXTURES / "harness_export_main.py").read_text()
 SKILLS_NOMEMORY_MAIN_PY = (FIXTURES / "harness_export_skills_nomemory_main.py").read_text()
 PYPROJECT = (FIXTURES / "harness_export_pyproject.toml").read_text()
 MCP_CLIENT_PY = (FIXTURES / "harness_export_mcp_client.py").read_text()
-
-
-@pytest.fixture(autouse=True)
-def stub_pin_resolution(monkeypatch):
-    """Conversion resolves the source Harness's dependency ranges to pins, which
-    shells out to `uv pip compile` and therefore needs the network (or a warm uv
-    cache). Stub it so this suite stays hermetic — `resolve_pins` itself is
-    covered against a stub runner in test_requirements_pinning.py.
-
-    Records the `platform` argument in `RESOLVED_AGAINST`: the pins are only
-    lockable if the conversion hands over the deploy's full platform contribution,
-    so that argument is part of the contract and needs asserting.
-    """
-    RESOLVED_AGAINST.clear()
-
-    def fake_resolve(entries, platform):
-        RESOLVED_AGAINST.append(list(platform))
-        out = []
-        for entry in entries:
-            if "==" in entry and "*" not in entry:
-                out.append(entry)
-                continue
-            name, _, _ = entry.partition(" ")
-            name = name.split(">")[0].split("<")[0].split("~")[0].split("=")[0].strip()
-            out.append(f"{name}==9.9.9")
-        return out
-
-    monkeypatch.setattr(hc, "resolve_pins", fake_resolve)
-
-
-RESOLVED_AGAINST: list[list[str]] = []
 
 
 # ─── graft ───────────────────────────────────────────────────────────────────
@@ -112,35 +70,6 @@ def test_graft_supports_real_export_without_memory_or_skills():
     assert "system_prompt=resolve_system_prompt()" in grafted
     assert "system_prompt=DEFAULT_SYSTEM_PROMPT" not in grafted
     assert hc.graft_config_bundle(grafted) == grafted
-
-
-@pytest.mark.parametrize("gateway_attached", [False, True])
-def test_build_tool_free_export_with_unused_gateway_scaffold(gateway_attached):
-    source = _source_agent()
-    source.spec = {
-        **source.spec,
-        "memory": {"short_term": False, "long_term": False},
-        "tools": [{"type": "gateway", "name": "hr-database"}] if gateway_attached else [],
-    }
-    files = {
-        "main.py": (FIXTURES / "harness_export_nomemory_main.py").read_text(),
-        "mcp_client/client.py": "def get_all_gateway_mcp_clients():\n    return []\n",
-        "pyproject.toml": PYPROJECT,
-    }
-    if gateway_attached:
-        with pytest.raises(hc.ConversionError, match="module-scope"):
-            hc.build_conversion_spec(
-                source, files, ["bedrock-agentcore==1.17.*"], "no-tools-rt", ws_ctx({}),
-            )
-        return
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "no-tools-rt", ws_ctx({}),
-    )
-    assert not spec.memory.short_term and not spec.memory.long_term
-    assert spec.tools == []
-    assert hc.GRAFT_START in spec.code_bundle["main.py"]
-    assert hc.GW_SOFTFAIL_START not in spec.code_bundle["main.py"]
-    assert spec.code_bundle["mcp_client/client.py"] == files["mcp_client/client.py"]
 
 
 def test_graft_is_idempotent_and_upgrades_promoted_defaults():
@@ -277,49 +206,6 @@ def test_direct_kb_graft_fails_without_tools_collection_anchor():
         hc.graft_direct_kb_tools(MAIN_PY.replace("tools = []", "tools = [shell]"))
 
 
-# ─── env discovery ───────────────────────────────────────────────────────────
-def test_discover_env_leaves_an_unresolvable_gateway_key_unset(monkeypatch):
-    """No shared Gateway in the bootstrap config ⇒ the key stays unset and the
-    exported client skips the gateway with a warning."""
-    workspace = ws_ctx({"memory_id": "launchpad_memory-XYZ"})
-    files = {
-        "memory/session.py":
-            'MEMORY_ID = os.getenv("MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID")\n'
-            'REGION = os.getenv("AWS_REGION")',
-        "mcp_client/client.py":
-            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
-    }
-    env = hc.discover_env(files, workspace)
-    assert env["MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID"] == "launchpad_memory-XYZ"
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
-    assert "AWS_REGION" not in env  # runtime-provided
-
-
-def test_discover_env_wires_the_shared_gateway_but_not_the_kb_gateway(monkeypatch):
-    """The v1 caveat is removed, not reworded: the shared Gateway URL is wired.
-
-    The KB gateway's own key stays unset on purpose — conversion replaces it with
-    grafted direct-retrieval tools, so wiring it too would give the runtime two
-    duplicate retrieval surfaces.
-    """
-    workspace = ws_ctx({
-            "gateway_id": "launchpad-gw-a1b2c3d4e5",
-            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
-            "kb_gateway_id": "launchpad-kb-gw-f6g7h8j9k0",
-            "kb_gateway_url": "https://launchpad-kb-gw-f6g7h8j9k0.gateway.example/mcp",
-        })
-    files = {
-        "mcp_client/client.py":
-            'a = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")\n'
-            'b = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
-    }
-    env = hc.discover_env(files, workspace)
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
-        "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
-    )
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
-
-
 # ─── gateway soft-fail graft ─────────────────────────────────────────────────
 def test_gateway_softfail_graft_wraps_the_module_scope_call():
     """The documented v1 blocker: the export builds its gateway clients at import,
@@ -366,208 +252,8 @@ def test_flatten_requirements_dedupes_against_base_pins():
     assert "aws-opentelemetry-distro" in names
 
 
-def test_flatten_requirements_dedupes_against_extras_lists_too():
-    """The platform names `openai` only in MANTLE_EXTRA_REQUIREMENTS, never in the
-    template base list. Handing over only the base list left the Harness's own
-    `openai` in the spec, so the package stage received the project twice —
-    the tell that the conversion was working from a partial platform view."""
-    files = {"pyproject.toml": PYPROJECT.replace(
-        '    "mcp >= 1.19.0",', '    "mcp >= 1.19.0",\n    "openai >= 1.0",'
-    )}
-    platform = platform_requirements("zip_runtime", "mantle")
-    assert any(p.startswith("openai") for p in platform)  # guards the premise
-
-    extras = hc.flatten_requirements(files, platform)
-    names = {e.split(">=")[0].split("[")[0].strip().lower() for e in extras}
-    assert "openai" not in names
-    assert "mcp" in names  # not named by any platform list — must survive
-
-
 # ─── spec + packaging ────────────────────────────────────────────────────────
-def _source_agent():
-    return SimpleNamespace(
-        id="src1", name="aurora-support",
-        arn="arn:aws:bedrock-agentcore:us-west-2:1:harness/aurora_support-X",
-        spec={"system_prompt": "You are the Aurora Deck support assistant.",
-              "memory": {"short_term": True, "long_term": False}},
-    )
-
-
-def test_build_conversion_spec_shape(monkeypatch):
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
-             "mcp_client/client.py":
-                 'url = os.environ.get("GATEWAY_GATEWAY_X_URL")'}
-    spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
-    )
-    assert spec.method == "zip_runtime"
-    assert spec.code_bundle and "main.py" in spec.code_bundle
-    assert "pyproject.toml" not in spec.code_bundle  # not runtime source
-    assert "resolve_system_prompt()" in spec.code_bundle["main.py"]
-    assert spec.source_harness["agent_name"] == "aurora-support"
-    assert spec.conversion_notes["system_prompt"].startswith("wired")
-    assert spec.conversion_notes["kb_gateway"].startswith("not wired")
-    # unresolvable against this stubbed config, so still absent from env
-    assert "GATEWAY_GATEWAY_X_URL" not in spec.env
-
-
-def test_build_conversion_spec_materializes_direct_kb_support(monkeypatch):
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    source = _source_agent()
-    source.spec = {
-        **source.spec,
-        "knowledge_bases": [
-            {
-                "kb_id": "KB111",
-                "name": "fund-docs",
-                "description": "fund product PDFs",
-            },
-            {"kb_id": "KB222", "name": "faq", "description": ""},
-        ],
-        "tool_description_overrides": {"kb_search": "promoted fast search"},
-    }
-    files = {
-        "main.py": MAIN_PY,
-        "pyproject.toml": PYPROJECT,
-        "mcp_client/client.py": 'url = os.environ.get("GATEWAY_GATEWAY_X_URL")',
-    }
-
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace
-    )
-
-    assert [kb.kb_id for kb in spec.knowledge_bases] == ["KB111", "KB222"]
-    assert spec.code_bundle and "launchpad_kb_tools.py" in spec.code_bundle
-    kb_source = spec.code_bundle["launchpad_kb_tools.py"]
-    assert "def kb_search(" in kb_source and "def kb_deep_search(" in kb_source
-    assert "MOUNTED_KBS" in kb_source and "KB111" in kb_source
-    main_py = spec.code_bundle["main.py"]
-    assert "from launchpad_kb_tools import kb_deep_search, kb_search" in main_py
-    assert "tools.extend([kb_search, kb_deep_search])" in main_py
-    assert "`kb_search`" in spec.system_prompt
-    assert "`kb_deep_search`" in spec.system_prompt
-    assert "___Retrieve" not in spec.system_prompt
-    assert spec.tool_description_overrides["kb_search"] == "promoted fast search"
-    assert spec.tool_description_overrides["kb_deep_search"].startswith("Deep-search")
-    assert "_LAUNCHPAD_DEFAULT_SYSTEM_PROMPT" in main_py
-    assert "promoted fast search" in main_py
-    assert "GATEWAY_GATEWAY_X_URL" not in spec.env
-    assert spec.conversion_notes["knowledge_bases"].startswith("wired (direct")
-
-
-def test_build_conversion_spec_without_kbs_keeps_existing_bundle_shape(monkeypatch):
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
-    spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
-        workspace,
-    )
-    expected = hc.graft_config_bundle(
-        MAIN_PY,
-        default_system_prompt=_source_agent().spec["system_prompt"],
-        tool_description_overrides=None,
-    )
-    assert spec.code_bundle == {"main.py": hc.graft_runtime_attachments(expected)}
-    assert spec.knowledge_bases == []
-    assert hc.KB_GRAFT_START not in spec.code_bundle["main.py"]
-
-
-def test_build_conversion_spec_carries_model_source(monkeypatch):
-    """model_source rides along with model_id. A source harness stored before the
-    field existed converts to "bedrock" (Converse), never Mantle."""
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
-    base = ["bedrock-agentcore==1.17.*"]
-
-    legacy = hc.build_conversion_spec(
-        _source_agent(), files, base, "aurora-support-rt", workspace
-    )
-    assert legacy.model_source == "bedrock"
-
-    mantle_source = _source_agent()
-    mantle_source.spec = {**mantle_source.spec,
-                          "model_id": "openai.gpt-5.6-sol", "model_source": "mantle"}
-    converted = hc.build_conversion_spec(
-        mantle_source, files, base, "aurora-support-rt", workspace
-    )
-    assert converted.model_id == "openai.gpt-5.6-sol"
-    assert converted.model_source == "mantle"
-    # The CLI export builds its own model (model/load.py), not the strands
-    # template's build_model(), so what the conversion owes a Mantle harness is
-    # the openai extra — flatten_requirements drops it as a base-pin name.
-    from app.deployer.zip_runtime import _method_requirements
-
-    assert any("[openai]" in r for r in _method_requirements(converted))
-    assert not any("[openai]" in r for r in _method_requirements(legacy))
-
-
 SKILL_URI = "s3://launchpad-artifacts-1-us-west-2/skills/lab-quota-answering/"
-
-
-@pytest.mark.parametrize("with_kb", [False, True], ids=["skills", "skills-and-kb"])
-def test_build_skills_without_memory_preserves_resources_and_bundle(with_kb):
-    source = _source_agent()
-    source.spec = {
-        **source.spec,
-        "memory": {"short_term": False, "long_term": False},
-        "skills": [SKILL_URI],
-        "knowledge_bases": [
-            {"kb_id": "KB111", "name": "product-docs", "description": "Product manuals"},
-        ] if with_kb else [],
-        "tool_description_overrides": {"kb_search": "Reviewed product search"} if with_kb else {},
-    }
-    original_spec = json.loads(json.dumps(source.spec))
-    files = {"main.py": SKILLS_NOMEMORY_MAIN_PY, "pyproject.toml": PYPROJECT}
-    # Even when the workspace has Memory, this export must remain Memory-free.
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "product-support-rt",
-        ws_ctx({"memory_id": "mem-1"}),
-    )
-
-    assert spec.method == "zip_runtime"
-    assert not spec.memory.short_term and not spec.memory.long_term
-    assert not any(key.startswith("MEMORY_") for key in spec.env)
-    assert "memory" not in spec.conversion_notes
-    assert spec.skills == sorted([SKILL_URI, "s3://example-artifacts/skills/product-support/"])
-    assert spec.conversion_notes["skills"].startswith("wired (2 bundle(s)")
-    assert spec.source_harness["agent_id"] == source.id
-    assert [kb.model_dump() for kb in spec.knowledge_bases] == source.spec["knowledge_bases"]
-    assert source.spec == original_spec
-    assert files["main.py"] == SKILLS_NOMEMORY_MAIN_PY
-
-    assert spec.code_bundle and "pyproject.toml" not in spec.code_bundle
-    for path, content in spec.code_bundle.items():
-        compile(content, path, "exec")
-    main_py = spec.code_bundle["main.py"]
-    assert (
-        "agent = get_or_create_agent(_skill_plugins)\n"
-        "    _launchpad_apply_tool_descriptions(agent)"
-    ) in main_py
-    assert "plugins=skill_plugins or None" in main_py
-    assert "asyncio.to_thread(resolve_s3_skills, s3_skill_sources, None)" in main_py
-    assert "system_prompt=resolve_system_prompt()" in main_py
-    assert hc.graft_config_bundle(
-        main_py,
-        default_system_prompt=spec.system_prompt,
-        tool_description_overrides=spec.tool_description_overrides,
-    ) == main_py
-
-    if with_kb:
-        assert set(spec.code_bundle) == {"main.py", "launchpad_kb_tools.py"}
-        assert "KB111" in spec.code_bundle["launchpad_kb_tools.py"]
-        assert "tools.extend([kb_search, kb_deep_search])" in main_py
-        assert spec.system_prompt.startswith(source.spec["system_prompt"])
-        assert "`kb_search`" in spec.system_prompt and "`kb_deep_search`" in spec.system_prompt
-        assert spec.tool_description_overrides["kb_search"] == "Reviewed product search"
-        assert spec.tool_description_overrides["kb_deep_search"].startswith("Deep-search")
-        assert spec.conversion_notes["knowledge_bases"].startswith("wired (direct")
-        assert hc.graft_direct_kb_tools(main_py) == main_py
-    else:
-        assert set(spec.code_bundle) == {"main.py"}
-        assert spec.system_prompt == source.spec["system_prompt"]
-        assert hc.KB_GRAFT_START not in main_py
-        assert "knowledge_bases" not in spec.conversion_notes
 
 
 def test_discover_skills_reads_the_exported_source_lists():
@@ -582,120 +268,6 @@ def test_discover_skills_reads_the_exported_source_lists():
     s3_uris, other = hc.discover_skills(files)
     assert s3_uris == [SKILL_URI]
     assert other == ["https://example.invalid/repo.git"]
-
-
-def test_conversion_carries_skills_so_the_exec_role_grants_s3_read(monkeypatch):
-    """`agent_iam` gates the skill S3 statement on `spec.skills`. Dropping the
-    field made the deploy report success and the runtime fail at INVOKE with
-    `Failed to resolve S3 skill … AccessDenied`, because the exported code fetches
-    the prefixes it baked in."""
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    source = _source_agent()
-    source.spec = {**source.spec, "skills": [SKILL_URI]}
-    files = {
-        "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
-        "pyproject.toml": PYPROJECT,
-    }
-
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace
-    )
-
-    assert spec.skills == [SKILL_URI]
-    assert spec.conversion_notes["skills"].startswith("wired")
-
-
-def test_skills_only_the_exported_code_names_are_still_granted(monkeypatch):
-    """The grant must cover what the CODE fetches. A source row that never
-    recorded the bundle (or recorded it before the export changed) would
-    otherwise authorize the role for the wrong thing."""
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    source = _source_agent()  # ledger row has NO skills
-    files = {
-        "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
-        "pyproject.toml": PYPROJECT,
-    }
-
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace
-    )
-
-    assert spec.skills == [SKILL_URI]
-
-
-def test_non_s3_skill_sources_are_flagged_not_silently_claimed(monkeypatch):
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    files = {
-        "main.py": MAIN_PY
-        + '\ngit_skill_sources = ["https://example.invalid/repo.git"]\n',
-        "pyproject.toml": PYPROJECT,
-    }
-
-    spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
-        workspace,
-    )
-
-    assert spec.skills == []  # no S3 prefix to grant
-    assert spec.conversion_notes["skills_non_s3"].startswith("not verified")
-
-
-def test_a_skill_free_harness_claims_nothing_about_skills(monkeypatch):
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    spec = hc.build_conversion_spec(
-        _source_agent(),
-        {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
-        ["bedrock-agentcore==1.17.*"],
-        "aurora-support-rt",
-        workspace,
-    )
-    assert spec.skills == []
-    assert "skills" not in spec.conversion_notes
-    assert "skills_non_s3" not in spec.conversion_notes
-
-
-def test_pins_are_resolved_against_the_specs_own_platform_list(monkeypatch):
-    """A Mantle harness (the lab-quota-advisor shape) must resolve its pins against
-    the Mantle extras too. Resolving against the base list alone is what produced
-    `mcp==2.0.0` — un-lockable, because strands-agents caps `mcp<2.0.0`."""
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
-    mantle_source = _source_agent()
-    mantle_source.spec = {**mantle_source.spec, "model_source": "mantle"}
-
-    platform = platform_requirements(*hc.conversion_platform_inputs(mantle_source))
-    hc.build_conversion_spec(
-        mantle_source, files, platform, "aurora-support-rt", workspace
-    )
-
-    assert RESOLVED_AGAINST, "resolve_pins was never called"
-    resolved_against = RESOLVED_AGAINST[-1]
-    assert "strands-agents[openai]>=1.47,<2" in resolved_against
-    assert "openai>=2,<3" in resolved_against
-    assert any(r.startswith("strands-agents[otel]") for r in resolved_against)
-
-
-def test_the_pin_platform_matches_what_the_package_stage_will_prepend(monkeypatch):
-    """Drift guard. The router derives the platform list *before* the spec exists;
-    if that derivation disagrees with the spec actually built, pins are resolved
-    against a graph the deploy never uses — silently reintroducing this whole bug.
-    """
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
-    for model_source in ("bedrock", "mantle"):
-        source = _source_agent()
-        source.spec = {**source.spec, "model_source": model_source}
-
-        # what the router computes up front …
-        platform = platform_requirements(*hc.conversion_platform_inputs(source))
-        spec = hc.build_conversion_spec(
-            source, files, platform, "aurora-support-rt", ws_ctx()
-        )
-
-        # … must equal what the package stage prepends to the resulting spec
-        assert platform == platform_requirements(
-            spec.method, spec.model_source, spec.protocol
-        )
-        assert _method_requirements(spec) == platform + spec.requirements
 
 
 def test_code_bundle_validation():
@@ -723,193 +295,6 @@ def test_write_bundle_files_stages_subpackages(tmp_path):
     assert not (tmp_path / "main.py").exists()
 
 
-# ─── endpoint contract ──────────────────────────────────────────────────────
-def _mk_agent(**kw):
-    db = SessionLocal()
-    agent = Agent(**{"workspace_id": DEFAULT_WORKSPACE_ID, "name": "h-src",
-                     "method": "harness", "status": "active",
-                     "arn": "arn:h", "spec": {"system_prompt": "sp"}, **kw})
-    db.add(agent)
-    db.commit()
-    db.refresh(agent)
-    db.close()
-    return agent
-
-
-def test_convert_rejects_non_harness_and_inactive(client):
-    runtime_agent = _mk_agent(name="rt-src", method="zip_runtime")
-    res = client.post(f"/api/agents/{runtime_agent.id}/convert")
-    assert res.status_code == 400
-    assert res.json()["code"] == "agent.convert_unsupported"
-
-    inactive = _mk_agent(name="h-off", status="stopped")
-    res = client.post(f"/api/agents/{inactive.id}/convert")
-    assert res.status_code == 400
-
-
-def test_convert_happy_path_and_in_flight_guard(client, monkeypatch):
-    source = _mk_agent(name="aurora-support")
-    monkeypatch.setattr(
-        hc, "export_harness",
-        lambda arn: {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
-    )
-    started: list[str] = []
-    monkeypatch.setattr(agents_router, "start_deploy_async",
-                        lambda job_id: started.append(job_id))
-
-    res = client.post(f"/api/agents/{source.id}/convert")
-    assert res.status_code == 202
-    body = res.json()["agent"]
-    assert body["name"] == "aurora-support-rt"
-    assert body["method"] == "zip_runtime"
-    assert body["status"] == "deploying"
-    assert body["spec"]["source_harness"]["agent_id"] == source.id
-    assert "resolve_system_prompt()" in body["spec"]["code_bundle"]["main.py"]
-    assert started, "deploy job must be kicked"
-
-    # same source, conversion still deploying → 409
-    res = client.post(f"/api/agents/{source.id}/convert")
-    assert res.status_code == 409
-    assert res.json()["code"] == "agent.convert_in_flight"
-
-
-def test_conversions_lists_runtime_twins_of_the_source(client, monkeypatch):
-    """GET …/conversions projects the ledger relation the convert stamped
-    (spec.source_harness.agent_id), newest first, with each twin's latest
-    deployment — and only for THIS source."""
-    source = _mk_agent(name="twin-src")
-    other = _mk_agent(name="twin-other")
-    monkeypatch.setattr(
-        hc, "export_harness",
-        lambda arn: {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
-    )
-    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
-
-    # nothing converted yet → empty, but the source is named
-    res = client.get(f"/api/agents/{source.id}/conversions")
-    assert res.status_code == 200
-    assert res.json() == {
-        "source": {"id": source.id, "name": "twin-src", "method": "harness", "status": "active"},
-        "conversions": [],
-    }
-
-    twin = client.post(f"/api/agents/{source.id}/convert").json()["agent"]
-    client.post(f"/api/agents/{other.id}/convert")
-
-    res = client.get(f"/api/agents/{source.id}/conversions")
-    body = res.json()
-    assert [c["id"] for c in body["conversions"]] == [twin["id"]]
-    row = body["conversions"][0]
-    assert row["name"] == "twin-src-rt"
-    assert row["status"] == "deploying"
-    assert row["deployment"]["status"] == "running"
-    # the capability the NEXT STEPS ladder gates the experiment link on
-    assert "experiment_capability" in row
-
-    # a deleted twin drops out; an unknown source is a 404
-    db = SessionLocal()
-    db.get(Agent, twin["id"]).status = "deleted"
-    db.commit()
-    db.close()
-    assert client.get(f"/api/agents/{source.id}/conversions").json()["conversions"] == []
-    assert client.get("/api/agents/nope/conversions").status_code == 404
-
-
-def test_convert_happy_path_persists_direct_kb_bundle(client, monkeypatch):
-    source = _mk_agent(
-        name="kb-support",
-        spec={
-            "system_prompt": "Use the product corpus.",
-            "knowledge_bases": [
-                {"kb_id": "KB111", "name": "Product Docs", "description": "features"}
-            ],
-        },
-    )
-    monkeypatch.setattr(
-        hc,
-        "export_harness",
-        lambda arn: {
-            "main.py": MAIN_PY,
-            "mcp_client/client.py": 'url = os.environ.get("GATEWAY_GATEWAY_X_URL")',
-        },
-    )
-    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
-
-    res = client.post(f"/api/agents/{source.id}/convert")
-
-    assert res.status_code == 202
-    spec = res.json()["agent"]["spec"]
-    assert spec["knowledge_bases"][0]["kb_id"] == "KB111"
-    assert "launchpad_kb_tools.py" in spec["code_bundle"]
-    assert "kb_search" in spec["code_bundle"]["main.py"]
-    assert "`kb_deep_search`" in spec["system_prompt"]
-    assert "GATEWAY_GATEWAY_X_URL" not in spec["env"]
-
-
-def test_convert_name_dedupe(client, monkeypatch):
-    source = _mk_agent(name="hr-assistant")
-    _mk_agent(name="hr-assistant-rt", method="zip_runtime")  # name taken (active)
-    monkeypatch.setattr(hc, "export_harness",
-                        lambda arn: {"main.py": MAIN_PY})
-    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
-    res = client.post(f"/api/agents/{source.id}/convert")
-    assert res.status_code == 202
-    assert res.json()["agent"]["name"] == "hr-assistant-rt-2"
-
-
-def test_convert_graft_failure_is_clean(client, monkeypatch):
-    source = _mk_agent(name="h-graftless")
-    monkeypatch.setattr(hc, "export_harness",
-                        lambda arn: {"main.py": "print('no anchors')"})
-    res = client.post(f"/api/agents/{source.id}/convert")
-    assert res.status_code == 502
-    assert res.json()["code"] == "agent.convert_failed"
-    db = SessionLocal()
-    leftovers = db.query(Agent).filter(Agent.name.like("h-graftless-rt%")).all()
-    db.close()
-    assert leftovers == []  # no half-registered row (A2)
-
-
-def test_convert_missing_managed_cli_uses_app_error_without_row(
-    client, tmp_path, monkeypatch
-):
-    source = _mk_agent(name="h-cli-missing")
-    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", tmp_path / "missing")
-    monkeypatch.setattr(hc, "_SCRATCH_DIR", tmp_path / "harness-export")
-
-    res = client.post(f"/api/agents/{source.id}/convert")
-
-    assert res.status_code == 502
-    assert res.json()["code"] == "agent.convert_cli_missing"
-    assert "make bootstrap" in res.json()["message"]
-    db = SessionLocal()
-    leftovers = db.query(Agent).filter(Agent.name.like("h-cli-missing-rt%")).all()
-    db.close()
-    assert leftovers == []
-
-
-def test_convert_direct_kb_anchor_failure_is_clean(client, monkeypatch):
-    source = _mk_agent(
-        name="h-kb-graftless",
-        spec={
-            "system_prompt": "Use the corpus.",
-            "knowledge_bases": [{"kb_id": "KB111", "name": "Docs"}],
-        },
-    )
-    monkeypatch.setattr(
-        hc,
-        "export_harness",
-        lambda arn: {"main.py": MAIN_PY.replace("tools = []", "tools = [shell]")},
-    )
-    res = client.post(f"/api/agents/{source.id}/convert")
-    assert res.status_code == 502
-    assert "direct KB graft anchor missing" in res.json()["message"]
-    db = SessionLocal()
-    leftovers = db.query(Agent).filter(Agent.name.like("h-kb-graftless-rt%")).all()
-    db.close()
-    assert leftovers == []
-
-
 def test_flatten_sse_text_joins_deltas_and_raises_on_error():
     from app.services.agentcore.runtime import flatten_sse_text
 
@@ -923,218 +308,6 @@ def test_flatten_sse_text_joins_deltas_and_raises_on_error():
     assert flatten_sse_text("") is None
     with pytest.raises(RuntimeError, match="boom"):
         flatten_sse_text('data: {"event": {"runtimeClientError": "boom"}}\n')
-
-
-def test_last_json_skips_update_notice():
-    out = json.dumps({"success": True, "agentPath": "/x"}) + \
-        "\n\nUpdate available: 0.21.1 → 0.24.0\n"
-    # update notice AFTER the json — reversed scan still finds the object
-    assert hc._last_json(out)["success"] is True
-
-
-def test_last_json_rejects_non_object_json():
-    with pytest.raises(hc.ConversionError, match="returned no JSON"):
-        hc._last_json('["not", "a", "result"]\n')
-
-
-# ─── managed CLI ────────────────────────────────────────────────────────────
-def _managed_cli(tmp_path: Path) -> Path:
-    cli = tmp_path / "agentcore-cli" / "node_modules" / ".bin" / "agentcore"
-    cli.parent.mkdir(parents=True)
-    cli.write_text("#!/bin/sh\n")
-    cli.chmod(0o755)
-    return cli
-
-
-def test_managed_cli_missing_uses_existing_error_boundary(tmp_path, monkeypatch):
-    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", tmp_path / "missing")
-
-    with pytest.raises(AppError) as exc_info:
-        hc.resolve_agentcore_cli()
-
-    assert exc_info.value.code == "agent.convert_cli_missing"
-    assert exc_info.value.status_code == 502
-    assert "make bootstrap" in exc_info.value.message
-
-
-def test_managed_cli_timeout_uses_conversion_error(tmp_path, monkeypatch):
-    cli = _managed_cli(tmp_path)
-    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
-
-    def timed_out(cmd, cwd):
-        raise hc.subprocess.TimeoutExpired(cmd=cmd, timeout=hc.EXPORT_TIMEOUT_S)
-
-    monkeypatch.setattr(hc, "_run", timed_out)
-
-    with pytest.raises(hc.ConversionError, match="timed out after 120 seconds"):
-        hc._run_agentcore(["export"], cwd=tmp_path)
-
-
-def test_scratch_create_uses_managed_cli_path(tmp_path, monkeypatch):
-    cli = _managed_cli(tmp_path)
-    scratch = tmp_path / "harness-export"
-    project = scratch / hc.SCRATCH_PROJECT
-    calls = []
-    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
-    monkeypatch.setattr(hc, "_SCRATCH_DIR", scratch)
-
-    def fake_run(cmd, cwd):
-        calls.append((cmd, cwd))
-        return SimpleNamespace(
-            stdout=json.dumps({"success": True, "projectPath": str(project)})
-        )
-
-    monkeypatch.setattr(hc, "_run", fake_run)
-
-    assert hc.ensure_scratch_project() == project
-    assert calls == [
-        (
-            [
-                str(cli),
-                "create",
-                "--project-name",
-                hc.SCRATCH_PROJECT,
-                "--no-agent",
-                "--json",
-            ],
-            scratch,
-        )
-    ]
-
-
-def test_harness_export_uses_managed_cli_path(tmp_path, monkeypatch):
-    cli = _managed_cli(tmp_path)
-    scratch = tmp_path / "harness-export"
-    project = scratch / hc.SCRATCH_PROJECT
-    project.mkdir(parents=True)
-    exported = tmp_path / "exported"
-    exported.mkdir()
-    (exported / "main.py").write_text("print('exported')\n")
-    calls = []
-    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
-    monkeypatch.setattr(hc, "_SCRATCH_DIR", scratch)
-
-    def fake_run(cmd, cwd):
-        calls.append((cmd, cwd))
-        return SimpleNamespace(
-            stdout=json.dumps({"success": True, "agentPath": str(exported)})
-        )
-
-    monkeypatch.setattr(hc, "_run", fake_run)
-
-    assert hc.export_harness("arn:harness") == {"main.py": "print('exported')\n"}
-    assert len(calls) == 1
-    cmd, cwd = calls[0]
-    assert cwd == project
-    target = cmd[cmd.index("--target-agent-name") + 1]
-    assert cmd == [
-        str(cli),
-        "export",
-        "harness",
-        "--arn",
-        "arn:harness",
-        "--target-agent-name",
-        target,
-        "--build",
-        "CodeZip",
-        "--json",
-    ]
-
-
-def test_harness_export_never_reuses_a_target_agent_name(tmp_path, monkeypatch):
-    """The CLI derives `<harnessName>Agent` and REFUSES to overwrite it, so a
-    default-named export makes every second conversion of the same harness fail
-    with `A runtime agent named "…" already exists`. A per-call name also stops two
-    concurrent conversions from sharing an export directory.
-    """
-    cli = _managed_cli(tmp_path)
-    scratch = tmp_path / "harness-export"
-    (scratch / hc.SCRATCH_PROJECT).mkdir(parents=True)
-    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
-    monkeypatch.setattr(hc, "_SCRATCH_DIR", scratch)
-    targets = []
-
-    def fake_run(cmd, cwd):
-        target = cmd[cmd.index("--target-agent-name") + 1]
-        targets.append(target)
-        exported = tmp_path / "exports" / target
-        exported.mkdir(parents=True)
-        (exported / "main.py").write_text("print('exported')\n")
-        return SimpleNamespace(
-            stdout=json.dumps({"success": True, "agentPath": str(exported)})
-        )
-
-    monkeypatch.setattr(hc, "_run", fake_run)
-
-    for _ in range(2):
-        assert hc.export_harness("arn:harness") == {"main.py": "print('exported')\n"}
-
-    assert len(set(targets)) == 2, "the same target name was reused"
-    # read into memory, then gone: the scratch tree is not an artifact of record
-    assert not [p for p in (tmp_path / "exports").iterdir()]
-
-
-def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
-    """Requirement B / R5. Dropping the gateway ToolRef is the same failure shape
-    as the dropped spec.skills once was: the deploy reports READY and the runtime
-    reaches no tools, because agent_iam gates the AgentCore Identity statements —
-    and the invoke chain gates runtimeUserId — on that field being present."""
-    workspace = ws_ctx({
-            "memory_id": "mem-1",
-            "gateway_id": "launchpad-gw-a1b2c3d4e5",
-            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
-        })
-    source = _source_agent()
-    source.spec = {
-        **source.spec,
-        "tools": [
-            {"type": "gateway", "name": "hr-database",
-             "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}},
-            {"type": "mcp", "name": "deepwiki", "config": {"url": "https://x/mcp"}},
-            {"type": "builtin", "name": "code-interpreter"},
-        ],
-    }
-    files = {
-        "main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
-        "mcp_client/client.py":
-            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")',
-    }
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
-    )
-    # gateway + mcp carried (both drive _uses_gateway); builtin is a Harness-only
-    # tool type the exported code does not reproduce
-    assert [(t.type, t.name) for t in spec.tools] == [
-        ("gateway", "hr-database"), ("mcp", "deepwiki"),
-    ]
-    assert spec.tools[0].config["gateway_id"] == "launchpad-gw-a1b2c3d4e5"
-    from app.services.agent_iam import _uses_gateway
-    assert _uses_gateway(spec) is True
-    from app.templates.gateway_support import runtime_user_id
-    assert runtime_user_id(spec.model_dump(), "river") == "river"
-    # env wired, soft-fail graft applied, and the note says so truthfully
-    assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
-        "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
-    )
-    assert hc.GW_SOFTFAIL_START in spec.code_bundle["main.py"]
-    assert spec.conversion_notes["gateway"].startswith("wired")
-    assert spec.conversion_notes["gateway_tools"].startswith("wired (2 attachment")
-    assert "kb_gateway" not in spec.conversion_notes
-
-
-def test_build_conversion_spec_skips_the_softfail_graft_without_a_gateway_client(
-    monkeypatch,
-):
-    """An export carrying no mcp_client/client.py has no gateway to soft-fail. That
-    is benign — it must not fail the conversion and must not graft anything."""
-    workspace = ws_ctx({"memory_id": "mem-1"})
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
-    spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
-    )
-    assert spec.tools == []
-    assert hc.GW_SOFTFAIL_START not in spec.code_bundle["main.py"]
-    assert "gateway_tools" not in spec.conversion_notes
 
 
 # ─── lazy gateway token graft ────────────────────────────────────────────────
@@ -1168,28 +341,6 @@ def test_lazy_gateway_token_graft_fails_on_a_missing_anchor():
         hc.graft_lazy_gateway_token(
             MCP_CLIENT_PY.replace("token = _get_bearer_token_launchpad_gw()", "token = None")
         )
-
-
-def test_conversion_applies_both_gateway_grafts(monkeypatch):
-    workspace = ws_ctx({
-            "memory_id": "mem-1",
-            "gateway_id": "launchpad-gw-a1b2c3d4e5",
-            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
-        })
-    source = _source_agent()
-    source.spec = {**source.spec,
-                   "tools": [{"type": "gateway", "name": "hr-database"}]}
-    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
-             "mcp_client/client.py": MCP_CLIENT_PY}
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
-    )
-    # main.py: the import-time crash is contained
-    assert hc.GW_SOFTFAIL_START in spec.code_bundle["main.py"]
-    # client.py: the token fetch is deferred into the request
-    assert hc.GW_LAZY_TOKEN_MARK in spec.code_bundle["mcp_client/client.py"]
-    compile(spec.code_bundle["mcp_client/client.py"], "client.py", "exec")
-    compile(spec.code_bundle["main.py"], "main.py", "exec")
 
 
 # ─── native Harness tools the export drops ──────────────────────────────────
@@ -1239,34 +390,6 @@ def test_grafted_file_operations_reads_a_skill_reference(tmp_path):
 
     assert "项目" in scope["file_operations"]("view", str(ref))
     assert scope["tools"] == [scope["file_operations"]]
-
-
-def test_build_conversion_spec_restores_selected_native_tools(monkeypatch):
-    template = FIXTURES / "agentcore_cli_strands_main_template.py"
-    monkeypatch.setattr(hc, "NATIVE_TOOL_TEMPLATE", template)
-    source = _source_agent()
-    source.spec = {**source.spec, "native_tools": ["file_operations"]}
-    files = {"main.py": DROPPED_MAIN_PY, "pyproject.toml": PYPROJECT}
-
-    spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", ws_ctx({})
-    )
-
-    assert "def file_operations(" in spec.code_bundle["main.py"]
-    assert "def shell(" not in spec.code_bundle["main.py"]
-    assert spec.conversion_notes["native_tools"].startswith("wired (file_operations")
-
-
-def test_build_conversion_spec_needs_no_template_without_native_tools(monkeypatch):
-    monkeypatch.setattr(hc, "NATIVE_TOOL_TEMPLATE", Path("/nonexistent/main.py"))
-    files = {"main.py": DROPPED_MAIN_PY, "pyproject.toml": PYPROJECT}
-
-    spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", ws_ctx({})
-    )
-
-    assert "def file_operations(" not in spec.code_bundle["main.py"]
-    assert "native_tools" not in spec.conversion_notes
 
 
 # ─── Gateway clients the CLI export drops for a narrowed Harness ─────────────
@@ -1354,51 +477,6 @@ def test_unselected_or_already_exported_gateways_are_left_alone():
     assert hc.graft_missing_gateway_clients(
         exported, [_gw_tool("launchpad_gw", GW_ARN)], None,
     ) == exported
-
-
-def test_conversion_of_a_narrowed_harness_restores_its_gateway_tools():
-    """End to end through build_conversion_spec: without the live Harness the export
-    fails the soft-fail anchor (the prod regression); with it the clients are rebuilt
-    and both the lazy-token and soft-fail grafts apply."""
-    workspace = ws_ctx({
-        "gateway_id": "launchpad-gw-a1b2c3d4e5",
-        "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
-        "kb_gateway_arn": KB_GW_ARN,
-    })
-    source = _source_agent()
-    source.spec = {**source.spec, "memory": {"short_term": False, "long_term": False},
-                   "tools": [{"type": "gateway", "name": "anyhr-leave",
-                              "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}}]}
-    with pytest.raises(hc.ConversionError, match="module-scope"):
-        hc.build_conversion_spec(
-            source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "hr-rt", workspace,
-        )
-    spec = hc.build_conversion_spec(
-        source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "hr-rt", workspace,
-        harness=NARROWED_HARNESS,
-    )
-    main, client = spec.code_bundle["main.py"], spec.code_bundle["mcp_client/client.py"]
-    assert hc.GW_SOFTFAIL_START in main
-    assert hc.GW_LAZY_TOKEN_MARK in client
-    assert "tool_filters={'allowed': [" in client
-    assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"].startswith("https://")
-
-
-def test_convert_route_reads_the_live_harness_only_for_gateway_sources(client, monkeypatch):
-    seen: list[str] = []
-    monkeypatch.setattr(agents_router.harness_api, "get_harness",
-                        lambda control, harness_id: seen.append(harness_id) or {})
-    monkeypatch.setattr(
-        hc, "export_harness", lambda arn: {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
-    )
-    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
-    plain = _mk_agent(name="plain-src")
-    assert client.post(f"/api/agents/{plain.id}/convert").status_code == 202
-    assert seen == []
-    gw = _mk_agent(name="gw-src", resource_id="gw_src-H1", spec={
-        "system_prompt": "sp", "tools": [{"type": "gateway", "name": "hr-database"}]})
-    client.post(f"/api/agents/{gw.id}/convert")
-    assert seen == ["gw_src-H1"]
 
 
 def test_twin_gateway_client_drops_config_bundle_baggage():
@@ -1532,18 +610,346 @@ def test_gateway_without_any_outbound_auth_still_fails_the_conversion():
         hc.graft_missing_gateway_clients(_narrowed_files(), [tool], None)
 
 
-def test_conversion_of_a_harness_with_an_iam_gateway_restores_its_tools():
-    source = _source_agent()
-    source.spec = {**source.spec, "memory": {"short_term": False, "long_term": False},
-                   "tools": [{"type": "gateway", "name": "web-search",
-                              "config": {"gateway_id": "web-search-gw-k1l2m3n4o5"}}]}
-    spec = hc.build_conversion_spec(
-        source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "research-rt", ws_ctx({}),
-        harness={"tools": [_iam_gw_tool("web_search")], "allowedTools": IAM_ALLOWED},
+# ─── self-built Harness renderers (N7) ───────────────────────────────────────
+HARNESS_TEMPLATE_DIR = Path(__file__).parent.parent / "app" / "templates" / "harness_runtime"
+MIN_TEMPLATE = (FIXTURES / "harness_runtime_min" / "main.py.tmpl").read_text()
+REAL_MAIN_PY = (HARNESS_TEMPLATE_DIR / "main.py.tmpl").read_text()
+REAL_CLIENT_PY = (HARNESS_TEMPLATE_DIR / "mcp_client" / "client.py.tmpl").read_text()
+
+
+@pytest.mark.parametrize("template", [MIN_TEMPLATE, REAL_MAIN_PY], ids=["fixture", "real"])
+def test_actor_graft_reads_the_platform_actor_from_the_payload(template):
+    out = hc.graft_actor_from_payload(template)
+    assert (
+        'user_id = str(payload.get("actor_id") or '
+        'getattr(context, "user_id", "default-user"))'
+    ) in out
+    assert "getattr(context, 'user_id', 'default-user')" not in out
+    assert hc.graft_actor_from_payload(out) == out  # idempotent
+    with pytest.raises(hc.ConversionError, match="A7"):
+        hc.graft_actor_from_payload(template.replace("user_id = getattr", "uid = getattr"))
+
+
+@pytest.mark.parametrize("template", [MIN_TEMPLATE, REAL_MAIN_PY], ids=["fixture", "real"])
+def test_loop_bounds_are_rewritten_everywhere_the_export_bakes_them(template):
+    out = hc.render_loop_bounds(template, 12, 240)
+    assert "max_iterations=12," in out and "max_iterations=10," not in out
+    assert out.count("timeout_seconds=240,") == 1 and "timeout_seconds = 240" in out
+    assert "timeout_seconds = 300" not in out
+    with pytest.raises(hc.ConversionError, match="A8"):
+        hc.render_loop_bounds(template.replace("ExecutionLimitsHook(", "LimitsHook("), 1, 10)
+
+
+@pytest.mark.parametrize("template", [MIN_TEMPLATE, REAL_MAIN_PY], ids=["fixture", "real"])
+def test_skill_sources_are_rendered_from_the_spec_and_readable_back(template):
+    out = hc.render_skill_sources(template, ["s3://b/skills/x/", "s3://b/skills/y/"])
+    assert "s3_skill_sources = ['s3://b/skills/x/', 's3://b/skills/y/']" in out
+    assert hc.discover_skills({"main.py": out}) == (["s3://b/skills/x/", "s3://b/skills/y/"], [])
+    assert "s3_skill_sources = []" in hc.render_skill_sources(template, [])
+    with pytest.raises(hc.ConversionError, match="A6"):
+        hc.render_skill_sources(template.replace("s3_skill_sources", "sources"), [])
+
+
+@pytest.mark.parametrize(
+    ("main_template", "client_template"),
+    [(MIN_TEMPLATE, NARROWED_CLIENT), (REAL_MAIN_PY, REAL_CLIENT_PY)],
+    ids=["fixture", "real"],
+)
+def test_remote_mcp_tools_are_rebuilt_as_soft_clients_next_to_the_sigv4_gateway(
+    main_template, client_template
+):
+    files = {"main.py": main_template, "mcp_client/client.py": client_template}
+    tools = [
+        _iam_gw_tool("launchpad_gw",
+                     "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:gateway/launchpad-gw-a1b2c3d4e5"),
+        {"type": "remote_mcp", "name": "aws_knowledge",
+         "config": {"remoteMcp": {"url": "https://knowledge-mcp.global.api.aws"}}},
+    ]
+    out = hc.graft_missing_gateway_clients(files, tools, None)
+    client = out["mcp_client/client.py"]
+    assert "def get_launchpad_gw_mcp_client" in client and hc.GW_SIGV4_TRANSPORT in client
+    assert "def get_aws_knowledge_mcp_client" in client
+    assert "streamablehttp_client('https://knowledge-mcp.global.api.aws')" in client
+    assert "amazonaws.com.cn/mcp" in client  # partition-aware URL from the aws-cn ARN
+    lazy = hc.graft_lazy_gateway_token(client)
+    assert f"return {hc.GW_SOFT_CLIENT}(lambda: streamablehttp_client(" in lazy
+    assert f"class {hc.GW_SOFT_CLIENT}({hc.GW_NO_BUNDLE_CLIENT})" in lazy
+    assert hc.GW_SOFTFAIL_START in hc.graft_gateway_softfail(out["main.py"])
+
+
+@pytest.mark.parametrize("template", [MIN_TEMPLATE, REAL_MAIN_PY], ids=["fixture", "real"])
+def test_tool_module_graft_is_generic_and_idempotent(template):
+    out = hc.graft_tool_module(
+        template, start=hc.BUILTIN_GRAFT_START, end=hc.BUILTIN_GRAFT_END,
+        import_line="from launchpad_builtin_tools import code_interpreter",
+        tool_names=["code_interpreter"],
     )
-    main, client = spec.code_bundle["main.py"], spec.code_bundle["mcp_client/client.py"]
-    compile(client, "client.py", "exec")
-    assert hc.GW_SOFTFAIL_START in main
-    assert f"{hc.GW_NO_BUNDLE_CLIENT}(lambda: {hc.GW_SIGV4_TRANSPORT}(" in client
-    assert [t.config["gateway_id"] for t in spec.tools if t.type == "gateway"] == [
-        "web-search-gw-k1l2m3n4o5"]
+    assert "tools.extend([code_interpreter])" in out
+    assert hc.graft_tool_module(out, start=hc.BUILTIN_GRAFT_START, end=hc.BUILTIN_GRAFT_END,
+                                import_line="x", tool_names=["y"]) == out
+
+
+def test_native_tool_template_is_the_vendored_cli_handlebars_file():
+    assert hc.NATIVE_TOOL_TEMPLATE.name == "strands_base_main.py.hbs"
+    assert "harness_runtime" in hc.NATIVE_TOOL_TEMPLATE.parts
+
+
+@pytest.mark.parametrize("template", [MIN_TEMPLATE, REAL_MAIN_PY], ids=["fixture", "real"])
+def test_config_bundle_graft_leaves_no_unrendered_placeholder_in_the_constant_body(template):
+    """Lead ruling (Task 1 review, step 0): `graft_config_bundle` redirects the
+    *usage* site (`system_prompt=DEFAULT_SYSTEM_PROMPT` → `resolve_system_prompt()`)
+    but the vendored template still bakes the constant's own body as the literal
+    placeholder `__LAUNCHPAD_REFERENCE_PROMPT__` — left alone, that placeholder would
+    ship as the bundle's fallback prompt in every render. `render_skill_sources` (A6)
+    resolves the sibling `__LAUNCHPAD_SKILLS__` placeholder — rendering it too lets
+    this assert the FULL renderer chain Task 3 runs leaves no `__LAUNCHPAD_` substring
+    anywhere, override given or not. Do NOT narrow or exempt the scan."""
+    out = hc.render_skill_sources(template, [])
+    out = hc.graft_config_bundle(out, default_system_prompt="You are the Launchpad assistant.")
+    compile(out, "main.py", "exec")
+    assert "__LAUNCHPAD_" not in out
+    assert 'DEFAULT_SYSTEM_PROMPT = """You are the Launchpad assistant."""' in out
+
+    out_default = hc.render_skill_sources(template, [])
+    out_default = hc.graft_config_bundle(out_default)
+    compile(out_default, "main.py", "exec")
+    assert "__LAUNCHPAD_" not in out_default
+
+
+def _baked_prompt(main_py: str) -> str:
+    tree = ast.parse(main_py)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "DEFAULT_SYSTEM_PROMPT" for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError("DEFAULT_SYSTEM_PROMPT constant missing")
+
+
+@pytest.mark.parametrize("prompt", [
+    'Say "hi"',                 # trailing quote
+    '"""""x',                   # five consecutive quotes
+    'ends with backslash-quote \\"',
+    "trailing backslash \\",
+    'mixed \\"""\\ """ end"',
+], ids=["trailing-quote", "five-quotes", "backslash-quote", "backslash", "mixed"])
+def test_prompt_constant_body_round_trips_awkward_quoting(prompt):
+    """A1 (fix round 1, F2): uniform escaping — the baked constant always evaluates back
+    to the exact prompt, compiles, and survives a re-graft with a new prompt."""
+    out = hc.render_skill_sources(MIN_TEMPLATE, [])
+    out = hc.graft_config_bundle(out, default_system_prompt=prompt)
+    compile(out, "main.py", "exec")
+    assert _baked_prompt(out) == prompt
+    assert len(hc._PROMPT_CONST_RE.findall(out)) == 1  # one module-level constant
+    again = hc.graft_config_bundle(out, default_system_prompt="second " + prompt)
+    compile(again, "main.py", "exec")
+    assert _baked_prompt(again) == "second " + prompt
+    assert len(hc._PROMPT_CONST_RE.findall(again)) == 1
+
+
+# ─── memory grafts (N8; memory-runtime.md §6 steps 2–3) ───────────────────────
+REAL_TEMPLATE_MAIN = (
+    Path(__file__).resolve().parents[1] / "app" / "templates" / "harness_runtime" / "main.py.tmpl"
+).read_text()
+FIXTURE_TEMPLATE_MAIN = (FIXTURES / "harness_runtime_min" / "main.py.tmpl").read_text()
+
+
+def _agent_hooks_elements(main_py: str) -> list[ast.expr]:
+    tree = ast.parse(main_py)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "Agent"):
+            (hooks,) = [kw.value for kw in node.keywords if kw.arg == "hooks"]
+            assert isinstance(hooks, ast.List)
+            return hooks.elts
+    raise AssertionError("no Agent(...) call")
+
+
+@pytest.mark.parametrize("source", [REAL_TEMPLATE_MAIN, FIXTURE_TEMPLATE_MAIN, MAIN_PY],
+                         ids=["real-template", "fixture-template", "export"])
+def test_memory_hooks_graft_appends_to_the_execution_limits_list(source):
+    grafted = hc.graft_memory_hooks(source)
+    compile(grafted, "main.py", "exec")
+    elts = _agent_hooks_elements(grafted)
+    assert len(elts) == 2  # append, never replace: the ExecutionLimitsHook stays first
+    assert ast.unparse(elts[0]).startswith("ExecutionLimitsHook(")
+    assert ast.unparse(elts[1]) == "*make_memory_hooks(user_id, session_id)"
+    assert hc.MEMORY_HOOKS_MARK in grafted
+    assert hc.graft_memory_hooks(grafted) == grafted  # idempotent
+    # the A8 loop-bounds anchors survive the graft
+    assert hc.LOOP_ITER_RE.search(grafted) and hc.LOOP_HOOK_TIMEOUT_RE.search(grafted)
+
+
+def test_memory_hooks_graft_names_its_anchor_on_drift():
+    with pytest.raises(hc.ConversionError, match=r"\(A11\)"):
+        hc.graft_memory_hooks(REAL_TEMPLATE_MAIN.replace("hooks=[", "hooks=list(["))
+    # a factory whose parameters are not (session_id, user_id, …) has no actor to scope to
+    with pytest.raises(hc.ConversionError, match=r"\(A11\)"):
+        hc.graft_memory_hooks(REAL_TEMPLATE_MAIN.replace(
+            "def get_or_create_agent(session_id, user_id, skill_plugins=None):",
+            "def get_or_create_agent(sid, uid, skill_plugins=None):",
+        ))
+
+
+def test_memory_import_graft_degrades_to_no_memory_when_the_library_is_unimportable():
+    grafted = hc.graft_memory_import(REAL_TEMPLATE_MAIN)
+    assert hc.MEMORY_GRAFT_START in grafted and hc.MEMORY_GRAFT_END in grafted
+    assert "from launchpad_memory import make_memory_hooks, recall_context" in grafted
+    assert grafted.index(hc.MEMORY_GRAFT_START) > grafted.index(
+        "from memory.session import get_memory_session_manager"
+    )
+    assert hc.graft_memory_import(grafted) == grafted
+    with pytest.raises(hc.ConversionError, match=r"\(A10\)"):
+        hc.graft_memory_import(REAL_TEMPLATE_MAIN.replace(
+            "from memory.session import get_memory_session_manager", "import memory.session"))
+    # the fallback definitions are inert
+    block = grafted[grafted.index(hc.MEMORY_GRAFT_START): grafted.index(hc.MEMORY_GRAFT_END)]
+    namespace: dict = {}
+    exec(block.replace("from launchpad_memory import", "from launchpad_memory_absent import"),
+         namespace)  # noqa: S102 — our own graft text
+    assert namespace["make_memory_hooks"]("a", "s") == []
+    assert namespace["recall_context"]("a", "q") == ""
+    assert namespace["_launchpad_recall_query"]("hello") == "hello"
+    assert namespace["_launchpad_recall_query"](
+        [{"role": "assistant", "content": [{"text": "hi"}]},
+         {"role": "user", "content": [{"text": "my name"}, {"text": "is River"}]}]
+    ) == "my name\nis River"
+    assert namespace["_launchpad_recall_query"](
+        [{"role": "user", "content": [{"toolResult": {}}]}]
+    ) == ""
+    assert namespace["_launchpad_recall_query"]({"prompt": "x"}) == ""
+
+
+@pytest.mark.parametrize("source", [REAL_TEMPLATE_MAIN, FIXTURE_TEMPLATE_MAIN],
+                         ids=["real-template", "fixture-template"])
+def test_memory_recall_graft_prepends_recall_before_the_turn_streams(source):
+    main = hc.graft_config_bundle(source, default_system_prompt="p")
+    main = hc.graft_runtime_attachments(main)
+    main = hc.graft_actor_from_payload(main)
+    grafted = hc.graft_memory_recall(main)
+    compile(grafted, "main.py", "exec")
+    assert hc.MEMORY_RECALL_START in grafted and hc.MEMORY_RECALL_END in grafted
+    assert hc.graft_memory_recall(grafted) == grafted
+    tree = ast.parse(grafted)
+    (invoke,) = [
+        n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "invoke"
+    ]
+    unparsed = [ast.unparse(stmt) for stmt in invoke.body]
+    i_agent = next(
+        i for i, s in enumerate(unparsed) if s.startswith("agent = get_or_create_agent(")
+    )
+    i_prompt = unparsed.index("prompt = _extract_prompt(payload)")
+    i_query = unparsed.index("_launchpad_query = _launchpad_recall_query(prompt)")
+    i_known = next(i for i, s in enumerate(unparsed) if s.startswith("_launchpad_known = "))
+    # A12 fix: the reset keys on the USER turn (_launchpad_query), not on recall
+    # presence (_launchpad_known) — see test_memory_recall_graft_resets_stale_context_*
+    # below for why (the Harness caches one Agent per session/actor).
+    i_set = next(i for i, s in enumerate(unparsed) if s.startswith("if _launchpad_query:"))
+    i_attach = next(
+        i for i, s in enumerate(unparsed) if s.startswith("if payload.get('attachments'):")
+    )
+    stream_line = next(n.lineno for n in ast.walk(invoke)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == "stream_async")
+    # actor + agent exist → raw prompt extracted → recall → attachments adapt → stream
+    assert i_agent < i_prompt < i_query < i_known < i_set < i_attach
+    assert invoke.body[i_set].lineno < stream_line
+    assert ast.unparse(invoke.body[i_known]) == (
+        "_launchpad_known = recall_context(user_id, _launchpad_query) if _launchpad_query else ''"
+    )
+    assert "Known user context:" in ast.unparse(invoke.body[i_set])
+    assert "resolve_system_prompt()" in ast.unparse(invoke.body[i_set])
+    assert "_launchpad_known" in ast.unparse(invoke.body[i_set])
+
+
+def _exec_recall_turn(grafted: str, *, prompt, agent_system_prompt: str, known_text: str,
+                       user_id: str = "actor-1") -> str:
+    """Simulate one invoke() turn of the grafted A12 recall block against a stand-in
+    for the Harness's cached Agent (`agent_factory()`'s `cache[key]` keeps the SAME
+    Agent object across turns — unlike the per-turn strands_agent HTTP runtime).
+    Execs the real graft text (import block for `_launchpad_recall_query` + the
+    recall block itself) with `recall_context`/`resolve_system_prompt` stubbed, and
+    returns the resulting `agent.system_prompt`."""
+    import textwrap
+    from types import SimpleNamespace
+
+    import_block = grafted[
+        grafted.index(hc.MEMORY_GRAFT_START): grafted.index(hc.MEMORY_GRAFT_END)
+        + len(hc.MEMORY_GRAFT_END)
+    ]
+    namespace: dict = {}
+    exec(import_block, namespace)  # noqa: S102 — our own graft text
+    namespace["recall_context"] = lambda actor, query: known_text if query else ""
+    namespace["resolve_system_prompt"] = lambda: "BASE"
+
+    start = grafted.index(hc.MEMORY_RECALL_START)
+    end = grafted.index(hc.MEMORY_RECALL_END) + len(hc.MEMORY_RECALL_END)
+    block = grafted[start:end]
+    code = textwrap.dedent(
+        "\n".join(line for line in block.splitlines() if not line.strip().startswith("#"))
+    )
+    agent = SimpleNamespace(system_prompt=agent_system_prompt)
+    namespace.update({"prompt": prompt, "user_id": user_id, "agent": agent})
+    exec(code, namespace)  # noqa: S102 — our own graft text
+    return agent.system_prompt
+
+
+@pytest.mark.parametrize("source", [REAL_TEMPLATE_MAIN, FIXTURE_TEMPLATE_MAIN],
+                         ids=["real-template", "fixture-template"])
+def test_memory_recall_graft_resets_stale_context_on_a_recall_empty_user_turn(source):
+    """A12 fix: the self-built Harness caches one Agent per session/actor (A11), so a
+    `Known user context:` block left on `agent.system_prompt` by a prior turn must be
+    cleared on the NEXT user turn even when that turn's own recall is empty — the
+    reset keys on the user turn (_launchpad_query), not on recall presence
+    (_launchpad_known). A tool-result continuation turn (_launchpad_query == "") must
+    leave the cached Agent's system_prompt completely untouched."""
+    main = hc.graft_config_bundle(source, default_system_prompt="p")
+    main = hc.graft_runtime_attachments(main)
+    main = hc.graft_actor_from_payload(main)
+    main = hc.graft_memory_import(main)
+    grafted = hc.graft_memory_recall(main)
+
+    # Turn 1: user turn, recall present → context grafted on.
+    sp = _exec_recall_turn(
+        grafted, prompt="my name is River", agent_system_prompt="BASE",
+        known_text="User's name is River",
+    )
+    assert sp == "BASE\n\nKnown user context:\nUser's name is River"
+
+    # Turn 2: NEXT user turn on the SAME cached agent, recall now empty → must reset
+    # back to the base prompt, not inherit turn 1's stale context.
+    sp = _exec_recall_turn(grafted, prompt="what's 2+2?", agent_system_prompt=sp, known_text="")
+    assert sp == "BASE"
+
+    # Turn 3: tool-result continuation (_launchpad_query == "") → system_prompt must
+    # be left exactly as the loop set it, untouched by the recall graft.
+    sp = _exec_recall_turn(
+        grafted,
+        prompt=[{"role": "user", "content": [{"toolResult": {}}]}],
+        agent_system_prompt="TAMPERED-BY-LOOP",
+        known_text="should not matter",
+    )
+    assert sp == "TAMPERED-BY-LOOP"
+
+
+def test_memory_recall_graft_requires_the_bundle_graft_and_names_its_anchor():
+    with pytest.raises(hc.ConversionError, match=r"\(A12\)"):
+        hc.graft_memory_recall(REAL_TEMPLATE_MAIN)  # resolve_system_prompt() not grafted yet
+    main = hc.graft_config_bundle(REAL_TEMPLATE_MAIN, default_system_prompt="p")
+    with pytest.raises(hc.ConversionError, match=r"\(A12\)"):
+        hc.graft_memory_recall(main.replace("prompt = _extract_prompt(payload)",
+                                            "prompt = payload.get('prompt', '')"))
+    with pytest.raises(hc.ConversionError, match=r"\(A12\)"):
+        hc.graft_memory_recall(main.replace(
+            "agent = get_or_create_agent(session_id, user_id, _skill_plugins)",
+            "agent = get_or_create_agent(_skill_plugins)"))
+
+
+def test_graft_memory_applies_all_three_once():
+    main = hc.graft_config_bundle(REAL_TEMPLATE_MAIN, default_system_prompt="p")
+    main = hc.graft_actor_from_payload(main)
+    grafted = hc.graft_memory(main)
+    compile(grafted, "main.py", "exec")
+    for mark in (hc.MEMORY_GRAFT_START, hc.MEMORY_HOOKS_MARK, hc.MEMORY_RECALL_START):
+        assert grafted.count(mark) == 1
+    assert hc.graft_memory(grafted) == grafted

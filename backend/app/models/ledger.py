@@ -10,14 +10,15 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
-    event,
-    inspect,
+    false,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -60,9 +61,11 @@ class Workspace(Base):
     # registered | bootstrapping | ready | failed
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # Operator-owned workspace policy blob (vs `resources`, which bootstrap owns).
-    # Keys: "inbound_auth_default" — the InboundAuth agents inherit when their
-    # spec carries none. Unlike `resources`, this is ledger-authoritative for
-    # EVERY workspace including `default` (the startup mirror leaves it alone).
+    # Unused in this build (inbound auth is AWS_IAM-only — GRAPH-LOOP-SPEC N3 /
+    # D9 — so there is no per-workspace default left to store here); kept for a
+    # future operator-owned workspace policy. Unlike `resources`, this is
+    # ledger-authoritative for EVERY workspace including `default` (the startup
+    # mirror leaves it alone).
     settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -103,7 +106,16 @@ class Agent(Base):
     # Server-owned: the runtime version whose packaged entrypoint acknowledges
     # native attachments. Never copied from AgentSpec or an import descriptor.
     attachment_version: Mapped[str | None] = mapped_column(String(16), default=None)
-    owner: Mapped[str] = mapped_column(String(64), default="river")
+    # The creating console principal (`app.services.creators`, upstream #263 shape):
+    # `created_by` is its `users.id` — the ownership key the creator-or-admin gate on
+    # redeploy / delete checks — NULL for the config admin / auth-disabled operator, for
+    # a system preset and a discovered runtime (no human creator), and for rows whose
+    # pre-#261 `owner` username had no `users` row at migration. `created_by_name` is
+    # the username at creation, display only. Server-set, never from `AgentSpec`.
+    # (`owner`, the pre-#261 username column with its "river" default, was retired —
+    # C5 — and is dropped by `core.db._migrate_creator_columns` after the copy.)
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # Server-owned system identity. NULL for every ordinary agent; a preset key
     # (``app.system_agents.presets``) for a platform-managed preset the console
@@ -111,15 +123,36 @@ class Agent(Base):
     # payload — ``AgentSpec`` has no such field — and never editable through the
     # ordinary lifecycle routes, which refuse rows that carry it.
     system_key: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
-    # Inbound auth actually deployed onto the Runtime — the RESOLVED choice
-    # (spec > workspace default > iam), snapshotted by the deploy stage so the
-    # invoke path and the console never re-resolve against a default that may
-    # have changed since. "iam" | "jwt"; NULL for rows that predate the feature
-    # (which all deployed without an authorizer, i.e. IAM).
+    # N17-obs202: on a system preset row only — True when the administrator pinned the
+    # model through the preset's settings edit (an explicit `model_id`), False when the
+    # stored `spec.model_id` is the `agent_default` model role as it stood at the last
+    # install / repair (the row FOLLOWS the model-defaults page: a changed role re-publishes
+    # it on the next repair). NULL = a row written before the flag: pinned iff its model
+    # differs from the then-only default (`system_agents.service.model_pinned`).
+    preset_model_pinned: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    # N17-obs31 (= N16-obs34): the forced delete of a knowledge base the spec mounted stripped
+    # the pin here — `{kb_ids: [...], at: iso, by: username}` — and the deployed Runtime keeps
+    # its retrieval tool until the next successful publish, which clears this (`_finish`).
+    # The projection reads it as `kb_stale`; never a snapshot (a strip is not a publish).
+    last_strip: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # Inbound auth actually deployed onto the Runtime — snapshotted by the
+    # deploy stage. AWS_IAM-only in this build (GRAPH-LOOP-SPEC N3 / D9): every
+    # new deploy writes "iam"; a pre-N3 row may still carry a stale "jwt" value
+    # from before this build removed the JWT authorizer (`parse_inbound_auth`
+    # reads it back as IAM-equivalent, never as a mode this build can serve).
+    # NULL for rows that predate the feature entirely (also IAM).
     inbound_auth_mode: Mapped[str | None] = mapped_column(String(8), default=None)
-    # The resolved InboundAuth dict when mode is jwt (discovery url, allowed
-    # clients/audience/scopes, custom claims — no secrets live here).
+    # Always NULL in this build (there is no JWT config left to snapshot); a
+    # pre-N3 row may still carry a stale JWT config blob (discovery url,
+    # allowed clients/audience/scopes, custom claims — no secrets live here),
+    # which nothing in this build reads back.
     inbound_auth_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # D20 (P1-b): snapshot of the deploy-time policy narrowing the live version carries:
+    # {stamp, mode, applied, patterns[], removed[], unenforceable[], gateway_dropped,
+    # coverage, policy_versions{}, applied_at, job_id}. NULL before the first deploy under
+    # the policy module. `policy_stale` is DERIVED from it on read
+    # (services/policy_enforcement.is_stale) — never stored.
+    policy_applied: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -144,10 +177,11 @@ class SystemSkillRecord(Base):
     """Server-owned association between a system preset's published Skill bundle and
     the Agent Registry record that describes it (SE-043).
 
-    One row per (workspace, preset) — the mapping outlives the preset agent (an
-    uninstall keeps the record and the S3 release for other consumers) and a reinstall
-    reuses it, so it is deliberately **not** ``Agent.registry_record_id`` (that column
-    is the agent's own A2A record). Nothing here is derived from a client payload:
+    One row per (workspace, preset) — the mapping is independent of the agent row (a
+    repair keeps it; the preset uninstall's ``registry`` step deletes record and mapping
+    together, N10v3-bug6, while the S3 release stays for other consumers) and a reinstall
+    registers afresh, so it is deliberately **not** ``Agent.registry_record_id`` (that
+    column is the agent's own A2A record). Nothing here is derived from a client payload:
     the row is written only by the registration service, and a registry record is
     system-protected exactly when a row in the caller's workspace names its id.
     ``client_token`` is the durable CreateRegistryRecord intent: it is persisted
@@ -207,6 +241,63 @@ class SystemSkillRecord(Base):
     )
 
 
+class RegistryRecord(Base):
+    """One local Agent Registry record (N4). The CN partition has no Agent Registry
+    service, so the ledger *is* the registry here — the one place the "AWS is the source
+    of truth" rule inverts, acceptable because a record has no runtime state.
+
+    ``record_type`` holds the platform descriptor type (``A2A`` / ``MCP`` /
+    ``AGENT_SKILLS`` / ``CUSTOM``); ``descriptors`` is the platform descriptor tree the
+    builders in ``services/registry_backend.py`` produce, stored as-is. ``search_text``
+    is the flattened descriptor text FTS indexes (tool names, SKILL.md body, card skills);
+    ``services/registry_local.py`` derives it on every write.
+    """
+
+    __tablename__ = "registry_records"
+    __table_args__ = (
+        # GA uniqueness, kept: one (name, recordVersion) per workspace. A unique INDEX
+        # rather than a table constraint so `tests/test_ledger_migration.py` can drop the
+        # `workspace_id` column in its upgrade rehearsal (SQLite cannot drop a column that
+        # a table constraint names).
+        Index(
+            "uq_registry_records_ws_name_version",
+            "workspace_id",
+            "name",
+            "record_version",
+            unique=True,
+        ),
+        Index("ix_registry_records_ws_type_status", "workspace_id", "record_type", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    record_type: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    record_version: Mapped[str] = mapped_column(String(32))
+    # DRAFT | PENDING_APPROVAL | APPROVED | REJECTED | DEPRECATED
+    status: Mapped[str] = mapped_column(String(24), default="DRAFT")
+    status_reason: Mapped[str | None] = mapped_column(String(500), default=None)
+    descriptors: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    tags: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    search_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    decided_by: Mapped[str | None] = mapped_column(String(96), default=None)
+    # Who registered the record (`app.services.creators`, N15-obs7): `created_by` is the
+    # creating principal's `users.id` — NULL for the config admin / auth-disabled operator,
+    # deploy-created A2A records, gateway imports, platform defaults and legacy rows (an
+    # administrator's, as everywhere) — and `created_by_name` the username, display only.
+    # Reads stay shared (users-and-ownership.md §7); PUT / reimport / DELETE are
+    # creator-or-admin (§8).
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+
+
 class ManagedMemory(Base):
     """An AgentCore Memory this workspace manages (issue #55).
 
@@ -231,8 +322,121 @@ class ManagedMemory(Base):
     memory_id: Mapped[str] = mapped_column(String(128), index=True)
     # created (console CreateMemory) | adopted (administrator adopted an existing one)
     origin: Mapped[str] = mapped_column(String(16), default="created")
-    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Who brought it in (`app.services.creators`): `created_by` is the creator's
+    # `users.id` — NULL for the config admin / auth-disabled operator, for an
+    # adopted memory (it pre-existed, so the adopter is not its owner) and for rows
+    # whose pre-#261 username had no `users` row at migration. `created_by_name` is
+    # the creating (or adopting) principal's username, display only.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ResourceCreator(Base):
+    """Who created an AWS-only resource through the console (upstream #261).
+
+    A resource with no ledger row of its own keeps its creator here, keyed on
+    (workspace, kind, resource id). Written only by the server right after the
+    console's create call succeeds and removed by the console's delete; a resource
+    created outside the console has no row (its creator reads as unknown), and one
+    deleted outside it leaves a harmless orphan that the workspace purge clears.
+    Same column semantics as `ApiKey.created_by` / `created_by_name` (not a FK).
+    In the CN build every such kind (knowledge bases, evaluators) is ledger-backed, so
+    the table holds no rows today — kept with upstream's API for parity (`services/
+    creators.py`).
+    """
+
+    __tablename__ = "resource_creators"
+    __table_args__ = (
+        Index(
+            "uq_resource_creators_workspace_kind_resource",
+            "workspace_id",
+            "kind",
+            "resource_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    kind: Mapped[str] = mapped_column(String(32))  # knowledge_base | evaluator
+    resource_id: Mapped[str] = mapped_column(String(128))
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+# --- CN memory/KB (N6) ---
+class MemoryStore(Base):
+    """A self-hosted memory store (N6): one row per store the console created or
+    materialized by editing the workspace's default (`launchpad_memory-<workspace>`),
+    which otherwise exists implicitly (ruling: default store synthesized). Data lives
+    in S3 (`memory/<memory_id>/`) and OpenSearch (`store_id` filter); this row holds
+    the console-facing identifiers and settings only."""
+
+    __tablename__ = "memory_stores"
+    __table_args__ = (
+        Index("uq_memory_stores_workspace_memory", "workspace_id", "memory_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    memory_id: Mapped[str] = mapped_column(String(128), index=True)
+    name: Mapped[str] = mapped_column(String(48))
+    description: Mapped[str] = mapped_column(String(4096), default="")
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")
+    event_expiry_days: Mapped[int] = mapped_column(default=30)
+    strategies: Mapped[list[str]] = mapped_column(JSON, default=list)
+    namespace_keys: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # r14-a (N14-obs1): merge strategy v2 knobs — recall half-life, per-actor caps, soft
+    # TTL, rolling-summary interval (`opensearch_http.MERGE_SETTINGS_DEFAULTS`); NULL /
+    # missing keys read as the defaults, so a pre-v2 row behaves as before.
+    merge_settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for the
+    # config admin / auth-disabled operator, the materialized default store and legacy
+    # rows) + the username at creation, display only. Mirrors the `managed_memories` row
+    # the console registers for the same store.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class KnowledgeBase(Base):
+    """A self-hosted knowledge base (N6): Bedrock Knowledge Bases do not exist in
+    `cn-northwest-1`, so this row is the console-facing identity of a KB whose
+    documents live in S3 (`kb/<kb_id>/<ds_id>/`) and whose indexed chunks live in a
+    dedicated OpenSearch index (`opensearch_http.kb_index_name(kb_id)`, one index per
+    KB — ruling R3). `data_sources` holds the full data-source list inline (there is
+    no AWS DataSource resource to mirror); ingestion job state lives in OpenSearch
+    (ruling R4), never here."""
+
+    __tablename__ = "knowledge_bases"
+    __table_args__ = (
+        Index("uq_knowledge_bases_workspace_name", "workspace_id", "name", unique=True),
+    )
+
+    kb_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(String(1000), default="")
+    status: Mapped[str] = mapped_column(String(16), default="CREATING")
+    # CREATING | ACTIVE | FAILED | DELETING
+    failure_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # [{ds_id, name, mode, bucket, prefix, status, created_at}]
+    data_sources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for the
+    # config admin / auth-disabled operator, preset-installed KBs and legacy rows) + the
+    # username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+# --- end CN memory/KB (N6) ---
 
 
 class User(Base):
@@ -272,6 +476,9 @@ class User(Base):
         DateTime(timezone=True), default=None
     )
     login_count: Mapped[int] = mapped_column(default=0)
+    # r12-g (rev-r11 ruling): bumped on every password change / reset and carried in the
+    # session cookie, so a new password signs the account's other sessions out at once.
+    session_epoch: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -288,14 +495,59 @@ class Deployment(Base):
     status: Mapped[str] = mapped_column(String(24), default="running")
     # running | succeeded | failed
     stages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
-    # [{name, status: pending|running|succeeded|skipped|failed, detail, started_at, ended_at}]
+    # [{name, status: pending|running|succeeded|skipped|failed|cancelled|interrupted, detail,
+    #   started_at, ended_at}] — `interrupted` (N17-obs113): the stage's subprocess was
+    #   stopped with the service; the job stays `running` and resumes from that stage
     # Immutable ECR digest of the container image this deployment runs. Recorded so
     # the console can say exactly what is deployed and a resumed job re-uses the
     # same image rather than whatever the mutable tag points at by then. None for
     # zip/harness methods and for container deployments predating digest pinning.
     image_digest: Mapped[str | None] = mapped_column(String(80), default=None)
+    # D21 (M1-d): the model-registry catalog version the `generate` stage rendered from and
+    # the resolved descriptor of `spec.model_id` at that moment (`schemas.agent.
+    # model_descriptor`; None for an id outside the catalog). The agent view compares the
+    # stored descriptor with today's to raise the Redeploy hint — a new unrelated model does
+    # not. None on rows that predate the column.
+    catalog_version: Mapped[int | None] = mapped_column(Integer, default=None)
+    model_descriptor: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class SpecSnapshot(Base):
+    """The full agent spec of one publish (`app.services.snapshots`; upstream #277).
+
+    `deployer.pipeline.create_deployment` writes one per create / redeploy / promotion;
+    the Runtime-canary promote changes `Agent.spec` without a deployment and writes its
+    own, and a startup backfill gives an agent that predates the table a `baseline`.
+    Rows are append-only except for the success stamp in `_finish`, which fills
+    `aws_version` and replaces `spec` with the spec as deployed (a deploy stage may
+    rewrite it mid-job). The evaluation scorecards (`evaluation/scorecard.py`) read
+    `seq` as the agent version a run evaluated.
+
+    CN: the rollback route of upstream #277 is not ported (a redeploy publishes any
+    spec); the table and its reads are, as the version ledger of upstream #289–#295.
+    """
+
+    __tablename__ = "spec_snapshots"
+    __table_args__ = (UniqueConstraint("agent_id", "seq", name="uq_spec_snapshots_agent_seq"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    seq: Mapped[int]  # 1, 2, … per agent
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # the AWS version the publish left live; NULL until the deploy succeeds (and for
+    # good when it failed)
+    aws_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    # NULL for the canary snapshots and the startup baseline
+    deployment_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    # Who published (`app.services.creators`): `users.id` and the username (display).
+    # Not a FK. Falls back to the agent's creator when the path has no actor.
+    created_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)  # "baseline", …
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class ChatSession(Base):
@@ -318,6 +570,53 @@ class ChatSession(Base):
     ended_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # Which entrance opened the session: ``console`` (Chat playground) or
+    # ``public_api`` (``POST /v1/agents/{id}/invoke[-stream]``). N-SCN-obs1: the
+    # /v1 path used to write no row at all, so its sessions were never listed.
+    source: Mapped[str] = mapped_column(String(16), default="console")
+    # N-ARCH-obs15 v2 (chat parity): the durable claim of the console turn running
+    # server-side for this session — its number (= ``turns`` once claimed at ``meta``),
+    # when it started and the token that fences release. NULL when nothing runs; a claim
+    # found at startup belongs to a dead process and is finalized from the event log.
+    active_turn: Mapped[int | None] = mapped_column(default=None)
+    active_turn_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    active_turn_token: Mapped[str | None] = mapped_column(String(32), default=None)
+    # CN extra (Family B step 1): the console principal that OPENED the session — its
+    # `users.id` (NULL for the config admin / auth-disabled operator, for rows older than
+    # the column and for a `/v1` session whose key has no creator) and username, display
+    # only. A `/v1` session records its key's creator. Members list their own sessions
+    # (`routers/chat.py`), administrators every session; the actor stays `actor_id`.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+
+
+class ChatTurnEvent(Base):
+    """One SSE event of one console chat turn (N-ARCH-obs15 v2). ``seq`` starts at 1
+    per turn and is assigned by the turn's single producer, so ``(agent_id, session_id,
+    turn, seq)`` is unique and ordered; heartbeats are never recorded, and the single-use
+    as_user authorization ``url`` is dropped from the stored ``auth_required`` frame
+    exactly as the history row drops it."""
+
+    __tablename__ = "chat_turn_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    turn: Mapped[int] = mapped_column(default=0)
+    seq: Mapped[int] = mapped_column(default=0)
+    # meta | tool | tool_input | tool_result | delta | auth_required | policy_denied |
+    # policy_decision |
+    # truncated | complete | done | error (whatever the wire carried)
+    event: Mapped[str] = mapped_column(String(24))
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("agent_id", "session_id", "turn", "seq", name="uq_chat_turn_events_seq"),
+    )
 
 
 class ChatMessage(Base):
@@ -337,6 +636,18 @@ class ChatMessage(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # N16-obs85 (additive): on a `tool` row, the bounded call summary the runtime streamed —
+    # `{id, input (≤ 512 chars), result_summary (≤ 256 chars), status}`; NULL for rows older
+    # than the column and for runtimes that stream no summary. Never the full output.
+    tool_call: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # N-SCN-bug4: an `agent` row whose answer the runtime closed at the model's token
+    # limit (the SSE `truncated: true` marker) — replayed as the bubble's inline notice
+    # and as the transcript turn's badge
+    # (server default too: pre-workspace rows are inserted by column list — the upgrade
+    # tests do — and the migrated column carries DEFAULT 0 as well)
+    truncated: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -349,6 +660,22 @@ class ApiKey(Base):
     prefix: Mapped[str] = mapped_column(String(16))  # display only, e.g. lp_live_ab12
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
     enabled: Mapped[bool] = mapped_column(default=True)
+    # The minting console principal (#259): `created_by` is its `users.id`, NULL for the
+    # config admin / auth-disabled operator (no `users` row) and for keys minted before
+    # creators were recorded by id (the pre-#259 username value moved to
+    # `created_by_name` once, see `core.db._migrate_creator_columns`). Not a FK — a
+    # deleted creator must leave the id behind, since that dangling id is how the key
+    # knows its creator is gone. It is also what the member rule reads: a member lists /
+    # toggles / deletes only the keys they minted (N10v2-obs11, re-pointed to the id).
+    # `created_by_name` is the display name at mint time (NULL only on legacy rows).
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Stamped by /v1 auth on success, at most once per `api_keys.LAST_USED_RESOLUTION`.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Optional free-text label set at creation (N-SCN-obs4): keys are workspace-wide
+    # and outlive agents by design, so the Chat → API panel labels a key with the
+    # agent it was minted from — display only, never part of authentication.
+    label: Mapped[str | None] = mapped_column(String(120), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -386,7 +713,12 @@ class IdentityProvider(Base):
     arn: Mapped[str] = mapped_column(String(512), default="")
     # OAuth2 only: the redirect URI the operator registers at the IdP
     callback_url: Mapped[str | None] = mapped_column(String(1024), default=None)
-    created_by: Mapped[str] = mapped_column(String(64), default="")
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for the
+    # config admin / auth-disabled operator and for rows whose pre-#261 username — the
+    # column used to hold one, `""` when unknown — had no `users` row at migration) + the
+    # username at creation, display only.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     # OAuth2 only: the (non-secret) client id, for display
     client_id: Mapped[str | None] = mapped_column(String(256), default=None)
@@ -452,11 +784,12 @@ class OauthPendingSession(Base):
     user_id: Mapped[str] = mapped_column(String(128))
     agent_id: Mapped[str] = mapped_column(String(32), default="")
     tool: Mapped[str] = mapped_column(String(80), default="")
-    # Who the Runtime saw as the caller when it asked (identity P3): "iam"
-    # (SigV4 + runtimeUserId), "user_jwt" (the user's own Cognito JWT) or
-    # "m2m" (the workspace client_credentials token). Under a JWT authorizer
-    # the vault keys the user on the inbound JWT, so the completion leg must
-    # present a JWT of the same subject instead of the bare user id.
+    # Legacy column from the pre-N3 identity fork, when a Runtime could be
+    # JWT-inbound and the vault keyed the user on the inbound JWT instead of
+    # the bare user id. Every Runtime inbound is AWS_IAM-only in this build
+    # (GRAPH-LOOP-SPEC N3 / D9), so this is always "iam" now; kept as a
+    # column (not dropped) so pre-existing rows still load, and in case a
+    # future external-IdP node needs the distinction again.
     caller_kind: Mapped[str] = mapped_column(String(16), default="iam")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -500,79 +833,6 @@ class UserGrant(Base):
         DateTime(timezone=True), default=None
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-
-
-class PolicyDecision(Base):
-    __tablename__ = "policy_decisions"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
-    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    principal: Mapped[str] = mapped_column(String(96))  # e.g. demo@hr-analyst
-    tool: Mapped[str] = mapped_column(String(128))
-    outcome: Mapped[str] = mapped_column(String(8))  # ALLOW | DENY
-    reason: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-
-class PolicyChange(Base):
-    """Immutable request/snapshot fields plus mutable AWS operation outcome."""
-
-    __tablename__ = "policy_changes"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
-    # deliberately NOT in _POLICY_CHANGE_IMMUTABLE: the startup backfill must
-    # stay legal on rows whose audit snapshot is otherwise frozen
-    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    gateway_id: Mapped[str] = mapped_column(String(128), index=True)
-    gateway_arn: Mapped[str] = mapped_column(String(512))
-    gateway_name: Mapped[str] = mapped_column(String(100))
-    engine_id: Mapped[str | None] = mapped_column(String(128), default=None)
-    engine_arn: Mapped[str | None] = mapped_column(String(512), default=None)
-    policy_id: Mapped[str | None] = mapped_column(String(128), default=None)
-    policy_name: Mapped[str | None] = mapped_column(String(100), default=None)
-    candidate_policy_id: Mapped[str | None] = mapped_column(String(128), default=None)
-    operation: Mapped[str] = mapped_column(String(48))
-    operator: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
-    before: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    requested: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    after: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
-    expected_updated_at: Mapped[str | None] = mapped_column(String(64), default=None)
-    override_reason: Mapped[str | None] = mapped_column(Text, default=None)
-    error: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
-
-
-_POLICY_CHANGE_IMMUTABLE = {
-    "gateway_id",
-    "gateway_arn",
-    "gateway_name",
-    "engine_id",
-    "engine_arn",
-    "policy_id",
-    "policy_name",
-    "operation",
-    "operator",
-    "before",
-    "requested",
-    "expected_updated_at",
-    "override_reason",
-    "created_at",
-}
-
-
-@event.listens_for(PolicyChange, "before_update")
-def _prevent_policy_change_snapshot_mutation(_: Any, __: Any, target: PolicyChange) -> None:
-    state = inspect(target)
-    changed = [
-        name for name in _POLICY_CHANGE_IMMUTABLE if state.attrs[name].history.has_changes()
-    ]
-    if changed:
-        raise ValueError(f"immutable policy audit fields changed: {', '.join(sorted(changed))}")
 
 
 class Job(Base):

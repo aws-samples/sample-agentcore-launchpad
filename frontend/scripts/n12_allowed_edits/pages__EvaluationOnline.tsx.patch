@@ -1,0 +1,12 @@
+diff --git a/frontend/src/pages/EvaluationOnline.tsx b/frontend/src/pages/EvaluationOnline.tsx
+index 1c2b31e8..05815e76 100644
+--- a/frontend/src/pages/EvaluationOnline.tsx
++++ b/frontend/src/pages/EvaluationOnline.tsx
+@@ -93,7 +93,6 @@ const REPORT_POLL_MS = 8000;
+ const ELIGIBLE_METHODS = new Set<AgentInfo["method"]>([
+   "zip_runtime",
+   "studio",
+-  "container",
+   "harness",
+   "byoc",
+ ]);

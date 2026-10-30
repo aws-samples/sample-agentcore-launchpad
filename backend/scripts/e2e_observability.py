@@ -93,10 +93,10 @@ def main() -> int:
     print(f"  ERROR%   {tiles['error_rate'] * 100:.1f}%")
     print(f"  LATENCY  p50 {tiles['latency']['p50_ms']}ms · p95 {tiles['latency']['p95_ms']}ms")
     print(f"  TOKENS   {tiles['tokens']['total']} ({tiles['tokens']['input']} in · "
-          f"{tiles['tokens']['output']} out) · ≈${tiles['tokens']['est_cost_usd']}")
+          f"{tiles['tokens']['output']} out)")
     print(f"  series buckets: {len(dashboard['series'])}")
     for row in dashboard["tokens_by_model"]:
-        print(f"  model {row['model']}: {row['total']} tok · ≈${row['est_cost_usd']}")
+        print(f"  model {row['model']}: {row['total']} tok")
     for row in dashboard["top_tools"][:5]:
         print(f"  tool  {row['tool']}: {row['calls']} calls · {row['success_rate']}% ok")
     assert tiles["traces"]["total"] > 0, "expected live traces in dashboard"
@@ -108,7 +108,7 @@ def main() -> int:
         print(f"  {row['time']} {row['root_operation'][:24]:<26} {row['agent'][:24]:<26} "
               f"{(row['session_id'] or '—')[:12]:<14} {row['duration_ms']}ms · "
               f"{row['span_count']} spans · {row['llm_count']} llm · "
-              f"{row['tokens']['total']} tok · ≈${row['est_cost_usd']} · {row['status']}")
+              f"{row['tokens']['total']} tok · {row['status']}")
     assert traces["count"] > 0, "expected non-empty traces list"
 
     trace_id = session_traces[0]["trace_id"]
@@ -117,7 +117,7 @@ def main() -> int:
     meta = detail["meta"]
     print(f"  agent={meta['agent']} session={str(meta['session_id'])[:16]}… "
           f"{meta['duration_ms']}ms · {meta['span_count']} spans · {meta['llm_count']} llm · "
-          f"{meta['tokens']['total']} tok · ≈${meta['est_cost_usd']} · {meta['status']}")
+          f"{meta['tokens']['total']} tok · {meta['status']}")
     max_depth = 0
     for root in detail["tree"]:
         max_depth = max(max_depth, print_tree(root))
@@ -129,16 +129,14 @@ def main() -> int:
     for row in sessions["sessions"][:5]:
         print(f"  {row['session_id'][:20]:<22} {row['agent'][:24]:<26} "
               f"{row['traces']} traces · {row['llm_calls']} llm · "
-              f"{row['tokens']['total']} tok · ≈${row['est_cost_usd']} · "
-              f"platform={row['platform']}")
+              f"{row['tokens']['total']} tok · platform={row['platform']}")
     assert sessions["count"] > 0, "expected sessions"
 
     print(f"\n── GET /api/observability/sessions/{session_id} (detail + transcript)")
     sdetail, _ = timed_get(client, f"/api/observability/sessions/{session_id}?range={RANGE}")
     summary = sdetail["summary"]
     print(f"  summary: agent={summary['agent']} traces={summary['traces']} "
-          f"llm={summary['llm_calls']} tok={summary['tokens']['total']} "
-          f"≈${summary['est_cost_usd']}")
+          f"llm={summary['llm_calls']} tok={summary['tokens']['total']}")
     transcript = sdetail["transcript"]
     print(f"  transcript available={transcript['available']} "
           f"turns={len(transcript.get('turns', []))} "

@@ -24,8 +24,8 @@ export const singleAgent: SampleFlow = {
       data: {
         label: 'Assistant Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a helpful AI assistant that answers user questions clearly and concisely.',
         maxTokens: 32000,
         streaming: false,

@@ -3,10 +3,14 @@
 // Styling lives in v2.css under the `.v2` scope.
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Inbox,
   Info,
   Loader2,
@@ -30,6 +34,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { PageHeaderAsideContext, ToastContext } from "./hooks";
+import { type Signal, worstSignal } from "./signals";
 
 /* ---------- button ---------- */
 export function Button({
@@ -125,6 +130,8 @@ export interface Option {
   disabled?: boolean;
   /** consecutive options sharing a group render under one header */
   group?: string;
+  /** native tooltip of the row (default: the label) — e.g. why a row is disabled */
+  title?: string;
 }
 
 /** Lists longer than this get a filter box at the top of the popup. */
@@ -368,7 +375,7 @@ function useListbox({
                 aria-disabled={o.disabled || undefined}
                 data-idx={i}
                 className={["v2-opt", o.group ? "grouped" : "", i === active ? "active" : "", selected ? "selected" : "", o.disabled ? "disabled" : ""].join(" ").trim()}
-                title={o.label}
+                title={o.title ?? o.label}
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => !o.disabled && setActive(i)}
                 onClick={() => choose(o)}
@@ -681,6 +688,109 @@ export function Card({
   );
 }
 
+/* ---------- signal lamp + attention panel ("what needs you", ranked) ---------- */
+// Upstream #268 primitives, ported for the evaluation scorecards (#291, r15-a) without
+// the per-browser dismissal store (`attentionDismiss.ts`, upstream #292 — not ported):
+// `dismissScope` is accepted and ignored so the pages read as upstream.
+export function Lamp({ signal, live, title }: { signal: Signal; live?: boolean; title?: string }) {
+  return (
+    <span
+      className="v2-lamp"
+      data-signal={signal}
+      data-live={live ? "true" : undefined}
+      title={title}
+      aria-hidden={title ? undefined : true}
+    />
+  );
+}
+
+export interface AttentionItem {
+  key: string;
+  signal: Signal;
+  live?: boolean;
+  title: ReactNode;
+  hint?: ReactNode;
+  /** right-aligned muted text, e.g. a relative time */
+  meta?: ReactNode;
+  /** row click; also renders the trailing "open" label */
+  onOpen?: () => void;
+  openLabel?: string;
+  /** inline buttons, kept outside the row button so their clicks never open the row */
+  actions?: ReactNode;
+  testId?: string;
+}
+
+/** A ranked list of what needs a look. The page orders `items`; the card edge takes the
+ *  most severe shown item's colour and `empty` is the one-line state when nothing does.
+ *  `cap` limits the rows shown; the header counts every item. */
+export function AttentionPanel({
+  title,
+  items,
+  empty,
+  cap,
+  count,
+  testId,
+}: {
+  title: ReactNode;
+  items: AttentionItem[];
+  empty: ReactNode;
+  /** rows shown at most; the header counts every row */
+  cap?: number;
+  /** the header count when it is not the row count (e.g. every failed task, not the shown ones) */
+  count?: number;
+  /** accepted for upstream parity; dismissal is not ported in CN */
+  dismissScope?: string;
+  testId?: string;
+}) {
+  const shown = cap !== undefined ? items.slice(0, cap) : items;
+  const row = (item: AttentionItem) => {
+    const body = (
+      <>
+        <Lamp signal={item.signal} live={item.live} />
+        <span className="v2-attention-text">
+          <span className="title">{item.title}</span>
+          {item.hint && <small>{item.hint}</small>}
+        </span>
+        {item.meta && <span className="v2-attention-meta">{item.meta}</span>}
+        {item.onOpen && item.openLabel && (
+          <span className="v2-attention-open">
+            {item.openLabel}
+            <ChevronRight size={14} aria-hidden="true" />
+          </span>
+        )}
+      </>
+    );
+    return (
+      <li key={item.key} className="v2-attention-row" data-signal={item.signal} data-testid={item.testId}>
+        {item.onOpen ? (
+          <button type="button" className="v2-attention-main" onClick={item.onOpen}>
+            {body}
+          </button>
+        ) : (
+          <div className="v2-attention-main">{body}</div>
+        )}
+        {item.actions && <span className="v2-attention-actions">{item.actions}</span>}
+      </li>
+    );
+  };
+
+  return (
+    <section className="v2-card v2-attention" data-signal={worstSignal(shown.map((i) => i.signal))} data-testid={testId}>
+      <div className="v2-card-body">
+        <h2 className="v2-sec-title">
+          {title}
+          <span className="end v2-count">{count ?? items.length}</span>
+        </h2>
+        {shown.length === 0 ? (
+          <div className="v2-attention-empty">{empty}</div>
+        ) : (
+          <ul className="v2-attention-list">{shown.map(row)}</ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function Field({
   label,
   required,
@@ -716,6 +826,7 @@ export function OptionCard({
   onClick,
   badge,
   testId,
+  tip,
 }: {
   title: string;
   desc: string;
@@ -724,6 +835,8 @@ export function OptionCard({
   onClick: () => void;
   badge?: ReactNode;
   testId?: string;
+  /** Native tooltip — why a card is disabled, for instance. */
+  tip?: string;
 }) {
   return (
     <button
@@ -733,6 +846,7 @@ export function OptionCard({
       onClick={onClick}
       aria-pressed={on}
       data-testid={testId}
+      title={tip}
     >
       <span className="t">
         {title}
@@ -788,15 +902,29 @@ export function Alert({
   tone = "info",
   children,
   action,
+  testId,
+  ...rest
 }: {
   tone?: "info" | "warn" | "error" | "success";
   children: ReactNode;
   action?: ReactNode;
+  /** N17-obs5: the primitive used to swallow `data-testid`; both spellings reach the DOM. */
+  testId?: string;
+  "data-testid"?: string;
+  id?: string;
+  "aria-label"?: string;
+  "aria-describedby"?: string;
 }) {
   const Icon =
     tone === "error" ? AlertCircle : tone === "warn" ? TriangleAlert : tone === "success" ? CheckCircle2 : Info;
+  const { "data-testid": dataTestId, ...attrs } = rest;
   return (
-    <div className={`v2-alert ${tone}`} role={tone === "error" ? "alert" : "status"}>
+    <div
+      className={`v2-alert ${tone}`}
+      role={tone === "error" ? "alert" : "status"}
+      data-testid={testId ?? dataTestId}
+      {...attrs}
+    >
       <Icon size={15} aria-hidden="true" />
       <div>{children}</div>
       {action}
@@ -821,6 +949,13 @@ export interface Column<T> {
   render: (row: T) => ReactNode;
   className?: string;
   width?: number | string;
+  /** the header toggles `sort` through `onSort` (the caller sorts before paging) */
+  sortable?: boolean;
+}
+
+export interface TableSort {
+  key: string;
+  dir: "asc" | "desc";
 }
 
 export function Table<T>({
@@ -833,6 +968,8 @@ export function Table<T>({
   empty,
   density,
   selectedKey,
+  sort,
+  onSort,
   testId,
 }: {
   columns: Column<T>[];
@@ -844,6 +981,8 @@ export function Table<T>({
   empty?: ReactNode;
   density?: "dense" | "default" | "loose";
   selectedKey?: string | null;
+  sort?: TableSort | null;
+  onSort?: (key: string) => void;
   testId?: string;
 }) {
   const { t } = useTranslation();
@@ -853,11 +992,27 @@ export function Table<T>({
       <table className={cls} data-testid={testId}>
         <thead>
           <tr>
-            {columns.map((c) => (
-              <th key={c.key} className={c.className} style={c.width ? { width: c.width } : undefined}>
-                {c.title}
-              </th>
-            ))}
+            {columns.map((c) => {
+              const on = sort?.key === c.key ? sort.dir : null;
+              const Icon = on === "asc" ? ArrowUp : on === "desc" ? ArrowDown : ArrowUpDown;
+              return (
+                <th
+                  key={c.key}
+                  className={c.className}
+                  style={c.width ? { width: c.width } : undefined}
+                  aria-sort={c.sortable && onSort ? (on === "asc" ? "ascending" : on === "desc" ? "descending" : "none") : undefined}
+                >
+                  {c.sortable && onSort ? (
+                    <button type="button" className={`v2-th-sort${on ? " on" : ""}`} onClick={() => onSort(c.key)} data-testid={testId ? `${testId}-sort-${c.key}` : undefined}>
+                      {c.title}
+                      <Icon size={12} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    c.title
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -915,23 +1070,25 @@ export function Pager({
   pages,
   total,
   onPage,
+  testId,
 }: {
   page: number;
   pages: number;
   total: number;
   onPage: (page: number) => void;
+  testId?: string;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="v2-pager">
+    <div className="v2-pager" data-testid={testId}>
       <span>{t("v2.common.total", { count: total })}</span>
-      <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+      <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)} data-testid={testId ? `${testId}-previous` : undefined}>
         {t("v2.common.prevPage")}
       </button>
       <span>
         {page} / {pages}
       </span>
-      <button type="button" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+      <button type="button" disabled={page >= pages} onClick={() => onPage(page + 1)} data-testid={testId ? `${testId}-next` : undefined}>
         {t("v2.common.nextPage")}
       </button>
     </div>

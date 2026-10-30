@@ -1,0 +1,63 @@
+{
+ "recorded": "P0 probe 2026-10-26 (cn-northwest-1), anonymised; header secrets were redacted at source",
+ "phase": "RESPONSE",
+ "client_context": {
+  "custom": {
+   "GATEWAY_ARN": "arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0",
+   "GATEWAY_ACCOUNT_ID": "123456789012",
+   "REQUEST_ID": "c2248f29-f802-4552-a4aa-5ab2ed15c413",
+   "SOURCE_IP": "198.51.100.7"
+  },
+  "env": null
+ },
+ "event": {
+  "interceptorInputVersion": "1.0",
+  "mcp": {
+   "gatewayRequest": {
+    "path": "/mcp",
+    "httpMethod": "POST",
+    "headers": {},
+    "body": {
+     "id": "665dd09b",
+     "jsonrpc": "2.0",
+     "method": "tools/call",
+     "params": {
+      "name": "hr-database___echo",
+      "_meta": {
+       "launchpad/principal": "__TEST_TOKEN__",
+       "probe_mode": "deny"
+      },
+      "arguments": {
+       "probe_mode": "deny",
+       "amount_cents": 1234,
+       "text": "hello B-role-noheaders"
+      }
+     }
+    },
+    "context": {
+     "identity": {
+      "awsPrincipalArn": "arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34"
+     }
+    }
+   },
+   "gatewayResponse": {
+    "path": "/mcp",
+    "httpMethod": "POST",
+    "headers": {},
+    "body": {
+     "jsonrpc": "2.0",
+     "id": "665dd09b",
+     "error": {
+      "code": -32002,
+      "message": "Tool Execution Denied: Tool call not allowed due to policy enforcement [probe deny]"
+     }
+    },
+    "statusCode": 200,
+    "isStreamingResponse": false
+   },
+   "rawGatewayRequest": {
+    "body": "<raw body contains a probe token; see parsed body>"
+   }
+  }
+ }
+}

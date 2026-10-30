@@ -1,7 +1,35 @@
 import { useTranslation } from "react-i18next";
 
-import type { InsightCluster, InsightTrees } from "../lib/evaluation";
-import { Tag, type TagTone } from "./ui";
+import { type FailureDetection, failureDetectionTotals, type InsightCluster, type InsightTrees } from "../lib/evaluation";
+import { Alert, Tag, type TagTone } from "./ui";
+
+/** N17-obs449: what the failure analysis did — so 0 clusters can only mean 0 detected:
+ *  sessions whose detection did not complete, findings the threshold dropped, else "N
+ *  analysed, none found". Nothing for a run without the counts (older worker). */
+export function FailureDetectionNote({ totals, clusters }: { totals: FailureDetection | null; clusters: number }) {
+  const { t } = useTranslation();
+  if (!totals || totals.sessions === 0) return null;
+  const threshold = t(`evalPage.insights.threshold.${totals.threshold ?? "medium"}`, { defaultValue: totals.threshold ?? "medium" });
+  return (
+    <div className="v2-stack" data-testid="v2-failure-detection">
+      {totals.incomplete > 0 && (
+        <Alert tone="warn" testId="v2-failure-detection-incomplete">
+          {t("evalPage.insights.detectIncomplete", { count: totals.incomplete, total: totals.sessions })}
+        </Alert>
+      )}
+      {totals.lowConfidenceDropped > 0 && (
+        <div className="v2-muted" data-testid="v2-failure-detection-low">
+          {t("evalPage.insights.detectLowDropped", { count: totals.lowConfidenceDropped, threshold })}
+        </div>
+      )}
+      {clusters === 0 && totals.incomplete === 0 && (
+        <div className="v2-muted" data-testid="v2-failure-detection-none">
+          {t("evalPage.insights.detectNone", { count: totals.sessions })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Section({
   label,
@@ -55,6 +83,7 @@ export function InsightClusters({ insights }: { insights: InsightTrees }) {
         clusters={insights.failures ?? []}
         extra={(c) => c.subCategories?.flatMap((s) => s.rootCauses ?? []).find((r) => r.recommendation)?.recommendation}
       />
+      <FailureDetectionNote totals={failureDetectionTotals(insights)} clusters={insights.failures?.length ?? 0} />
       <Section
         label={t("evalPage.insights.secIntents")}
         tone="blue"

@@ -17,22 +17,30 @@ promises that the ordinary delete does not:
   transaction the worker re-reads job + row and requires: right job type and
   workspace, job still ``running``, row still ``uninstalling``, this job still the
   row's newest attempt. A superseded, duplicate or late worker is inert;
-* **exact resource identity** — the harness id comes from the row, the KB target id
-  is resolved once under the fence (by the reserved name, while the row still owns
-  that name exclusively) and pinned on the job BEFORE deletion; deletion and
-  readback use the pinned id, never a fresh name lookup; the execution role is the
-  deterministic per-agent role and must carry this agent's ownership tag;
-* **strict teardown** — the KB agentic target (any historical one, not only what the
-  desired spec says) must be read back as gone; ``DeleteHarness`` is polled until
-  ``GetHarness`` raises ``ResourceNotFoundException``; the role is deleted with the
-  low-level IAM helper and its ``False`` is a failure. ``AccessDenied``, throttling,
-  ``FAILED``/``DELETE_FAILED`` and timeouts keep the row ``uninstalling`` for a retry.
-  Per-step progress (with the exact resource ids) is recorded on the job; a new
-  attempt carries verified steps forward only when their resource ids still match;
+* **exact resource identity** — the Runtime id comes from the row (``agent.resource_id``,
+  set by the ordinary register stage every method shares); the execution role is the
+  deterministic per-agent role and must carry this agent's ownership tag; the KB
+  agentic target this preset might once have used has no CN implementation and is
+  never resolved;
+* **strict teardown** — ``DeleteAgentRuntime`` is polled until ``GetAgentRuntime``
+  raises ``ResourceNotFoundException`` (the self-built Harness is an ordinary
+  AgentCore Runtime; the same two calls `zip_runtime.delete_agent_resources` and
+  `agentcore.runtime.get_runtime` wrap for every other method — mirrors the pre-CN
+  ``DeleteHarness``/``GetHarness`` loop); the role is deleted with the low-level IAM
+  helper and its ``False`` is a failure. ``AccessDenied``, throttling, a timed-out
+  poll and a Runtime that never reaches "gone" keep the row ``uninstalling`` for a
+  retry. Per-step progress (with the exact resource ids) is recorded on the job; a
+  new attempt carries verified steps forward only when their resource ids still match;
+* **registry records go with the preset** — the ``registry`` step deletes the A2A record
+  the register stage made (``deployer.teardown._step_registry_record``, same name/kind
+  check as an ordinary delete) and the preset's protected AGENT_SKILLS record through the
+  maintenance path that owns it (``skill_registry.unregister_system_skill``), both
+  idempotently (N10v3-bug6 / N11-r4-bug1: the records used to outlive the preset, and the
+  protected one could be removed by nobody);
 * **deleted means gone** — only a fully verified teardown marks the row ``deleted``.
 
 The ordinary agent delete (``routers.agents._delete_agent_resources``) and the
-best-effort ``kb_gateway`` helpers keep their semantics; this module does not call
+best-effort knowledge-base helpers keep their semantics; this module does not call
 them for cleanup.
 """
 
@@ -49,33 +57,32 @@ from sqlalchemy import update
 
 from app.core.config import DATA_DIR
 from app.core.db import SessionLocal
-from app.deployer import harness as harness_method
-from app.deployer.pipeline import _append_log
+from app.deployer import teardown, zip_runtime
+from app.deployer.pipeline import _append_log, _log_line
 from app.models.ledger import Agent, Job
 from app.services import agent_iam
-from app.services import kb_gateway as kbgw
-from app.services.agentcore import harness as hc
+from app.services.agentcore import runtime as rt
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 logger = logging.getLogger("launchpad.system_agents")
 
 JOB_TYPE = "uninstall_system_agent"
-# Harness / target deletion is asynchronous. Bounded waits: a timeout is a retryable
-# failure, never a success.
-HARNESS_GONE_TIMEOUT_S = 90
-TARGET_GONE_TIMEOUT_S = 60
-POLL_S = 3
 # A QUEUED job may wait this long for a retiring predecessor's lock (the previous
 # attempt commits its failure before it releases the lock, so an operator can request
 # the retry inside that window). A running job never waits: it is either ours (resume)
 # or someone else's.
 LOCK_WAIT_S = 30
 LOCK_POLL_S = 0.2
-_sleep = time.sleep  # injectable in tests
 _lock_sleep = time.sleep
 LOCK_DIR = DATA_DIR / "locks" / "system-agents"
 
-_STEPS = ("kb_target", "harness", "role")
+# How long the "harness" step polls GetAgentRuntime after DeleteAgentRuntime before
+# giving up and failing the job (retried by another explicit uninstall).
+RUNTIME_GONE_TIMEOUT_S = 300
+RUNTIME_GONE_POLL_S = 2
+_sleep = time.sleep
+
+_STEPS = ("kb_target", "harness", "role", "registry")
 
 
 class Superseded(Exception):
@@ -159,119 +166,6 @@ def _step_state(job: Job, step: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _is_not_found(client: Any, exc: BaseException) -> bool:
-    rnf = getattr(getattr(client, "exceptions", None), "ResourceNotFoundException", None)
-    if rnf is not None and isinstance(exc, rnf):
-        return True
-    return type(exc).__name__ == "ResourceNotFoundException"
-
-
-def _list_all_targets(control: Any, gateway_id: str) -> list[dict[str, Any]]:
-    """Every gateway target across all pages (the shared helper reads one page)."""
-    items: list[dict[str, Any]] = []
-    kwargs: dict[str, Any] = {"gatewayIdentifier": gateway_id, "maxResults": 100}
-    while True:
-        page = control.list_gateway_targets(**kwargs)
-        items.extend(page.get("items") or [])
-        token = page.get("nextToken")
-        if not token:
-            return items
-        kwargs["nextToken"] = token
-
-
-def _teardown_kb_target(
-    agent: Agent, workspace: WorkspaceContext, *, db=None, job_id: str | None = None
-) -> str:
-    """Remove this installation's agentic KB target, strictly.
-
-    The desired spec is NOT consulted to decide whether a target exists: a failed
-    detach-repair rewrites the spec before the old target is gone. While the row is
-    ``uninstalling`` it owns the reserved name exclusively, so the target carrying
-    ``agentic_target_name(<preset name>)`` is this installation's (historical or
-    current). Its id is pinned on the job before deletion; deletion and readback use
-    the pinned id only.
-    """
-    recorded = _step_state(db.get(Job, job_id), "kb_target") if db is not None and job_id else {}
-    target_id = recorded.get("target_id")
-    # the pinned gateway wins over the current resource map: identity, once pinned, is exact
-    gateway_id = recorded.get("gateway_id") or workspace.resources.get("kb_gateway_id")
-    if not gateway_id:
-        if target_id or (agent.spec or {}).get("knowledge_bases"):
-            raise RuntimeError(
-                "a knowledge-base target may exist but the workspace resource map has no "
-                "kb_gateway_id — restore the KB gateway resources, then retry the uninstall"
-            )
-        return "workspace has no KB gateway"
-    control = harness_method.control_client(workspace)
-    if not target_id:
-        name = kbgw.agentic_target_name((agent.spec or {}).get("name") or agent.name)
-        matches = [t for t in _list_all_targets(control, gateway_id) if t.get("name") == name]
-        if not matches:
-            return "no agentic target on the KB gateway"
-        target_id = matches[0]["targetId"]
-        if db is not None and job_id:
-            # pin the exact id BEFORE the delete; the fence inside _progress guarantees
-            # the row is still ours to clean
-            _progress(db, job_id, "kb_target", "pinned", f"target {target_id}",
-                      target_id=target_id, gateway_id=gateway_id)
-    try:
-        control.delete_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
-    except Exception as exc:  # noqa: BLE001 — anything but not-found propagates
-        if not _is_not_found(control, exc):
-            raise
-        return f"agentic target {target_id} already gone"
-    deadline = time.monotonic() + TARGET_GONE_TIMEOUT_S
-    while True:
-        try:
-            status = control.get_gateway_target(
-                gatewayIdentifier=gateway_id, targetId=target_id
-            ).get("status")
-        except Exception as exc:  # noqa: BLE001
-            if _is_not_found(control, exc):
-                return f"agentic target {target_id} gone (GetGatewayTarget → ResourceNotFound)"
-            raise
-        if status in ("FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONIZE_UNSUCCESSFUL"):
-            raise RuntimeError(f"target {target_id} reports {status} — retry the uninstall")
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"target {target_id} still {status or '?'} after {TARGET_GONE_TIMEOUT_S}s — "
-                "retry the uninstall"
-            )
-        _sleep(POLL_S)
-
-
-def _teardown_harness(agent: Agent, workspace: WorkspaceContext, log) -> str:
-    if not agent.resource_id:
-        return "no harness recorded"
-    client = harness_method.control_client(workspace)
-    try:
-        hc.delete_harness(client, agent.resource_id)
-        log(f"DeleteHarness accepted for {agent.resource_id}")
-    except Exception as exc:  # noqa: BLE001
-        if not _is_not_found(client, exc):
-            raise
-        return "harness already gone"
-    deadline = time.monotonic() + HARNESS_GONE_TIMEOUT_S
-    while True:
-        try:
-            status = hc.get_harness(client, agent.resource_id).get("status")
-        except Exception as exc:  # noqa: BLE001
-            if _is_not_found(client, exc):
-                return "harness gone (GetHarness → ResourceNotFound)"
-            raise
-        if status == "DELETE_FAILED":
-            raise RuntimeError(
-                f"harness {agent.resource_id} reports DELETE_FAILED — retry the uninstall"
-            )
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"harness {agent.resource_id} still {status or '?'} after "
-                f"{HARNESS_GONE_TIMEOUT_S}s — retry the uninstall"
-            )
-        log(f"harness {agent.resource_id} status {status or '?'} — waiting for deletion")
-        _sleep(POLL_S)
-
-
 def _teardown_role(agent: Agent, workspace: WorkspaceContext, log) -> str:
     """Delete the preset's dedicated role by *installed* ownership, not by the current
     ``per_agent_execution_roles`` toggle: a preset is never deployed on the shared role
@@ -300,6 +194,50 @@ def _teardown_role(agent: Agent, workspace: WorkspaceContext, log) -> str:
     return f"execution role {name} deleted"
 
 
+def _teardown_runtime(agent: Agent, workspace: WorkspaceContext, log) -> str:
+    """Delete the preset's AgentCore Runtime and poll until it reads back gone.
+
+    The self-built Harness is an ordinary Runtime (``deployer.harness_local`` shares
+    `zip_runtime`'s provision/deploy/register stages), so teardown is the same two
+    calls every other method's delete uses — mirroring the pre-CN ``DeleteHarness``
+    accepted-then-poll-``GetHarness`` shape this module's docstring describes.
+    """
+    if not agent.resource_id:
+        return "runtime already gone (no resource id)"
+    client = zip_runtime.control_client(workspace)
+    try:
+        rt.delete_runtime(client, agent.resource_id)
+    except client.exceptions.ResourceNotFoundException:
+        return f"runtime {agent.resource_id} already gone"
+    log(f"DeleteAgentRuntime accepted for {agent.resource_id}; polling GetAgentRuntime")
+    deadline = time.monotonic() + RUNTIME_GONE_TIMEOUT_S
+    while True:
+        try:
+            rt.get_runtime(client, agent.resource_id)
+        except client.exceptions.ResourceNotFoundException:
+            return f"runtime {agent.resource_id} deleted"
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"runtime {agent.resource_id} still present after {RUNTIME_GONE_TIMEOUT_S}s"
+            )
+        _sleep(RUNTIME_GONE_POLL_S)
+
+
+def _teardown_registry(db, agent: Agent, workspace: WorkspaceContext, log) -> str:
+    """Delete the preset's registry records: its A2A record (by id, only if it is still
+    THIS agent's A2A record — the ordinary delete's check) and its protected Skill record
+    + mapping row through the maintenance path. Not-found is "already gone"; any other
+    registry error propagates and fails the step for a retry."""
+    from app.system_agents import skill_registry  # resolved here: it imports service
+
+    a2a = teardown._step_registry_record(agent, workspace, log)
+    skill = skill_registry.unregister_system_skill(db, workspace, agent.system_key or "", log)
+    detail = f"a2a: {a2a.detail or a2a.status} · skill: {skill}"
+    if a2a.status == teardown.SKIPPED and skill.startswith("skipped"):
+        return "skipped: " + detail
+    return detail
+
+
 # ---------------------------------------------------------------------------
 # the worker
 # ---------------------------------------------------------------------------
@@ -310,6 +248,8 @@ def _resource_id_for(step: str, agent: Agent) -> str:
         return agent.resource_id or ""
     if step == "role":
         return agent_iam.role_name_for(agent.name, agent.id)
+    if step == "registry":
+        return agent.registry_record_id or ""
     return ""  # kb_target carries its own pinned target_id
 
 
@@ -364,11 +304,13 @@ def execute_uninstall_job(job_id: str, *, resume: bool = False) -> None:
                 ):
                     continue  # verified earlier for the SAME resource
                 if step == "kb_target":
-                    detail = _teardown_kb_target(agent, workspace, db=db, job_id=job_id)
+                    detail = "skipped: not managed in this build"
                 elif step == "harness":
-                    detail = _teardown_harness(agent, workspace, log)
-                else:
+                    detail = _teardown_runtime(agent, workspace, log)
+                elif step == "role":
                     detail = _teardown_role(agent, workspace, log)
+                else:
+                    detail = _teardown_registry(db, agent, workspace, log)
                 _progress(db, job_id, step, "done", detail,
                           resource_id=_resource_id_for(step, agent))
             except Superseded as exc:
@@ -401,9 +343,11 @@ def execute_uninstall_job(job_id: str, *, resume: bool = False) -> None:
             _fail(db, db.get(Job, job_id), None, "superseded at finalization: row changed")
             return
         job.status = "succeeded"
-        job.payload = {**(job.payload or {}), "aws_resource_deleted": True}
+        job.payload = {**(job.payload or {}), "aws_resource_deleted": True,
+                       "teardown": teardown_summary(job)}
+        # N17-obs479: the final line rides in the terminal commit
+        _log_line(job, "teardown", "done · every resource verified gone")
         db.commit()
-        _append_log(db, job_id, "teardown", "done · every resource verified gone")
     except Exception as exc:  # noqa: BLE001 — job-level failure must never crash the worker
         db.rollback()
         logger.exception("uninstall job %s failed outside teardown: %s", job_id, exc)
@@ -426,11 +370,26 @@ def _fail(db, job: Job | None, agent: Agent | None, detail: str) -> None:
     logger.warning("uninstall job %s failed: %s", job.id, detail)
     job.status = "failed"
     job.error = detail[:500]
+    job.payload = {**(job.payload or {}), "teardown": teardown_summary(job)}
     if agent is not None:
         agent.error = f"uninstall failed: {detail}"[:500]
         agent.updated_at = datetime.now(UTC)
+    _log_line(job, "teardown", detail, level="error")  # N17-obs479: one commit
     db.commit()
-    _append_log(db, job.id, "teardown", detail, level="error")
+
+
+def teardown_summary(job: Job) -> dict[str, list[str]]:
+    """``{removed, skipped, failed}`` step names from the job's per-step progress — what
+    this attempt verified gone, what it never manages here, and where it stopped. Written
+    on success and on failure so the console can say what a stuck uninstall did remove
+    (N10v2-bug8) instead of only that it failed."""
+    progress = (job.payload or {}).get("progress") or {}
+    removed = [s for s in _STEPS if progress.get(s, {}).get("state") == "done"
+               and not str(progress[s].get("detail", "")).startswith("skipped")]
+    skipped = [s for s in _STEPS if progress.get(s, {}).get("state") == "done"
+               and str(progress[s].get("detail", "")).startswith("skipped")]
+    failed = [s for s in _STEPS if progress.get(s, {}).get("state") == "failed"]
+    return {"removed": removed, "skipped": skipped, "failed": failed}
 
 
 # ---------------------------------------------------------------------------

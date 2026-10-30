@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_decide_request/v1",
+  "title": "I4 POST /v1/decide request (also the item shape of I5 authorize_stateless, with record=false)",
+  "type": "object",
+  "$defs": {
+    "entity": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(::[A-Za-z][A-Za-z0-9_]*)*::\".*\"$",
+      "maxLength": 512
+    }
+  },
+  "properties": {
+    "ws": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "codec.session_key(ws, psid, kind, id); also the Dogwood launchpad.sessionId pin"
+    },
+    "record": {
+      "type": "boolean"
+    },
+    "action": {
+      "$ref": "#/$defs/entity"
+    },
+    "resource": {
+      "$ref": "#/$defs/entity"
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/entity"
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string"
+        },
+        "system": {
+          "type": "boolean"
+        },
+        "workspace_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Trusted caller workspace, independent of the engine set key in ws. Omitted on legacy workspace-keyed calls."
+        }
+      },
+      "required": [
+        "entity",
+        "agent_id",
+        "method",
+        "system"
+      ],
+      "additionalProperties": false
+    },
+    "principal": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/entity"
+        },
+        "parents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entity"
+          }
+        },
+        "attrs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "entity",
+        "parents",
+        "attrs"
+      ],
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "object"
+        },
+        "agent_id": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "expect": {
+          "type": "object",
+          "description": "amendment 3: the set versions the caller's bundle holds; a mismatch with the engine's installed set => 409 set_mismatch (have = the engine's policy_set_version)",
+          "properties": {
+            "policy_set_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "temporal_set_version": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "policy_set_version",
+            "temporal_set_version"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "input",
+        "agent_id",
+        "channel"
+      ],
+      "additionalProperties": true,
+      "description": "The WIRE context: input, agent_id, channel (+ expect). The Dogwood-side context that policies read (context.input, context.launchpad.{agent_id, channel, sessionId}, context.system.*) is built by the engine: launchpad.agent_id <- agent.agent_id, launchpad.channel <- context.channel, launchpad.sessionId <- the top-level `session` (codec.session_key, binding ws + psid + principal), system.* <- the engine clock. Never send a launchpad block, a psid or time."
+    },
+    "tsv": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "amendment 2: the token's temporal-set version; older than the workspace's => 409 session_invalidated"
+    },
+    "session_started_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "amendment 2: the token's iat; older than the store epoch on a recorded call => 409 history_lost"
+    }
+  },
+  "required": [
+    "ws",
+    "session",
+    "record",
+    "action",
+    "resource",
+    "agent",
+    "principal",
+    "context"
+  ],
+  "additionalProperties": false
+}

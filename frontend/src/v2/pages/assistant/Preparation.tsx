@@ -8,13 +8,16 @@ import {
   type AssistantCatalog,
   type AssistantCatalogTool,
   type AssistantConversationDetail,
+  type AssistantStatus,
   type AttachableKnowledgeBase,
   errorMessage,
 } from "../../../lib/api";
+import { KbJobsStaleHint } from "../../../components/KbJobsStaleHint";
 import { type AssistantKbDetail, kbReadiness } from "../../../lib/assistant";
 import { Alert, Button, Tag } from "../../ui";
 import { KnowledgeBaseCreateDrawer } from "./KnowledgeBaseCreate";
 import { SECTION_IDS } from "./common";
+import { awsStatusLabel } from "../../awsStatus";
 
 const sameKeys = (a: string[], b: string[]) => a.length === b.length && a.every((key) => b.includes(key));
 const toggle = (values: string[], value: string) =>
@@ -31,11 +34,15 @@ const PREP_SECTION = { knowledge_base: "v2-assistant-prep-kbs", skill: "v2-assis
  * revision when a binding changed). Locked once a revision was approved.
  */
 export function PreparationCard({
-  conversation, workspaceId, disabled, locked, onDirty, onUpdated, onCatalog, onWorking, onDiscuss,
+  conversation, workspaceId, capabilities, disabled, disabledReason, locked, onDirty, onUpdated, onCatalog, onWorking, onDiscuss,
 }: {
   conversation: AssistantConversationDetail;
   workspaceId: string;
+  capabilities: AssistantStatus["capabilities"];
   disabled: boolean;
+  /** Why the parent made the panel read-only (assistant turn streaming, a proposal edit
+   *  open, approval running) — shown on the disabled SAVE button (N-ARCH-obs8). */
+  disabledReason?: string;
   locked: boolean;
   onDirty: (dirty: boolean) => void;
   onUpdated: (detail: AssistantConversationDetail) => void;
@@ -75,11 +82,9 @@ export function PreparationCard({
   const busy = disabled || working || refreshing;
   const selectionDisabled = busy || locked;
   const catalog = conversation.catalog;
-  const resources = catalog.resources;
-  const gatewayReady = Boolean(
-    resources?.kb_gateway_id && resources.kb_gateway_arn && resources.oauth_provider_arn
-      && resources.kb_gateway?.status === "READY" && resources.kb_gateway.url,
-  );
+  // Harness mounts a knowledge base as direct kb_search/kb_deep_search tools (no
+  // gateway involved); the only prerequisite is a registered knowledge backend.
+  const kbReady = capabilities.knowledge_bases;
   const availableKbIds = new Set(catalog.knowledge_bases.map((kb) => kb.kb_id));
   const availableSkillKeys = new Set(catalog.skills.filter((skill) => skill.content_digest).map((skill) => skill.key));
   const availableToolKeys = new Set(catalog.tools.filter((tool) => tool.attachable).map((tool) => tool.key));
@@ -87,12 +92,21 @@ export function PreparationCard({
     || !sameKeys(selectedSkills, prep?.skills ?? [])
     || !sameKeys(selectedTools, savedTools);
   const invalidSelection = selectedKbs.some((id) => !availableKbIds.has(id))
-    || (selectedKbs.length > 0 && !gatewayReady)
+    || (selectedKbs.length > 0 && !kbReady)
     || selectedSkills.some((key) => !availableSkillKeys.has(key))
     || selectedTools.some((key) => !availableToolKeys.has(key))
     || selectedTools.length > MAX_TOOLS;
   const describeError = (err: unknown) =>
     err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err);
+  // N-ARCH-obs8: the save button used to go silent while the assistant was still
+  // generating a turn (or an edit / approval was open) — every disabled state now
+  // names its cause: the parent's reason first, then an invalid selection, then
+  // "already in the plan"; an in-flight save speaks for itself.
+  const saveReason = disabled && disabledReason ? disabledReason
+    : changed && invalidSelection ? t("assistantPreparation.selectionUnavailable")
+    : working || refreshing ? undefined
+    : !changed ? t("assistantPreparation.nothingToSave")
+    : undefined;
 
   useEffect(() => {
     callbacks.current.onDirty(changed && !locked);
@@ -266,11 +280,11 @@ export function PreparationCard({
           )}
           {kbs === null && !kbError && <p className="v2-muted">{t("common.loading")}</p>}
           {kbs?.length === 0 && !kbError && <p className="v2-muted">{t("assistantPreparation.noKbs")}</p>}
-          {!gatewayReady && <Alert tone="warn">{t("assistantPreparation.gatewayMissing")}</Alert>}
+          {!kbReady && <Alert tone="warn">{t("assistantPreparation.gatewayMissing")}</Alert>}
           <div className="v2-assistant-options" data-testid="v2-assistant-prep-kb-options">
             {kbRows.map((kb) => {
               const selected = selectedKbs.includes(kb.kb_id);
-              const available = availableKbIds.has(kb.kb_id) && gatewayReady
+              const available = availableKbIds.has(kb.kb_id) && kbReady
                 && (!("status" in kb) || !kb.status || kb.status === "ACTIVE");
               const off = selectionDisabled || (!selected && !available);
               return (
@@ -285,7 +299,7 @@ export function PreparationCard({
                   <Tag tone={available ? "green" : "gray"}>
                     {available ? t("assistantPreparation.mountable")
                       : ("status" in kb && kb.status && kb.status !== "ACTIVE"
-                        ? t(`knowledge.status.${kb.status.toLowerCase()}`, kb.status)
+                        ? t(`knowledge.status.${kb.status.toLowerCase()}`, awsStatusLabel(t, kb.status))
                         : t("assistantPreparation.unavailable"))}
                   </Tag>
                 </label>
@@ -411,6 +425,9 @@ export function PreparationCard({
         {!locked && (
           <div className="v2-assistant-save">
             <span className="v2-muted">{t(changed ? "assistantPreparation.unsaved" : "assistantPreparation.savedHint")}</span>
+            {changed && disabled && disabledReason && (
+              <span className="v2-muted" role="status" data-testid="v2-assistant-prep-save-reason">{disabledReason}</span>
+            )}
             {changed && (
               <Button
                 disabled={busy}
@@ -428,7 +445,7 @@ export function PreparationCard({
             <Button
               kind="primary"
               disabled={busy || !changed || invalidSelection}
-              title={!busy && changed && invalidSelection ? t("assistantPreparation.selectionUnavailable") : undefined}
+              title={saveReason}
               onClick={() => void save()}
               testId="v2-assistant-prep-save"
             >
@@ -480,6 +497,7 @@ function KbReadiness({ kbId, name, workspaceId }: { kbId: string; name: string; 
     <div className="v2-row" style={{ fontSize: 13 }} data-testid={`v2-assistant-kb-readiness-${kbId}`}>
       <b>{name}</b>
       <Tag tone={tone}>{t(`assistantPreparation.${key}`)}</Tag>
+      <KbJobsStaleHint degraded={detail?.jobs_degraded} className="v2-muted" />
       <Link to={`/knowledge-bases?view=detail&kb=${encodeURIComponent(kbId)}`} target="_blank" rel="noopener noreferrer">
         {t("assistantPreparation.openKb")}
       </Link>

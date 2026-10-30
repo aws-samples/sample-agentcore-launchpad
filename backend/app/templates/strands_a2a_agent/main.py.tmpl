@@ -6,47 +6,74 @@ Serves the standard Agent-to-Agent protocol (JSON-RPC on port 9000 at "/"):
   through unmodified; AGENTCORE_RUNTIME_URL is injected by the runtime, so the
   served card advertises the real data-plane invocations URL.
 - Observability (ADOT): launched through ``opentelemetry-instrument``.
-- AgentCore Memory: each A2A context gets an isolated session manager, so
-  conversation state survives server context eviction and runtime restarts.
+- Launchpad memory (S3 session snapshots): each A2A context gets an isolated
+  session manager, so conversation state survives server context eviction and
+  runtime restarts.
 
 Config-bundle A/B overrides remain deliberately unsupported; A2A agents are
 excluded from config-bundle experiments.
 """
 
 import ast
+import asyncio
+import hashlib
+import hmac
+import json
+import logging
 import operator
 import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from a2a.types import AgentSkill
-from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
-from bedrock_agentcore.memory.integrations.strands.session_manager import (
-    AgentCoreMemorySessionManager,
-)
-from fastapi import FastAPI
+from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
+from fastapi import FastAPI, Request
 from strands import Agent, tool
+from strands.models import BedrockModel
 from strands.multiagent.a2a import A2AServer
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
-MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# --- CN model block (N2/N7, one implementation) ---
+# model_support.render_model_source(): the Strands template's model constants + helpers,
+# byte-identical to the HTTP runtime's and the Harness bundle's model/load.py (spec C4).
+# The middleware below fills `_WORKLOAD_TOKEN` and resolves the key ON THE REQUEST PATH —
+# A2AServer has no per-request context hook and its executor builds the agent outside
+# any request context, so the Runtime-injected token is captured off the request header
+# (present only when the CALLER sent runtimeUserId; a runtime-linked workload identity
+# cannot self-mint one — N10v3-bug5 live correction).
+__LAUNCHPAD_MODEL_SOURCE__
+# --- end CN model block ---
 SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 AGENT_DESCRIPTION = __LAUNCHPAD_AGENT_DESCRIPTION__
 CARD_SKILLS: list[dict] = __LAUNCHPAD_A2A_SKILLS__
 A2A_CARD_VERSION = __LAUNCHPAD_A2A_CARD_VERSION__  # shared with the registry record
 SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__
 SKILLS_ROOT = Path(__file__).parent / "skills"
-MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
-REGION = os.environ.get("AWS_REGION", "us-west-2")
 _MEMORY_SESSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-_]*$")
-# Message batching: buffer messages locally and persist them in one batch call
-# per turn instead of one create_event round-trip per message. The A2AServer
-# owns the agent lifecycle, so there is no close() point here — flushing relies
-# on the AfterInvocationEvent hook the session manager registers whenever
-# batch_size > 1. 100 is the SDK maximum.
-MEMORY_BATCH_SIZE = 100
+# N16-obs79: the hub sends the Launchpad memory actor (`<agent>__<human>`, the same id the
+# HTTP template receives as `actor_id` and the console reads back) as A2A message
+# metadata. A2AServer hands the factory only the context id, so the middleware binds
+# context → actor off the request body first; a context no caller bound (a peer-to-peer
+# call) keeps the per-context actor. Bounded: an idle-evicted context is simply re-bound.
+# N16-obs90 (security): ANY holder of InvokeAgentRuntime on this runtime can send metadata,
+# so the actor is bound only when (a) `launchpad_actor_sig` verifies as
+# HMAC-SHA256(LAUNCHPAD_A2A_ACTOR_KEY, "<contextId>\x1f<actor>") — the key is derived by
+# the hub per agent and injected at deploy — and (b) the actor is one of THIS agent's:
+# the hub signs `scoped_actor(agent.id, human)` = `<agent ID>__<human>` (N16-obs90a: the
+# agent ID from LAUNCHPAD_AGENT_ID, not the agent NAME), never the per-context `__a2a__`
+# shape. Otherwise the per-context actor stays and ONE warning per context is logged (no
+# actor value in the log).
+A2A_ACTOR_METADATA_KEY = "launchpad_actor_id"
+# the ledger id of this agent — what the console keys memory on (`memory_backend.scoped_actor`)
+AGENT_ID = os.environ.get("LAUNCHPAD_AGENT_ID", "")
+A2A_ACTOR_SIG_METADATA_KEY = "launchpad_actor_sig"
+_A2A_ACTOR_KEY = os.environ.get("LAUNCHPAD_A2A_ACTOR_KEY", "")
+_CONTEXT_ACTORS: dict[str, str] = {}
+_CONTEXT_ACTORS_MAX = 4096
+_UNBOUND_WARNED: set[str] = set()
 
 _SAFE_OPS = {
     ast.Add: operator.add,
@@ -96,28 +123,105 @@ def skill_plugins() -> list:
     return [AgentSkills(skills=str(SKILLS_ROOT))]
 
 
+# --- CN memory/KB (N6) ---
+# The self-hosted memory library (S3 session snapshots · SQS extraction · OpenSearch
+# recall): env-driven, a no-op without LAUNCHPAD_MEMORY_ID; needs the model block above.
+__LAUNCHPAD_MEMORY_SOURCE__
+# --- end CN memory/KB (N6) ---
+
+
+def _actor_signature(key: str, context_id: str, actor: str) -> str:
+    """Mirror of the hub's ``services/a2a_actor.sign_actor``."""
+    message = f"{context_id}\x1f{actor}".encode()
+    return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _refuse_actor(context_id: str, reason: str) -> None:
+    """One WARNING per context, naming the reason but never the actor value."""
+    if context_id not in _UNBOUND_WARNED:
+        if len(_UNBOUND_WARNED) >= _CONTEXT_ACTORS_MAX:
+            _UNBOUND_WARNED.clear()
+        _UNBOUND_WARNED.add(context_id)
+        _log.warning("A2A memory actor metadata for context %s not bound: %s — keeping the "
+                     "per-context actor", context_id, reason)
+
+
+def _bind_context_actor(raw: bytes) -> None:
+    """Remember the memory actor a JSON-RPC ``message/send`` names for its context.
+
+    Anything that is not a well-formed envelope with a string ``contextId`` and a
+    safe ``metadata.launchpad_actor_id`` is ignored — the request still proceeds. An actor
+    without a verifying ``launchpad_actor_sig``, or one that is not this agent's own
+    ``<AGENT_ID>__…`` actor (the console's ``scoped_actor(agent.id, human)``), is refused
+    (N16-obs90 / N16-obs90a)."""
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return
+    params = body.get("params") if isinstance(body, dict) else None
+    message = params.get("message") if isinstance(params, dict) else None
+    if not isinstance(message, dict):
+        return
+    context_id = message.get("contextId")
+    metadata = message.get("metadata")
+    actor = metadata.get(A2A_ACTOR_METADATA_KEY) if isinstance(metadata, dict) else None
+    if not (isinstance(context_id, str) and isinstance(actor, str)):
+        return
+    if not (_MEMORY_SESSION_RE.fullmatch(context_id) and _MEMORY_SESSION_RE.fullmatch(actor)):
+        return
+    signature = metadata.get(A2A_ACTOR_SIG_METADATA_KEY)
+    if not _A2A_ACTOR_KEY:
+        _refuse_actor(context_id, "no LAUNCHPAD_A2A_ACTOR_KEY in this runtime's environment")
+        return
+    if not isinstance(signature, str) or not hmac.compare_digest(
+        _actor_signature(_A2A_ACTOR_KEY, context_id, actor), signature
+    ):
+        _refuse_actor(context_id, "missing or invalid launchpad_actor_sig")
+        return
+    if not AGENT_ID:
+        _refuse_actor(context_id, "no LAUNCHPAD_AGENT_ID in this runtime's environment")
+        return
+    if not actor.startswith(f"{AGENT_ID}__") or "__a2a__" in actor:
+        _refuse_actor(context_id, "actor is not one of this agent's own")
+        return
+    if len(_CONTEXT_ACTORS) >= _CONTEXT_ACTORS_MAX and context_id not in _CONTEXT_ACTORS:
+        _CONTEXT_ACTORS.pop(next(iter(_CONTEXT_ACTORS)))
+    _CONTEXT_ACTORS[context_id] = actor
+
+
+def _context_actor(context_id: str) -> str:
+    """The memory actor of one A2A context: the hub-signed ``<agent id>__<human>`` actor
+    (N16-obs79 / N16-obs90), else the per-context actor of a call that named none — keyed
+    on the agent ID like every other memory partition of this agent (N16-obs90a; the name
+    only when a runtime has no LAUNCHPAD_AGENT_ID)."""
+    return _CONTEXT_ACTORS.get(context_id) or f"{AGENT_ID or AGENT_NAME}__a2a__{context_id}"
+
+
 def agent_factory(context_id: str) -> Agent:
     """Fresh, memory-backed agent per A2A context."""
     kwargs = {
         "name": AGENT_NAME,
         "description": AGENT_DESCRIPTION,
-        "model": MODEL_ID,
+        # A2AServer builds a card-only agent with its internal "__agent_card__"
+        # context before any request arrives — no token yet, and that agent
+        # never invokes a model.
+        "model": build_model() if _MEMORY_SESSION_RE.fullmatch(context_id) else MODEL_ID,
         "system_prompt": SYSTEM_PROMPT,
         "tools": [calculator, current_utc_time],
     }
     # A2AServer calls the factory once with its internal ``__agent_card__``
     # context while constructing the public card. That value is not a valid
-    # AgentCore Memory session id, and the card-only agent needs no persistence.
-    if MEMORY_ID and _MEMORY_SESSION_RE.fullmatch(context_id):
-        config = AgentCoreMemoryConfig(
-            memory_id=MEMORY_ID,
-            actor_id=f"{AGENT_NAME}__a2a__{context_id}",
-            session_id=context_id,
-            batch_size=MEMORY_BATCH_SIZE,
-        )
-        kwargs["session_manager"] = AgentCoreMemorySessionManager(
-            config, region_name=REGION
-        )
+    # session id (S3 session keys), and the card-only agent needs no persistence.
+    # --- CN memory/KB (N6) ---
+    if _memory_env()["store"] and _MEMORY_SESSION_RE.fullmatch(context_id):
+        actor = _context_actor(context_id)
+        session_manager = make_session_manager(actor, context_id)
+        if session_manager is not None:
+            kwargs["session_manager"] = session_manager
+        hooks = make_memory_hooks(actor, context_id)
+        if hooks:
+            kwargs["hooks"] = hooks
+    # --- end CN memory/KB (N6) ---
     plugins = skill_plugins()
     if plugins:
         kwargs["plugins"] = plugins
@@ -138,6 +242,34 @@ server = A2AServer(
 )
 
 app = FastAPI()
+_log = logging.getLogger(AGENT_NAME)
+
+
+@app.middleware("http")
+async def _capture_workload_token(request: Request, call_next):
+    # The Runtime injects the workload access token as this request header (the one
+    # BedrockAgentCoreApp reads into its context) ONLY when the caller sent runtimeUserId;
+    # A2AServer has no such hook, so the latest token is kept for the key exchange, and
+    # the key is resolved + cached here, on the request path, so the executor's
+    # agent_factory (no request context) finds it ready. A failure is not fatal here:
+    # build_model() raises the readable cause inside the task, which the caller relays.
+    if request.method == "POST":
+        # N16-obs79: bind the context's memory actor before the executor builds the agent.
+        # Starlette caches the body read here, so the A2A app downstream still gets it.
+        try:
+            _bind_context_actor(await request.body())
+        except Exception as exc:  # noqa: BLE001 — never fail the turn over the binding
+            _log.warning("memory actor not bound: %s: %s", type(exc).__name__, exc)
+    token = request.headers.get("WorkloadAccessToken")
+    if token:
+        _WORKLOAD_TOKEN["value"] = token
+        if not _BEDROCK_API_KEY.get("key"):
+            try:
+                await asyncio.to_thread(_resolve_model_api_key)
+            except Exception as exc:  # noqa: BLE001 — never log the token or the key
+                _log.warning("model key not resolved on the request path: %s: %s",
+                             type(exc).__name__, exc)
+    return await call_next(request)
 
 
 @app.get("/ping")

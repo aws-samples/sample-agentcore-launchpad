@@ -52,6 +52,5 @@ def test_clients_are_built_in_the_workspace_region(monkeypatch):
 
     ctx = ws.default_workspace_context()
     assert client_mod.control_client(ctx).service_name == "bedrock-agentcore-control"
-    assert client_mod.registry_control_client(ctx).service_name == "agent-registry-control"
     assert client_mod.iam_client(ctx).service_name == "iam"
     assert {region for _account, region, _role, _ext in lookups} == {"eu-central-1"}

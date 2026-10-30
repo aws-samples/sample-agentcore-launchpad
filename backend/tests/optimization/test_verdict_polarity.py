@@ -7,11 +7,13 @@ sample-size weighting for both the experiment verdict and the canary
 auto-decision that shares ``compute_verdict``.
 """
 
-from app.evaluation import agentcore_eval as ac
-from app.optimization.service import compute_verdict
+from app.optimization import routing as ac
+from app.optimization.verdict import compute_verdict
 
 
-def _metric(evaluator, c_mean, t_mean, n=6, significant=False):
+# n=12 clears the N-SCN-obs14 per-arm bar (Settings.verdict_min_arm_n = 10) so these
+# tests keep exercising the *direction* of the verdict, not the sample gate.
+def _metric(evaluator, c_mean, t_mean, n=12, significant=False):
     return {
         "evaluatorId": evaluator,
         "label": evaluator.rsplit("/", 1)[-1],
@@ -128,13 +130,97 @@ def test_custom_evaluator_treated_as_higher_is_better():
 def test_verdict_contract_keys_are_stable():
     """The console reads these keys — orientation must not rename anything."""
     verdict = compute_verdict([_metric("Builtin.Helpfulness", 0.4, 0.6, significant=True)])
-    assert set(verdict) == {"verdict", "avg_delta", "n", "significant"}
-    assert verdict["n"] == 12 and verdict["significant"] is True
+    # N-SCN-obs14 added the additive ``arms_n`` / ``min_arm_n`` — nothing was renamed
+    assert set(verdict) == {"verdict", "avg_delta", "n", "significant", "arms_n", "min_arm_n"}
+    assert verdict["n"] == 24 and verdict["significant"] is True
+    assert verdict["arms_n"] == {"control": 12, "treatment": 12}
+    assert verdict["min_arm_n"] == 10
     assert compute_verdict([])["verdict"] == "insufficient-data"
     no_means = [{"evaluatorId": "Builtin.Refusal", "control": {}, "variants": [{}]}]
+    # N17-obs443 added the additive ``reason_code`` / ``reason_params`` — ``reason`` is kept
     assert compute_verdict(no_means) == {
         "verdict": "insufficient-data", "reason": "arms have no means yet",
+        "reason_code": "no_means", "reason_params": {},
     }
+
+
+# ─── N-SCN-obs14: per-arm minimum for a directional verdict ─────────────────────
+def _arms(
+    c_n, t_n, *, c_mean=0.625, t_mean=0.5, significant=False,
+    evaluator="Builtin.GoalSuccessRate",
+):
+    return {
+        "evaluatorId": evaluator,
+        "label": evaluator,
+        "control": {"mean": c_mean, "sampleSize": c_n},
+        "variants": [{"mean": t_mean, "sampleSize": t_n, "isSignificant": significant}],
+    }
+
+
+def test_treatment_arm_below_the_bar_is_insufficient_n_not_control_wins():
+    """The live obs14 round: C 0.625 n 32 vs T1 0.50 n 4 used to be a terminal
+    ``control-wins``; four treatment sessions cannot carry a direction."""
+    verdict = compute_verdict([
+        _arms(32, 4),
+        _arms(31, 4, c_mean=0.753, t_mean=0.75, evaluator="Builtin.Helpfulness"),
+    ])
+    assert verdict["verdict"] == "insufficient-n"
+    assert verdict["arms_n"] == {"control": 32, "treatment": 4}
+    assert verdict["min_arm_n"] == 10
+    assert verdict["n"] == 71
+    # the reason names both arms, the bar and the unit
+    assert "10 scored records per arm" in verdict["reason"]
+    assert "control has 32" in verdict["reason"] and "treatment has 4" in verdict["reason"]
+    assert "significant" not in verdict  # no direction → no significance claim either
+
+
+def test_control_arm_below_the_bar_is_insufficient_n_too():
+    verdict = compute_verdict([_arms(3, 40, c_mean=0.2, t_mean=0.9)])
+    assert verdict["verdict"] == "insufficient-n"
+    assert verdict["arms_n"] == {"control": 3, "treatment": 40}
+
+
+def test_significance_does_not_bypass_the_per_arm_bar():
+    """A p < 0.05 on n = 4 is noise — the bar applies before the direction is read."""
+    verdict = compute_verdict([_arms(32, 4, significant=True)])
+    assert verdict["verdict"] == "insufficient-n"
+
+
+def test_both_arms_at_the_bar_keep_the_directional_outcomes():
+    control = compute_verdict([_arms(10, 10, significant=True)])
+    assert control["verdict"] == "control-wins" and control["significant"] is True
+    assert control["arms_n"] == {"control": 10, "treatment": 10}
+    treatment = compute_verdict([_arms(10, 10, c_mean=0.5, t_mean=0.8)])
+    assert treatment["verdict"] == "treatment-wins" and treatment["significant"] is False
+    tie = compute_verdict([_arms(10, 10, c_mean=0.5, t_mean=0.5)])
+    assert tie["verdict"] == "tie"
+
+
+def test_per_arm_count_is_the_largest_evaluator_sample_of_that_arm():
+    """One evaluator that scored fewer sessions (judge hiccup) must not starve the arm:
+    the arm's n is the sessions that reached ANY judge, i.e. the max over evaluators."""
+    verdict = compute_verdict([
+        _arms(12, 11, c_mean=0.5, t_mean=0.8, evaluator="Builtin.Helpfulness"),
+        _arms(12, 3, c_mean=0.5, t_mean=0.8, evaluator="Builtin.Coherence"),
+    ])
+    assert verdict["verdict"] == "treatment-wins"
+    assert verdict["arms_n"] == {"control": 12, "treatment": 11}
+
+
+def test_min_arm_n_argument_overrides_the_settings_bar():
+    assert compute_verdict([_arms(32, 4)], min_arm_n=4)["verdict"] == "control-wins"
+    assert compute_verdict([_arms(32, 4)], min_arm_n=5)["verdict"] == "insufficient-n"
+    assert compute_verdict([_arms(32, 4)], min_arm_n=4)["min_arm_n"] == 4
+
+
+def test_settings_knob_is_the_default_bar(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "verdict_min_arm_n", 4)
+    verdict = compute_verdict([_arms(32, 4)])
+    assert verdict["verdict"] == "control-wins" and verdict["min_arm_n"] == 4
+    monkeypatch.setattr(get_settings(), "verdict_min_arm_n", 33)
+    assert compute_verdict([_arms(32, 40)])["verdict"] == "insufficient-n"
 
 
 def test_normalize_ab_results_carries_polarity():
@@ -143,13 +229,13 @@ def test_normalize_ab_results_carries_polarity():
             "evaluatorMetrics": [
                 {
                     "evaluatorArn": "arn:aws:bedrock-agentcore:::evaluator/Builtin.Refusal",
-                    "controlStats": {"name": "C", "mean": 0.2, "sampleSize": 4},
-                    "variantResults": [{"name": "T1", "mean": 0.0, "sampleSize": 4}],
+                    "controlStats": {"name": "C", "mean": 0.2, "sampleSize": 14},
+                    "variantResults": [{"name": "T1", "mean": 0.0, "sampleSize": 14}],
                 },
                 {
                     "evaluatorArn": "arn:aws:bedrock-agentcore:1234:evaluator/my_judge",
-                    "controlStats": {"name": "C", "mean": 0.5, "sampleSize": 4},
-                    "variantResults": [{"name": "T1", "mean": 0.9, "sampleSize": 4}],
+                    "controlStats": {"name": "C", "mean": 0.5, "sampleSize": 14},
+                    "variantResults": [{"name": "T1", "mean": 0.9, "sampleSize": 14}],
                 },
             ]
         }

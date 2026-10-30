@@ -89,14 +89,21 @@ def _client(region: str, timeout_seconds: float) -> Any:
             raise RuntimeError(
                 "bedrock_chat backend requires boto3 (pip install boto3)"
             ) from exc
+        # LAUNCHPAD PATCH (D16 / model-credential.md): the Launchpad host and worker
+        # reach Global Bedrock with an API key injected as AWS_BEARER_TOKEN_BEDROCK;
+        # pin bearer signing when it is present so a stray SigV4 identity in the
+        # environment can never be used for a cross-partition model call.
+        config_kwargs: dict[str, Any] = {
+            "connect_timeout": 30,
+            "read_timeout": timeout_seconds,
+            "retries": {"max_attempts": 1},
+        }
+        if os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
+            config_kwargs["signature_version"] = "bearer"
         client = boto3.client(
             "bedrock-runtime",
             region_name=region,
-            config=Config(
-                connect_timeout=30,
-                read_timeout=timeout_seconds,
-                retries={"max_attempts": 1},
-            ),
+            config=Config(**config_kwargs),
         )
         _clients[key] = client
         return client

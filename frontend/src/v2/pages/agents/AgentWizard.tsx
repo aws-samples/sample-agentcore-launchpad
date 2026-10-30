@@ -22,7 +22,6 @@ import {
   filesystemIssues,
   formFromStoredSpec,
   gatewaySelectionsValid,
-  inboundValid,
   republishSpec,
   resolveKb,
   type StoredAgentExtras,
@@ -30,6 +29,8 @@ import {
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage } from "../../../lib/api";
+import { useMethodCapabilities } from "../../../lib/capabilities";
+import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -41,19 +42,17 @@ import {
   ByocBasicCard,
   ByocEnvCard,
   ByocModelsCard,
-  ContainerToolsCard,
   FilesystemCard,
   HarnessToolsCard,
   ProtocolCard,
-  SdkCard,
   StrandsToolsCard,
 } from "./MethodSections";
 import { MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
 import { IdentityCard } from "./IdentityCard";
-import { InboundCard } from "./InboundAuthFields";
 import { WizardReview } from "./WizardReview";
+import { entryShown } from "../../hiddenSurfaces";
 
-const METHODS: AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
+const METHODS: AgentMethod[] = ["harness", "zip_runtime", "byoc"];
 const isMethod = (m: string | null): m is AgentMethod => !!m && (METHODS as string[]).includes(m);
 
 interface Draft {
@@ -82,9 +81,10 @@ function editDraft(agent: AgentInfo): Draft {
 }
 
 /**
- * Native V2 creation wizard for every form-driven method — managed Harness,
- * Strands (zip_runtime, HTTP or A2A), other Agent SDK (container) and bring your
- * own code (byoc). The form model, spec builder and per-method validation are the
+ * Native V2 creation wizard for every form-driven method — self-built Harness
+ * (rendered onto AgentCore Runtime), Strands (zip_runtime, HTTP or A2A), other
+ * Agent SDK (container) and bring your own code (byoc). The form model, spec
+ * builder and per-method validation are the
  * classic wizard's (`lib/agent-spec.ts`), so both consoles post the same
  * `AgentSpecInput` for the same inputs.
  *
@@ -104,13 +104,21 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const [form, setForm] = useState<AgentForm>(initial.form);
   const [ui, setUi] = useState<Omit<WizardUi, "customSkills">>({
     // a stored id the dropdown does not offer rides the "Custom model ID…" branch
-    customModel: edit
-      ? isCustomModelId(initial.form.modelId, initial.form.modelSource, initial.form.method === "container")
-      : false,
+    customModel: edit ? isCustomModelId(initial.form.modelId, initial.form.modelSource) : false,
     byocUpload: null,
     byocUploading: false,
   });
   const [customSkills, setCustomSkills] = useState<WizardUi["customSkills"]>(initial.extras?.customSkills ?? []);
+  // r15-e: a NEW agent seeds the static default and adopts the configured `agent_default`
+  // role when `GET /api/model-defaults` answers — unless the member already picked a model;
+  // a re-publish keeps the stored id.
+  useModelDefaultsArrival((defaults) => {
+    if (edit) return;
+    setForm((prev) => {
+      const next = adoptModelDefault(prev.modelId, initial.form.modelId, defaults.agent_default);
+      return next === prev.modelId ? prev : { ...prev, modelId: next };
+    });
+  });
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ text: string; rows: string[] } | null>(null);
@@ -144,27 +152,32 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const attachables = useLoad(() => api.registryAttachables(), "attachables");
   const kbs = useLoad(() => api.listAttachableKnowledgeBases(), "kbs");
   const memories = useLoad(() => api.memoryResources(), "memories");
+  // round 16 (N15-obs16): an option is offered only where the method renders it — read
+  // from the capability declaration; an unreadable one (null) offers everything
+  const methodCaps = useMethodCapabilities();
   // Unlike the catalogs above, a failed Connection read DOES block a spec whose
   // Identity rows name a Connection: nothing could verify it (authToolIssues).
   const connectionsLoad = useLoad(() => api.listConnections(), "connections");
   const connections = connectionsLoad.data?.connections ?? null;
-  // what an "inherit" choice resolves to at deploy; a failed read reads as IAM
-  const inboundDefault = useLoad(() => api.getInboundAuthDefault(), "inbound-default");
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
       gatewayTargets: (attachables.data?.mcp_servers ?? []).filter((m) => m.gateway),
       remoteMcp: (attachables.data?.mcp_servers ?? []).filter((m) => !m.gateway),
+      agents: attachables.data?.agents ?? [],
       skills: attachables.data?.skills ?? [],
       kbCatalog: kbs.data?.items ?? [],
       memories: memories.data?.items ?? [],
+      methodCaps,
     }),
-    [attachables.data, attachables.loading, kbs.data, memories.data],
+    [attachables.data, attachables.loading, kbs.data, memories.data, methodCaps],
   );
   const specCatalogs: AgentFormCatalogs = {
     gatewayTargets: cat.gatewayTargets,
     remoteMcp: cat.remoteMcp,
+    agents: cat.agents,
     storedGatewayConfig: initial.extras?.storedGatewayConfig ?? {},
+    storedA2aConfig: initial.extras?.storedA2aConfig ?? {},
     kbInfo: (id) => resolveKb(id, cat.kbCatalog, initial.extras?.specKbs ?? []),
   };
 
@@ -187,7 +200,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       applySource(sourceForMethod(method));
     } else {
       set((prev) => ({ protocol: "a2a", a2aSkills: prev.a2aSkills.length ? prev.a2aSkills : A2A_SKILL_SEEDS }));
-      // the A2A template has no Mantle branch
+      // the A2A template stays on the Converse path — see A2A_MODEL_SOURCE
       if (form.modelSource !== A2A_MODEL_SOURCE) applySource(A2A_MODEL_SOURCE);
     }
   };
@@ -228,7 +241,6 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const problems = useMemo(() => {
     const out: Record<string, string> = {};
     if (!AGENT_NAME_RE.test(form.name)) out.name = t("v2.agents.wizard.errName");
-    if (!inboundValid(form)) out.inbound = "inbound";
     if (form.authTools.length) {
       const auth = authToolIssues(form, connections);
       if (auth.unsupported || auth.catalogPending || Object.keys(auth.rows).length) out.identity = "identity";
@@ -302,16 +314,6 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const skillsKb = (kbNote: string) => (
     <SkillsKbCard {...section} customSkills={customSkills} setCustomSkills={setCustomSkills} kbNote={kbNote} />
   );
-  const inboundCard = (
-    <InboundCard
-      form={form}
-      set={set}
-      touched={touched}
-      workspaceDefault={inboundDefault.data?.default ?? null}
-      cognito={inboundDefault.data?.cognito ?? null}
-      cognitoIssuer={inboundDefault.data?.cognito_issuer ?? null}
-    />
-  );
   const modelCard = (extra: Partial<Parameters<typeof ModelCard>[0]> = {}) => (
     <ModelCard
       form={form}
@@ -384,15 +386,21 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           </Card>
           <Card title={t("v2.agents.wizard.otherWays")}>
             <div className="v2-row">
-              <Link to="/v2/assistant" className="v2-btn">
-                {t("v2.agents.wizard.assistant")}
-              </Link>
-              <Link to="/create/studio" className="v2-btn">
-                {t("v2.agents.wizard.studio")}
-              </Link>
-              <Link to="/agents/import" className="v2-btn">
-                {t("v2.agents.import")}
-              </Link>
+              {entryShown("assistant") && (
+                <Link to="/v2/assistant" className="v2-btn">
+                  {t("v2.agents.wizard.assistant")}
+                </Link>
+              )}
+              {entryShown("studio") && (
+                <Link to="/create/studio" className="v2-btn">
+                  {t("v2.agents.wizard.studio")}
+                </Link>
+              )}
+              {entryShown("import") && (
+                <Link to="/agents/import" className="v2-btn">
+                  {t("v2.agents.import")}
+                </Link>
+              )}
               <Link to="/agents/new" className="v2-btn">
                 <ExternalLink size={13} aria-hidden="true" />
                 {t("v2.agents.wizard.presets")}
@@ -416,7 +424,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       {step === 1 && method === "zip_runtime" && (
         <>
           <BasicCard {...section} />
-          <ProtocolCard form={form} set={set} onProtocol={changeProtocol} />
+          <ProtocolCard form={form} set={set} cat={cat} onProtocol={changeProtocol} />
           {modelCard(
             converted
               ? { showSource: false, sourceNote: t("v2.agents.wizard.convertedModelLocked"), locked: true }
@@ -435,22 +443,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
               onRetry={connectionsLoad.reload}
             />
           )}
-          {inboundCard}
           {skillsKb(t("create.configure.kbNoteDirect"))}
           <FilesystemCard form={form} set={set} touched={touched} />
-          <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
-        </>
-      )}
-
-      {step === 1 && method === "container" && (
-        <>
-          <BasicCard {...section} />
-          <SdkCard form={form} set={set} />
-          {modelCard({ showSource: false, sourceNote: t("v2.agents.wizard.claudeSourcePinned"), claudeOnly: true })}
-          <ContainerToolsCard {...section} />
-          {skillsKb(t("create.configure.kbNoteDirect"))}
-          <FilesystemCard form={form} set={set} touched={touched} />
-          {inboundCard}
           <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
         </>
       )}
@@ -462,6 +456,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             form={form}
             set={set}
             err={err}
+            cat={cat}
             ui={{ ...ui, customSkills }}
             onUpload={(file) => void uploadZip(file)}
             onPython={changePython}
@@ -476,7 +471,6 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             catalogError={Boolean(connectionsLoad.error)}
             onRetry={connectionsLoad.reload}
           />
-          {inboundCard}
         </>
       )}
 
@@ -486,8 +480,6 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           cat={cat}
           ui={{ ...ui, customSkills }}
           shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
-          workspaceDefault={inboundDefault.data?.default ?? null}
-          cognitoIssuer={inboundDefault.data?.cognito_issuer ?? null}
         />
       )}
     </>

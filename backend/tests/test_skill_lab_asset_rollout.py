@@ -51,7 +51,7 @@ def prepare_workspace(**kwargs):
     (root / 'task.md').write_text(kwargs['task_text'])
 rollout.prepare_workspace = prepare_workspace
 rollout.build_manifest = lambda *_: {}
-rollout.run_claude_code_exec = lambda **_: ('ok', {})
+rollout.run_opencode_exec = lambda **_: ('ok', {})
 rollout.diff_manifests = lambda *_: []
 result = rollout._rollout_one(items[0], '# skill', sys.argv[4], timeout=60, model='model')
 print(json.dumps({'asset_files': items[0]['_asset_files'], 'work_dir': result['work_dir']}))
@@ -209,8 +209,9 @@ def run_backend(_backend, **kwargs):
     sheet.write_bytes(sheet.read_bytes() + b"-worker")
     return "ok", "raw"
 agentcore_worker._run_backend = run_backend
+agentcore_worker.resolve_model_api_key = lambda **_: "test-bearer"
 result = agentcore_worker._run_exec_job({
-    "backend": "claude_code_exec", "bucket": "bucket", "job_prefix": prefix,
+    "backend": "opencode_exec", "bucket": "bucket", "job_prefix": prefix,
     "wait": True, "sync_interval": 0,
 })
 agentcore_runner._extract_tar_over_work_dir(s3.objects[result["out_key"]], str(restored))
@@ -253,7 +254,7 @@ def test_vendored_validator_reserves_runtime_roots_and_keeps_legacy_case_paths(t
         return json.loads(proc.stdout)["results"][0]
 
     assert validate(legacy_files)["ok"] is True
-    for root in (".claude", ".codex", ".git", ".CLAUDE"):
+    for root in (".agents", ".opencode", ".git", ".OPENCODE"):
         result = validate({f"{root}/input.txt": "legacy"})
         assert result["ok"] is False
         assert "collides with the evaluation runtime" in result["error"]

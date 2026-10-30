@@ -76,7 +76,7 @@ def _validate_files(index: int, item: dict, assets_dir: str | None = None) -> tu
                 "must be a safe relative path"
             )
         parts = rel_path.split("/")
-        if parts[0].casefold() in {".agents", ".claude", ".codex", ".git", "task.md"}:
+        if parts[0].casefold() in {".agents", ".opencode", ".git", "task.md"}:  # LAUNCHPAD PATCH
             raise ValueError(
                 f"{_item_label(index, item)}: 'files' path {rel_path!r} "
                 "collides with the evaluation runtime"

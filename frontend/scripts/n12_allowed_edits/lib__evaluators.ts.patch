@@ -1,0 +1,39 @@
+diff --git a/frontend/src/lib/evaluators.ts b/frontend/src/lib/evaluators.ts
+index a9de24c6..363aee65 100644
+--- a/frontend/src/lib/evaluators.ts
++++ b/frontend/src/lib/evaluators.ts
+@@ -1,5 +1,7 @@
+ import type { TFunction } from "i18next";
+ 
++import { MODEL_CATALOG } from "./models";
++
+ // Localized display names for evaluators. Builtins translate through the
+ // evalPage.evaluatorNames.<Name> locale block, third-party managed evaluators
+ // (ThirdParty.<Provider>.<Metric>) through evalPage.thirdPartyNames.<Metric>
+@@ -50,22 +52,10 @@ export function scoreColor(score: number, evaluatorId: string): string {
+       : "var(--crit-text)";
+ }
+ 
+-/** Bedrock models offered as the judge of a custom LLM evaluator (the backend
+- *  default, `global.openai.gpt-6-sol`, first; while AgentCore's evaluator
+- *  validation still refuses GPT-6 the backend falls back to
+- *  `global.anthropic.claude-sonnet-5-5` and says so in `model_fallback`). */
+-export const JUDGE_MODEL_OPTIONS = [
+-  "global.openai.gpt-6-sol",
+-  "global.anthropic.claude-sonnet-5-5",
+-  "global.anthropic.claude-sonnet-5",
+-  "global.anthropic.claude-sonnet-4-6",
+-  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+-  "global.anthropic.claude-opus-4-8",
+-  "global.anthropic.claude-opus-4-6-v1",
+-  "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+-  "global.amazon.nova-2-lite-v1:0",
+-  "us.amazon.nova-pro-v1:0",
+-];
++/** Bedrock models offered as the judge of a custom LLM evaluator — the CN model
++ *  catalog (GLM 5.3 first = the backend default, then Kimi K3), mirroring the
++ *  backend ALLOWED_MODEL_IDS (Launchpad-CN constraint C3). */
++export const JUDGE_MODEL_OPTIONS: string[] = MODEL_CATALOG.bedrock.map((m) => m.model_id);
+ 
+ export type EvaluatorLevel = "TOOL_CALL" | "TRACE" | "SESSION";
+ 

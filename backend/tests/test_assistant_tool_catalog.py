@@ -1,34 +1,14 @@
-"""Exact, reviewed tool names must survive discovery and evaluation-plan validation."""
+"""Exact, reviewed tool names must survive discovery; support names are never guessed."""
 
 from copy import deepcopy
 from unittest.mock import Mock, call
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-from app.assistant import evaluation_assets as assets
-from app.assistant import evaluation_plan as plans
 from app.assistant import proposal as proposals
 from app.assistant import service, tool_catalog
-from app.core.db import SessionLocal
 from app.core.errors import AppError
-from app.models.assistant import (
-    AssistantConversation,
-    AssistantEvaluationPlan,
-    EvaluationAssetOperation,
-)
-from app.services import aws_clients
-from tests.test_assistant_readonly_evaluation import _source, _validate_plan
-from tests.test_evaluation_assets import (
-    _conversation,
-    _snapshot_proposal,
-    _url,
-    app_ready,  # noqa: F401 -- shared fixture, without importing its tests
-    no_aws_clients,  # noqa: F401 -- autouse hermetic guard
-    no_deploy_no_eval,  # noqa: F401 -- autouse side-effect guard
-    no_network,  # noqa: F401 -- autouse socket guard
-)
 
 MCP_URL = "https://reports.example.test/mcp"
 REPORT_TOOL = "reports_read_report"
@@ -36,7 +16,10 @@ WRITE_TOOL = "reports_send_email"
 GATEWAY_TOOL = "finance___GetRevenue"
 RETRIEVE_TOOL = "quarterly-earnings-kb-earnings___Retrieve"
 AGENTIC_TOOL = "agentic-earnings-assistant___AgenticRetrieveStream"
-SUPPORT_TOOLS = {"skills", RETRIEVE_TOOL, AGENTIC_TOOL}
+# Mounted Skills expose ``skills``; mounted KBs expose the direct retrieval tools the
+# renderer wires (``templates/kb_support``) — the pre-CN KB-gateway callables
+# (``___Retrieve`` / ``___AgenticRetrieveStream``) are gone with that gateway.
+SUPPORT_TOOLS = {"skills", "kb_search", "kb_deep_search"}
 
 
 @pytest.fixture
@@ -54,7 +37,7 @@ def catalog():
         ],
         "skills": [{"key": "earnings-analysis", "name": "earnings-analysis"}],
         "knowledge_bases": [{"kb_id": "KB-EARNINGS", "name": "Quarterly Earnings"}],
-        "resources": {"kb_gateway_id": "kb-gateway", "oauth_provider_arn": "arn:oauth"},
+        "resources": {},
     }
 
 
@@ -65,20 +48,9 @@ def _mounted_content():
     }
 
 
-def _evaluators(*checks):
-    return [plans.CodeEvaluator(
-        kind="code", key="boundary", name="tool_boundary", title="Tool boundary", level="SESSION",
-        rules=plans.CodeRules(checks=[plans.CodeCheck.model_validate(check) for check in checks]),
-    )]
-
-
-def _allowlist(names):
-    return {"id": "allow", "type": "tool_set", "allowed": sorted(names)}
-
-
 def _rpc_pages(monkeypatch, *pages):
     rpc = Mock(side_effect=deepcopy(pages))
-    monkeypatch.setattr(tool_catalog.mcp_client, "_rpc", rpc)
+    monkeypatch.setattr(tool_catalog.mcp_client, "_unsigned_rpc", rpc)
     return rpc
 
 
@@ -335,140 +307,41 @@ def test_support_names_resolve_selected_kbs_and_deduplicate_shared_skills(catalo
     assert (content, catalog) == before
 
 
-def test_support_names_normalize_harness_targets_from_inline_kbs():
-    content = {
-        "name": " Earnings / Assistant__2026 ", "skills": ["analysis"],
-        "knowledge_bases": [{"kb_id": "KB123", "name": "Quarterly / Earnings__Reports"}],
-    }
-    assert tool_catalog.support_tool_names(content) == {
-        "skills", "quarterly-earnings-reports-kb123___Retrieve",
-        "agentic-earnings-assistant-2026___AgenticRetrieveStream",
-    }
-
-
 @pytest.mark.parametrize("method", ["container", "zip_runtime", "studio", "external"])
 def test_support_names_do_not_guess_nonharness_tool_names(catalog, method):
     content = {**_mounted_content(), "method": method}
     assert tool_catalog.support_tool_names(content, catalog) == set()
 
 
-def test_support_names_without_kb_catalog_do_not_guess_retrieve_name():
-    assert tool_catalog.support_tool_names(_mounted_content()) == {"skills", AGENTIC_TOOL}
+def test_support_names_are_constant_callables_and_need_no_catalog():
+    assert tool_catalog.support_tool_names(_mounted_content()) == SUPPORT_TOOLS
+    assert tool_catalog.support_tool_names(
+        {**_mounted_content(), "knowledge_bases": []}) == {"skills"}
     assert tool_catalog.support_tool_names({"name": "earnings-assistant"}) == set()
 
 
-@pytest.mark.parametrize("missing", ["catalog", "entry", "names", "kb", "kb-name"])
-def test_rule_catalog_rejects_incomplete_selected_catalog(catalog, missing):
-    content = _mounted_content()
-    if missing == "catalog":
-        catalog = {}
-    elif missing == "entry":
-        catalog["tools"] = []
-    elif missing == "names":
-        catalog["tools"][0]["runtime_tools"] = None
-    elif missing == "kb":
-        catalog["knowledge_bases"] = []
-    else:
-        catalog["knowledge_bases"][0]["name"] = ""
-    errors = tool_catalog.rule_catalog_errors(
-        _evaluators(_allowlist({REPORT_TOOL, *SUPPORT_TOOLS})), content, catalog,
-    )
-    assert len(errors) == 1
-    assert "evaluators.boundary.rules.allow" in errors[0]
-    assert "catalog unavailable" in errors[0] and "refresh" in errors[0]
-    missing_key = "knowledge_base:KB-EARNINGS" if missing.startswith("kb") else "mcp:reports"
-    assert missing_key in errors[0]
-
-
-@pytest.mark.parametrize("unknown", [
-    "made_up", "read_report", "Reports_read_report", "mcp:reports", GATEWAY_TOOL,
-])
-def test_rule_catalog_rejects_unknown_and_unselected_exact_names(catalog, unknown):
-    errors = tool_catalog.rule_catalog_errors(
-        _evaluators(_allowlist({REPORT_TOOL, unknown, *SUPPORT_TOOLS})),
-        _mounted_content(), catalog,
-    )
-    assert len(errors) == 1
-    assert "evaluators.boundary.rules.allow" in errors[0]
-    assert "not in the selected runtime catalog" in errors[0] and unknown in errors[0]
-
-
-@pytest.mark.parametrize("omitted", sorted(SUPPORT_TOOLS))
-def test_rule_catalog_requires_every_mounted_support_tool(catalog, omitted):
-    errors = tool_catalog.rule_catalog_errors(
-        _evaluators(_allowlist({REPORT_TOOL, *SUPPORT_TOOLS} - {omitted})),
-        _mounted_content(), catalog,
-    )
-    assert len(errors) == 1
-    assert "omits mounted" in errors[0] and omitted in errors[0]
-
-
-def test_rule_catalog_accepts_selected_exact_names_without_expanding_business_allowlist(catalog):
-    content = _mounted_content()
-    content["tools"].append("gateway:finance")
-    # The selected MCP's send_email remains disallowed; support calls must remain usable.
-    evaluators = _evaluators(_allowlist({REPORT_TOOL, GATEWAY_TOOL, *SUPPORT_TOOLS}))
-    before = deepcopy((content, catalog, evaluators))
-    assert tool_catalog.rule_catalog_errors(evaluators, content, catalog) == []
-    assert (content, catalog, evaluators) == before
-
-
-@pytest.mark.parametrize("check", [
-    {"id": "required", "type": "tool_count", "tool": GATEWAY_TOOL, "min": 1},
-    {"id": "required", "type": "tool_sequence", "tools": [GATEWAY_TOOL], "mode": "subsequence"},
-])
-def test_required_mcp_calls_must_belong_to_selected_attachments(catalog, check):
-    content = _mounted_content()
-    rules = _evaluators(check)
-    before = deepcopy(rules)
-    errors = tool_catalog.rule_catalog_errors(rules, content, catalog)
-    assert any(GATEWAY_TOOL in err and "selected runtime catalog" in err for err in errors)
-    content["tools"].append("gateway:finance")
-    assert tool_catalog.rule_catalog_errors(rules, content, catalog) == []
-    content["tools"].remove("gateway:finance")
-    assert tool_catalog.rule_catalog_errors(rules, content, catalog)
-    assert rules == before
-
-
-def test_named_mcp_write_bans_do_not_require_attaching_the_forbidden_tool(catalog):
-    rules = _evaluators(
-        {"id": "no_write", "type": "tool_count", "tool": GATEWAY_TOOL, "max": 0},
-        {"id": "forbidden", "type": "tool_set", "forbidden": [GATEWAY_TOOL]},
-    )
-    assert tool_catalog.rule_catalog_errors(rules, _mounted_content(), catalog) == []
-
-
-def test_rule_catalog_checks_every_positive_allowlist(catalog):
-    evaluators = _evaluators(
-        _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
-        {**_allowlist({REPORT_TOOL}), "id": "second"},
-    )
-    errors = tool_catalog.rule_catalog_errors(evaluators, _mounted_content(), catalog)
-    assert len(errors) == 1 and "evaluators.boundary.rules.second" in errors[0]
+@pytest.mark.parametrize("native", ["shell", "file_operations"])
+def test_native_selection_rejects_duplicate_entries(native):
+    parsed, errors = proposals.parse_content({
+        "name": "selection-test", "system_prompt": "Answer safely.",
+        "native_tools": [native, native],
+    })
+    assert parsed is None and "native_tools must not repeat an entry" in errors
 
 
 @pytest.mark.parametrize("native", ["shell", "file_operations"])
-def test_native_harness_tools_can_be_explicitly_allowed_but_are_never_added(catalog, native):
-    narrow = _evaluators(_allowlist({REPORT_TOOL, *SUPPORT_TOOLS}))
-    before = deepcopy(narrow)
-    assert tool_catalog.rule_catalog_errors(narrow, _mounted_content(), catalog) == []
-    assert narrow == before and native not in narrow[0].rules.checks[0].allowed
-    expanded = _evaluators(_allowlist({REPORT_TOOL, native, *SUPPORT_TOOLS}))
-    assert tool_catalog.rule_catalog_errors(expanded, _mounted_content(), catalog)
-    selected = {**_mounted_content(), "native_tools": [native]}
-    assert tool_catalog.rule_catalog_errors(expanded, selected, catalog) == []
-    assert native not in tool_catalog.support_tool_names(_mounted_content(), catalog)
-
-
-@pytest.mark.parametrize("native", ["shell", "file_operations"])
-def test_native_permission_is_bound_to_proposal_and_cannot_be_granted_by_evaluator(native):
-    rule = {"id": "native", "type": "tool_set", "allowed": [native]}
-    raw = _source(rule, {})
-    raw["native_tools"] = []  # an explicit opt-out; omitted means both (the default)
-    for parsed, errors in (proposals.parse_content(raw), _validate_plan(raw)):
-        assert parsed is None
-        assert any("not selected for this Harness runtime" in e for e in errors)
-    raw["native_tools"] = [native]
+def test_native_tools_are_tracked_in_bindings_and_the_revision_hash(native):
+    """Trimmed from the pre-CN
+    ``test_native_permission_is_bound_to_proposal_and_cannot_be_granted_by_evaluator``
+    (lost its only coverage when evaluation_plan/_validate_plan were deleted in Task 3):
+    asserts only the surviving ``proposals.*`` half — native_tools selection flows into
+    ``resource_bindings``, is visible to ``binding_diff``, and changes the
+    ``revision_hash``. The deleted ``_validate_plan`` arm (evaluator-side enforcement)
+    does not come back; ``evaluation_plan`` is no longer a valid proposal member."""
+    raw = {
+        "name": "earnings-assistant", "system_prompt": "Read and explain published reports.",
+        "tools": [], "skills": [], "knowledge_bases": [], "native_tools": [native],
+    }
     parsed, errors = proposals.parse_content(raw)
     assert parsed is not None and errors == []
     spec = proposals.to_agent_spec(parsed, {})
@@ -483,32 +356,6 @@ def test_native_permission_is_bound_to_proposal_and_cannot_be_granted_by_evaluat
     )
 
 
-@pytest.mark.parametrize("native", ["shell", "file_operations"])
-def test_native_selection_rejects_duplicate_entries(native):
-    parsed, errors = proposals.parse_content({
-        "name": "selection-test", "system_prompt": "Answer safely.",
-        "native_tools": [native, native],
-    })
-    assert parsed is None and "native_tools must not repeat an entry" in errors
-
-
-@pytest.mark.parametrize("patterns", [["*"], ["@builtin"], ["@builtin/shell"], ["shell"]])
-def test_explicit_legacy_runtime_override_is_respected_in_rule_validation(patterns):
-    checks = plans.CodeRules(checks=[{"id": "native", "type": "tool_set",
-                                      "allowed": ["shell"]}]).checks
-    assert plans.code_rule_capability_conflict_errors(
-        checks, {"method": "harness", "allowed_tools": patterns}, evaluator_key="native",
-    ) == []
-
-
-@pytest.mark.parametrize("rule", [
-    {"id": "no-write", "type": "tool_count", "tool": WRITE_TOOL, "max": 0},
-    {"id": "no-write", "type": "tool_set", "forbidden": [WRITE_TOOL]},
-])
-def test_named_write_bans_need_no_discovery_to_remain_valid(rule):
-    assert tool_catalog.rule_catalog_errors(_evaluators(rule), _mounted_content(), {}) == []
-
-
 def test_catalog_section_discloses_exact_names_unavailability_and_support(catalog):
     catalog["tools"][0]["runtime_tools"] = None
     catalog["tools"].append({
@@ -520,362 +367,50 @@ def test_catalog_section_discloses_exact_names_unavailability_and_support(catalo
     assert "`gateway:finance`" in text and f"`{GATEWAY_TOOL}`" in text
     assert "Runtime callable names for `mcp:reports` are unavailable" in text
     assert "do not invent a literal tool allowlist" in text
-    assert "`skills`" in text and f"`{RETRIEVE_TOOL}`" in text
-    assert "agentic-<agent-name>___AgenticRetrieveStream" in text
+    assert "`skills`" in text and f"`{RETRIEVE_TOOL}`" not in text
     assert "mcp:hidden" not in text and "hidden_private" not in text
     assert catalog == before
 
 
-@pytest.mark.parametrize("selector", ["mcp:reports", "gateway:finance", "builtin:browser"])
-@pytest.mark.parametrize("field,rule", [
-    ("tool", {"id": "literal", "type": "tool_count", "max": 0}),
-    ("tools", {"id": "literal", "type": "tool_sequence", "mode": "exact"}),
-    ("allowed", {"id": "literal", "type": "tool_set"}),
-    ("forbidden", {"id": "literal", "type": "tool_set"}),
-])
-def test_proposal_and_plan_reject_attachment_selectors_in_literal_fields(selector, field, rule):
-    source = _source({**rule, field: selector if field == "tool" else [selector]}, {})
-    before = deepcopy(source)
-    for parsed, errors in (proposals.parse_content(source), _validate_plan(source)):
-        assert parsed is None
-        message = "; ".join(errors)
-        assert "evaluators.readonly.rules.literal" in message
-        assert selector in message and "attachment selectors" in message
-        assert "exact callable names" in message
-    assert source == before
+
+# ─── N17-obs375: trajectory names are the agent's runtime names ─────────────────────
+def _gateway_content(method=None):
+    return {"name": "fin", "tools": ["gateway:finance"], **({"method": method} if method else {})}
 
 
-@pytest.mark.parametrize("capabilities,missing", [
-    ({"skills": ["earnings-analysis"]}, "skills"),
-    ({"knowledge_bases": ["KB-EARNINGS"]}, AGENTIC_TOOL),
-    ({"skills": ["earnings-analysis"], "knowledge_bases": ["KB-EARNINGS"]}, AGENTIC_TOOL),
-])
-def test_proposal_and_plan_reject_global_allowlists_omitting_support(capabilities, missing):
-    source = _source(_allowlist({REPORT_TOOL}), capabilities)
-    for parsed, errors in (proposals.parse_content(source), _validate_plan(source)):
-        assert parsed is None
-        message = "; ".join(errors)
-        assert "evaluators.readonly.rules.allow" in message
-        assert "omits mounted" in message and missing in message
+def _scenario(*names):
+    from app.assistant.evaluation_plan import Scenario
+
+    return Scenario.model_validate({"scenario_id": "s1", "golden_test_id": "GT-1",
+                                    "turns": [{"input": "q"}],
+                                    "expected_trajectory": list(names)})
 
 
-@pytest.mark.parametrize("rule", [
-    _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
-    {"id": "no-write", "type": "tool_count", "tool": WRITE_TOOL, "max": 0},
-    {"id": "no-write", "type": "tool_set", "forbidden": [WRITE_TOOL]},
-    {"id": "read", "type": "tool_sequence", "tools": [REPORT_TOOL], "mode": "exact"},
-])
-def test_proposal_and_plan_keep_exact_names_and_named_write_bans_valid(rule):
-    source = _source(rule, _mounted_content())
-    before = deepcopy(source)
-    for parsed, errors in (proposals.parse_content(source), _validate_plan(source)):
-        assert parsed is not None, errors
-        assert errors == []
-    assert source == before
+def test_the_gateway_alias_is_the_harness_one():
+    from app.deployer.harness_local import GATEWAY_ALIAS
+
+    assert tool_catalog.GATEWAY_ALIAS == GATEWAY_ALIAS
 
 
-@pytest.mark.parametrize("rule", [
-    _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
-    {"id": "allow", "type": "tool_count", "tool": REPORT_TOOL, "min": 1},
-    {"id": "allow", "type": "tool_sequence", "tools": [REPORT_TOOL], "mode": "subsequence"},
-])
-def test_store_plan_route_uses_saved_catalog_and_preserves_review_history(
-    app_ready, catalog, monkeypatch, rule,  # noqa: F811 -- shared fixture
-):
-    source = _source(rule, _mounted_content())
-    cid, digest = _conversation("local-operator", proposal=source)
-    before = _snapshot_proposal(cid)
-    raw = plans.draft_plan(source, revision=1, content_hash=digest, agent_name=source["name"])
-    # Every plan already passes pure validation; only the saved catalog can reject it.
-    assert plans.validate_plan(raw, source, revision=1, content_hash=digest)[1] == []
-    starter = Mock(side_effect=AssertionError("review must not materialize assets"))
-    monkeypatch.setattr(assets, "start_async", starter)
-    with TestClient(app_ready) as client:
-        response = client.put(_url(cid), json={"content": raw})
-        assert response.status_code == 200, response.text
-        unavailable = response.json()["plan"]
-        assert unavailable["status"] == "invalid"
-        assert any("catalog unavailable" in e for e in unavailable["validation_errors"])
-
-        with SessionLocal() as db:
-            db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
-            db.commit()
-        invalid = deepcopy(raw)
-        check = invalid["evaluators"][0]["rules"]["checks"][0]
-        if check["type"] == "tool_count":
-            check["tool"] = GATEWAY_TOOL
-        else:
-            check["allowed" if check["type"] == "tool_set" else "tools"].append(GATEWAY_TOOL)
-        response = client.put(_url(cid), json={"content": invalid})
-        assert response.status_code == 200, response.text
-        unselected = response.json()["plan"]
-        assert unselected["status"] == "invalid"
-        assert any(GATEWAY_TOOL in e and "selected runtime catalog" in e
-                   for e in unselected["validation_errors"])
-
-        response = client.put(_url(cid), json={"content": raw})
-        assert response.status_code == 200, response.text
-        valid = response.json()["plan"]
-        assert valid["status"] == "draft" and valid["validation_errors"] == []
-        assert (unavailable["revision"], unselected["revision"], valid["revision"]) == (1, 2, 3)
-        with SessionLocal() as db:
-            rows = db.query(AssistantEvaluationPlan).filter_by(conversation_id=cid).order_by(
-                AssistantEvaluationPlan.revision,
-            ).all()
-            assert [row.status for row in rows] == ["superseded", "superseded", "draft"]
-            assert rows[0].content_hash == unavailable["content_hash"]
-            assert rows[1].content_hash == unselected["content_hash"]
-            assert rows[0].validation_errors == unavailable["validation_errors"]
-            assert rows[1].validation_errors == unselected["validation_errors"]
-            assert db.query(EvaluationAssetOperation).count() == 0
-    starter.assert_not_called()
-    assert _snapshot_proposal(cid) == before
+def test_a_harness_trajectory_resolves_declared_gateway_names_to_runtime_names(catalog):
+    content = _gateway_content()
+    assert tool_catalog.resolve_trajectory([GATEWAY_TOOL], content, catalog) == [
+        f"launchpad_gw_{GATEWAY_TOOL}"]
+    # the runtime name itself is accepted and kept
+    runtime = f"launchpad_gw_{GATEWAY_TOOL}"
+    assert tool_catalog.resolve_trajectory([runtime], content, catalog) == [runtime]
+    for names in ([GATEWAY_TOOL], [runtime]):
+        assert tool_catalog.rule_catalog_errors([], content, catalog,
+                                                scenarios=[_scenario(*names)]) == []
 
 
-@pytest.mark.parametrize("rule", [
-    _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
-    {"id": "allow", "type": "tool_count", "tool": REPORT_TOOL, "min": 1},
-    {"id": "allow", "type": "tool_sequence", "tools": [REPORT_TOOL], "mode": "subsequence"},
-])
-@pytest.mark.parametrize("change,expected_error", [
-    ("changed-names", "not in the selected runtime catalog"),
-    ("unavailable-names", "catalog unavailable"),
-    ("missing-entry", "catalog unavailable"),
-    ("missing-catalog", "catalog unavailable"),
-])
-def test_materialize_rechecks_catalog_for_saved_draft_before_any_effect(
-    app_ready, catalog, monkeypatch, change, expected_error, rule,  # noqa: F811 -- shared fixture
-):
-    source = _source(rule, _mounted_content())
-    cid, digest = _conversation("local-operator", proposal=source)
-    proposal_before = _snapshot_proposal(cid)
-    with SessionLocal() as db:
-        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
-        db.commit()
-    raw = plans.draft_plan(source, revision=1, content_hash=digest, agent_name=source["name"])
-    # Without the catalog guard, approval would read IAM to verify this grant target.
-    raw["grant_workspace_execution_role"] = True
-    cloud_access = Mock(side_effect=AssertionError("approval must stop before AWS/IAM reads"))
-    starter = Mock(side_effect=AssertionError("invalid approval must not start a worker"))
-    monkeypatch.setattr(aws_clients, "client", cloud_access)
-    monkeypatch.setattr(aws_clients, "get_session", cloud_access)
-    monkeypatch.setattr(assets, "start_async", starter)
-
-    with TestClient(app_ready) as client:
-        response = client.put(_url(cid), json={"content": raw})
-        assert response.status_code == 200, response.text
-        previous = response.json()["plan"]
-        assert previous["status"] == "draft" and previous["validation_errors"] == []
-
-        raw["dataset"]["description"] = "Reviewed exact runtime tool names."
-        response = client.put(_url(cid), json={"content": raw})
-        assert response.status_code == 200, response.text
-        saved = response.json()
-        draft = saved["plan"]
-        assert draft["status"] == "draft" and draft["validation_errors"] == []
-        assert draft["revision"] == 2 and draft["content_hash"] != previous["content_hash"]
-        # Snapshot persisted rows through a fresh request; SQLite strips timezone
-        # metadata from the timestamp returned on the initial in-memory save.
-        response = client.get(_url(cid))
-        assert response.status_code == 200, response.text
-        history = response.json()["plans"]
-        draft = next(p for p in history if p["revision"] == 2)
-        assert draft["content_hash"] == saved["plan"]["content_hash"]
-        assert next(p for p in history if p["revision"] == 1)["status"] == "superseded"
-
-        changed_catalog = deepcopy(catalog)
-        if change == "changed-names":
-            changed_catalog["tools"][0]["runtime_tools"] = [WRITE_TOOL]
-            # Being advertised by an unselected attachment cannot keep the rule valid.
-            changed_catalog["tools"][1]["runtime_tools"].append(REPORT_TOOL)
-        elif change == "unavailable-names":
-            changed_catalog["tools"][0]["runtime_tools"] = None
-        elif change == "missing-entry":
-            changed_catalog["tools"] = changed_catalog["tools"][1:]
-        else:
-            changed_catalog = {}
-        with SessionLocal() as db:
-            db.get(AssistantConversation, cid).catalog = changed_catalog
-            db.commit()
-
-        response = client.post(_url(cid, "/materialize"), json={
-            "plan_revision": draft["revision"], "plan_hash": draft["content_hash"],
-            "acknowledge_disclosure": True,
-        })
-        assert response.status_code == 409, response.text
-        error = response.json()
-        assert error["code"] == "assistant.evaluation_plan_invalid"
-        errors = "; ".join(error["detail"]["errors"])
-        assert "evaluators.readonly.rules.allow" in errors and expected_error in errors
-        assert (REPORT_TOOL if change == "changed-names" else "mcp:reports") in errors
-
-        response = client.get(_url(cid))
-        assert response.status_code == 200, response.text
-        persisted = response.json()["plans"]
-        assert next(p for p in persisted if p["revision"] == draft["revision"]) == draft
-        assert persisted == history
-        with SessionLocal() as db:
-            assert db.query(EvaluationAssetOperation).count() == 0
-            assert db.get(AssistantConversation, cid).catalog == changed_catalog
-
-    cloud_access.assert_not_called()
-    starter.assert_not_called()
-    assert _snapshot_proposal(cid) == proposal_before
+def test_a_non_harness_agent_keeps_the_declared_gateway_names(catalog):
+    content = _gateway_content("zip_runtime")
+    assert tool_catalog.resolve_trajectory([GATEWAY_TOOL], content, catalog) == [GATEWAY_TOOL]
 
 
-def _trajectory_source(kind, trajectory):
-    source = _source(
-        {"id": "trajectory", "type": "reference_trajectory", "mode": "exact"},
-        _mounted_content(),
-    )
-    if kind == "judge":
-        source["evaluation_plan"]["evaluators"] = [{
-            "kind": "judge", "key": "trajectory", "title": "Expected calls",
-            "name": "expected_calls", "level": "SESSION",
-            "instructions": "Compare {actual_tool_trajectory} to {expected_tool_trajectory}.",
-        }]
-    elif kind == "builtin":
-        source["evaluation_plan"]["evaluators"] = [{
-            "kind": "existing", "key": "trajectory", "title": "Expected calls",
-            "evaluator_id": "Builtin.TrajectoryExactOrderMatch",
-        }]
-    source["evaluation_plan"]["scenarios"][0]["expected_trajectory"] = list(trajectory)
-    return source
-
-
-@pytest.mark.parametrize("kind", ["code", "judge", "builtin"])
-@pytest.mark.parametrize("unknown", [
-    GATEWAY_TOOL, REPORT_TOOL, "read_report", "made_up", "shell", "file_operations",
-    "mcp:reports", "gateway:finance", "builtin:shell",
-])
-def test_plan_routes_reject_unselected_trajectory_names_and_keep_history(
-    app_ready, catalog, kind, unknown,  # noqa: F811 -- shared fixture
-):
-    source = _trajectory_source(kind, [unknown])
-    if unknown == REPORT_TOOL:
-        source["tools"] = []  # the previously expected MCP was removed from the proposal
-    cid, digest = _conversation("local-operator", proposal=source)
-    before = _snapshot_proposal(cid)
-    with SessionLocal() as db:
-        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
-        db.commit()
-    with TestClient(app_ready) as client:
-        response = client.post(_url(cid, "/prepare"), json={"revision": 1})
-        assert response.status_code == 201, response.text
-        invalid = response.json()["plan"]
-        assert invalid["status"] == "invalid"
-        assert any("scenarios.facts.expected_trajectory" in err and unknown in err
-                   for err in invalid["validation_errors"])
-        corrected = deepcopy(invalid["content"])
-        corrected["scenarios"][0]["expected_trajectory"] = (
-            [REPORT_TOOL] if source["tools"] else ["skills"]
-        )
-        response = client.put(_url(cid), json={"content": corrected})
-        assert response.status_code == 200, response.text
-        valid = response.json()["plan"]
-        assert valid["status"] == "draft" and valid["validation_errors"] == []
-        assert valid["source_revision"] == 1 and valid["source_content_hash"] == digest
-        assert valid["revision"] == invalid["revision"] + 1
-        assert valid["content"]["evaluators"] == invalid["content"]["evaluators"]
-    with SessionLocal() as db:
-        old = db.query(AssistantEvaluationPlan).filter_by(
-            conversation_id=cid, revision=invalid["revision"],
-        ).one()
-        assert old.content == invalid["content"]
-        assert old.content_hash == invalid["content_hash"]
-        assert old.validation_errors == invalid["validation_errors"]
-        assert db.query(EvaluationAssetOperation).count() == 0
-    assert _snapshot_proposal(cid) == before
-
-
-@pytest.mark.parametrize("kind", ["code", "judge", "builtin"])
-def test_plan_trajectory_accepts_selected_native_mcp_and_support_names_without_rewriting(
-    app_ready, catalog, kind,  # noqa: F811 -- shared fixture
-):
-    trajectory = [REPORT_TOOL, GATEWAY_TOOL, "skills", RETRIEVE_TOOL, AGENTIC_TOOL,
-                  REPORT_TOOL, "shell"]
-    source = _trajectory_source(kind, trajectory)
-    source["tools"].append("gateway:finance")
-    source["native_tools"] = ["shell"]
-    cid, _ = _conversation("local-operator", proposal=source)
-    with SessionLocal() as db:
-        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
-        db.commit()
-    with TestClient(app_ready) as client:
-        response = client.post(_url(cid, "/prepare"), json={"revision": 1})
-        assert response.status_code == 201, response.text
-        plan = response.json()["plan"]
-        assert plan["status"] == "draft", plan["validation_errors"]
-        assert plan["content"]["scenarios"][0]["expected_trajectory"] == trajectory
-
-
-def test_empty_trajectories_and_blocked_golden_tools_need_no_catalog(
-    app_ready,  # noqa: F811 -- shared fixture
-):
-    source = _source(
-        {"id": "no-write", "type": "tool_count", "tool": WRITE_TOOL, "max": 0},
-        _mounted_content(),
-    )
-    source["golden_tests"].append({
-        "id": "blocked", "input": "Do unavailable work", "expected_tools": ["mcp:removed"],
-    })
-    source["evaluation_plan"]["blocked_golden_tests"] = [{
-        "golden_test_id": "blocked", "reason": "Required integration is unavailable.",
-    }]
-    cid, _ = _conversation("local-operator", proposal=source)
-    with TestClient(app_ready) as client:
-        response = client.post(_url(cid, "/prepare"), json={"revision": 1})
-        assert response.status_code == 201, response.text
-        plan = response.json()["plan"]
-        assert plan["status"] == "draft", plan["validation_errors"]
-        assert [s["expected_trajectory"] for s in plan["content"]["scenarios"]] == [[]]
-        assert plan["content"]["blocked_golden_tests"] == (
-            source["evaluation_plan"]["blocked_golden_tests"]
-        )
-
-
-@pytest.mark.parametrize("kind", ["code", "judge", "builtin"])
-@pytest.mark.parametrize("change", ["removed-tool", "missing-catalog", "missing-entry"])
-def test_materialize_rechecks_trajectory_catalog_without_changing_approved_history(
-    app_ready, catalog, monkeypatch, kind, change,  # noqa: F811 -- shared fixture
-):
-    source = _trajectory_source(kind, [REPORT_TOOL])
-    cid, digest = _conversation("local-operator", proposal=source)
-    before = _snapshot_proposal(cid)
-    with SessionLocal() as db:
-        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
-        db.commit()
-    starter = Mock(side_effect=AssertionError("invalid trajectory must not start asset work"))
-    monkeypatch.setattr(assets, "start_async", starter)
-    raw = plans.draft_plan(source, revision=1, content_hash=digest, agent_name=source["name"])
-    raw["grant_workspace_execution_role"] = True
-    with TestClient(app_ready) as client:
-        response = client.put(_url(cid), json={"content": raw})
-        assert response.status_code == 200, response.text
-        draft = response.json()["plan"]
-        assert draft["status"] == "draft", draft["validation_errors"]
-        history = client.get(_url(cid)).json()["plans"]
-        changed = deepcopy(catalog)
-        if change == "removed-tool":
-            changed["tools"][0]["runtime_tools"] = [WRITE_TOOL]
-            changed["tools"][1]["runtime_tools"].append(REPORT_TOOL)
-        elif change == "missing-catalog":
-            changed["tools"][0]["runtime_tools"] = None
-        else:
-            changed["tools"] = changed["tools"][1:]
-        with SessionLocal() as db:
-            db.get(AssistantConversation, cid).catalog = changed
-            db.commit()
-        response = client.post(_url(cid, "/materialize"), json={
-            "plan_revision": draft["revision"], "plan_hash": draft["content_hash"],
-            "acknowledge_disclosure": True,
-        })
-        assert response.status_code == 409, response.text
-        assert response.json()["code"] == "assistant.evaluation_plan_invalid"
-        assert any("scenarios.facts.expected_trajectory" in err
-                   for err in response.json()["detail"]["errors"])
-        assert client.get(_url(cid)).json()["plans"] == history
-    with SessionLocal() as db:
-        assert db.query(EvaluationAssetOperation).count() == 0
-    starter.assert_not_called()
-    assert _snapshot_proposal(cid) == before
+def test_an_unknown_trajectory_name_is_refused_with_the_valid_names(catalog):
+    errors = tool_catalog.rule_catalog_errors([], _gateway_content(), catalog,
+                                              scenarios=[_scenario("finance___Nope")])
+    assert len(errors) == 1 and "finance___Nope" in errors[0]
+    assert f"launchpad_gw_{GATEWAY_TOOL}" in errors[0] and "valid names" in errors[0]

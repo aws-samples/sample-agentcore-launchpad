@@ -42,7 +42,7 @@ export const MAX_FILTERS = 5;
 const FILTER_KEY_RE = /^[a-zA-Z0-9._-]{1,256}$/;
 const SAMPLING_DEFAULT: Record<OnlineEvalMode, string> = { scores: "10", insights: "100" };
 /** Agents an online config can watch (an imported runtime has no platform spans). */
-const ELIGIBLE_METHODS = new Set<AgentInfo["method"]>(["zip_runtime", "studio", "container", "harness", "byoc"]);
+const ELIGIBLE_METHODS = new Set<AgentInfo["method"]>(["zip_runtime", "studio", "harness", "byoc"]);
 
 export const eligibleAgent = (a: AgentInfo) => a.status === "active" && ELIGIBLE_METHODS.has(a.method);
 export const isTransient = (row: OnlineEvalConfigRow) => TRANSIENT.has(row.status ?? "");
@@ -51,6 +51,12 @@ export const modeOf = (row: OnlineEvalConfigRow): OnlineEvalMode =>
 /** Only agent-owned configs are edited here; experiment-owned ones belong to their experiment. */
 export const isEditable = (row: OnlineEvalConfigRow) => row.owner === "agent";
 export const canToggle = (row: OnlineEvalConfigRow) => row.owner !== "experiment";
+/** N17-obs445: an ENABLED arm of a finished canary / experiment may be paused (server: the
+ *  owning run is terminal; creator-or-admin against that run's creator — `pauseOwner`). */
+export const canPauseArm = (row: OnlineEvalConfigRow) =>
+  row.owner === "experiment" && !!row.owner_run?.terminal && row.execution_status === "ENABLED";
+/** The stamp the creator-or-admin rule reads for a row's pause: an arm's owning run. */
+export const pauseOwner = (row: OnlineEvalConfigRow) => (row.owner === "experiment" ? row.owner_run : row);
 
 export function statusTone(status: string | null): TagTone {
   if (status === "ACTIVE") return "green";
@@ -64,8 +70,11 @@ export const OWNER_TONE: Record<OnlineEvalConfigRow["owner"], TagTone> = {
   external: "orange",
 };
 
+/** N17-obs441: an online config's display name — its 任务描述 (the form says it is shown as
+ *  the task name, and the task list always showed it so), else the generated name
+ *  (`oe_<agent>_<hex>`), else the id. The generated name stays visible as tooltip / sub-line. */
 export function configName(row: OnlineEvalConfigRow): string {
-  return row.name ?? row.config_id;
+  return row.description?.trim() || row.name || row.config_id;
 }
 
 export function agentLabel(row: OnlineEvalConfigRow): string {

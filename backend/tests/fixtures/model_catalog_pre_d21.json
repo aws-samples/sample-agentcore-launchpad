@@ -1,0 +1,489 @@
+{
+  "_source": "backend/app/schemas/agent.py @ cn/integration 58e44a50 (pre-D21), executed verbatim with DEFAULT_SILICONFLOW_MODELS and no SiliconFlow key in the environment; captured 2026-10-14 by tests/test_model_registry_parity.py's generator",
+  "PROVIDERS": {
+    "bedrock": {
+      "kind": "bedrock",
+      "label": "Global Bedrock",
+      "base_url": null,
+      "credential_provider": "launchpad-global-bedrock",
+      "ssm_parameter": "launchpad-global-bedrock-api-key",
+      "api_key_env": "LAUNCHPAD_GLOBAL_BEDROCK_API_KEY",
+      "required": true,
+      "id_prefix": ""
+    },
+    "siliconflow": {
+      "kind": "openai_compatible",
+      "label": "SiliconFlow",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "credential_provider": "launchpad-siliconflow",
+      "ssm_parameter": "launchpad-siliconflow-api-key",
+      "api_key_env": "LAUNCHPAD_SILICONFLOW_API_KEY",
+      "required": false,
+      "id_prefix": "siliconflow."
+    }
+  },
+  "MODEL_CATALOG": {
+    "global.zai.glm-5.3": {
+      "model_id": "global.zai.glm-5.3",
+      "provider": "bedrock",
+      "kind": "bedrock",
+      "label": "GLM 5.3 (Z.AI · global)",
+      "api_model_name": "global.zai.glm-5.3",
+      "base_url": null,
+      "credential_provider": "launchpad-global-bedrock",
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_max_tokens": 16384,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    "global.moonshotai.kimi-k3": {
+      "model_id": "global.moonshotai.kimi-k3",
+      "provider": "bedrock",
+      "kind": "bedrock",
+      "label": "Kimi K3 (Moonshot AI · global)",
+      "api_model_name": "global.moonshotai.kimi-k3",
+      "base_url": null,
+      "credential_provider": "launchpad-global-bedrock",
+      "vision": true,
+      "temperature": false,
+      "tools": true,
+      "streaming": true,
+      "default_max_tokens": 16384,
+      "default_judge_max_tokens": 2048,
+      "max_output_tokens": null
+    },
+    "siliconflow.zai-org/GLM-5.3": {
+      "model_id": "siliconflow.zai-org/GLM-5.3",
+      "provider": "siliconflow",
+      "kind": "openai_compatible",
+      "label": "GLM-5.3 (SiliconFlow)",
+      "api_model_name": "zai-org/GLM-5.3",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "credential_provider": "launchpad-siliconflow",
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": {
+      "model_id": "siliconflow.deepseek-ai/DeepSeek-V4-Pro",
+      "provider": "siliconflow",
+      "kind": "openai_compatible",
+      "label": "DeepSeek-V4-Pro (SiliconFlow)",
+      "api_model_name": "deepseek-ai/DeepSeek-V4-Pro",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "credential_provider": "launchpad-siliconflow",
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    "siliconflow.Qwen/Qwen3.8-27B": {
+      "model_id": "siliconflow.Qwen/Qwen3.8-27B",
+      "provider": "siliconflow",
+      "kind": "openai_compatible",
+      "label": "Qwen3.8-27B (SiliconFlow)",
+      "api_model_name": "Qwen/Qwen3.8-27B",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "credential_provider": "launchpad-siliconflow",
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": {
+      "model_id": "siliconflow.Pro/moonshotai/Kimi-K2.6",
+      "provider": "siliconflow",
+      "kind": "openai_compatible",
+      "label": "Kimi-K2.6 (SiliconFlow)",
+      "api_model_name": "Pro/moonshotai/Kimi-K2.6",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "credential_provider": "launchpad-siliconflow",
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    }
+  },
+  "MODEL_CAPABILITIES": {
+    "global.zai.glm-5.3": {
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_judge_max_tokens": 4096
+    },
+    "global.moonshotai.kimi-k3": {
+      "vision": true,
+      "temperature": false,
+      "tools": true,
+      "streaming": true,
+      "default_judge_max_tokens": 2048
+    },
+    "siliconflow.zai-org/GLM-5.3": {
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_judge_max_tokens": 4096
+    },
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": {
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_judge_max_tokens": 4096
+    },
+    "siliconflow.Qwen/Qwen3.8-27B": {
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_judge_max_tokens": 4096
+    },
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": {
+      "vision": false,
+      "temperature": true,
+      "tools": true,
+      "streaming": true,
+      "default_judge_max_tokens": 4096
+    }
+  },
+  "MODEL_DEFAULT_MAX_TOKENS": {
+    "global.zai.glm-5.3": 16384,
+    "global.moonshotai.kimi-k3": 16384,
+    "siliconflow.zai-org/GLM-5.3": 8192,
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": 8192,
+    "siliconflow.Qwen/Qwen3.8-27B": 8192,
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": 8192
+  },
+  "ALLOWED_MODEL_IDS": [
+    "global.zai.glm-5.3",
+    "global.moonshotai.kimi-k3",
+    "siliconflow.zai-org/GLM-5.3",
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro",
+    "siliconflow.Qwen/Qwen3.8-27B",
+    "siliconflow.Pro/moonshotai/Kimi-K2.6"
+  ],
+  "model_provider_table": {
+    "global.zai.glm-5.3": {
+      "kind": "bedrock",
+      "base_url": null,
+      "api_model_name": "global.zai.glm-5.3",
+      "credential_provider": "launchpad-global-bedrock",
+      "streaming": true
+    },
+    "global.moonshotai.kimi-k3": {
+      "kind": "bedrock",
+      "base_url": null,
+      "api_model_name": "global.moonshotai.kimi-k3",
+      "credential_provider": "launchpad-global-bedrock",
+      "streaming": true
+    },
+    "siliconflow.zai-org/GLM-5.3": {
+      "kind": "openai_compatible",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_model_name": "zai-org/GLM-5.3",
+      "credential_provider": "launchpad-siliconflow",
+      "streaming": true
+    },
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": {
+      "kind": "openai_compatible",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_model_name": "deepseek-ai/DeepSeek-V4-Pro",
+      "credential_provider": "launchpad-siliconflow",
+      "streaming": true
+    },
+    "siliconflow.Qwen/Qwen3.8-27B": {
+      "kind": "openai_compatible",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_model_name": "Qwen/Qwen3.8-27B",
+      "credential_provider": "launchpad-siliconflow",
+      "streaming": true
+    },
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": {
+      "kind": "openai_compatible",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_model_name": "Pro/moonshotai/Kimi-K2.6",
+      "credential_provider": "launchpad-siliconflow",
+      "streaming": true
+    }
+  },
+  "judge_budget_defaults": {
+    "global.zai.glm-5.3": 4096,
+    "global.moonshotai.kimi-k3": 2048,
+    "siliconflow.zai-org/GLM-5.3": 4096,
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": 4096,
+    "siliconflow.Qwen/Qwen3.8-27B": 4096,
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": 4096
+  },
+  "model_catalog_entries": [
+    {
+      "model_id": "global.zai.glm-5.3",
+      "default": true,
+      "label": "GLM 5.3 (Z.AI · global)",
+      "available": true,
+      "provider": "bedrock",
+      "provider_kind": "bedrock",
+      "provider_label": "Global Bedrock",
+      "api_model_name": "global.zai.glm-5.3",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "temperature": true,
+      "default_max_tokens": 16384,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    {
+      "model_id": "global.moonshotai.kimi-k3",
+      "default": false,
+      "label": "Kimi K3 (Moonshot AI · global)",
+      "available": true,
+      "provider": "bedrock",
+      "provider_kind": "bedrock",
+      "provider_label": "Global Bedrock",
+      "api_model_name": "global.moonshotai.kimi-k3",
+      "tools": true,
+      "streaming": true,
+      "vision": true,
+      "temperature": false,
+      "default_max_tokens": 16384,
+      "default_judge_max_tokens": 2048,
+      "max_output_tokens": null
+    },
+    {
+      "model_id": "siliconflow.zai-org/GLM-5.3",
+      "default": false,
+      "label": "GLM-5.3 (SiliconFlow)",
+      "available": false,
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "zai-org/GLM-5.3",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "temperature": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    {
+      "model_id": "siliconflow.deepseek-ai/DeepSeek-V4-Pro",
+      "default": false,
+      "label": "DeepSeek-V4-Pro (SiliconFlow)",
+      "available": false,
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "deepseek-ai/DeepSeek-V4-Pro",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "temperature": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    {
+      "model_id": "siliconflow.Qwen/Qwen3.8-27B",
+      "default": false,
+      "label": "Qwen3.8-27B (SiliconFlow)",
+      "available": false,
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "Qwen/Qwen3.8-27B",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "temperature": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    },
+    {
+      "model_id": "siliconflow.Pro/moonshotai/Kimi-K2.6",
+      "default": false,
+      "label": "Kimi-K2.6 (SiliconFlow)",
+      "available": false,
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "Pro/moonshotai/Kimi-K2.6",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "temperature": true,
+      "default_max_tokens": 8192,
+      "default_judge_max_tokens": 4096,
+      "max_output_tokens": null
+    }
+  ],
+  "model_catalog_lines": [
+    "- `global.zai.glm-5.3` (default) — provider: Global Bedrock; tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 16384 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `global.moonshotai.kimi-k3` — provider: Global Bedrock; tool calling: yes; image input: yes (native vision); accepts the `temperature` parameter: no; default per-call output ceiling 16384 tokens; as an LLM judge / optimizer its output budget starts at 2048 tokens",
+    "- `siliconflow.zai-org/GLM-5.3` (not configured in this workspace — not selectable) — selectable once the operator stores the SiliconFlow API key as SSM SecureString parameter `launchpad-siliconflow-api-key` (the host exports it as `LAUNCHPAD_SILICONFLOW_API_KEY`) and re-runs bootstrap; provider: SiliconFlow (OpenAI-compatible endpoint, model `zai-org/GLM-5.3`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `siliconflow.deepseek-ai/DeepSeek-V4-Pro` (not configured in this workspace — not selectable) — selectable once the operator stores the SiliconFlow API key as SSM SecureString parameter `launchpad-siliconflow-api-key` (the host exports it as `LAUNCHPAD_SILICONFLOW_API_KEY`) and re-runs bootstrap; provider: SiliconFlow (OpenAI-compatible endpoint, model `deepseek-ai/DeepSeek-V4-Pro`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `siliconflow.Qwen/Qwen3.8-27B` (not configured in this workspace — not selectable) — selectable once the operator stores the SiliconFlow API key as SSM SecureString parameter `launchpad-siliconflow-api-key` (the host exports it as `LAUNCHPAD_SILICONFLOW_API_KEY`) and re-runs bootstrap; provider: SiliconFlow (OpenAI-compatible endpoint, model `Qwen/Qwen3.8-27B`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `siliconflow.Pro/moonshotai/Kimi-K2.6` (not configured in this workspace — not selectable) — selectable once the operator stores the SiliconFlow API key as SSM SecureString parameter `launchpad-siliconflow-api-key` (the host exports it as `LAUNCHPAD_SILICONFLOW_API_KEY`) and re-runs bootstrap; provider: SiliconFlow (OpenAI-compatible endpoint, model `Pro/moonshotai/Kimi-K2.6`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens"
+  ],
+  "model_catalog_lines_configured": [
+    "- `global.zai.glm-5.3` (default) — provider: Global Bedrock; tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 16384 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `global.moonshotai.kimi-k3` — provider: Global Bedrock; tool calling: yes; image input: yes (native vision); accepts the `temperature` parameter: no; default per-call output ceiling 16384 tokens; as an LLM judge / optimizer its output budget starts at 2048 tokens",
+    "- `siliconflow.zai-org/GLM-5.3` — provider: SiliconFlow (OpenAI-compatible endpoint, model `zai-org/GLM-5.3`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `siliconflow.deepseek-ai/DeepSeek-V4-Pro` — provider: SiliconFlow (OpenAI-compatible endpoint, model `deepseek-ai/DeepSeek-V4-Pro`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `siliconflow.Qwen/Qwen3.8-27B` — provider: SiliconFlow (OpenAI-compatible endpoint, model `Qwen/Qwen3.8-27B`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens",
+    "- `siliconflow.Pro/moonshotai/Kimi-K2.6` — provider: SiliconFlow (OpenAI-compatible endpoint, model `Pro/moonshotai/Kimi-K2.6`); tool calling: yes; image input: no (text only); accepts the `temperature` parameter: yes; default per-call output ceiling 8192 tokens; as an LLM judge / optimizer its output budget starts at 4096 tokens"
+  ],
+  "capabilities_models": [
+    {
+      "model_id": "global.zai.glm-5.3",
+      "label": "GLM 5.3 (Z.AI · global)",
+      "provider": "bedrock",
+      "provider_kind": "bedrock",
+      "provider_label": "Global Bedrock",
+      "api_model_name": "global.zai.glm-5.3",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "default": true,
+      "available": true
+    },
+    {
+      "model_id": "global.moonshotai.kimi-k3",
+      "label": "Kimi K3 (Moonshot AI · global)",
+      "provider": "bedrock",
+      "provider_kind": "bedrock",
+      "provider_label": "Global Bedrock",
+      "api_model_name": "global.moonshotai.kimi-k3",
+      "tools": true,
+      "streaming": true,
+      "vision": true,
+      "default": false,
+      "available": true
+    },
+    {
+      "model_id": "siliconflow.zai-org/GLM-5.3",
+      "label": "GLM-5.3 (SiliconFlow)",
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "zai-org/GLM-5.3",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "default": false,
+      "available": false
+    },
+    {
+      "model_id": "siliconflow.deepseek-ai/DeepSeek-V4-Pro",
+      "label": "DeepSeek-V4-Pro (SiliconFlow)",
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "deepseek-ai/DeepSeek-V4-Pro",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "default": false,
+      "available": false
+    },
+    {
+      "model_id": "siliconflow.Qwen/Qwen3.8-27B",
+      "label": "Qwen3.8-27B (SiliconFlow)",
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "Qwen/Qwen3.8-27B",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "default": false,
+      "available": false
+    },
+    {
+      "model_id": "siliconflow.Pro/moonshotai/Kimi-K2.6",
+      "label": "Kimi-K2.6 (SiliconFlow)",
+      "provider": "siliconflow",
+      "provider_kind": "openai_compatible",
+      "provider_label": "SiliconFlow",
+      "api_model_name": "Pro/moonshotai/Kimi-K2.6",
+      "tools": true,
+      "streaming": true,
+      "vision": false,
+      "default": false,
+      "available": false
+    }
+  ],
+  "capabilities_model_providers": {
+    "bedrock": {
+      "kind": "bedrock",
+      "label": "Global Bedrock",
+      "credential_provider": "launchpad-global-bedrock",
+      "configured": true,
+      "ssm_parameter": "launchpad-global-bedrock-api-key",
+      "api_key_env": "LAUNCHPAD_GLOBAL_BEDROCK_API_KEY"
+    },
+    "siliconflow": {
+      "kind": "openai_compatible",
+      "label": "SiliconFlow",
+      "credential_provider": "launchpad-siliconflow",
+      "configured": false,
+      "ssm_parameter": "launchpad-siliconflow-api-key",
+      "api_key_env": "LAUNCHPAD_SILICONFLOW_API_KEY"
+    }
+  },
+  "inference_param_support": {
+    "global.zai.glm-5.3": {
+      "temperature": true
+    },
+    "global.moonshotai.kimi-k3": {
+      "temperature": false
+    },
+    "siliconflow.zai-org/GLM-5.3": {
+      "temperature": true
+    },
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": {
+      "temperature": true
+    },
+    "siliconflow.Qwen/Qwen3.8-27B": {
+      "temperature": true
+    },
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": {
+      "temperature": true
+    }
+  },
+  "default_runtime_max_tokens": {
+    "global.zai.glm-5.3": 16384,
+    "global.moonshotai.kimi-k3": 16384,
+    "siliconflow.zai-org/GLM-5.3": 8192,
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": 8192,
+    "siliconflow.Qwen/Qwen3.8-27B": 8192,
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": 8192
+  },
+  "supports_native_images": {
+    "global.zai.glm-5.3": false,
+    "global.moonshotai.kimi-k3": true,
+    "siliconflow.zai-org/GLM-5.3": false,
+    "siliconflow.deepseek-ai/DeepSeek-V4-Pro": false,
+    "siliconflow.Qwen/Qwen3.8-27B": false,
+    "siliconflow.Pro/moonshotai/Kimi-K2.6": false
+  }
+}

@@ -1,0 +1,20 @@
+{
+ "seam": "opensearch-memory",
+ "case": "iam_identity_403_instance_role",
+ "captured_at": "2026-10-19T09:14:13Z",
+ "notes": "The IAM-level 403 (identity-based policy) — distinct from the FGAC 403 and from the anonymous resource-policy 403.",
+ "response_or_error": {
+  "http_status": 403,
+  "headers_subset": {
+   "Content-Type": "application/json",
+   "Content-Length": "223",
+   "x-amzn-requestid": "8f2dce29-8db0-40d2-bb0f-9b19b199bf7f"
+  },
+  "body": {
+   "Message": "User: arn:aws-cn:sts::000000000000:assumed-role/launchpad-cn-ops-cn-northwest-1-t1/i-XXXXXXXXXXXXXXXXX is not authorized to perform: es:ESHttpGet because no identity-based policy allows the es:ESHttpGet action"
+  }
+ },
+ "status": 403,
+ "elapsed_s": 0.111,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

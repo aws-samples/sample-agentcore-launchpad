@@ -7,9 +7,11 @@ import { RANGE_HOURS, RANGES, rangeLabel } from "../format";
 import { useLoad } from "../hooks";
 import { InsightsPanel } from "../InsightsPanel";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../ResultsView";
-import { type ResultRow, rowsFromOnline, rowsFromRun, summarize } from "../results";
+import { type ResultRow, rowsFromOnline, rowsFromRun, SCORE_BANDS, summarize } from "../results";
 import { loadTasks, TASK_SOURCES, type V2Task } from "../tasks";
 import { Alert, Card, FilterSelect, PageHeader, SearchInput } from "../ui";
+import { useEvaluatorNames } from "../useEvaluatorNames";
+import { compareTimesDesc, timeMs } from "../../lib/timestamps";
 
 /** At most this many completed runs are read per refresh (one results call each). */
 const MAX_RUNS = 12;
@@ -41,7 +43,7 @@ async function loadInsights(range: V2Range): Promise<InsightData> {
   const tasks = await loadTasks();
   const since = Date.now() - RANGE_HOURS[range] * 3_600_000;
   const completed = tasks.filter(
-    (task) => task.kind === "run" && task.status === "completed" && task.createdAt && new Date(task.createdAt).getTime() >= since,
+    (task) => task.kind === "run" && task.status === "completed" && task.createdAt && timeMs(task.createdAt) >= since,
   );
   // insights runs cluster sessions instead of scoring them: their trees ride on the
   // run row (no results read) and go to the insights panel, not the score tables
@@ -65,15 +67,9 @@ async function loadInsights(range: V2Range): Promise<InsightData> {
       return [];
     }
   });
-  const rows = [...runRows.flat(), ...onlineRows.flat()].sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
+  const rows = [...runRows.flat(), ...onlineRows.flat()].sort((a, b) => compareTimesDesc(a.time, b.time));
   return { rows, tasks: [...runs, ...online], insightTasks, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
 }
-
-const SCORE_BANDS = {
-  low: [0, 0.4],
-  mid: [0.4, 0.7],
-  high: [0.7, 1.0001],
-} as const;
 
 /**
  * 评估总览 — every judged result of the recent evaluation tasks in one place:
@@ -83,6 +79,7 @@ const SCORE_BANDS = {
  */
 export function V2Insights() {
   const { t } = useTranslation();
+  useEvaluatorNames(); // N17-obs429: custom evaluators by name
   const [range, setRange] = useState<V2Range>("7d");
   const { data, loading, error, reload } = useLoad(() => loadInsights(range), `insights:${range}`);
   const [task, setTask] = useState("");

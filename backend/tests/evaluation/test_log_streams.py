@@ -299,3 +299,16 @@ def test_discovery_routes(client, monkeypatch):
         "service_name": 'x" or 1', "log_group": "aws/spans"}).status_code == 422
     assert client.get("/api/eval/log-sessions", params={
         "service_name": "svc"}).status_code == 422  # log_group required
+
+
+def test_snippet_masks_access_key_ids_before_the_cut():
+    """N17-obs307: a content hit next to a span's access-key id shows `[redacted]` —
+    masked before the excerpt is cut, so no partial key id survives the window edge."""
+    key_id = "ASIAEXAMPLE00000TEST"
+    message = json.dumps({"attributes": {"aws.auth.account.access_key": key_id},
+                          "body": "EMP-042 lookup"})
+    snippet = log_streams._snippet(message, "EMP-042")
+    assert "ASIA" not in snippet and "EMP-042" in snippet
+    for cut in range(1, len(key_id)):  # an excerpt that would start mid-key
+        padded = "x" * (log_streams._SNIPPET_CHARS // 3 - cut) + key_id + " EMP-042"
+        assert key_id[cut:] not in log_streams._snippet(padded, "EMP-042")

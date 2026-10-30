@@ -66,7 +66,7 @@ def test_converts_half_width_next_to_cjk(before: str, after: str):
         "arn:aws:s3files:…:file-system/…/access-point/…",  # ARN with … placeholders
         "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/abc",
         "https://api.openai.com/v1?view=experiment",
-        "config/launchpad.yaml · model_prices",
+        "config/launchpad.yaml · features",
         "get_config_bundle() 读取",  # Latin-adjacent brackets stay
         "在 NEW RUN 中选择 ACTOR MODEL;goal 达成",  # `;` has Latin on both sides
         "^[a-zA-Z][a-zA-Z0-9_]{0,47}$ 结尾",  # regex quantifier braces are protected

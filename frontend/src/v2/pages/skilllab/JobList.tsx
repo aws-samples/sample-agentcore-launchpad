@@ -5,8 +5,9 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabJobInfo } from "../../../lib/api";
 import { isLiveJob, RESUMABLE_STATUSES, tasksetLabel } from "../../../lib/skillLab";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Button,
   Card,
@@ -34,6 +35,7 @@ export function JobList({ type }: { type: "eval" | "train" }) {
   const [skill, setSkill] = useState("");
   const [q, setQ] = useState("");
   const [pending, setPending] = useState<{ job: SkillLabJobInfo; action: Action } | null>(null);
+  const mayMutate = useMayMutate(); // creator-or-admin on cancel / resume / delete (r13-g)
   const [busy, setBusy] = useState(false);
 
   const skills = useMemo(
@@ -135,6 +137,7 @@ export function JobList({ type }: { type: "eval" | "train" }) {
       render: score,
     },
     { key: "status", title: t("skillLab.eval.col.status"), render: (job) => <JobStatusTag job={job} /> },
+    { key: "creator", title: t("v2.common.creator"), render: (job) => creatorLabel(job) },
     { key: "created", title: t("skillLab.eval.col.created"), className: "nowrap", render: (job) => fmtTime(job.created_at) },
     {
       key: "ops",
@@ -143,17 +146,17 @@ export function JobList({ type }: { type: "eval" | "train" }) {
       render: (job) => (
         <div className="v2-actions">
           <LinkButton onClick={() => open(job)}>{t("v2.common.view")}</LinkButton>
-          {isLiveJob(job) && (
+          {mayMutate(job) && isLiveJob(job) && (
             <LinkButton danger disabled={busy} onClick={() => setPending({ job, action: "cancel" })}>
               {t("v2.skillLab.cancelRun")}
             </LinkButton>
           )}
-          {type === "train" && RESUMABLE_STATUSES.includes(job.status) && (
+          {mayMutate(job) && type === "train" && RESUMABLE_STATUSES.includes(job.status) && (
             <LinkButton disabled={busy} onClick={() => setPending({ job, action: "resume" })}>
               {t("skillLab.train.resume")}
             </LinkButton>
           )}
-          {!isLiveJob(job) && (
+          {mayMutate(job) && !isLiveJob(job) && (
             <LinkButton danger disabled={busy} onClick={() => setPending({ job, action: "delete" })}>
               {t("v2.common.delete")}
             </LinkButton>

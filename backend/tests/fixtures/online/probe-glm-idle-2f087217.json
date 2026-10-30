@@ -1,0 +1,3460 @@
+{
+ "session_id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+ "log_group": "/aws/bedrock-agentcore/runtimes/probe_stub_glm_0e7f91-EXAMPLE009-DEFAULT",
+ "source": "eval-wb session cache (read-only fetch 2026-10-23), N17-obs422 idle-resume probe: turn 1 16:39, turn 2 16:56 (17 min later, timeout 15)",
+ "records": [
+  {
+   "timestamp": 1792773585476,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792773585476207605,
+    "observedTimeUnixNano": 1792773585693457539,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "system",
+        "content": {
+         "content": "[{\"text\": \"You are probe-assistant, a concise operations helper for a demo retail company. You can check weather, orders, inventory, currency conversion, fetch backend resources and run demo jobs with your tools. Use tools whenever the user asks for data they provide; when the user asks you to call several tools at once, issue the calls together in one step. If a tool fails, say so plainly and do not invent data. Answer in the user's language (Chinese or English).\"}]"
+        }
+       },
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"Weather in Chengdu?\"}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "finish_reason": "tool_use",
+         "message": "[{\"reasoningContent\": {\"reasoningText\": {\"text\": \"The user asks for weather in Chengdu. I should call get_weather with city \\\"Chengdu\\\".\"}}}, {\"toolUse\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"name\": \"get_weather\", \"input\": {\"city\": \"Chengdu\"}}}]"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "0230151942ee43c0",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585510,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792773585510444480,
+    "observedTimeUnixNano": 1792773585693631104,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "tool",
+        "content": {
+         "role": "tool",
+         "content": "{\"city\": \"Chengdu\"}",
+         "id": "call_9f2fe40164e055848bc1fd36a9885da6"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "message": "[{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]",
+         "id": "call_9f2fe40164e055848bc1fd36a9885da6"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "a8c7c2dc9081d9b5",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585595,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792773585595142467,
+    "observedTimeUnixNano": 1792773585693813728,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"Weather in Chengdu?\"}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "message": "[{\"reasoningContent\": {\"reasoningText\": {\"text\": \"The user asks for weather in Chengdu. I should call get_weather with city \\\"Chengdu\\\".\"}}}, {\"toolUse\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"name\": \"get_weather\", \"input\": {\"city\": \"Chengdu\"}}}]",
+         "tool.result": "[{\"toolResult\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]}}]"
+        }
+       },
+       {
+        "role": "assistant",
+        "content": "[{\"toolResult\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]}}]"
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "7e2dc9602451b72e",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590198,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792773590198385180,
+    "observedTimeUnixNano": 1792773590752519596,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "system",
+        "content": {
+         "content": "[{\"text\": \"You are probe-assistant, a concise operations helper for a demo retail company. You can check weather, orders, inventory, currency conversion, fetch backend resources and run demo jobs with your tools. Use tools whenever the user asks for data they provide; when the user asks you to call several tools at once, issue the calls together in one step. If a tool fails, say so plainly and do not invent data. Answer in the user's language (Chinese or English).\"}]"
+        }
+       },
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"Weather in Chengdu?\"}]"
+        }
+       },
+       {
+        "role": "tool",
+        "content": {
+         "content": "[{\"toolResult\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]}}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "content": "[{\"reasoningContent\": {\"reasoningText\": {\"text\": \"The user asks for weather in Chengdu. I should call get_weather with city \\\"Chengdu\\\".\"}}}, {\"toolUse\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"name\": \"get_weather\", \"input\": {\"city\": \"Chengdu\"}}}]"
+        }
+       },
+       {
+        "role": "assistant",
+        "content": {
+         "finish_reason": "end_turn",
+         "message": "[{\"text\": \"Current weather in Chengdu: overcast, 15°C, humidity 70%.\"}]"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "623005181ad81208",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590226,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792773590226929797,
+    "observedTimeUnixNano": 1792773590752720345,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"Weather in Chengdu?\"}]"
+        }
+       },
+       {
+        "role": "tool",
+        "content": {
+         "content": "[{\"toolResult\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]}}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "content": "[{\"reasoningContent\": {\"reasoningText\": {\"text\": \"The user asks for weather in Chengdu. I should call get_weather with city \\\"Chengdu\\\".\"}}}, {\"toolUse\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"name\": \"get_weather\", \"input\": {\"city\": \"Chengdu\"}}}]"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "d086cce6d783d9ce",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590348,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792773590348266829,
+    "observedTimeUnixNano": 1792773590752950468,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "system",
+        "content": "You are probe-assistant, a concise operations helper for a demo retail company. You can check weather, orders, inventory, currency conversion, fetch backend resources and run demo jobs with your tools. Use tools whenever the user asks for data they provide; when the user asks you to call several tools at once, issue the calls together in one step. If a tool fails, say so plainly and do not invent data. Answer in the user's language (Chinese or English)."
+       },
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"Weather in Chengdu?\"}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "message": "Current weather in Chengdu: overcast, 15°C, humidity 70%.\n",
+         "finish_reason": "end_turn"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "7dbf11223afe72de",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774599948,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792774599948002824,
+    "observedTimeUnixNano": 1792774603341609463,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "system",
+        "content": {
+         "content": "[{\"text\": \"You are probe-assistant, a concise operations helper for a demo retail company. You can check weather, orders, inventory, currency conversion, fetch backend resources and run demo jobs with your tools. Use tools whenever the user asks for data they provide; when the user asks you to call several tools at once, issue the calls together in one step. If a tool fails, say so plainly and do not invent data. Answer in the user's language (Chinese or English).\"}]"
+        }
+       },
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"And Xi'an?\"}]"
+        }
+       },
+       {
+        "role": "tool",
+        "content": {
+         "content": "[{\"toolResult\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]}}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "content": "[{\"text\": \"Current weather in Chengdu: overcast, 15°C, humidity 70%.\"}]"
+        }
+       },
+       {
+        "role": "assistant",
+        "content": {
+         "finish_reason": "tool_use",
+         "message": "[{\"toolUse\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"name\": \"get_weather\", \"input\": {\"city\": \"Xi'an\"}}}]"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "a9e68547f39bd8c4",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774599978,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792774599978367605,
+    "observedTimeUnixNano": 1792774603341819829,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "tool",
+        "content": {
+         "role": "tool",
+         "content": "{\"city\": \"Xi'an\"}",
+         "id": "call_3e04bcb655b95e6885673c0816301250"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "message": "[{\"text\": \"{\\\"city\\\": \\\"Xi'an\\\", \\\"temp_c\\\": 10, \\\"condition\\\": \\\"windy\\\", \\\"humidity\\\": 25}\"}]",
+         "id": "call_3e04bcb655b95e6885673c0816301250"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "d84e1d41fc130427",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774600074,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792774600074061568,
+    "observedTimeUnixNano": 1792774603342058224,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"And Xi'an?\"}]"
+        }
+       },
+       {
+        "role": "tool",
+        "content": {
+         "content": "[{\"toolResult\": {\"toolUseId\": \"call_9f2fe40164e055848bc1fd36a9885da6\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Chengdu\\\", \\\"temp_c\\\": 15, \\\"condition\\\": \\\"overcast\\\", \\\"humidity\\\": 70}\"}]}}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "content": "[{\"text\": \"Current weather in Chengdu: overcast, 15°C, humidity 70%.\"}]"
+        }
+       },
+       {
+        "role": "assistant",
+        "content": {
+         "message": "[{\"toolUse\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"name\": \"get_weather\", \"input\": {\"city\": \"Xi'an\"}}}]",
+         "tool.result": "[{\"toolResult\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Xi'an\\\", \\\"temp_c\\\": 10, \\\"condition\\\": \\\"windy\\\", \\\"humidity\\\": 25}\"}]}}]"
+        }
+       },
+       {
+        "role": "assistant",
+        "content": "[{\"toolResult\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Xi'an\\\", \\\"temp_c\\\": 10, \\\"condition\\\": \\\"windy\\\", \\\"humidity\\\": 25}\"}]}}]"
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "e5da688e2c0b09b8",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602367,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792774602367371981,
+    "observedTimeUnixNano": 1792774603342246016,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "system",
+        "content": {
+         "content": "[{\"text\": \"You are probe-assistant, a concise operations helper for a demo retail company. You can check weather, orders, inventory, currency conversion, fetch backend resources and run demo jobs with your tools. Use tools whenever the user asks for data they provide; when the user asks you to call several tools at once, issue the calls together in one step. If a tool fails, say so plainly and do not invent data. Answer in the user's language (Chinese or English).\"}]"
+        }
+       },
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"And Xi'an?\"}]"
+        }
+       },
+       {
+        "role": "tool",
+        "content": {
+         "content": "[{\"toolResult\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Xi'an\\\", \\\"temp_c\\\": 10, \\\"condition\\\": \\\"windy\\\", \\\"humidity\\\": 25}\"}]}}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "content": "[{\"toolUse\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"name\": \"get_weather\", \"input\": {\"city\": \"Xi'an\"}}}]"
+        }
+       },
+       {
+        "role": "assistant",
+        "content": {
+         "finish_reason": "end_turn",
+         "message": "[{\"text\": \"Weather in Xi'an: windy, 10°C, humidity 25%. Quite a bit cooler and drier than Chengdu.\"}]"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "5b0636a1bb5008f4",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602397,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792774602397786150,
+    "observedTimeUnixNano": 1792774603342399356,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"And Xi'an?\"}]"
+        }
+       },
+       {
+        "role": "tool",
+        "content": {
+         "content": "[{\"toolResult\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"city\\\": \\\"Xi'an\\\", \\\"temp_c\\\": 10, \\\"condition\\\": \\\"windy\\\", \\\"humidity\\\": 25}\"}]}}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "content": "[{\"toolUse\": {\"toolUseId\": \"call_3e04bcb655b95e6885673c0816301250\", \"name\": \"get_weather\", \"input\": {\"city\": \"Xi'an\"}}}]"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "eb581ac94de8fc55",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602537,
+   "group": "runtime",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer"
+    },
+    "timeUnixNano": 1792774602537427787,
+    "observedTimeUnixNano": 1792774603342596888,
+    "severityNumber": 9,
+    "severityText": "",
+    "body": {
+     "input": {
+      "messages": [
+       {
+        "role": "system",
+        "content": "You are probe-assistant, a concise operations helper for a demo retail company. You can check weather, orders, inventory, currency conversion, fetch backend resources and run demo jobs with your tools. Use tools whenever the user asks for data they provide; when the user asks you to call several tools at once, issue the calls together in one step. If a tool fails, say so plainly and do not invent data. Answer in the user's language (Chinese or English)."
+       },
+       {
+        "role": "user",
+        "content": {
+         "content": "[{\"text\": \"And Xi'an?\"}]"
+        }
+       }
+      ]
+     },
+     "output": {
+      "messages": [
+       {
+        "role": "assistant",
+        "content": {
+         "message": "Weather in Xi'an: windy, 10°C, humidity 25%. Quite a bit cooler and drier than Chengdu.\n",
+         "finish_reason": "end_turn"
+        }
+       }
+      ]
+     }
+    },
+    "attributes": {
+     "event.name": "strands.telemetry.tracer",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "flags": 1,
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "9bca61a9d563ca9f",
+    "eventName": "strands.telemetry.tracer",
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583515,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "b26b860843793220",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583446416493,
+    "endTimeUnixNano": 1792773583515316236,
+    "durationNano": 68899743,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT2E4X7NJZSV4DX9",
+     "http.status_code": 404,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 404,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "events": [
+     {
+      "timeUnixNano": 1792773583515286229,
+      "name": "exception",
+      "attributes": {
+       "exception.escaped": "False",
+       "exception.stacktrace": "Traceback (most recent call last):\n  File \"/var/task/opentelemetry/trace/__init__.py\", line 608, in use_span\n    yield span\n  File \"/var/task/opentelemetry/sdk/trace/__init__.py\", line 1183, in start_as_current_span\n    yield span\n  File \"/var/task/amazon/opentelemetry/distro/patches/_botocore_patches.py\", line 291, in patched_api_call\n    result = original_func(*args, **kwargs)\n  File \"/var/task/botocore/context.py\", line 123, in wrapper\n    return func(*args, **kwargs)\n  File \"/var/task/botocore/client.py\", line 1094, in _make_api_call\n    raise error_class(parsed_response, operation_name)\nbotocore.errorfactory.NoSuchKey: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.\n",
+       "exception.type": "botocore.errorfactory.NoSuchKey",
+       "exception.message": "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist."
+      }
+     }
+    ],
+    "status": {
+     "message": "NoSuchKey: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.",
+     "code": "ERROR"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583530,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "bedb8e0f477ae099",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583515684431,
+    "endTimeUnixNano": 1792773583530667754,
+    "durationNano": 14983323,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "HeadObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT25CV5G0ZTR3RBN",
+     "http.status_code": 404,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "HeadObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 404,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "events": [
+     {
+      "timeUnixNano": 1792773583530644680,
+      "name": "exception",
+      "attributes": {
+       "exception.escaped": "False",
+       "exception.stacktrace": "Traceback (most recent call last):\n  File \"/var/task/opentelemetry/trace/__init__.py\", line 608, in use_span\n    yield span\n  File \"/var/task/opentelemetry/sdk/trace/__init__.py\", line 1183, in start_as_current_span\n    yield span\n  File \"/var/task/amazon/opentelemetry/distro/patches/_botocore_patches.py\", line 291, in patched_api_call\n    result = original_func(*args, **kwargs)\n  File \"/var/task/botocore/context.py\", line 123, in wrapper\n    return func(*args, **kwargs)\n  File \"/var/task/botocore/client.py\", line 1094, in _make_api_call\n    raise error_class(parsed_response, operation_name)\nbotocore.exceptions.ClientError: An error occurred (404) when calling the HeadObject operation: Not Found\n",
+       "exception.type": "botocore.exceptions.ClientError",
+       "exception.message": "An error occurred (404) when calling the HeadObject operation: Not Found"
+      }
+     }
+    ],
+    "status": {
+     "message": "ClientError: An error occurred (404) when calling the HeadObject operation: Not Found",
+     "code": "ERROR"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583566,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "ddb7bfb8ff3eb69b",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583530962848,
+    "endTimeUnixNano": 1792773583566102881,
+    "durationNano": 35140033,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT223NQ6K4Z8C4CY",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583776,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.bedrock-agentcore",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "1fb2577e9ec01391",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "Bedrock AgentCore.GetResourceApiKey",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583691475774,
+    "endTimeUnixNano": 1792773583776393194,
+    "durationNano": 84917420,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "Bedrock AgentCore",
+     "aws.remote.resource.identifier": "launchpad-global-bedrock",
+     "aws.auth.credential_provider": "launchpad-global-bedrock",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::BedrockAgentCore",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetResourceApiKey",
+     "server.address": "bedrock-agentcore.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "70d5cd77-a09f-450c-88f0-ec9daa50b8fc",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::BedrockAgentCore::APIKeyCredentialProvider",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetResourceApiKey",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583897,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "099126026cc96e54",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583845154759,
+    "endTimeUnixNano": 1792773583897152233,
+    "durationNano": 51997474,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT22HAA6J6HCP6PJ",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583926,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "29a0f5b9f569c945",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583897969285,
+    "endTimeUnixNano": 1792773583926436723,
+    "durationNano": 28467438,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT21Y9M0SHQKP1V3",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583956,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "1e871f5811df648d",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583926685374,
+    "endTimeUnixNano": 1792773583956133386,
+    "durationNano": 29448012,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT28JKFHJ4GEBFKP",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773583986,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "d563ca9f1451a1c8",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773583956888464,
+    "endTimeUnixNano": 1792773583986425666,
+    "durationNano": 29537202,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "KT2741E4PVB9A07A",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585475,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.bedrock-runtime",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "ff9c2e15f2b01f4e",
+    "parentSpanId": "0230151942ee43c0",
+    "flags": 256,
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773584004832131,
+    "endTimeUnixNano": 1792773585475481237,
+    "durationNano": 1470649106,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "rpc.service": "Bedrock Runtime",
+     "aws.remote.resource.identifier": "global.zai.glm-5.3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "ConverseStream",
+     "gen_ai.provider.name": "aws.bedrock",
+     "server.address": "bedrock-runtime.us-west-2.amazonaws.com",
+     "gen_ai.request.max_tokens": 1024,
+     "aws.request_id": "59acedb6-1e20-4ba4-bee5-a01c7abc8a69",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.auth.region": "us-west-2",
+     "rpc.method": "ConverseStream",
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "server.port": 443,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "http.response.status_code": 200,
+     "gen_ai.system": "aws.bedrock",
+     "telemetry.extended": "true",
+     "gen_ai.usage.output_tokens": 35,
+     "aws.genai.span_kind": "LLM",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::BedrockRuntime",
+     "http.status_code": 200,
+     "aws.region": "us-west-2",
+     "aws.remote.resource.type": "AWS::Bedrock::Model",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 849,
+     "aws.genai.token_count_total": 884,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585476,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "0230151942ee43c0",
+    "parentSpanId": "7e2dc9602451b72e",
+    "flags": 256,
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792773583987872428,
+    "endTimeUnixNano": 1792773585476207605,
+    "durationNano": 1488335177,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.usage.prompt_tokens": 849,
+     "gen_ai.usage.output_tokens": 35,
+     "gen_ai.server.request.duration": 630,
+     "gen_ai.usage.total_tokens": 884,
+     "gen_ai.usage.completion_tokens": 35,
+     "aws.genai.span_kind": "LLM",
+     "gen_ai.event.start_time": "2026-10-23T16:39:43.987890+00:00",
+     "gen_ai.server.time_to_first_token": 1291,
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-23T16:39:45.476167+00:00",
+     "gen_ai.usage.input_tokens": 849,
+     "aws.genai.token_count_total": 884,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585508,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "fe7db2a63bd8f33c",
+    "parentSpanId": "7e2dc9602451b72e",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773585476702659,
+    "endTimeUnixNano": 1792773585508555548,
+    "durationNano": 31852889,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "VBJ0F8H7AG5WCEP3",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585510,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "a8c7c2dc9081d9b5",
+    "parentSpanId": "7e2dc9602451b72e",
+    "flags": 256,
+    "name": "execute_tool get_weather",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792773585509218866,
+    "endTimeUnixNano": 1792773585510444480,
+    "durationNano": 1225614,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_9f2fe40164e055848bc1fd36a9885da6",
+     "gen_ai.tool.description": "Return the current weather for a city (fixed demo data). Supported: Beijing, Shanghai, Shenzhen, Chengdu, Xi'an, Seattle (English or Chinese names).",
+     "gen_ai.tool.json_schema": "{\"properties\": {\"city\": {\"description\": \"Parameter city\", \"type\": \"string\"}}, \"required\": [\"city\"], \"type\": \"object\"}",
+     "aws.genai.span_kind": "TOOL",
+     "gen_ai.event.start_time": "2026-10-23T16:39:45.509245+00:00",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-23T16:39:45.510422+00:00",
+     "gen_ai.tool.name": "get_weather",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585539,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "f39bd8c4e5da688e",
+    "parentSpanId": "7e2dc9602451b72e",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773585510779393,
+    "endTimeUnixNano": 1792773585539863404,
+    "durationNano": 29084011,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "VBJ88CANX6HB1HWP",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585567,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "6c08efe0a9e68547",
+    "parentSpanId": "7e2dc9602451b72e",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773585540084625,
+    "endTimeUnixNano": 1792773585567335426,
+    "durationNano": 27250801,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "VBJ7WV5RMDEG33TD",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585594,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "73d75e84803392b8",
+    "parentSpanId": "7e2dc9602451b72e",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773585568062466,
+    "endTimeUnixNano": 1792773585594934875,
+    "durationNano": 26872409,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "VBJ7GY2WBGS7CABR",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773585595,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "7e2dc9602451b72e",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792773583987284655,
+    "endTimeUnixNano": 1792773585595142467,
+    "durationNano": 1607857812,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-23T16:39:45.595125+00:00",
+     "event_loop.cycle_id": "39c9122c-fc09-4f67-badd-f0e8449099c2",
+     "gen_ai.event.start_time": "2026-10-23T16:39:43.987311+00:00",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590197,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.bedrock-runtime",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "9f38e571f316fcc1",
+    "parentSpanId": "623005181ad81208",
+    "flags": 256,
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773585596641176,
+    "endTimeUnixNano": 1792773590197376512,
+    "durationNano": 4600735336,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "rpc.service": "Bedrock Runtime",
+     "aws.remote.resource.identifier": "global.zai.glm-5.3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "ConverseStream",
+     "gen_ai.provider.name": "aws.bedrock",
+     "server.address": "bedrock-runtime.us-west-2.amazonaws.com",
+     "gen_ai.request.max_tokens": 1024,
+     "aws.request_id": "1ec66869-c44f-4a8f-8cda-da4360307f7c",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.auth.region": "us-west-2",
+     "rpc.method": "ConverseStream",
+     "gen_ai.response.finish_reasons": [
+      "end_turn"
+     ],
+     "server.port": 443,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "http.response.status_code": 200,
+     "gen_ai.system": "aws.bedrock",
+     "telemetry.extended": "true",
+     "gen_ai.usage.output_tokens": 19,
+     "aws.genai.span_kind": "LLM",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::BedrockRuntime",
+     "http.status_code": 200,
+     "aws.region": "us-west-2",
+     "aws.remote.resource.type": "AWS::Bedrock::Model",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 916,
+     "aws.genai.token_count_total": 935,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590198,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "623005181ad81208",
+    "parentSpanId": "d086cce6d783d9ce",
+    "flags": 256,
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792773585595941000,
+    "endTimeUnixNano": 1792773590198385180,
+    "durationNano": 4602444180,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.usage.prompt_tokens": 916,
+     "gen_ai.usage.output_tokens": 19,
+     "gen_ai.server.request.duration": 4206,
+     "gen_ai.usage.total_tokens": 935,
+     "gen_ai.usage.completion_tokens": 19,
+     "aws.genai.span_kind": "LLM",
+     "gen_ai.event.start_time": "2026-10-23T16:39:45.595957+00:00",
+     "gen_ai.server.time_to_first_token": 4401,
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-23T16:39:50.198347+00:00",
+     "gen_ai.usage.input_tokens": 916,
+     "aws.genai.token_count_total": 935,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590226,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "6cbf1da892490635",
+    "parentSpanId": "d086cce6d783d9ce",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773590198842507,
+    "endTimeUnixNano": 1792773590226449414,
+    "durationNano": 27606907,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "N6BH0E9T8DZNEXM2",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590226,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "d086cce6d783d9ce",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792773585595443435,
+    "endTimeUnixNano": 1792773590226929797,
+    "durationNano": 4631486362,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-23T16:39:50.226905+00:00",
+     "event_loop.cycle_id": "baadfcf3-7986-4e67-9d05-4b53c8323fba",
+     "gen_ai.event.start_time": "2026-10-23T16:39:45.595465+00:00",
+     "event_loop.parent_cycle_id": "39c9122c-fc09-4f67-badd-f0e8449099c2",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590315,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "4de8fc553594663b",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773590258614380,
+    "endTimeUnixNano": 1792773590315274087,
+    "durationNano": 56659707,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "N6BG5XHW0HA6BPD0",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590348,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.sqs",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "613eb0495b0636a1",
+    "parentSpanId": "bb5008f4eb581ac9",
+    "flags": 256,
+    "name": "SQS.SendMessage",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792773590322714337,
+    "endTimeUnixNano": 1792773590348018383,
+    "durationNano": 25304046,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "messaging.system": "aws.sqs",
+     "messaging.url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "aws.sqs.queue.url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "rpc.service": "SQS",
+     "aws.remote.resource.identifier": "launchpad-memory-extract-cn-northwest-1",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "SendMessage",
+     "server.address": "sqs.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "fcabd0ca-a8fc-53d9-8ce4-b39f38ea6412",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "SendMessage",
+     "server.port": 443,
+     "messaging.message.id": "6c9d6719-2ecf-4b5d-8b75-58cc076a5c02",
+     "http.response.status_code": 200,
+     "telemetry.extended": "true",
+     "messaging.destination": "launchpad-memory-extract-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::SQS",
+     "aws.queue_url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "http.status_code": 200,
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::SQS::Queue",
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000002",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590348,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "7dbf11223afe72de",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "invoke_agent Strands Agents",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792773583897555561,
+    "endTimeUnixNano": 1792773590348266829,
+    "durationNano": 6450711268,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.usage.prompt_tokens": 1765,
+     "gen_ai.usage.output_tokens": 54,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.agent.name": "Strands Agents",
+     "gen_ai.usage.total_tokens": 1819,
+     "gen_ai.usage.completion_tokens": 54,
+     "aws.genai.span_kind": "AGENT",
+     "gen_ai.event.start_time": "2026-10-23T16:39:43.897584+00:00",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "invoke_agent",
+     "gen_ai.event.end_time": "2026-10-23T16:39:50.348235+00:00",
+     "gen_ai.usage.input_tokens": 1765,
+     "aws.genai.token_count_total": 1819,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 0,
+     "gen_ai.agent.tools": "[\"calculator\", \"current_utc_time\", \"get_weather\", \"lookup_order\", \"check_inventory\", \"convert_currency\", \"fetch_resource\", \"slow_task\"]",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590348,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.boto3sqs",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "bb5008f4eb581ac9",
+    "parentSpanId": "7dbf11223afe72de",
+    "flags": 256,
+    "name": "launchpad-memory-extract-cn-northwest-1 send",
+    "kind": "PRODUCER",
+    "startTimeUnixNano": 1792773590322330497,
+    "endTimeUnixNano": 1792773590348076829,
+    "durationNano": 25746332,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "messaging.system": "aws.sqs",
+     "messaging.destination_kind": "queue",
+     "messaging.url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "telemetry.extended": "true",
+     "messaging.destination": "launchpad-memory-extract-cn-northwest-1",
+     "aws.remote.service": "aws.sqs",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "UnknownRemoteOperation",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "PRODUCER",
+     "messaging.message.id": "6c9d6719-2ecf-4b5d-8b75-58cc076a5c02",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792773590349,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.starlette",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb8dcc5d2e6c1e78f98f7b10e3a82f",
+    "spanId": "179f20d3690648f3",
+    "parentSpanId": "fdbe7e26a47496b5",
+    "flags": 768,
+    "name": "POST /invocations",
+    "kind": "SERVER",
+    "startTimeUnixNano": 1792773583275244314,
+    "endTimeUnixNano": 1792773590349216075,
+    "durationNano": 7073971761,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "net.peer.port": 36370,
+     "telemetry.extended": "true",
+     "http.target": "/invocations",
+     "http.flavor": "1.1",
+     "http.url": "http://a8d0b4d0-f485-74d9-29d7-60247610f42e.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn/invocations",
+     "net.peer.ip": "127.0.0.1",
+     "http.host": "127.0.0.1:8080",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "http.status_code": 200,
+     "aws.local.operation": "POST /invocations",
+     "aws.span.kind": "SERVER",
+     "http.server_name": "a8d0b4d0-f485-74d9-29d7-60247610f42e.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn",
+     "net.host.port": 8080,
+     "http.route": "/invocations",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "http.method": "POST",
+     "http.response.status_code": 200,
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "http.scheme": "http"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596143,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "b26b860843793220",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596088167224,
+    "endTimeUnixNano": 1792774596143072403,
+    "durationNano": 54905179,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76G43K12RV0JY05",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596336,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.bedrock-agentcore",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "ff3eb69bbedb8e0f",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "Bedrock AgentCore.GetResourceApiKey",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596247541293,
+    "endTimeUnixNano": 1792774596336672653,
+    "durationNano": 89131360,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "Bedrock AgentCore",
+     "aws.remote.resource.identifier": "launchpad-global-bedrock",
+     "aws.auth.credential_provider": "launchpad-global-bedrock",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::BedrockAgentCore",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetResourceApiKey",
+     "server.address": "bedrock-agentcore.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "b42e329f-6247-4dcf-88d9-0d3a2b6c177b",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::BedrockAgentCore::APIKeyCredentialProvider",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetResourceApiKey",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596456,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "1fb2577e9ec01391",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596429342219,
+    "endTimeUnixNano": 1792774596456846824,
+    "durationNano": 27504605,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76TBN79NZ0FT5GW",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596485,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "6cc96e545b4ac9f6",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.ListObjectsV2",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596467798048,
+    "endTimeUnixNano": 1792774596485997815,
+    "durationNano": 18199767,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "ListObjectsV2",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76N221J5DWZREQJ",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "ListObjectsV2",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596510,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "3afe72de09912602",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596486539089,
+    "endTimeUnixNano": 1792774596510257763,
+    "durationNano": 23718674,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76TKDZEWVKV81Z7",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596560,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "11df648d29a0f5b9",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596489739807,
+    "endTimeUnixNano": 1792774596560036324,
+    "durationNano": 70296517,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76GZE9R8YR8JA2T",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596560,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "1451a1c81e871f58",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596491280297,
+    "endTimeUnixNano": 1792774596560812882,
+    "durationNano": 69532585,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76GBWEJY8C3FCE3",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596567,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "f569c9457dbf1122",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596488270490,
+    "endTimeUnixNano": 1792774596567818075,
+    "durationNano": 79547585,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76YXG30HPR7JDEY",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596603,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "516929560866e8bf",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596570045145,
+    "endTimeUnixNano": 1792774596603127037,
+    "durationNano": 33081892,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76TW7X9QM5QJPQQ",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596626,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "7e2dc9602451b72e",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596603404143,
+    "endTimeUnixNano": 1792774596626933564,
+    "durationNano": 23529421,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76QRSPZSPD0MN0C",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774596654,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "0230151942ee43c0",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596627647312,
+    "endTimeUnixNano": 1792774596654488688,
+    "durationNano": 26841376,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Z76TSNTMYHCBMRMZ",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774599947,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.bedrock-runtime",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "803392b86c08efe0",
+    "parentSpanId": "a9e68547f39bd8c4",
+    "flags": 256,
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774596672837429,
+    "endTimeUnixNano": 1792774599947277860,
+    "durationNano": 3274440431,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "rpc.service": "Bedrock Runtime",
+     "aws.remote.resource.identifier": "global.zai.glm-5.3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "ConverseStream",
+     "gen_ai.provider.name": "aws.bedrock",
+     "server.address": "bedrock-runtime.us-west-2.amazonaws.com",
+     "gen_ai.request.max_tokens": 1024,
+     "aws.request_id": "ca1ff3ce-5ca5-42e2-99c6-81bbdffbbb74",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.auth.region": "us-west-2",
+     "rpc.method": "ConverseStream",
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "server.port": 443,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "http.response.status_code": 200,
+     "gen_ai.system": "aws.bedrock",
+     "telemetry.extended": "true",
+     "gen_ai.usage.output_tokens": 13,
+     "aws.genai.span_kind": "LLM",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::BedrockRuntime",
+     "http.status_code": 200,
+     "aws.region": "us-west-2",
+     "aws.remote.resource.type": "AWS::Bedrock::Model",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 941,
+     "aws.genai.token_count_total": 954,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774599948,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "a9e68547f39bd8c4",
+    "parentSpanId": "e5da688e2c0b09b8",
+    "flags": 256,
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792774596655995471,
+    "endTimeUnixNano": 1792774599948002824,
+    "durationNano": 3292007353,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.usage.prompt_tokens": 941,
+     "gen_ai.usage.output_tokens": 13,
+     "gen_ai.server.request.duration": 2563,
+     "gen_ai.usage.total_tokens": 954,
+     "gen_ai.usage.completion_tokens": 13,
+     "aws.genai.span_kind": "LLM",
+     "gen_ai.event.start_time": "2026-10-23T16:56:36.656012+00:00",
+     "gen_ai.server.time_to_first_token": 3290,
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-23T16:56:39.947962+00:00",
+     "gen_ai.usage.input_tokens": 941,
+     "aws.genai.token_count_total": 954,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774599976,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "6742040a1f9359aa",
+    "parentSpanId": "e5da688e2c0b09b8",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774599948465672,
+    "endTimeUnixNano": 1792774599976620607,
+    "durationNano": 28154935,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "2JXJGEXZXMCQB7M8",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774599978,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "d84e1d41fc130427",
+    "parentSpanId": "e5da688e2c0b09b8",
+    "flags": 256,
+    "name": "execute_tool get_weather",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792774599977164974,
+    "endTimeUnixNano": 1792774599978367605,
+    "durationNano": 1202631,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_3e04bcb655b95e6885673c0816301250",
+     "gen_ai.tool.description": "Return the current weather for a city (fixed demo data). Supported: Beijing, Shanghai, Shenzhen, Chengdu, Xi'an, Seattle (English or Chinese names).",
+     "gen_ai.tool.json_schema": "{\"properties\": {\"city\": {\"description\": \"Parameter city\", \"type\": \"string\"}}, \"required\": [\"city\"], \"type\": \"object\"}",
+     "aws.genai.span_kind": "TOOL",
+     "gen_ai.event.start_time": "2026-10-23T16:56:39.977193+00:00",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-23T16:56:39.978344+00:00",
+     "gen_ai.tool.name": "get_weather",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774600017,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "f316fcc162300518",
+    "parentSpanId": "e5da688e2c0b09b8",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774599978698054,
+    "endTimeUnixNano": 1792774600017936670,
+    "durationNano": 39238616,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "2JXP58W30YXHNTD8",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774600045,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "5e1e7db19f38e571",
+    "parentSpanId": "e5da688e2c0b09b8",
+    "flags": 256,
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774600018164652,
+    "endTimeUnixNano": 1792774600045047875,
+    "durationNano": 26883223,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "GetObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Q4F82WF9A6RRQ921",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "GetObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774600073,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "b89386dfffdc7d73",
+    "parentSpanId": "e5da688e2c0b09b8",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774600045763789,
+    "endTimeUnixNano": 1792774600073857086,
+    "durationNano": 28093297,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "Q4FED74Q90G13Z6G",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774600074,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "e5da688e2c0b09b8",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792774596655397499,
+    "endTimeUnixNano": 1792774600074061568,
+    "durationNano": 3418664069,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-23T16:56:40.074044+00:00",
+     "event_loop.cycle_id": "74c854c3-b968-487b-a49c-7a02076b7126",
+     "gen_ai.event.start_time": "2026-10-23T16:56:36.655421+00:00",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602366,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.bedrock-runtime",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "0f7e17da613eb049",
+    "parentSpanId": "5b0636a1bb5008f4",
+    "flags": 256,
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774600075736533,
+    "endTimeUnixNano": 1792774602366462096,
+    "durationNano": 2290725563,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "rpc.service": "Bedrock Runtime",
+     "aws.remote.resource.identifier": "global.zai.glm-5.3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "ConverseStream",
+     "gen_ai.provider.name": "aws.bedrock",
+     "server.address": "bedrock-runtime.us-west-2.amazonaws.com",
+     "gen_ai.request.max_tokens": 1024,
+     "aws.request_id": "c3f17410-cc9a-4e08-a777-b2df222ee467",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.auth.region": "us-west-2",
+     "rpc.method": "ConverseStream",
+     "gen_ai.response.finish_reasons": [
+      "end_turn"
+     ],
+     "server.port": 443,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "http.response.status_code": 200,
+     "gen_ai.system": "aws.bedrock",
+     "telemetry.extended": "true",
+     "gen_ai.usage.output_tokens": 28,
+     "aws.genai.span_kind": "LLM",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::BedrockRuntime",
+     "http.status_code": 200,
+     "aws.region": "us-west-2",
+     "aws.remote.resource.type": "AWS::Bedrock::Model",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 985,
+     "aws.genai.token_count_total": 1013,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602367,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "5b0636a1bb5008f4",
+    "parentSpanId": "eb581ac94de8fc55",
+    "flags": 256,
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792774600075003265,
+    "endTimeUnixNano": 1792774602367371981,
+    "durationNano": 2292368716,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.usage.prompt_tokens": 985,
+     "gen_ai.usage.output_tokens": 28,
+     "gen_ai.server.request.duration": 1896,
+     "gen_ai.usage.total_tokens": 1013,
+     "gen_ai.usage.completion_tokens": 28,
+     "aws.genai.span_kind": "LLM",
+     "gen_ai.event.start_time": "2026-10-23T16:56:40.075019+00:00",
+     "gen_ai.server.time_to_first_token": 2090,
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-23T16:56:42.367335+00:00",
+     "gen_ai.usage.input_tokens": 985,
+     "aws.genai.token_count_total": 1013,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602397,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "eb581ac94de8fc55",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792774600074368624,
+    "endTimeUnixNano": 1792774602397786150,
+    "durationNano": 2323417526,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-23T16:56:42.397760+00:00",
+     "event_loop.cycle_id": "b938bee3-9cee-4366-8821-f56f6746ea15",
+     "gen_ai.event.start_time": "2026-10-23T16:56:40.074391+00:00",
+     "event_loop.parent_cycle_id": "74c854c3-b968-487b-a49c-7a02076b7126",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602397,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "43804f28c119c501",
+    "parentSpanId": "eb581ac94de8fc55",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774602367803633,
+    "endTimeUnixNano": 1792774602397293410,
+    "durationNano": 29489777,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "BWG8T7Q12Y53AJ13",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602501,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.s3",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "4627a1bd8a810352",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774602429383397,
+    "endTimeUnixNano": 1792774602501487975,
+    "durationNano": 72104578,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "telemetry.extended": "true",
+     "rpc.service": "S3",
+     "aws.remote.resource.identifier": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::S3",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "PutObject",
+     "server.address": "s3.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "BWGA4Y8SBRH59ZQ5",
+     "http.status_code": 200,
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::S3::Bucket",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "PutObject",
+     "server.port": 443,
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.s3.bucket": "launchpad-artifacts-000000000000-cn-northwest-1",
+     "http.response.status_code": 200,
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602537,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.botocore.sqs",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "9328f343fecdc37e",
+    "parentSpanId": "66cdbacdcc9b627d",
+    "flags": 256,
+    "name": "SQS.SendMessage",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792774602509142562,
+    "endTimeUnixNano": 1792774602537175665,
+    "durationNano": 28033103,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "messaging.system": "aws.sqs",
+     "messaging.url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "aws.sqs.queue.url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "rpc.service": "SQS",
+     "aws.remote.resource.identifier": "launchpad-memory-extract-cn-northwest-1",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "SendMessage",
+     "server.address": "sqs.cn-northwest-1.amazonaws.com.cn",
+     "aws.request_id": "8b5af822-8d73-5872-9029-9b771979e9c3",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "CLIENT",
+     "aws.auth.region": "cn-northwest-1",
+     "rpc.method": "SendMessage",
+     "server.port": 443,
+     "messaging.message.id": "4f45879f-0f6e-4f01-ac1d-7b413bee86af",
+     "http.response.status_code": 200,
+     "telemetry.extended": "true",
+     "messaging.destination": "launchpad-memory-extract-cn-northwest-1",
+     "rpc.system": "aws-api",
+     "aws.remote.service": "AWS::SQS",
+     "aws.queue_url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "http.status_code": 200,
+     "aws.region": "cn-northwest-1",
+     "aws.remote.resource.type": "AWS::SQS::Queue",
+     "retry_attempts": 0,
+     "PlatformType": "AWS::BedrockAgentCore",
+     "aws.auth.account.access_key": "ASIAEXAMPLETMP000001",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602537,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.boto3sqs",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "66cdbacdcc9b627d",
+    "parentSpanId": "9bca61a9d563ca9f",
+    "flags": 256,
+    "name": "launchpad-memory-extract-cn-northwest-1 send",
+    "kind": "PRODUCER",
+    "startTimeUnixNano": 1792774602508756711,
+    "endTimeUnixNano": 1792774602537237459,
+    "durationNano": 28480748,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "messaging.system": "aws.sqs",
+     "messaging.destination_kind": "queue",
+     "messaging.url": "https://sqs.cn-northwest-1.amazonaws.com.cn/000000000000/launchpad-memory-extract-cn-northwest-1",
+     "telemetry.extended": "true",
+     "messaging.destination": "launchpad-memory-extract-cn-northwest-1",
+     "aws.remote.service": "aws.sqs",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "aws.remote.operation": "UnknownRemoteOperation",
+     "aws.local.operation": "UnmappedOperation",
+     "aws.span.kind": "PRODUCER",
+     "messaging.message.id": "4f45879f-0f6e-4f01-ac1d-7b413bee86af",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602537,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "strands.telemetry.tracer",
+     "version": ""
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "9bca61a9d563ca9f",
+    "parentSpanId": "179f20d3690648f3",
+    "flags": 256,
+    "name": "invoke_agent Strands Agents",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792774596569631963,
+    "endTimeUnixNano": 1792774602537427787,
+    "durationNano": 5967795824,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "gen_ai.usage.prompt_tokens": 1926,
+     "gen_ai.usage.output_tokens": 41,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.agent.name": "Strands Agents",
+     "gen_ai.usage.total_tokens": 1967,
+     "gen_ai.usage.completion_tokens": 41,
+     "aws.genai.span_kind": "AGENT",
+     "gen_ai.event.start_time": "2026-10-23T16:56:36.569659+00:00",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "invoke_agent",
+     "gen_ai.event.end_time": "2026-10-23T16:56:42.537395+00:00",
+     "gen_ai.usage.input_tokens": 1926,
+     "aws.genai.token_count_total": 1967,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 0,
+     "gen_ai.agent.tools": "[\"calculator\", \"current_utc_time\", \"get_weather\", \"lookup_order\", \"check_inventory\", \"convert_currency\", \"fetch_resource\", \"slow_task\"]",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  },
+  {
+   "timestamp": 1792774602538,
+   "group": "aws/spans",
+   "record": {
+    "scope": {
+     "name": "opentelemetry.instrumentation.starlette",
+     "version": "0.65b0"
+    },
+    "traceId": "6adb91c1150079aa1dfcb1e262360150",
+    "spanId": "179f20d3690648f3",
+    "parentSpanId": "8e982f5f39e0cf0e",
+    "flags": 768,
+    "name": "POST /invocations",
+    "kind": "SERVER",
+    "startTimeUnixNano": 1792774595936644383,
+    "endTimeUnixNano": 1792774602538685475,
+    "durationNano": 6602041092,
+    "attributes": {
+     "aws.local.service": "probe_stub_glm_0e7f91.DEFAULT",
+     "net.peer.port": 36378,
+     "telemetry.extended": "true",
+     "http.target": "/invocations",
+     "http.flavor": "1.1",
+     "http.url": "http://24d0b4d8-ae3b-d40c-ddbf-0e2a5bd5e0f5.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn/invocations",
+     "net.peer.ip": "127.0.0.1",
+     "http.host": "127.0.0.1:8080",
+     "aws.local.environment": "bedrock-agentcore:default",
+     "http.status_code": 200,
+     "aws.local.operation": "POST /invocations",
+     "aws.span.kind": "SERVER",
+     "http.server_name": "24d0b4d8-ae3b-d40c-ddbf-0e2a5bd5e0f5.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn",
+     "net.host.port": 8080,
+     "http.route": "/invocations",
+     "PlatformType": "AWS::BedrockAgentCore",
+     "http.method": "POST",
+     "http.response.status_code": 200,
+     "session.id": "probe-glm-idle-2f08721756c947bea71e9c294b5ed75a",
+     "http.scheme": "http"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "probe_stub_glm_0e7f91.DEFAULT"
+     }
+    }
+   }
+  }
+ ]
+}

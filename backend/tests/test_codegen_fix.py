@@ -3,8 +3,8 @@
 Covers the ported codegen fix-half: contract/ruff/import-smoke validators,
 fix-workspace layout + error tail truncation, diagnosis.json normalization,
 the environment-category revert guard, and the full fix_code_events event
-sequence driven by a FAKE coding-agent backend (no live Claude). The Claude
-SDK backend itself is exercised only via get_status availability shape.
+sequence driven by a FAKE coding-agent backend (no live Kimi). The Kimi
+backend itself is covered by test_codegen_kimi.py.
 """
 
 import asyncio
@@ -249,14 +249,14 @@ def test_read_diagnosis_missing_file_degrades(tmp_path):
 # --- FAKE backend for full fix_code_events flow ---------------------------
 
 class _FakeBackend(CodingAgentBackend):
-    """Deterministic stand-in for the Claude SDK backend.
+    """Deterministic stand-in for the Kimi backend.
 
     Writes a diagnosis.json and (optionally) rewrites generated_agent.py on the
     first round; asserts nothing live. Configured via class attributes set per
     test through a factory.
     """
 
-    name = "claude"
+    name = "kimi"
     new_code: str | None = None
     diagnosis: dict | None = None
     available: tuple[bool, str] = (True, "")
@@ -287,7 +287,7 @@ def _install_fake_backend(monkeypatch, *, new_code, diagnosis, available=(True, 
         (_FakeBackend,),
         {"new_code": new_code, "diagnosis": diagnosis, "available": available},
     )
-    monkeypatch.setitem(registry._BACKENDS, "claude", backend_cls)
+    monkeypatch.setitem(registry._BACKENDS, "kimi", backend_cls)
 
 
 FIXED_CODE = GOOD_CODE.replace('return "ok"', 'return "fixed"')
@@ -388,12 +388,13 @@ def test_fix_flow_emits_error_when_backend_unavailable(monkeypatch):
 
 def test_get_status_reports_unavailable_reason(monkeypatch):
     _install_fake_backend(
-        monkeypatch, new_code=None, diagnosis=None, available=(False, "claude CLI not found")
+        monkeypatch, new_code=None, diagnosis=None,
+        available=(False, "AWS_BEARER_TOKEN_BEDROCK is not set"),
     )
     status = asyncio.run(service.get_status())
-    assert status["backend"] == "claude"
+    assert status["backend"] == "kimi"
     assert status["available"] is False
-    assert status["reason"] == "claude CLI not found"
+    assert status["reason"] == "AWS_BEARER_TOKEN_BEDROCK is not set"
     assert status["model"] == config.get_model()
 
 

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_control_response/v1",
+  "title": "I5 engine control response",
+  "type": "object",
+  "properties": {
+    "ok": {"type": "boolean"},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "decisions": {"type": "array", "items": {"type": "object"}},
+    "shards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "shard": {"type": "integer", "minimum": 0},
+          "ready": {"type": "boolean"},
+          "store_epoch": {"type": "string"},
+          "sets": {"type": "object", "additionalProperties": {"type": "string"}}
+        },
+        "required": ["shard", "ready", "store_epoch", "sets"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["ok"],
+  "additionalProperties": false
+}

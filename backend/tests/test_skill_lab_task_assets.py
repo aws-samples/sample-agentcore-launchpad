@@ -434,7 +434,7 @@ def test_update_commit_failure_restores_json_assets_and_preserves_staged_token(l
 
 
 def test_reserved_runtime_roots_are_rejected_case_insensitively(lab):
-    for root in (".claude", ".codex", ".git", ".CLAUDE", ".CoDeX", ".GIT"):
+    for root in (".agents", ".opencode", ".git", ".AGENTS", ".OpenCode", ".GIT"):
         staged = _upload(
             lab, [("files", ("one.pdf", b"%PDF-reserved", "application/pdf"))]
         ).json()["assets"][0]

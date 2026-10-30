@@ -8,18 +8,29 @@ Nothing here proves a policy is sufficient. Only a live invoke does. See
 implement.md's final section.
 """
 
+import dataclasses
+import json
+
 import pytest
 
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import AgentSpec, ToolRef
 from app.services import agent_iam
-from app.services.agent_iam import RoleContext
+from app.services.agent_iam import RoleContext, policy_document
 
 CTX = RoleContext(
     account_id="123456789012",
     region="us-west-2",
     artifacts_bucket="launchpad-artifacts-123456789012-us-west-2",
     ecr_repo_arn="arn:aws:ecr:us-west-2:123456789012:repository/launchpad-agents",
-    memory_id="launchpad_memory-abc123",
+)
+# A workspace whose self-hosted memory substrate exists (N6): the resource map carries
+# the store id, snapshot bucket, extraction queue and OpenSearch domain.
+MEM_CTX = dataclasses.replace(
+    CTX,
+    memory_store_id="launchpad_memory-default",
+    memory_bucket="bkt",
+    memory_queue_arn=CTX.arn("sqs", "launchpad-memory-extract"),
+    memory_domain_arn=CTX.arn("es", "domain/lp-memory"),
 )
 
 
@@ -70,160 +81,37 @@ class TestRoleName:
         assert agent_iam.role_name_for("", "abcdef12").startswith("launchpad-agent-")
 
 
-# ─── model scoping ───────────────────────────────────────────────────────────
-
-class TestModelResources:
-    def test_a_profile_id_authorizes_both_the_profile_and_the_model(self):
-        """Invoking a profile authorizes against the profile ARN *and* the
-        foundation models it fronts; scoping to one fails at first invoke."""
-        resources = agent_iam.model_resources("global.anthropic.claude-sonnet-5", CTX)
-        assert "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5" in resources
-        assert any("inference-profile/global.anthropic.claude-sonnet-5" in r for r in resources)
-
-    @pytest.mark.parametrize("prefix", ["us.", "eu.", "apac."])
-    def test_every_known_profile_prefix(self, prefix):
-        resources = agent_iam.model_resources(f"{prefix}amazon.nova-2-lite-v1:0", CTX)
-        assert any("inference-profile/" in r for r in resources)
-        assert any(r.endswith("foundation-model/amazon.nova-2-lite-v1:0") for r in resources)
-
-    def test_a_bare_foundation_model_id(self):
-        assert agent_iam.model_resources("amazon.nova-2-lite-v1:0", CTX) == [
-            "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0"
-        ]
-
-    def test_an_unrecognised_id_falls_back_rather_than_guessing(self):
-        """Custom model ids are a first-class feature and the valid id space cannot
-        be enumerated — narrowing a shape we do not understand would break the agent
-        instead of protecting it."""
-        assert agent_iam.model_resources("my-private-endpoint", CTX) == [
-            "arn:aws:bedrock:*::foundation-model/*"
-        ]
-
-    def test_an_empty_id_does_not_produce_a_broken_arn(self):
-        assert agent_iam.model_resources("", CTX) == ["*"]
-
-
-class TestAllowedModelResources:
-    """byoc `allowed_models`: the BedrockModels statement covers the UNION of the
-    per-model resources — each entry still scoped to its exact id, no wildcard."""
-
-    def _byoc(self, models, **over):
-        return _spec(
-            method="byoc", system_prompt="",
-            byoc={"artifact_kind": "code_zip", "upload_id": "u1",
-                  "allowed_models": models},
-            **over,
-        )
-
-    def test_union_over_every_entry(self):
-        spec = self._byoc(["global.anthropic.claude-sonnet-5",
-                           "amazon.nova-2-lite-v1:0"])
-        resources = agent_iam.allowed_model_resources(spec, CTX)
-        assert resources == [
-            "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
-            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/"
-            "global.anthropic.claude-sonnet-5",
-            "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0",
-        ]
-
-    def test_overlapping_entries_dedupe(self):
-        # a profile and the bare model it fronts share a foundation-model ARN
-        spec = self._byoc(["global.anthropic.claude-sonnet-5",
-                           "anthropic.claude-sonnet-5"])
-        resources = agent_iam.allowed_model_resources(spec, CTX)
-        assert len(resources) == len(set(resources)) == 2
-
-    def test_policy_statement_carries_the_union(self):
-        spec = self._byoc(["global.anthropic.claude-sonnet-5",
-                           "amazon.nova-2-lite-v1:0"])
-        statement = _statement(spec, "BedrockModels")
-        assert "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0" in (
-            statement["Resource"])
-        assert "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5" in (
-            statement["Resource"])
-        assert "arn:aws:bedrock:*::foundation-model/*" not in statement["Resource"]
-
-    def test_single_model_specs_are_unchanged(self):
-        assert agent_iam.allowed_model_resources(_spec(), CTX) == (
-            agent_iam.model_resources(_spec().model_id, CTX))
-
-    def test_foundation_model_arn_is_scoped_exactly(self):
-        model = "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
-        assert _statement(self._byoc([model]), "BedrockModels")["Resource"] == [model]
-
-    def test_profile_arn_includes_only_its_foundation_model(self):
-        profile = (
-            "arn:aws:bedrock:us-east-1:123456789012:"
-            "inference-profile/us.amazon.nova-pro-v1:0"
-        )
-        assert _statement(self._byoc([profile]), "BedrockModels")["Resource"] == [
-            "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0", profile,
-        ]
-
-    def test_custom_id_stays_literal_instead_of_using_the_legacy_fallback(self):
-        spec = self._byoc(["my-private-endpoint"])
-        assert _statement(spec, "BedrockModels")["Resource"] == [
-            "arn:aws:bedrock:*::foundation-model/my-private-endpoint",
-        ]
-
-    def test_omitted_allowlist_keeps_the_primary_arn_scoped(self):
-        model = "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
-        spec = _spec(
-            method="byoc", model_id=model,
-            byoc={"artifact_kind": "code_zip", "upload_id": "u1"},
-        )
-        assert _statement(spec, "BedrockModels")["Resource"] == [model]
-
-    def test_republish_updates_the_role_policy_with_the_new_union(self):
-        """`ensure_role` put_role_policy's the capability policy on every provision
-        run — a changed allowed_models list lands on re-publish, not only create."""
-        import json
-        from types import SimpleNamespace
-
-        put_docs = []
-
-        class StubIam:
-            def create_role(self, **kw):
-                return {"Role": {"Arn": "arn:aws:iam::123456789012:role/x"}}
-
-            def put_role_policy(self, RoleName, PolicyName, PolicyDocument):
-                put_docs.append(json.loads(PolicyDocument))
-
-            def delete_role_policy(self, **kw):
-                pass
-
-        agent = SimpleNamespace(id="abcdef1234567890", name="probe", system_key=None)
-        for models in (["us.model.one"], ["us.model.one", "us.model.two"]):
-            agent_iam.ensure_role(StubIam(), agent, self._byoc(models), CTX)
-        first, second = (
-            next(s for s in doc["Statement"] if s["Sid"] == "BedrockModels")
-            for doc in put_docs
-        )
-        assert first["Resource"] == [
-            "arn:aws:bedrock:*::foundation-model/model.one",
-            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.model.one",
-        ]
-        assert second["Resource"] == first["Resource"] + [
-            "arn:aws:bedrock:*::foundation-model/model.two",
-            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.model.two",
-        ]
-
-
 # ─── what a plain agent gets, and what it does not ───────────────────────────
 
 class TestBaselineAgent:
-    def test_gets_only_model_telemetry_and_config_bundle_reads(self):
-        # ConfigurationBundleRead is unconditional for a generated agent: its code
-        # always reads get_config_bundle(), so the role always needs to resolve one.
+    def test_gets_only_telemetry_and_config_bundle_reads(self):
+        # LaunchpadBundleRead is unconditional for a generated agent: its code always
+        # reads _config_bundle() (routed A/B experiments), so the role always needs to
+        # fetch the bundle JSON from the artifacts bucket (CN: S3, not the AgentCore
+        # ConfigurationBundle service — plan §B.6).
         assert _sids(_spec(memory={"short_term": False, "long_term": False})) == {
-            "BedrockModels",
-            "ConfigurationBundleRead",
+            "ModelCredentialApiKey",
+            "ModelCredentialVaultSecret",
+            "LaunchpadBundleRead",
             "Telemetry",
             "TelemetryTracing",
         }
 
-    def test_short_term_memory_is_on_by_default_so_memory_is_emitted(self):
-        assert "AgentCoreMemory" in _sids(_spec())
+    @pytest.mark.parametrize("method", ["zip_runtime", "studio", "byoc", "harness"])
+    def test_no_role_authorizes_a_model(self, method):
+        """The Global models are reached with the workspace's API key (spec C3/C4);
+        a bedrock:InvokeModel grant on an aws-cn role is dead weight."""
+        over = {"method": method}
+        if method == "studio":
+            over.update(code="print(1)", studio_flow={"nodes": [], "edges": []})
+        if method == "byoc":
+            over.update(system_prompt="", byoc={"artifact_kind": "code_zip", "upload_id": "u1",
+                                                "entrypoint": "main.py"})
+        doc = agent_iam.policy_document(_spec(**over), CTX)
+        actions = [a for s in doc["Statement"]
+                   for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])]
+        assert not any(a.startswith("bedrock:") for a in actions)
+        assert "BedrockModels" not in {s["Sid"] for s in doc["Statement"]}
 
     @pytest.mark.parametrize("absent", [
         "BedrockMantleInference",
@@ -247,128 +135,198 @@ class TestBaselineAgent:
         """16 actions including CreateGatewayRule / UpdateGateway / InvokeAgentRuntime
         were on every agent. That is what the platform does, from its own
         credentials — a compromised agent could rewrite gateway routing."""
-        for spec in (_spec(), _spec(method="container"), _spec(method="harness")):
+        for spec in (_spec(), _spec(method="harness")):
             assert "ABTestOrchestration" not in _sids(spec)
+
+
+class TestModelCredential:
+    """Every agent exchanges its workload token for the Global Bedrock API key."""
+
+    def test_grants_the_exchange_on_the_exact_provider_and_own_identity(self):
+        statement = _statement(_spec(), "ModelCredentialApiKey")
+        assert set(statement["Action"]) == {
+            "bedrock-agentcore:GetResourceApiKey", "bedrock-agentcore:GetWorkloadAccessToken",
+        }
+        base = "arn:aws:bedrock-agentcore:us-west-2:123456789012"
+        # N-R6: every platform model credential provider is `launchpad-*` (Bedrock,
+        # SiliconFlow, …) — a runtime fetches the one its model / judge needs
+        assert statement["Resource"] == [
+            f"{base}:token-vault/default",
+            f"{base}:workload-identity-directory/default",
+            agent_iam.own_workload_identity_arn(_spec(), CTX),
+            f"{base}:token-vault/default/apikeycredentialprovider/launchpad-*",
+        ]
+        secret = _statement(_spec(), "ModelCredentialVaultSecret")
+        assert secret["Action"] == ["secretsmanager:GetSecretValue"]
+        assert secret["Resource"] == [
+            "arn:aws:secretsmanager:us-west-2:123456789012:secret:"
+            "bedrock-agentcore-identity!default/apikey/launchpad-*-*"
+        ]
+
+    def test_the_family_pattern_covers_every_platform_provider(self):
+        from app.schemas.agent import providers
+
+        for row in providers().values():
+            assert row["credential_provider"].startswith("launchpad-")
+        assert agent_iam.model_credential_providers("launchpad-global-bedrock") == ["launchpad-*"]
+        assert agent_iam.model_credential_providers("launchpad-siliconflow") == ["launchpad-*"]
+
+    def test_follows_the_specs_credential_name(self):
+        """A custom (non-platform) provider name is granted explicitly, beside the family."""
+        spec = _spec(model_credential="team-bedrock-key")
+        api = _statement(spec, "ModelCredentialApiKey")["Resource"]
+        assert api[-2].endswith("apikeycredentialprovider/team-bedrock-key")
+        assert api[-1].endswith("apikeycredentialprovider/launchpad-*")
+        secret = _statement(spec, "ModelCredentialVaultSecret")["Resource"]
+        assert secret[0].endswith("apikey/team-bedrock-key-*")
+        assert secret[1].endswith("apikey/launchpad-*-*")
+
+    @pytest.mark.parametrize("over", [
+        {}, {"method": "harness"},
+        {"method": "studio", "code": "print(1)", "studio_flow": {"nodes": [], "edges": []}},
+        {"method": "byoc", "system_prompt": "",
+         "byoc": {"artifact_kind": "code_zip", "upload_id": "u1"}},
+    ])
+    def test_every_method_gets_it_and_the_partition_follows_the_context(self, over):
+        cn = RoleContext(
+            account_id="123456789012", region="cn-northwest-1",
+            artifacts_bucket="b",
+            ecr_repo_arn="arn:aws-cn:ecr:cn-northwest-1:123456789012:repository/r",
+            partition="aws-cn", dns_suffix="amazonaws.com.cn",
+        )
+        doc = agent_iam.policy_document(_spec(**over), cn)
+        sids = {s["Sid"] for s in doc["Statement"]}
+        assert {"ModelCredentialApiKey", "ModelCredentialVaultSecret"} <= sids
+        api = next(s for s in doc["Statement"] if s["Sid"] == "ModelCredentialApiKey")
+        cn_base = "arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:"
+        assert all(r.startswith(cn_base) for r in api["Resource"])
 
 
 # ─── per-capability derivation ───────────────────────────────────────────────
 
-class TestMantle:
-    def test_mantle_adds_its_three_statements(self):
-        sids = _sids(_spec(model_source="mantle"))
-        assert "BedrockMantleInference" in sids
-        assert "BedrockMantleCallWithBearerToken" in sids
-        assert "MarketplaceOperationsFromBedrockMantleFor3pModels" in sids
-
-    def test_the_marketplace_wildcard_keeps_its_guard_condition(self):
-        """The CalledViaLast condition is what makes that wildcard acceptable."""
-        statement = _statement(
-            _spec(model_source="mantle"),
-            "MarketplaceOperationsFromBedrockMantleFor3pModels",
-        )
-        assert statement["Condition"]["StringEquals"]["aws:CalledViaLast"] == (
-            "bedrock-mantle.amazonaws.com"
-        )
-
-
-def _studio(*nodes: dict) -> AgentSpec:
-    """A studio spec as the canvas publishes it — no model_id, the models on the nodes."""
-    flow = {"nodes": list(nodes), "edges": [], "graphMode": False}
-    return _spec(method="studio", code="print(1)", studio_flow=flow)
-
-
-def _node(node_type: str = "agent", **data) -> dict:
-    return {"id": node_type, "type": node_type, "data": data}
-
-
-class TestStudioFlowModels:
-    """The canvas publish sends no model_id, so the role must follow the nodes."""
-
-    def test_authorizes_every_bedrock_model_its_nodes_use(self):
-        resources = _statement(
-            _studio(
-                _node(modelProvider="AWS Bedrock", modelId="global.openai.gpt-6-sol"),
-                _node("orchestrator-agent", modelProvider="AWS Bedrock",
-                      modelId="global.anthropic.claude-opus-5"),
-            ),
-            "BedrockModels",
-        )["Resource"]
-        assert resources == [
-            "arn:aws:bedrock:*::foundation-model/openai.gpt-6-sol",
-            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.openai.gpt-6-sol",
-            "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5",
-            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.anthropic.claude-opus-5",
-        ]
-
-    def test_a_node_without_a_model_id_gets_the_codegen_fallback(self):
-        resources = _statement(_studio(_node()), "BedrockModels")["Resource"]
-        assert resources == agent_iam.model_resources("global.anthropic.claude-sonnet-5", CTX)
-
-    def test_a_mantle_node_adds_the_mantle_statements(self):
-        spec = _studio(_node(modelProvider="Amazon Bedrock (Mantle)",
-                             modelId="openai.gpt-5.6-terra", modelName="openai.gpt-5.6-terra"))
-        assert "BedrockMantleInference" in _sids(spec)
-        # no Bedrock node: the statement stays well-formed on the spec's own id
-        assert _statement(spec, "BedrockModels")["Resource"] == agent_iam.model_resources(
-            spec.model_id, CTX
-        )
-
-    def test_bedrock_only_flows_get_no_mantle_grant(self):
-        spec = _studio(_node(modelProvider="AWS Bedrock", modelId="global.openai.gpt-6-sol"))
-        assert "BedrockMantleInference" not in _sids(spec)
-
-    def test_non_model_nodes_and_other_methods_are_ignored(self):
-        spec = _studio(_node("tool", modelId="global.openai.gpt-6-luna"),
-                       _node(modelProvider="AWS Bedrock", modelId="global.openai.gpt-6-sol"))
-        assert all("gpt-6-luna" not in r for r in _statement(spec, "BedrockModels")["Resource"])
-        zip_spec = _spec(studio_flow={"nodes": [_node(modelId="global.openai.gpt-6-sol")]})
-        assert _statement(zip_spec, "BedrockModels")["Resource"] == agent_iam.model_resources(
-            zip_spec.model_id, CTX
-        )
-
-
-class TestMemory:
-    def test_scoped_to_the_configured_memory(self):
-        statement = _statement(_spec(), "AgentCoreMemory")
-        assert statement["Resource"].endswith("memory/launchpad_memory-abc123")
-
-    def test_falls_back_to_wildcard_when_the_memory_id_is_unknown(self):
-        ctx = RoleContext(
-            account_id=CTX.account_id, region=CTX.region,
-            artifacts_bucket=CTX.artifacts_bucket, ecr_repo_arn=CTX.ecr_repo_arn,
-        )
-        doc = agent_iam.policy_document(_spec(), ctx)
-        memory = next(s for s in doc["Statement"] if s["Sid"] == "AgentCoreMemory")
-        assert memory["Resource"] == "*"
-
-    def test_a_spec_pinned_memory_overrides_the_workspace_default(self):
-        spec = _spec(memory={"short_term": True, "memory_id": "team_notes-XYZ789"})
-        statement = _statement(spec, "AgentCoreMemory")
-        assert statement["Resource"].endswith("memory/team_notes-XYZ789")
-
-    def test_disabling_memory_drops_the_statement(self):
-        spec = _spec(memory={"short_term": False, "long_term": False})
-        assert "AgentCoreMemory" not in _sids(spec)
-
 
 class TestKnowledgeBases:
-    def test_retrieval_is_scoped_to_the_attached_kbs(self):
-        spec = _spec(knowledge_bases=[{"kb_id": "KBONE"}, {"kb_id": "KBTWO"}])
-        statement = _statement(spec, "ManagedKbRetrieval")
-        assert statement["Resource"] == [
-            "arn:aws:bedrock:us-west-2:123456789012:knowledge-base/KBONE",
-            "arn:aws:bedrock:us-west-2:123456789012:knowledge-base/KBTWO",
-        ]
+    """Bedrock Knowledge Bases have no CN implementation: the direct retrieval grants
+    are gone (the self-hosted backend of N6 is reached through the gateway)."""
 
-    def test_agentic_retrieval_stays_wildcard_and_that_is_recorded(self):
-        """AgenticRetrieveStream does not support resource scoping. Unchanged from
-        the shared role, and documented rather than quietly narrowed."""
-        spec = _spec(knowledge_bases=[{"kb_id": "KBONE"}])
-        assert _statement(spec, "ManagedKbAgenticRetrieval")["Resource"] == "*"
+    def test_no_direct_retrieval_grant(self):
+        spec = _spec(knowledge_bases=[{"kb_id": "KBONE"}, {"kb_id": "KBTWO"}])
+        assert not {"ManagedKbRetrieval", "ManagedKbAgenticRetrieval"} & _sids(spec)
 
     def test_kbs_imply_a_workload_token(self):
         spec = _spec(knowledge_bases=[{"kb_id": "KBONE"}])
         assert "AgentCoreWorkloadIdentity" in _sids(spec)
+
+
+class TestMemorySubstrate:
+    """N6: S3 snapshot prefix, extraction queue and the memory index — only for agents
+    with memory on, in a workspace whose substrate exists (ruling R2)."""
+
+    def test_memory_agents_get_prefix_scoped_s3_sqs_and_es_grants(self):
+        spec = _spec(memory={"short_term": True, "long_term": True})
+        by = {s["Sid"]: s for s in agent_iam.policy_document(spec, MEM_CTX)["Statement"]}
+        assert by["MemorySnapshotObjects"]["Resource"] == [
+            CTX.arn("s3", "bkt/memory/launchpad_memory-default/*", region="", account="")
+        ]
+        assert set(by["MemorySnapshotObjects"]["Action"]) == {
+            "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+        }
+        assert by["MemorySnapshotList"]["Resource"] == [
+            CTX.arn("s3", "bkt", region="", account="")
+        ]
+        assert by["MemorySnapshotList"]["Condition"] == {
+            "StringLike": {"s3:prefix": ["memory/launchpad_memory-default/*"]}
+        }
+        assert by["MemoryExtractionQueue"] == {
+            "Sid": "MemoryExtractionQueue", "Effect": "Allow", "Action": ["sqs:SendMessage"],
+            "Resource": [MEM_CTX.memory_queue_arn],
+        }
+        assert by["MemorySearch"]["Resource"] == [f"{MEM_CTX.memory_domain_arn}/launchpad-memory/*"]
+        assert set(by["MemorySearch"]["Action"]) == {
+            "es:ESHttpGet", "es:ESHttpPost", "es:ESHttpPut", "es:ESHttpHead",
+        }
+        assert "KnowledgeSearch" not in by  # no KB mounted
+
+    def test_a_pinned_store_scopes_the_prefix_and_kbs_get_their_own_index(self):
+        spec = _spec(
+            memory={"short_term": True, "memory_id": "team_notes-abcd1234"},
+            knowledge_bases=[{"kb_id": "KB1"}, {"kb_id": "kbTwo"}],
+        )
+        by = {s["Sid"]: s for s in agent_iam.policy_document(spec, MEM_CTX)["Statement"]}
+        assert by["MemorySnapshotObjects"]["Resource"] == [
+            CTX.arn("s3", "bkt/memory/team_notes-abcd1234/*", region="", account="")
+        ]
+        assert by["MemorySnapshotList"]["Condition"]["StringLike"]["s3:prefix"] == [
+            "memory/team_notes-abcd1234/*"
+        ]
+        assert by["KnowledgeSearch"]["Resource"] == [
+            f"{MEM_CTX.memory_domain_arn}/launchpad-kb-kb1/*",
+            f"{MEM_CTX.memory_domain_arn}/launchpad-kb-kbtwo/*",
+        ]
+        assert by["KnowledgeSearch"]["Action"] == ["es:ESHttpGet", "es:ESHttpPost"]
+
+    def test_knowledge_search_needs_no_memory(self):
+        spec = _spec(memory={"short_term": False, "long_term": False},
+                     knowledge_bases=[{"kb_id": "KB1"}])
+        sids = {s["Sid"] for s in agent_iam.policy_document(spec, MEM_CTX)["Statement"]}
+        assert "KnowledgeSearch" in sids
+        assert not {s for s in sids if s.startswith("Memory")}
+
+    def test_without_a_substrate_no_memory_statement_appears(self):
+        sids = _sids(_spec(memory={"short_term": True, "long_term": True},
+                           knowledge_bases=[{"kb_id": "KB1"}]))
+        assert not {s for s in sids if s.startswith("Memory") or s == "KnowledgeSearch"}
+
+    def test_memory_off_gets_no_memory_statement_even_with_a_substrate(self):
+        spec = _spec(memory={"short_term": False, "long_term": False})
+        sids = {s["Sid"] for s in agent_iam.policy_document(spec, MEM_CTX)["Statement"]}
+        assert not {s for s in sids if s.startswith("Memory")}
+
+    def test_no_queue_means_no_queue_statement(self):
+        ctx = dataclasses.replace(MEM_CTX, memory_queue_arn="")
+        spec = _spec(memory={"short_term": True})
+        sids = {s["Sid"] for s in agent_iam.policy_document(spec, ctx)["Statement"]}
+        assert "MemoryExtractionQueue" not in sids
+        assert {"MemorySnapshotObjects", "MemorySnapshotList", "MemorySearch"} <= sids
+
+    def test_arns_follow_the_context_partition(self):
+        cn = RoleContext(
+            account_id="123456789012", region="cn-northwest-1", artifacts_bucket="b",
+            ecr_repo_arn="arn:aws-cn:ecr:cn-northwest-1:123456789012:repository/r",
+            partition="aws-cn", dns_suffix="amazonaws.com.cn",
+        )
+        cn = dataclasses.replace(
+            cn, memory_store_id="launchpad_memory-ws1", memory_bucket="b",
+            memory_queue_arn=cn.arn("sqs", "launchpad-memory-extract"),
+            memory_domain_arn=cn.arn("es", "domain/lp-memory"),
+        )
+        spec = _spec(memory={"short_term": True, "long_term": True},
+                     knowledge_bases=[{"kb_id": "KB1"}])
+        by = {s["Sid"]: s for s in agent_iam.policy_document(spec, cn)["Statement"]}
+        assert by["MemorySnapshotObjects"]["Resource"] == [
+            "arn:aws-cn:s3:::b/memory/launchpad_memory-ws1/*"
+        ]
+        for sid in ("MemoryExtractionQueue", "MemorySearch", "KnowledgeSearch"):
+            assert all(r.startswith("arn:aws-cn:") for r in by[sid]["Resource"]), sid
+
+    def test_role_context_reads_the_substrate_from_the_resource_map(self):
+        from tests.conftest import ws_ctx
+
+        ws = ws_ctx(resources={
+            "artifacts_bucket": "artifacts", "memory_id": "launchpad_memory-ws",
+            "memory_queue_arn": "arn:aws-cn:sqs:cn-northwest-1:1:q",
+            "memory_os_domain_arn": "arn:aws-cn:es:cn-northwest-1:1:domain/d",
+        })
+        ctx = agent_iam.role_context(ws)
+        assert ctx.memory_store_id == "launchpad_memory-ws"
+        assert ctx.memory_bucket == "artifacts"  # falls back to the artifacts bucket
+        assert ctx.memory_queue_arn.endswith(":q")
+        assert ctx.memory_domain_arn.endswith("domain/d")
+        with_bucket = agent_iam.role_context(ws_ctx(resources={
+            "artifacts_bucket": "artifacts", "memory_bucket": "snapshots",
+        }))
+        assert with_bucket.memory_bucket == "snapshots"
+        assert with_bucket.memory_store_id == "" and with_bucket.memory_domain_arn == ""
 
 
 class TestSkills:
@@ -432,9 +390,11 @@ class TestBuiltinTools:
         ]
 
     def test_gateway_invoke_is_absent_without_a_resolvable_gateway_id(self):
-        """Legacy config-less refs ride launchpad-gw's OAuth, and a member-supplied
-        id that is not a gateway id (a wildcard, an ARN fragment, a trailing
-        newline) must never widen the Resource."""
+        """IAM's last line of defence (N17-obs487): creation-time validation now refuses a
+        Gateway ref without ``config.gateway_id`` (``agent.gateway_tool_unbound`` — on CN
+        AWS_IAM gateways a config-less ref is a broken agent, not a legacy OAuth one) and a
+        malformed or foreign id; should a stored spec still carry one (a legacy row), the
+        policy must never widen the Resource for it."""
         for gateway_id in (None, "*", "gw/*", "a-*", "web-search-smlhlkheht\n"):
             config = {"record_id": "rec", "gateway_id": gateway_id} if gateway_id else {}
             spec = _spec(tools=[{"type": "gateway", "name": "g", "config": config}])
@@ -444,7 +404,10 @@ class TestBuiltinTools:
 
 class TestContainerMethod:
     def test_gets_ecr_pull_scoped_to_the_repo(self):
-        statement = _statement(_spec(method="container"), "EcrPull")
+        statement = _statement(
+            _spec(method="byoc", byoc={"artifact_kind": "container_source", "upload_id": "u1"}),
+            "EcrPull",
+        )
         assert statement["Resource"] == [CTX.ecr_repo_arn]
 
     def test_zip_agents_do_not_get_ecr(self):
@@ -455,6 +418,7 @@ class TestA2A:
     def test_an_a2a_agent_may_invoke_peer_runtimes(self):
         spec = _spec(protocol="a2a")
         statement = _statement(spec, "A2AInvokePeerRuntimes")
+        assert set(statement["Action"]) == set(agent_iam.RUNTIME_INVOKE_ACTIONS)  # N12-bug5
         assert statement["Resource"] == [
             "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/*"
         ]
@@ -501,7 +465,7 @@ class TestFsPolicyCharacterisation:
             "/access-point/ap-1"
         )
         spec = _spec(
-            method="container",
+            method="zip_runtime",
             filesystem={"s3_files": [{"access_point_arn": ap, "mount_path": "/mnt/a"}]},
             network={"subnets": ["subnet-1"], "security_groups": ["sg-1"]},
         )
@@ -534,7 +498,7 @@ class TestFsPolicyCharacterisation:
     def test_efs_shape_keeps_the_conditioned_wildcard(self):
         ap = "arn:aws:elasticfilesystem:us-west-2:123456789012:access-point/fsap-1"
         spec = _spec(
-            method="container",
+            method="zip_runtime",
             filesystem={"efs": [{"access_point_arn": ap, "mount_path": "/mnt/e"}]},
             network={"subnets": ["subnet-1"], "security_groups": ["sg-1"]},
         )
@@ -564,19 +528,15 @@ def test_zip_runtime_gateway_role_matches_the_harness_one_exactly():
     """Requirement B's first acceptance criterion: a zip_runtime agent with a
     gateway ToolRef must get the role it already got — this feature adds transport,
     not authorization. _uses_gateway() never reads spec.method, so the two policies
-    must be identical apart from the model statement neither side changes."""
+    must be identical — a self-built harness is Runtime-backed exactly like
+    zip_runtime, including the routed-configuration-bundle grant."""
     tools = [{"type": "gateway", "name": "launchpad-gw"}]
     zip_spec = _spec(tools=tools)
     harness_spec = _spec(method="harness", tools=tools)
 
-    def without_bundle_reads(doc):
-        # The only legitimate difference: a Harness never resolves a routed bundle
-        # with its own role (the service does it), a generated runtime always does.
-        return [s for s in doc["Statement"] if s["Sid"] != "ConfigurationBundleRead"]
-
     zip_doc = agent_iam.policy_document(zip_spec, CTX)
     harness_doc = agent_iam.policy_document(harness_spec, CTX)
-    assert without_bundle_reads(zip_doc) == without_bundle_reads(harness_doc)
+    assert zip_doc == harness_doc
     assert "AgentCoreWorkloadIdentity" in _sids(zip_spec)
     assert "IdentityVaultSecrets" in _sids(zip_spec)
 
@@ -591,28 +551,293 @@ def test_gateway_workload_statement_covers_both_token_mechanisms():
     assert "bedrock-agentcore:GetResourceOauth2Token" in statement["Action"]
 
 
+def test_gateway_tool_grants_scoped_invoke_gateway():
+    spec = AgentSpec(
+        name="gw-probe", method="zip_runtime", model_id="global.zai.glm-5.3", system_prompt="x",
+        tools=[ToolRef(type="gateway", name="g", config={"gateway_id": "launchpad-gw-abc1234567"})],
+    )
+    ctx = RoleContext(
+        account_id="123456789012", region="cn-northwest-1", artifacts_bucket="b",
+        ecr_repo_arn="arn:aws-cn:ecr:cn-northwest-1:123456789012:repository/launchpad-agents",
+        partition="aws-cn", dns_suffix="amazonaws.com.cn",
+    )
+    doc = policy_document(spec, ctx)
+    stmt = next(s for s in doc["Statement"] if s["Sid"] == "AgentCoreGatewayInvoke")
+    assert stmt["Action"] == ["bedrock-agentcore:InvokeGateway"]
+    assert stmt["Resource"] == [
+        "arn:aws-cn:bedrock-agentcore:*:123456789012:gateway/launchpad-gw-abc1234567"
+    ]
+
+
+def test_bare_gateway_tool_no_longer_needs_the_workload_token_family():
+    """The AgentCoreWorkloadIdentity statement is for OAuth2/API-key token
+    exchange (identity_tools.py.tmpl); a bare gateway ToolRef needs only
+    AgentCoreGatewayInvoke now that the shared gateway is SigV4-only."""
+    spec = AgentSpec(
+        name="gw-probe", method="zip_runtime", model_id="global.zai.glm-5.3", system_prompt="x",
+        tools=[ToolRef(type="gateway", name="g", config={"gateway_id": "launchpad-gw-abc1234567"})],
+    )
+    ctx = RoleContext(
+        account_id="123456789012", region="cn-northwest-1", artifacts_bucket="b",
+        ecr_repo_arn="arn:aws-cn:ecr:cn-northwest-1:123456789012:repository/launchpad-agents",
+        partition="aws-cn", dns_suffix="amazonaws.com.cn",
+    )
+    doc = policy_document(spec, ctx)
+    sids = {s["Sid"] for s in doc["Statement"]}
+    assert "AgentCoreGatewayInvoke" in sids
+    # AgentCoreWorkloadIdentity is still emitted today — _uses_gateway() grants the
+    # family-wide token statement for ANY gateway ToolRef, not narrowed by this
+    # node (see agent_iam.py:510's own comment: "Granting it for an OAuth Gateway
+    # too is inert"). Documented as a candidate for a future tightening pass, not
+    # an N3 change (narrowing _uses_gateway risks breaking an existing agent that
+    # also has a KB or other MCP ref relying on the family-wide grant).
+    assert "AgentCoreWorkloadIdentity" in sids
+
+
 def test_no_gateway_tool_still_grants_no_workload_identity():
     assert "AgentCoreWorkloadIdentity" not in _sids(_spec())
 
 
-def test_generated_agents_can_read_a_routed_configuration_bundle():
-    """Measured live: without this the SDK's bundle resolution fails with
-    AccessDenied *inside* the runtime and the whole invocation 500s. The shared CDK
-    role has the grant (base_stack ABTestOrchestration); a per-agent role did not,
-    so every config-bundle experiment on a per-agent-role agent was broken."""
-    statement = _statement(_spec(), "ConfigurationBundleRead")
-    assert statement["Action"] == [
-        "bedrock-agentcore:GetConfigurationBundle",
-        "bedrock-agentcore:GetConfigurationBundleVersion",
-    ]
-    # read-only, and scoped to this account+region rather than "*"
+def test_generated_agents_can_read_a_routed_launchpad_bundle():
+    """CN (N12 E3-5): a routed arm's config bundle is immutable JSON under
+    ``bundles/<agent>/<id>/v<n>.json`` in the artifacts bucket; the runtime's
+    ``_config_bundle()`` fetches it with its own role, so every per-agent role carries
+    a read-only grant on exactly that prefix. No ``ConfigurationBundle*`` action is
+    granted anywhere (the service does not exist in aws-cn)."""
+    statement = _statement(_spec(), "LaunchpadBundleRead")
+    assert statement["Action"] == ["s3:GetObject"]
     assert statement["Resource"] == [
-        "arn:aws:bedrock-agentcore:us-west-2:123456789012:configuration-bundle/*"
+        f"arn:aws:s3:::{CTX.artifacts_bucket}/bundles/*"
     ]
-    for method in ("zip_runtime", "studio", "container"):
-        assert "ConfigurationBundleRead" in _sids(_spec(method=method))
+    for method in ("zip_runtime", "studio", "harness"):
+        assert "LaunchpadBundleRead" in _sids(_spec(method=method))
+    doc = agent_iam.policy_document(_spec(), CTX)
+    assert "ConfigurationBundle" not in json.dumps(doc)
+    # no artifacts bucket (un-bootstrapped workspace) → no dangling grant
+    bare = dataclasses.replace(CTX, artifacts_bucket="")
+    sids = {s["Sid"] for s in agent_iam.policy_document(_spec(), bare)["Statement"]}
+    assert "LaunchpadBundleRead" not in sids
 
 
-def test_harness_agents_get_no_configuration_bundle_grant():
-    """A Harness never reads a bundle with its own role — the service routes it."""
-    assert "ConfigurationBundleRead" not in _sids(_spec(method="harness"))
+# ─── N12 E1-3b: the preset hook puts the worker statements on the worker's role ─────
+
+class TestEvalWorkerPresetHook:
+    CN_CTX = RoleContext(
+        account_id="111122223333", region="cn-northwest-1",
+        artifacts_bucket="launchpad-artifacts-cn", ecr_repo_arn="arn:aws-cn:ecr:x",
+        partition="aws-cn", dns_suffix="amazonaws.com.cn",
+    )
+
+    def _worker(self):
+        from types import SimpleNamespace
+
+        from app.system_agents.presets import EVAL_WORKER, build_spec
+
+        spec = build_spec(EVAL_WORKER, "launchpad-artifacts-cn", EVAL_WORKER.default_options())
+        agent = SimpleNamespace(system_key=EVAL_WORKER.key, name=spec.name, id="agt1")
+        return agent, spec
+
+    def test_eval_worker_statements(self):
+        """The preset's ``extra_iam`` is exactly ``agent_iam.eval_worker_statements`` (E3-5),
+        appended after the spec-derived policy."""
+        agent, spec = self._worker()
+        extra = agent_iam.preset_statements(agent, spec, self.CN_CTX)
+        assert extra == agent_iam.eval_worker_statements(self.CN_CTX)
+        doc = agent_iam.policy_document(spec, self.CN_CTX, extra_statements=extra)
+        by_sid = {s["Sid"]: s for s in doc["Statement"]}
+        assert {"EvalWorkerSpansRead", "EvalWorkerArtifacts", "EvalWorkerArtifactsList",
+                "EvalWorkerInvokeTargets", "ModelCredentialApiKey"} <= set(by_sid)
+        assert "EvalWorkerCodeEvaluators" not in by_sid  # code evaluators off by default
+        assert by_sid["EvalWorkerInvokeTargets"]["Condition"] == {
+            "StringEquals": {"aws:ResourceAccount": "111122223333"}}
+        assert set(by_sid["EvalWorkerInvokeTargets"]["Action"]) == {
+            "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:InvokeAgentRuntimeForUser"}
+        assert not any("arn:aws:" in r for st in doc["Statement"]
+                       for r in ([st["Resource"]] if isinstance(st["Resource"], str)
+                                 else st["Resource"]))
+
+    def test_opt_in_statements_follow_the_settings(self, monkeypatch):
+        from app.core.config import get_settings
+        from app.templates import eval_worker as ew
+
+        agent, spec = self._worker()
+        monkeypatch.setenv("LAUNCHPAD_EVAL_CODE_EVALUATORS_ENABLED", "1")
+        monkeypatch.setenv("LAUNCHPAD_EVAL_RESULTS_LOG_GROUP_PREFIX",
+                           "/launchpad/evaluations/results/")
+        get_settings.cache_clear()
+        try:
+            sids = {s["Sid"] for s in ew.preset_iam_statements(self.CN_CTX, spec)}
+        finally:
+            get_settings.cache_clear()
+        assert {"EvalWorkerCodeEvaluators", "EvalWorkerResultsMirror"} <= sids
+
+    def test_ordinary_agents_get_no_preset_statements(self):
+        from types import SimpleNamespace
+
+        spec = _spec()
+        assert agent_iam.preset_statements(SimpleNamespace(system_key=None), spec, CTX) == []
+        doc = agent_iam.policy_document(spec, CTX)
+        assert not any(s["Sid"].startswith("EvalWorker") for s in doc["Statement"])
+
+    def test_ensure_role_puts_the_preset_statements_on_the_role(self):
+        import json as _json
+        from unittest.mock import MagicMock
+
+        agent, spec = self._worker()
+        iam = MagicMock()
+        iam.create_role.return_value = {"Role": {"Arn": "arn:aws-cn:iam::111122223333:role/r"}}
+        agent_iam.ensure_role(iam, agent, spec, self.CN_CTX)
+        policy = _json.loads(iam.put_role_policy.call_args.kwargs["PolicyDocument"])
+        assert "EvalWorkerInvokeTargets" in {s["Sid"] for s in policy["Statement"]}
+
+    def _existing_role_iam(self, stored_caps: dict | None):
+        """IAM as the repair path sees it: the role exists (CreateRole → EntityAlreadyExists),
+        the trust document is current, and the caps inline policy is ``stored_caps``."""
+        import json as _json
+        from unittest.mock import MagicMock
+
+        agent, spec = self._worker()
+        trust = agent_iam.trust_policy(self.CN_CTX, None)
+        iam = MagicMock()
+        iam.create_role.side_effect = type("EntityAlreadyExists", (Exception,), {})("r")
+        iam.get_role.return_value = {"Role": {
+            "Arn": "arn:aws-cn:iam::111122223333:role/r",
+            "AssumeRolePolicyDocument": _json.loads(_json.dumps(trust)),
+        }}
+        if stored_caps is None:
+            iam.get_role_policy.side_effect = type("NoSuchEntity", (Exception,), {})("p")
+        else:
+            iam.get_role_policy.return_value = {"PolicyDocument": stored_caps}
+        return iam, agent, spec
+
+    def test_existing_worker_role_gets_a_changed_caps_policy_re_put_on_provision(self):
+        """N12-bug5 item 2: the live worker role carried the pre-fix statement
+        (InvokeAgentRuntime only). A repair / redeploy re-enters provision → ensure_role
+        adopts the role and re-puts the caps inline policy because the rendered document
+        differs — no reinstall needed. Byte-identical stored policy → no PutRolePolicy."""
+        import json as _json
+
+        agent, spec = self._worker()
+        current = agent_iam.policy_document(
+            spec, self.CN_CTX,
+            extra_statements=agent_iam.preset_statements(agent, spec, self.CN_CTX))
+        stale = _json.loads(_json.dumps(current))
+        for st in stale["Statement"]:
+            if st["Sid"] == "EvalWorkerInvokeTargets":
+                st["Action"] = ["bedrock-agentcore:InvokeAgentRuntime"]  # what t1 had
+        assert stale != current
+
+        iam, agent, spec = self._existing_role_iam(stale)
+        lines: list[str] = []
+        agent_iam.ensure_role(iam, agent, spec, self.CN_CTX, log=lines.append)
+        iam.create_role.assert_called_once()
+        iam.update_assume_role_policy.assert_not_called()  # trust unchanged (N10v2-bug1)
+        put = iam.put_role_policy.call_args_list[0].kwargs
+        assert put["RoleName"] == agent_iam.role_name_for(agent.name, agent.id)
+        assert put["PolicyName"] == agent_iam.capability_policy_name(agent.name)
+        written = _json.loads(put["PolicyDocument"])
+        (invoke,) = [s for s in written["Statement"] if s["Sid"] == "EvalWorkerInvokeTargets"]
+        assert "bedrock-agentcore:InvokeAgentRuntimeForUser" in invoke["Action"]
+        assert any("reusing existing execution role" in line for line in lines)
+
+        # idempotent: the stored document already equals the rendered one → nothing written
+        iam2, agent, spec = self._existing_role_iam(_json.loads(_json.dumps(written)))
+        lines2: list[str] = []
+        agent_iam.ensure_role(iam2, agent, spec, self.CN_CTX, log=lines2.append)
+        caps_puts = [c for c in iam2.put_role_policy.call_args_list
+                     if c.kwargs["PolicyName"] == agent_iam.capability_policy_name(agent.name)]
+        assert caps_puts == []
+        assert any("unchanged" in line for line in lines2)
+
+
+def test_no_role_in_the_cn_tree_carries_the_ab_test_or_bundle_service_grants():
+    """C5: the Global ``ABTestOrchestration`` / ``ConfigurationBundleRead`` Sids are
+    deleted, not flagged — neither the per-agent policy, the workspace-role mirror nor
+    the CDK base stack may name them."""
+    from pathlib import Path
+
+    root = Path(agent_iam.__file__).resolve().parents[3]
+    sources = [
+        Path(agent_iam.__file__).read_text(),
+        (root / "backend/app/services/workspace_iam.py").read_text(),
+        (root / "infra/stacks/base_stack.py").read_text(),
+    ]
+    for text in sources:
+        assert "ABTestOrchestration" not in text
+        assert "GetConfigurationBundle" not in text
+
+
+# ─── the evaluation worker's execution role (N12 E3-5; plan §B.0 "Worker execution role") ─
+
+def test_eval_worker_statements_cover_spans_artifacts_and_replay_only():
+    statements = agent_iam.eval_worker_statements(CTX)
+    by_sid = {s["Sid"]: s for s in statements}
+    assert set(by_sid) == {
+        "EvalWorkerSpansRead", "EvalWorkerArtifacts", "EvalWorkerArtifactsList",
+        "EvalWorkerInvokeTargets",
+    }
+    spans = by_sid["EvalWorkerSpansRead"]
+    assert set(spans["Action"]) == {
+        "logs:StartQuery", "logs:GetQueryResults", "logs:StopQuery",
+        "logs:FilterLogEvents", "logs:DescribeLogGroups",
+    }
+    assert spans["Resource"] == [
+        "arn:aws:logs:us-west-2:123456789012:log-group:aws/spans",
+        "arn:aws:logs:us-west-2:123456789012:log-group:aws/spans:*",
+        "arn:aws:logs:us-west-2:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*",
+    ]
+    artifacts = by_sid["EvalWorkerArtifacts"]
+    assert set(artifacts["Action"]) == {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"}
+    bucket = f"arn:aws:s3:::{CTX.artifacts_bucket}"
+    assert artifacts["Resource"] == [
+        f"{bucket}/evaluations/*", f"{bucket}/eval-datasets/*", f"{bucket}/bundles/*",
+    ]
+    listing = by_sid["EvalWorkerArtifactsList"]
+    assert listing["Action"] == ["s3:ListBucket"] and listing["Resource"] == [bucket]
+    assert listing["Condition"] == {"StringLike": {"s3:prefix": [
+        "evaluations/*", "eval-datasets/*", "bundles/*"]}}
+
+
+def test_eval_worker_invoke_grant_is_runtime_wide_but_account_bound():
+    """Lead ruling (3) / R-15: ``InvokeAgentRuntime`` on ``runtime/*`` — runtime names
+    are ``sanitize_runtime_name(agent.name)``, so no name-prefix narrowing exists — with
+    ``aws:ResourceAccount`` pinned to this account; per-job session-policy narrowing is
+    the recorded follow-up."""
+    (invoke,) = [s for s in agent_iam.eval_worker_statements(CTX)
+                 if s["Sid"] == "EvalWorkerInvokeTargets"]
+    # N12-bug5: the worker sends runtimeUserId on every replay, so the data plane also
+    # authorizes the ForUser action — both, same resources, same account condition
+    assert invoke["Action"] == [
+        "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:InvokeAgentRuntimeForUser"]
+    assert invoke["Resource"] == [
+        "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/*"]
+    assert invoke["Condition"] == {"StringEquals": {"aws:ResourceAccount": "123456789012"}}
+    assert "bedrock-agentcore:StopRuntimeSession" not in invoke["Action"]
+
+
+def test_eval_worker_optional_grants_are_off_by_default():
+    base = {s["Sid"] for s in agent_iam.eval_worker_statements(CTX)}
+    assert "EvalWorkerCodeEvaluators" not in base and "EvalWorkerResultsMirror" not in base
+    with_code = {s["Sid"]: s for s in agent_iam.eval_worker_statements(
+        CTX, code_evaluators=True)}
+    assert with_code["EvalWorkerCodeEvaluators"]["Action"] == ["lambda:InvokeFunction"]
+    assert with_code["EvalWorkerCodeEvaluators"]["Resource"] == [
+        "arn:aws:lambda:us-west-2:123456789012:function:launchpad-evalfn-*"]
+    with_mirror = {s["Sid"]: s for s in agent_iam.eval_worker_statements(
+        CTX, results_mirror_prefix="/launchpad/evaluations/results")}
+    mirror = with_mirror["EvalWorkerResultsMirror"]
+    assert set(mirror["Action"]) == {"logs:CreateLogGroup", "logs:CreateLogStream",
+                                     "logs:PutLogEvents"}
+    assert mirror["Resource"] == [
+        "arn:aws:logs:us-west-2:123456789012:log-group:/launchpad/evaluations/results/*",
+        "arn:aws:logs:us-west-2:123456789012:log-group:/launchpad/evaluations/results/*:*",
+    ]
+
+
+def test_eval_worker_statements_are_partition_aware_and_need_the_bucket():
+    cn = dataclasses.replace(CTX, partition="aws-cn", region="cn-northwest-1",
+                             dns_suffix="amazonaws.com.cn")  # cn-lint: allow
+    doc = json.dumps(agent_iam.eval_worker_statements(cn))
+    assert "arn:aws:" not in doc and "arn:aws-cn:" in doc
+    with pytest.raises(ValueError, match="artifacts_bucket"):
+        agent_iam.eval_worker_statements(dataclasses.replace(CTX, artifacts_bucket=""))

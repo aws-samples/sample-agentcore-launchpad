@@ -1,19 +1,24 @@
-"""3rd-party recommendation providers — registry/discovery, router validation,
-stage dispatch, evidence collection + sampling, the gepa_lite reflection round,
-regeneration key ownership and treatment-bundle attribution."""
+"""Recommendation providers (N12 E2-4): registry / discovery, router validation, evidence
+from ``eval_results``, the ``gepa_lite`` reflection (in-process twin and the worker-side
+``recommend`` handler) and ``model_converse`` over a strands Model. The experiment-side
+seams left with the configuration experiment (N13-obs2)."""
+
+from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterable
 from typing import Any
 
 import pytest
 from botocore.exceptions import ClientError
 
-import app.optimization.service as svc
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation.models import EvalRun
+from app.evaluation import jobs
+from app.evaluation.executor import JobSink, MemoryStore
+from app.evaluation.jobs import JobDone, JobSpec
+from app.evaluation.models import EvalResult, EvalRun
 from app.optimization import providers as rp
-from app.optimization.models import Experiment
 from app.optimization.providers import evidence as ev
 from app.optimization.providers import gepa_lite
 from app.optimization.providers.base import (
@@ -22,39 +27,26 @@ from app.optimization.providers.base import (
     OptimizeRequest,
     SessionEvidence,
 )
+from app.services.strands_eval import jobs_recommend
 from tests.conftest import ws_ctx
+from tests.evaluation.fakes import FakeModel
 
 WS = ws_ctx()
 
 
+def _noop(_msg: str) -> None:
+    """A progress sink."""
+
+
+def _noop(_msg: str) -> None:
+    """A progress sink."""
+MODEL = "global.zai.glm-5.3"
 # ─── helpers ─────────────────────────────────────────────────────────────────
-def _mk_exp(**kw):
-    db = SessionLocal()
-    exp = Experiment(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        name="EXP-p", agent_id=kw.pop("agent_id", "a1"), agent_name="agent", **kw
-    )
-    db.add(exp)
-    db.commit()
-    db.refresh(exp)
-    db.close()
-    return exp
-
-
-def _reload(exp_id: str) -> Experiment:
-    db = SessionLocal()
-    try:
-        return db.get(Experiment, exp_id)
-    finally:
-        db.close()
-
-
 def _mk_run(**kw) -> str:
     db = SessionLocal()
     run = EvalRun(
         workspace_id=DEFAULT_WORKSPACE_ID, agent_id=kw.pop("agent_id", "a1"),
-        agent_name="agent", status=kw.pop("status", "completed"),
-        batch_eval_id=kw.pop("batch_eval_id", "be-1"), **kw,
+        agent_name="agent", status=kw.pop("status", "completed"), **kw,
     )
     db.add(run)
     db.commit()
@@ -63,37 +55,24 @@ def _mk_run(**kw) -> str:
     return rid
 
 
+def _row(run_id: str, sid: str, evaluator: str, score: float | None, *, explanation="why",
+         label=None, error=None, ordinal=0) -> None:
+    db = SessionLocal()
+    db.add(EvalResult(
+        id=jobs.record_id(run_id, sid, evaluator, ordinal), workspace_id=DEFAULT_WORKSPACE_ID,
+        source="run", run_id=run_id, session_id=sid, evaluator_id=evaluator, level="SESSION",
+        score=score, label=label, explanation=explanation if score is not None else None,
+        error_type="RuntimeError" if error else None, error_message=error,
+    ))
+    db.commit()
+    db.close()
+
+
 def _record(sid: str, evaluator: str, score: float | None, explanation: str = "why",
             label: str | None = None, error: str | None = None) -> dict[str, Any]:
-    attrs: dict[str, Any] = {
-        "gen_ai.evaluation.name": evaluator,
-        "session.id": sid,
-        "aws.bedrock_agentcore.evaluation_level": "Session",
-    }
-    if score is not None:
-        attrs["gen_ai.evaluation.score.value"] = score
-        attrs["gen_ai.evaluation.explanation"] = explanation
-    if label:
-        attrs["gen_ai.evaluation.score.label"] = label
-    if error:
-        attrs["error.message"] = error
-    return {"message": json.dumps({"name": "gen_ai.evaluation.result", "attributes": attrs})}
-
-
-class FakeLogs:
-    """get_log_events with real forward-token pagination semantics."""
-
-    def __init__(self, pages: list[list[dict[str, Any]]]):
-        self.pages = pages
-        self.calls: list[dict[str, Any]] = []
-
-    def get_log_events(self, **kw):
-        self.calls.append(kw)
-        idx = int(kw.get("nextToken") or 0)
-        events = self.pages[idx] if idx < len(self.pages) else []
-        # like AWS: the page after the last one is empty and repeats its token
-        nxt = str(idx + 1) if idx < len(self.pages) else str(idx)
-        return {"events": events, "nextForwardToken": nxt}
+    return {"session_id": sid, "evaluator_id": evaluator, "score": score,
+            "explanation": explanation if score is not None else None, "label": label,
+            "level": "SESSION", "error_message": error}
 
 
 def _evidence(n: int, scores: list[float] | None = None) -> list[SessionEvidence]:
@@ -109,7 +88,7 @@ def _evidence(n: int, scores: list[float] | None = None) -> list[SessionEvidence
     return out
 
 
-def _req(evidence, model="global.anthropic.claude-sonnet-5", max_chars=8000, **kw):
+def _req(evidence, model=MODEL, max_chars=8000, **kw):
     stats = EvidenceStats(
         sessions_scored=len(evidence), sessions_selected=len(evidence),
         sessions_with_transcript=sum(1 for e in evidence if e.turns),
@@ -135,222 +114,71 @@ def _converse(replies: list[str]):
     return fn
 
 
-def _inline(monkeypatch):
-    monkeypatch.setattr(svc, "_spawn", lambda target: target())
-
-
 # ─── registry + discovery ────────────────────────────────────────────────────
-def test_registry_lists_agentcore_first_and_matches_router_literal():
+def test_registry_lists_gepa_lite_first_and_matches_the_router_literal():
     ids = [p.id for p in rp.list_providers()]
-    assert ids == ["agentcore", "gepa_lite"]
-    assert tuple(ids) == rp.PROVIDER_IDS
+    assert ids == ["gepa_lite", "harness_optimizer"]
+    assert tuple(ids) == rp.PROVIDER_IDS and rp.DEFAULT_PROVIDER == "gepa_lite"
     with pytest.raises(ValueError):
         rp.get_provider("nope")
-    assert rp.get_provider(None).id == "agentcore"
+    with pytest.raises(ValueError):
+        rp.get_provider("agentcore")  # the AgentCore job is gone (C5)
+    assert rp.get_provider(None).id == "gepa_lite"
+    assert rp.get_provider("gepa_lite").job_type == "recommend"
+    assert rp.get_provider("harness_optimizer").job_type == "optimize"
+
+
+def test_provider_enabled_flags_follow_settings(monkeypatch):
+    assert rp.provider_enabled(rp.get_provider("gepa_lite")) is True
+    harness = rp.get_provider("harness_optimizer")
+    assert rp.provider_enabled(harness) is False  # R-4: shell tool → operator opt-in
+    monkeypatch.setattr(get_settings(), "prompt_opt_harness_optimizer_enabled", True)
+    assert rp.provider_enabled(harness) is True
 
 
 def test_providers_endpoint_shape_follows_settings(client):
-    res = client.get("/api/experiments/providers")
+    res = client.get("/api/eval/recommendation-providers")
     assert res.status_code == 200
     provs = {p["id"]: p for p in res.json()["providers"]}
-    assert provs["agentcore"]["requires_source"] is False
-    assert provs["agentcore"]["models"] == []
-    assert provs["agentcore"]["default_model_id"] is None
-    assert "tool_descriptions" in provs["agentcore"]["supports"]
-    g = provs["gepa_lite"]
-    assert g["requires_source"] is True
-    assert g["supports"] == ["system_prompt", "tool_descriptions"]
+    assert list(provs) == ["gepa_lite", "harness_optimizer"]
     settings = get_settings()
+    g = provs["gepa_lite"]
+    assert g["requires_source"] is True and g["enabled"] is True
+    assert g["supports"] == ["system_prompt", "tool_descriptions"]
     assert [m["model_id"] for m in g["models"]] == settings.prompt_opt_models
     assert g["default_model_id"] == settings.prompt_opt_default_model_id
     assert g["models"][0]["label"] != g["models"][0]["model_id"]  # catalog label
+    h = provs["harness_optimizer"]
+    assert h["enabled"] is False and h["supports"] == ["system_prompt"]
+    assert h["requires_source"] is True
+    assert [m["model_id"] for m in h["models"]] == settings.prompt_opt_models
 
 
 # ─── router validation ───────────────────────────────────────────────────────
-def test_gepa_lite_requires_a_pinned_source(client, monkeypatch):
-    spawned: list = []
-    monkeypatch.setattr(svc, "run_action", lambda *a, **k: spawned.append(a))
-    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "recommend", "recommend_provider": "gepa_lite"})
-    assert res.status_code == 422
-    assert res.json()["code"] == "experiment.provider_requires_source"
-    assert spawned == []
-    assert "recommend" not in _reload(exp.id).artifacts
-
-
-def test_gepa_lite_tool_descriptions_only_also_needs_a_source(client, monkeypatch):
-    """gepa_lite now owns tool descriptions too, so the source rule applies to a
-    tool-only request; the AgentCore default keeps bypassing it."""
-    captured: dict = {}
-    monkeypatch.setattr(svc, "run_action", lambda *a, **k: captured.update(ok=True))
-    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "recommend", "recommend_provider": "gepa_lite",
-                            "recommend_types": ["tool_descriptions"]})
-    assert res.status_code == 422
-    assert res.json()["code"] == "experiment.provider_requires_source"
-    assert captured == {}
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "recommend", "recommend_types": ["tool_descriptions"]})
-    assert res.status_code == 202
-    assert captured == {"ok": True}
-
-
-def test_unknown_provider_and_bad_model_id_are_422(client):
-    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "recommend", "recommend_provider": "dspy"})
-    assert res.status_code == 422
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "recommend", "recommend_model_id": "bad id!"})
-    assert res.status_code == 422
-    assert res.json()["code"] == "experiment.model_id_invalid"
-
-
-def test_provider_and_model_reach_act_recommend(client, monkeypatch):
-    captured: dict = {}
-
-    def fake_act(exp_id, progress, types=None, tools=None, source=None,
-                 provider=None, model_id=None):
-        captured.update(provider=provider, model_id=model_id, source=source)
-
-    monkeypatch.setattr(svc, "act_recommend", fake_act)
-    _inline(monkeypatch)
-    monkeypatch.setattr(svc, "resolve_recommend_source",
-                        lambda *_a, **_k: {"kind": "batch_evaluation", "run_id": "r1"})
-    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
-    res = client.post(
-        f"/api/experiments/{exp.id}/action",
-        json={"action": "recommend", "recommend_provider": "gepa_lite",
-              "recommend_model_id": "global.anthropic.claude-opus-5",
-              "recommend_source_run_id": "r1"},
-    )
-    assert res.status_code == 202
-    assert captured["provider"] == "gepa_lite"
-    assert captured["model_id"] == "global.anthropic.claude-opus-5"
-
-
 # ─── stage dispatch ──────────────────────────────────────────────────────────
-def test_default_provider_never_touches_the_provider_path(monkeypatch):
-    called: list = []
-    monkeypatch.setattr(svc, "_third_party_prompt_recommendation",
-                        lambda *a, **k: called.append(1))
-    fake_data = type("D", (), {})()
-    monkeypatch.setattr(svc, "data_client", lambda ws: fake_data)
-    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation",
-                        lambda *a, **k: {"recommendationId": "r"})
-    monkeypatch.setattr(svc.ac, "poll_recommendation", lambda *a, **k: {
-        "status": "COMPLETED",
-        "recommendationResult": {"systemPromptRecommendationResult": {
-            "recommendedSystemPrompt": "better", "explanation": "e"}},
-    })
-    agent = {"resource_id": "rid", "runtime_name": "rt", "system_prompt": "cur", "tools": {}}
-    out = svc.stage_recommend("e1", agent, WS, types=("system_prompt",))
-    assert called == []
-    assert out["recommended_prompt"] == "better"
-    assert "provider" not in out  # AgentCore artifact stays byte-identical
-
-
-def test_gepa_lite_dispatch_skips_start_recommendation(monkeypatch):
-    def boom(*a, **k):
-        raise AssertionError("StartRecommendation must not be called")
-
-    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation", boom)
-    monkeypatch.setattr(svc, "data_client", lambda ws: object())
-    monkeypatch.setattr(
-        svc, "_third_party_prompt_recommendation",
-        lambda *a, **k: {"provider": k["provider_id"], "provider_model_id": k["model_id"],
-                         "system_prompt_status": "COMPLETED", "recommended_prompt": "p"},
-    )
-    agent = {"resource_id": "rid", "runtime_name": "rt", "system_prompt": "cur", "tools": {}}
-    out = svc.stage_recommend("e1", agent, WS, types=("system_prompt",),
-                              provider="gepa_lite", model_id="m",
-                              source={"run_id": "r", "batch_evaluation_arn": "arn:be"})
-    assert out["provider"] == "gepa_lite"
-    # the pinned source is recorded as the trace source, exactly as on the AWS path
-    assert out["trace_source"]["run_id"] == "r"
-    assert out["trace_source"]["batch_evaluation_arn"] == "arn:be"
-
-
-def test_resolve_source_carries_results_stream(monkeypatch):
-    rid = _mk_run()
-    monkeypatch.setattr(svc, "data_client", lambda ws: object())
-    monkeypatch.setattr(svc.ac, "get_batch_evaluation", lambda *_a, **_k: {
-        "batchEvaluationArn": "arn:be",
-        "outputConfig": {"cloudWatchConfig": {"logGroupName": "/g", "logStreamName": "run-x"}},
-    })
-    src = svc.resolve_recommend_source("a1", rid, WS)
-    assert src["results_log_group"] == "/g"
-    assert src["results_log_stream"] == "run-x"
-
-
-def test_third_party_path_writes_attributed_keys(monkeypatch):
-    rid = _mk_run(mode="insights", insights={"failures": [
-        {"category": "Tone", "subCategories": [{"subCategory": "curt", "rootCauses": [
-            {"rootCause": "one-word answers", "recommendation": "explain"}]}]}]})
-    logs = FakeLogs([[_record("s1", "Builtin.Helpfulness", 0.0, "too short"),
-                      _record("s2", "Builtin.Helpfulness", 1.0, "great")]])
-    converse = _converse([json.dumps({
-        "diagnosis": "Answers are too short.",
-        "changes": ["Ask the agent to explain its reasoning"],
-        "revised_prompt": "You are helpful. Explain your reasoning.",
-    })])
-    out = svc._third_party_prompt_recommendation(
-        "e1", {"id": "a1", "system_prompt": "You are helpful."}, WS, svc._noop,
-        provider_id="gepa_lite", model_id=None,
-        source={"run_id": rid, "results_log_group": "/g", "results_log_stream": "run-x"},
-        transcript=lambda sid: [{"role": "user", "text": "hi"},
-                                {"role": "assistant", "text": "yo"}],
-        logs=logs, converse=converse,
-    )
-    assert out["system_prompt_status"] == "COMPLETED"
-    assert out["recommended_prompt"] == "You are helpful. Explain your reasoning."
-    assert out["provider"] == "gepa_lite"
-    assert out["provider_model_id"] == get_settings().prompt_opt_default_model_id
-    assert out["provider_meta"]["evidence_sessions"] == 2
-    assert out["provider_meta"]["evidence_records"] == 2
-    assert "explain its reasoning" in out["explanation"]
-    # insight clusters reached the reflection prompt as extra feedback
-    assert "one-word answers" in converse.calls[0]["messages"][0]["text"]
-    # worst session is rendered first
-    body = converse.calls[0]["messages"][0]["text"]
-    assert body.index("session s1") < body.index("session s2")
-
-
-def test_third_party_path_without_results_stream_fails_cleanly():
-    out = svc._third_party_prompt_recommendation(
-        "e1", {"id": "a1", "system_prompt": "cur"}, WS, svc._noop,
-        provider_id="gepa_lite", model_id="m", source={"run_id": "r"},
-    )
-    assert out["system_prompt_status"] == "FAILED"
-    assert "results log stream" in out["system_prompt_error"]
-    assert "recommended_prompt" not in out
-    assert svc.system_prompt_rec_failed(out)
-
-
-# ─── evidence ────────────────────────────────────────────────────────────────
-def test_read_result_records_paginates_until_token_repeats():
-    logs = FakeLogs([
-        [_record("s1", "Builtin.Helpfulness", 1.0)],
-        [_record("s2", "Builtin.Helpfulness", 0.0), {"message": "not json"}],
-        [{"message": json.dumps({"attributes": {"something.else": 1}})}],
-    ])
-    attrs = ev.read_result_records(logs, "/g", "run-x")
-    assert [a["session.id"] for a in attrs] == ["s1", "s2"]
-    # three pages + the empty end-of-stream page whose token repeats
-    assert len(logs.calls) == 4
-    assert logs.calls[0].get("nextToken") is None
-    assert logs.calls[-1]["nextToken"] == "3"
+# ─── evidence (eval_results rows) ────────────────────────────────────────────
+def test_read_run_records_reads_only_the_runs_rows_in_order():
+    rid, other = _mk_run(), _mk_run()
+    _row(rid, "s1", "Builtin.Helpfulness", 1.0)
+    _row(rid, "s2", "Builtin.Helpfulness", 0.0, label="No")
+    _row(rid, "s2", "Builtin.Correctness", None, error="judge timeout")
+    _row(other, "s9", "Builtin.Helpfulness", 0.5)
+    db = SessionLocal()
+    records = ev.read_run_records(db, rid, DEFAULT_WORKSPACE_ID)
+    db.close()
+    assert [(r["session_id"], r["evaluator_id"]) for r in records] == [
+        ("s1", "Builtin.Helpfulness"), ("s2", "Builtin.Helpfulness"), ("s2", "Builtin.Correctness")]
+    assert records[1]["label"] == "No" and records[2]["error_message"] == "judge timeout"
+    assert set(records[0]) == {"session_id", "trace_id", "evaluator_id", "level", "score",
+                               "label", "explanation", "error_type", "error_message"}
 
 
 def test_group_and_polarity_mean():
     grouped = ev.group_records([
-        json.loads(_record("s1", "Builtin.Helpfulness", 1.0)["message"])["attributes"],
-        json.loads(_record("s1", "Builtin.Refusal", 1.0, label="Yes")["message"])["attributes"],
-        json.loads(_record("s1", "Builtin.Correctness", None,
-                           error="judge timeout")["message"])["attributes"],
-        json.loads(_record("s2", "Builtin.Helpfulness", 0.5)["message"])["attributes"],
+        _record("s1", "Builtin.Helpfulness", 1.0),
+        _record("s1", "Builtin.Refusal", 1.0, label="Yes"),
+        _record("s1", "Builtin.Correctness", None, error="judge timeout"),
+        _record("s2", "Builtin.Helpfulness", 0.5),
     ])
     assert set(grouped) == {"s1", "s2"}
     # Refusal is a penalty: (1.0 + -1.0) / 2 = 0 — a refusing session is not "good"
@@ -393,23 +221,26 @@ def test_truncate_text_keeps_head_and_tail():
 
 
 def test_collect_evidence_is_fail_soft_per_transcript():
-    logs = FakeLogs([[_record("s1", "e", 0.0), _record("s2", "e", 1.0)]])
+    records = [_record("s1", "e", 0.0), _record("s2", "e", 1.0)]
 
     def transcript(sid):
         if sid == "s1":
             raise RuntimeError("memory down")
         return [{"role": "user", "text": "  "}, {"role": "assistant", "text": "x" * 2000}]
 
-    evidence, stats = ev.collect_evidence(
-        workspace=WS, log_group="/g", log_stream="run-x", transcript=transcript,
-        max_sessions=30, logs=logs,
-    )
+    evidence, stats = ev.collect_evidence(records=records, transcript=transcript,
+                                          max_sessions=30)
     assert [e.session_id for e in evidence] == ["s1", "s2"]
     assert evidence[0].turns == []
     assert len(evidence[1].turns) == 1  # blank turn dropped, long one truncated
     assert "omitted" in evidence[1].turns[0]["text"]
     assert stats.sessions_scored == 2 and stats.sessions_selected == 2
     assert stats.sessions_with_transcript == 1 and stats.records == 2
+    payload = ev.evidence_payload(evidence, stats)
+    assert payload["stats"]["records"] == 2
+    assert payload["evidence"][1]["records"][0] == {
+        "evaluator_id": "e", "score": 1.0, "label": None, "explanation": "why",
+        "level": "SESSION", "error": None}
 
 
 def test_insight_feedback_flattens_failure_tree():
@@ -418,18 +249,21 @@ def test_insight_feedback_flattens_failure_tree():
             {"subCategory": "math", "rootCauses": [
                 {"rootCause": "skips units", "recommendation": "state units"}]}]},
         {"category": "flat", "rootCauses": [{"rootCause": "no sub"}]},
+        {"category": "detector", "rootCauses": [
+            {"rootCause": "tool misuse", "fix_recommendation": "describe the tool"}]},
     ]})
     assert lines[0] == "Accuracy / math: skips units → state units"
     assert lines[1] == "flat: no sub"
+    assert lines[2] == "detector: tool misuse → describe the tool"
     assert ev.insight_feedback(None) == []
 
 
-# ─── gepa_lite provider ──────────────────────────────────────────────────────
+# ─── gepa_lite provider (in-process twin) ────────────────────────────────────
 def test_gepa_lite_happy_path_and_meta():
     prov = gepa_lite.GepaLiteProvider()
     converse = _converse(["```json\n" + json.dumps({
         "diagnosis": "d", "changes": ["c1", "c2"], "revised_prompt": "P2"}) + "\n```"])
-    res = prov.optimize(_req(_evidence(2)), svc._noop, converse=converse)
+    res = prov.optimize(_req(_evidence(2)), _noop, converse=converse)
     assert res.status == "COMPLETED"
     assert res.recommended_prompt == "P2"
     assert res.explanation == "d\n- c1\n- c2"
@@ -438,7 +272,7 @@ def test_gepa_lite_happy_path_and_meta():
     assert res.meta["evidence_sessions"] == 2
     assert "latency_ms" in res.meta
     call = converse.calls[0]
-    assert call["model"] == "global.anthropic.claude-sonnet-5"
+    assert call["model"] == MODEL
     assert "8000 characters" in call["system"]
     assert "You are helpful." in call["messages"][0]["text"]
 
@@ -448,7 +282,7 @@ def test_gepa_lite_no_scored_sessions_makes_no_call():
     converse = _converse([])
     evidence = _evidence(1)
     evidence[0].mean_score = None
-    res = prov.optimize(_req(evidence), svc._noop, converse=converse)
+    res = prov.optimize(_req(evidence), _noop, converse=converse)
     assert res.status == "FAILED"
     assert "no scored sessions" in res.error
     assert converse.calls == []
@@ -457,12 +291,12 @@ def test_gepa_lite_no_scored_sessions_makes_no_call():
 def test_gepa_lite_retries_unparseable_json_once():
     prov = gepa_lite.GepaLiteProvider()
     converse = _converse(["sorry, here is prose", json.dumps({"revised_prompt": "P"})])
-    res = prov.optimize(_req(_evidence(1)), svc._noop, converse=converse)
+    res = prov.optimize(_req(_evidence(1)), _noop, converse=converse)
     assert res.status == "COMPLETED" and res.recommended_prompt == "P"
     assert len(converse.calls) == 2
     assert "ONLY the JSON" in converse.calls[1]["messages"][0]["text"]
     converse = _converse(["nope", "still nope"])
-    res = prov.optimize(_req(_evidence(1)), svc._noop, converse=converse)
+    res = prov.optimize(_req(_evidence(1)), _noop, converse=converse)
     assert res.status == "FAILED" and "parseable JSON" in res.error
     assert res.recommended_prompt is None
 
@@ -474,7 +308,7 @@ def test_gepa_lite_client_error_becomes_failed_with_aws_code():
         raise ClientError({"Error": {"Code": "AccessDeniedException",
                                      "Message": "no model access"}}, "Converse")
 
-    res = prov.optimize(_req(_evidence(1)), svc._noop, converse=converse)
+    res = prov.optimize(_req(_evidence(1)), _noop, converse=converse)
     assert res.status == "FAILED"
     assert res.error == "AccessDeniedException: no model access"
     assert res.recommended_prompt is None
@@ -485,12 +319,12 @@ def test_gepa_lite_over_budget_compresses_once_then_fails():
     long = "x" * 120
     converse = _converse([json.dumps({"revised_prompt": long}),
                           json.dumps({"revised_prompt": "y" * 90})])
-    res = prov.optimize(_req(_evidence(1), max_chars=100), svc._noop, converse=converse)
+    res = prov.optimize(_req(_evidence(1), max_chars=100), _noop, converse=converse)
     assert res.status == "COMPLETED" and res.recommended_prompt == "y" * 90
     assert "100 characters" in converse.calls[1]["system"]
     converse = _converse([json.dumps({"revised_prompt": long}),
                           json.dumps({"revised_prompt": long})])
-    res = prov.optimize(_req(_evidence(1), max_chars=100), svc._noop, converse=converse)
+    res = prov.optimize(_req(_evidence(1), max_chars=100), _noop, converse=converse)
     assert res.status == "FAILED"
     assert "exceeds 100 chars" in res.error
     assert res.recommended_prompt is None
@@ -508,189 +342,185 @@ def test_render_reflective_dataset_shows_errors_and_labels():
     assert "Inputs:\n  - q0" in text and "Generated Outputs:\n  - a0" in text
 
 
-# ─── regeneration + attribution downstream ──────────────────────────────────
-def test_regenerating_with_agentcore_clears_provider_keys(monkeypatch):
-    _inline(monkeypatch)
-    monkeypatch.setattr(svc, "_agent_meta", lambda exp, ws: {"system_prompt": "cur"})
-    monkeypatch.setattr(svc, "stage_recommend", lambda *a, **k: {
-        "system_prompt_status": "COMPLETED", "recommended_prompt": "aws", "explanation": ""})
-    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}, "recommend": {
-        "provider": "gepa_lite", "provider_model_id": "m", "provider_meta": {"x": 1},
-        "system_prompt_status": "COMPLETED", "recommended_prompt": "gepa",
-        "accepted_prompt": "edited", "tool_status": "COMPLETED", "tool_descriptions": {}}})
-    svc.act_recommend(exp.id, svc._noop, types=["system_prompt"])
-    rec = _reload(exp.id).artifacts["recommend"]
-    assert rec["recommended_prompt"] == "aws"
-    for key in ("provider", "provider_model_id", "provider_meta"):
-        assert key not in rec
-    assert rec["accepted_prompt"] == "edited"  # earlier accept survives
-    assert rec["tool_status"] == "COMPLETED"  # the other generator's output too
-
-
-def test_accept_records_whether_the_seed_was_edited(client):
-    exp = _mk_exp(artifacts={"recommend": {"recommended_prompt": "rec", "provider": "gepa_lite"}})
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "accept", "accepted_prompt": "rec"})
-    assert res.json()["experiment"]["artifacts"]["recommend"]["accepted_edited"] is False
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "accept", "accepted_prompt": "rec, edited"})
-    rec = res.json()["experiment"]["artifacts"]["recommend"]
-    assert rec["accepted_edited"] is True
-    assert rec["provider"] == "gepa_lite"  # attribution survives an edit
-    # an unchanged prompt with a hand-edited tool description is an edit too
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "accept", "accepted_prompt": "rec",
-                            "accepted_tool_descriptions": {"t": "hand-written"}})
-    assert res.json()["experiment"]["artifacts"]["recommend"]["accepted_edited"] is True
-
-
-def test_recommendation_attribution_text():
-    assert svc.recommendation_attribution(None) is None
-    assert svc.recommendation_attribution({"provider": "agentcore"}) is None
-    assert svc.recommendation_attribution({"provider": "gepa_lite"}) == "gepa_lite"
-    assert svc.recommendation_attribution(
-        {"provider": "gepa_lite", "provider_model_id": "m1"}) == "gepa_lite · m1"
-
-
-def test_treatment_bundle_commit_message_carries_attribution(monkeypatch):
-    messages: list[str] = []
-
-    def fake_create(control, **kw):
-        messages.append(kw["commit_message"])
-        return {"bundleId": "b", "bundleArn": "arn:b", "versionId": "1"}
-
-    monkeypatch.setattr(svc, "create_bundle_idempotent", fake_create)
-    monkeypatch.setattr(svc, "control_client", lambda ws: object())
-    agent = {"arn": "arn:a", "system_prompt": "cur", "tools": {"t": "d"}}
-    svc.stage_bundles("e1", agent, "treat", WS, None, attribution="gepa_lite · m1")
-    assert messages[1] == "treatment — accepted recommendation (gepa_lite · m1)"
-    messages.clear()
-    svc.stage_bundles("e1", agent, "treat", WS, None)
-    assert messages[1] == "treatment — accepted recommendation"
-
-
-def test_action_bundles_passes_attribution_only_for_third_party(client, monkeypatch):
-    captured: list[dict] = []
-
-    def fake_stage_bundles(exp_id, agent, treatment_prompt, _ws, tds=None, **kw):
-        captured.append(kw)
-        return {"control": {"arn": "c"}, "treatment": {"arn": "t"}}
-
-    monkeypatch.setattr(svc, "stage_bundles", fake_stage_bundles)
-    exp = _mk_exp(artifacts={"agent_meta": {"arn": "arn:a", "system_prompt": "cur"},
-                             "recommend": {"accepted_prompt": "x", "provider": "gepa_lite",
-                                           "provider_model_id": "m"}})
-    assert client.post(f"/api/experiments/{exp.id}/action",
-                       json={"action": "bundles"}).status_code == 200
-    assert captured[-1] == {"attribution": "gepa_lite · m"}
-    exp2 = _mk_exp(artifacts={"agent_meta": {"arn": "arn:a", "system_prompt": "cur"},
-                              "recommend": {"accepted_prompt": "x"}})
-    assert client.post(f"/api/experiments/{exp2.id}/action",
-                       json={"action": "bundles"}).status_code == 200
-    assert captured[-1] == {}
-
-
-def test_accept_without_tool_field_takes_the_recommended_descriptions(client):
-    """A scripted accept that omits accepted_tool_descriptions must not build a
-    treatment with the OLD descriptions — absent falls back to the recommendation,
-    an explicit {} means no tool changes (found live on prod, 2026-09-03)."""
-    exp = _mk_exp(artifacts={"recommend": {"recommended_prompt": "rec",
-                                           "tool_descriptions": {"t": "new"}}})
-    res = client.post(f"/api/experiments/{exp.id}/action", json={"action": "accept"})
-    rec = res.json()["experiment"]["artifacts"]["recommend"]
-    assert rec["accepted_tool_descriptions"] == {"t": "new"}
-    assert rec["accepted_edited"] is False
-    res = client.post(f"/api/experiments/{exp.id}/action",
-                      json={"action": "accept", "accepted_tool_descriptions": {}})
-    rec = res.json()["experiment"]["artifacts"]["recommend"]
-    assert rec["accepted_tool_descriptions"] == {}
-    assert rec["accepted_edited"] is True  # the operator declined the tool changes
-    # no recommended descriptions at all → nothing recorded, nothing edited
-    exp2 = _mk_exp(artifacts={"recommend": {"recommended_prompt": "rec"}})
-    res = client.post(f"/api/experiments/{exp2.id}/action", json={"action": "accept"})
-    rec = res.json()["experiment"]["artifacts"]["recommend"]
-    assert "accepted_tool_descriptions" not in rec and rec["accepted_edited"] is False
-
-
-# ─── bedrock_lm: streaming + client config ──────────────────────────────────
-class _StreamClient:
-    """Fake bedrock-runtime client: records the ConverseStream request, replays events."""
-
-    def __init__(self, events):
-        self.events = events
-        self.calls: list[dict[str, Any]] = []
-
-    def converse_stream(self, **kw):
-        self.calls.append(kw)
-        return {"stream": iter(self.events)}
-
-
-def test_converse_text_streams_text_deltas_only_and_reads_usage_from_metadata():
-    from app.optimization.providers import bedrock_lm
-
-    client = _StreamClient([
-        {"messageStart": {"role": "assistant"}},
-        {"contentBlockStart": {"contentBlockIndex": 0}},
-        # Opus-style reasoning block first — never part of the answer
-        {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thinking…"}}}},
-        {"contentBlockStop": {"contentBlockIndex": 0}},
-        {"contentBlockDelta": {"delta": {"text": '{"revised_'}}},
-        {"contentBlockDelta": {"delta": {"text": 'prompt": "P"}'}}},
-        {"messageStop": {"stopReason": "end_turn"}},
-        {"metadata": {"usage": {"inputTokens": 1234, "outputTokens": 56}}},
-    ])
-    text, usage = bedrock_lm.converse_text(
-        WS, "m", "sys", [{"role": "user", "text": "hi"}], 777, client=client
-    )
-    assert text == '{"revised_prompt": "P"}'
-    assert usage == {"input_tokens": 1234, "output_tokens": 56, "stop_reason": "end_turn"}
-    req = client.calls[0]
-    assert req["modelId"] == "m" and req["system"] == [{"text": "sys"}]
-    assert req["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
-    # maxTokens only — the Claude 5 / GPT-5.6 profiles reject temperature
-    assert req["inferenceConfig"] == {"maxTokens": 777}
-
-
-def test_converse_text_reports_truncation_via_message_stop():
-    from app.optimization.providers import bedrock_lm
-
-    client = _StreamClient([
-        {"contentBlockDelta": {"delta": {"text": "partial"}}},
-        {"messageStop": {"stopReason": "max_tokens"}},
-        {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 2}}},
-    ])
-    text, usage = bedrock_lm.converse_text(WS, "m", "s", [], 5, client=client)
-    assert text == "partial" and usage["stop_reason"] == "max_tokens"
-
-
-def test_runtime_client_has_long_read_timeout_and_standard_retries(monkeypatch):
-    """The prod failure mode: botocore's 60 s default × 5 legacy attempts silently
-    re-sent a minutes-long Opus 5 reflection five times, then raised
-    ReadTimeoutError. The stream makes a timeout mean a real stall, so retries
-    stay (standard mode: throttling + connection errors with backoff)."""
-    from app.optimization.providers import bedrock_lm
-
+def test_gepa_lite_default_converse_builds_the_model_through_the_judge_factory(monkeypatch):
     seen: dict[str, Any] = {}
 
-    class _WS:
-        def client(self, service, cache_token=None, **cfg):
-            seen.update(service=service, cache_token=cache_token, **cfg)
-            return "CLIENT"
+    def fake_model(model_id, *, region, max_tokens=1024, **cfg):
+        seen.update(model_id=model_id, region=region, max_tokens=max_tokens)
+        return FakeModel(texts=[json.dumps({"diagnosis": "d", "revised_prompt": "P2"})])
 
-    monkeypatch.setattr(get_settings(), "prompt_opt_read_timeout_s", 1234)
-    assert bedrock_lm.runtime_client(_WS()) == "CLIENT"
-    assert seen["service"] == "bedrock-runtime"
-    cfg = seen["config"]
-    assert cfg.read_timeout == 1234
-    assert cfg.retries == {"max_attempts": 5, "mode": "standard"}
-    # cached path: the token stands in for the Config in the funnel's cache key
-    assert seen["cache_token"] and "1234" in seen["cache_token"]
+    monkeypatch.setattr(gepa_lite.aws_clients, "global_bedrock_model", fake_model)
+    res = gepa_lite.GepaLiteProvider().optimize(_req(_evidence(1)), _noop)
+    assert res.status == "COMPLETED" and res.recommended_prompt == "P2"
+    assert seen == {"model_id": MODEL, "region": get_settings().model_region, "max_tokens": 4096}
 
 
-def test_converse_text_builds_client_through_the_workspace_funnel(monkeypatch):
-    from app.optimization.providers import bedrock_lm
+def test_build_spec_is_plain_json_for_the_worker():
+    req = _req(_evidence(2), components=("system_prompt", "tool_descriptions"),
+               tools={"t": "d"}, extra_feedback=["fix the tone"])
+    spec = gepa_lite.GepaLiteProvider().build_spec(req)
+    assert set(spec) == {"provider", "model_id", "current_prompt", "components", "tools",
+                         "evidence", "stats", "extra_feedback", "max_chars", "max_tokens",
+                         "max_tokens_cap",
+                         "trace_source"}
+    assert spec["components"] == ["system_prompt", "tool_descriptions"]
+    assert spec["evidence"][0]["records"][0]["evaluator_id"] == "Builtin.Helpfulness"
+    json.dumps(spec)  # serialisable as a job payload
 
-    fake = _StreamClient([{"contentBlockDelta": {"delta": {"text": "ok"}}}])
-    monkeypatch.setattr(bedrock_lm, "runtime_client", lambda ws: fake)
-    text, usage = bedrock_lm.converse_for(WS)("m", "s", [{"role": "user", "text": "u"}], 9)
-    assert text == "ok" and usage["stop_reason"] is None and fake.calls[0]["modelId"] == "m"
+
+# ─── worker-side recommend handler + model_converse ──────────────────────────
+JOB_ID = "provider-gepa_lite-0123456789ab"
+
+
+def _job(spec: dict[str, Any]) -> JobSpec:
+    return JobSpec(job_id=JOB_ID, job_type="recommend",
+                   workspace={"account_id": "1", "region": "cn-northwest-1"},
+                   sink={"bucket": "b", "prefix": jobs.job_prefix(JOB_ID, 1)}, spec=spec)
+
+
+def test_recommend_handler_runs_the_reflection_and_reports_in_done_json():
+    store = MemoryStore()
+    req = _req(_evidence(2))
+    job = _job(gepa_lite.GepaLiteProvider().build_spec(req))
+    factory_calls: list[tuple] = []
+
+    def judge_factory(model_id, **kw):
+        factory_calls.append((model_id, kw))
+        return FakeModel(texts=[json.dumps({"diagnosis": "d", "changes": ["c"],
+                                            "revised_prompt": "P2"})])
+
+    jobs_recommend.run(job, JobSink(store, job), judge_factory=judge_factory)
+    assert factory_calls == [(MODEL, {"max_tokens": 4096, "temperature": 0.0})]
+    done = JobDone.from_dict(json.loads(store.get(jobs.done_key(JOB_ID, 1)).decode()))
+    assert done.state == "COMPLETED" and done.summary["provider"] == "gepa_lite"
+    rec = done.summary["recommendation"]
+    assert rec["status"] == "COMPLETED" and rec["recommended_prompt"] == "P2"
+    assert rec["explanation"] == "d\n- c" and rec["meta"]["calls"] == 1
+    artifact = json.loads(store.get(jobs.artifact_key(JOB_ID, 1, "recommendation.json")).decode())
+    assert artifact == rec
+
+
+class _ReasoningModel(FakeModel):
+    """GLM / Kimi stream a reasoning block before the answer — never part of the text."""
+
+    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs
+                     ) -> AsyncIterable[dict[str, Any]]:
+        yield {"messageStart": {"role": "assistant"}}
+        yield {"contentBlockStart": {"start": {}}}
+        yield {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thinking…"}}}}
+        yield {"contentBlockStop": {}}
+        yield {"contentBlockDelta": {"delta": {"text": self.texts.pop(0)}}}
+        yield {"contentBlockStop": {}}
+        yield {"messageStop": {"stopReason": "end_turn"}}
+        yield {"metadata": {"usage": {"inputTokens": 7, "outputTokens": 3, "totalTokens": 10},
+                            "metrics": {"latencyMs": 1}}}
+
+
+def test_model_converse_returns_text_only_with_usage_and_applies_max_tokens():
+    model = _ReasoningModel(texts=['{"revised_prompt": "P"}'])
+    converse = jobs_recommend.model_converse(model)
+    text, usage = converse(MODEL, "sys", [{"role": "user", "text": "hi"}], 777)
+    assert text == '{"revised_prompt": "P"}'
+    assert usage == {"input_tokens": 7, "output_tokens": 3, "stop_reason": "end_turn"}
+    assert model.get_config()["max_tokens"] == 777
+    with pytest.raises(ValueError, match="Model object"):
+        jobs_recommend.model_converse("global.zai.glm-5.3")  # a str would default to Claude
+
+
+# ─── experiment-side seams (W-E3) ────────────────────────────────────────────
+# ─── N-SCN-bug2: the reflection under the output budget ──────────────────────
+class _CutOffModel(FakeModel):
+    """Streams part of the answer, then stops with ``max_tokens`` — strands raises
+    MaxTokensReachedException after appending the partial message to the history."""
+
+    def __init__(self, partial: str, **kw):
+        super().__init__(**kw)
+        self.partial = partial
+
+    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs
+                     ) -> AsyncIterable[dict[str, Any]]:
+        self.calls.append({"kind": "stream", "max_tokens": self.get_config().get("max_tokens")})
+        yield {"messageStart": {"role": "assistant"}}
+        yield {"contentBlockStart": {"start": {}}}
+        yield {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thinking…"}}}}
+        yield {"contentBlockStop": {}}
+        yield {"contentBlockDelta": {"delta": {"text": self.partial}}}
+        yield {"contentBlockStop": {}}
+        yield {"messageStop": {"stopReason": "max_tokens"}}
+
+
+def test_model_converse_hands_back_the_partial_text_on_a_max_tokens_stop():
+    """Counting run #2 (b): strands raises on a max_tokens stop before `reflect` ever saw a
+    stop_reason, so its budget retry was dead code and the stage failed generically."""
+    model = _CutOffModel('{"diagnosis": "the agent', model_id=MODEL)
+    text, usage = jobs_recommend.model_converse(model)(MODEL, "sys", [{"role": "user",
+                                                                       "text": "hi"}], 512)
+    assert text == '{"diagnosis": "the agent' and usage["stop_reason"] == "max_tokens"
+    assert model.get_config()["max_tokens"] == 512
+
+
+def test_a_cut_off_reflection_that_still_parses_is_accepted_without_a_retry():
+    prov = gepa_lite.GepaLiteProvider()
+    calls: list[int] = []
+
+    def converse(model_id, system, messages, max_tokens):
+        calls.append(max_tokens)
+        return (json.dumps({"diagnosis": "d", "revised_prompt": "P2"}) + " and then it was cut",
+                {"input_tokens": 1, "output_tokens": max_tokens, "stop_reason": "max_tokens"})
+
+    res = prov.optimize(_req(_evidence(1), max_tokens=4096), _noop, converse=converse)
+    assert res.status == "COMPLETED" and res.recommended_prompt == "P2"
+    assert calls == [4096]
+
+
+def test_a_truncated_reflection_doubles_the_budget_at_most_twice_and_names_the_last():
+    prov = gepa_lite.GepaLiteProvider()
+    calls: list[tuple[int, bool]] = []
+    notes: list[str] = []
+
+    def converse(model_id, system, messages, max_tokens):
+        calls.append((max_tokens, messages[0]["text"].endswith(jobs_recommend.TRUNCATED_SUFFIX)))
+        return '{"diagnosis": "cut', {"input_tokens": 1, "output_tokens": max_tokens,
+                                      "stop_reason": "max_tokens"}
+
+    res = prov.optimize(_req(_evidence(1), max_tokens=8192, max_tokens_cap=16384), notes.append,
+                        converse=converse)
+    assert calls == [(8192, False), (16384, True)]  # 8192 → 16384 = the cap, then stop
+    assert res.status == "FAILED" and res.recommended_prompt is None
+    assert "truncated by the token limit" in res.error
+    assert "reflection exceeded 16384 output tokens after 2 attempts" in res.error
+    assert "raise prompt_opt_max_tokens" in res.error
+    assert any("retrying with 16384 tokens (attempt 2/3)" in n for n in notes)
+
+    res = prov.optimize(_req(_evidence(1), max_tokens=4096, max_tokens_cap=16384), _noop,
+                        converse=converse)
+    assert "reflection exceeded 16384 output tokens after 3 attempts" in res.error
+
+
+def test_recommend_job_spec_carries_the_cap_to_the_worker_reflection():
+    store = MemoryStore()
+    req = _req(_evidence(2), max_tokens=1024, max_tokens_cap=2048)
+    spec = gepa_lite.GepaLiteProvider().build_spec(req)
+    assert spec["max_tokens_cap"] == 2048
+    job = _job(spec)
+    budgets: list[int] = []
+
+    class _Tight(FakeModel):
+        async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs):
+            budget = int(self.get_config()["max_tokens"])
+            budgets.append(budget)
+            if budget < 2048:
+                yield {"messageStart": {"role": "assistant"}}
+                yield {"contentBlockDelta": {"delta": {"text": '{"diag'}}}
+                yield {"contentBlockStop": {}}
+                yield {"messageStop": {"stopReason": "max_tokens"}}
+                return
+            async for event in super().stream(messages, tool_specs, system_prompt, **kwargs):
+                yield event
+
+    jobs_recommend.run(job, JobSink(store, job), judge_factory=lambda model_id, **kw: _Tight(
+        texts=[json.dumps({"diagnosis": "d", "revised_prompt": "P2"})]))
+    done = JobDone.from_dict(json.loads(store.get(jobs.done_key(JOB_ID, 1)).decode()))
+    assert budgets == [1024, 2048]
+    assert done.summary["recommendation"]["status"] == "COMPLETED"
+    assert done.summary["recommendation"]["recommended_prompt"] == "P2"

@@ -19,13 +19,23 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import DATA_DIR, get_settings
-from app.services import workspace_iam
+from app.core.naming import resource_name
+from app.services import aws_clients, workspace_iam
 from app.services.agent_iam import retry_iam_propagation
 from app.services.agentcore import runtime as rt
 from app.services.workspace import WorkspaceContext
 from app.skill_lab import worker_build
+from app.skill_lab.executors import opencode as executor
 
 WORKER_RUNTIME_NAME = "launchpad_skill_lab_worker"  # runtime names disallow hyphens
+
+
+def worker_runtime_name() -> str:
+    """The runtime's physical name in this environment: the fixed base plus the
+    D13 `EnvName` suffix (`_t1` — runtime names take `_`, not `-`)."""
+    return resource_name(WORKER_RUNTIME_NAME).replace("-", "_")
+
+
 S3_PREFIX = "skill-lab"
 EXEC_JOBS_PREFIX = f"{S3_PREFIX}/exec-jobs"
 WORKER_LIFECYCLE = {"idleRuntimeSessionTimeout": 300, "maxLifetime": 28800}  # 5min/8h
@@ -35,15 +45,10 @@ VENV_STAMP = VENV_DIR / ".requirements.sha256"
 REQUIREMENTS_FILE = worker_build.VENDOR_ROOT / "requirements-launchpad.txt"
 
 
-def worker_runtime_environment(region: str) -> dict[str, str]:
-    """Env baked onto the runtime (upstream RUNTIME_ENV minus the codex vars)."""
-    settings = get_settings()
-    return {
-        "AWS_REGION": region,
-        "CLAUDE_CODE_USE_BEDROCK": "1",
-        "ANTHROPIC_MODEL": settings.skill_lab_target_model_id,
-        "CLAUDE_CODE_EXEC_USE_SDK": "cli",
-    }
+def worker_runtime_environment(workspace: WorkspaceContext) -> dict[str, str]:
+    """Env baked onto the runtime — the executor seam's worker contract (no key
+    material; the worker resolves the Global Bedrock API key through Identity)."""
+    return executor.worker_runtime_environment(workspace)
 
 
 def ensure_worker_role(
@@ -59,9 +64,6 @@ def ensure_worker_role(
             "artifacts_bucket/ecr_repo(_uri) missing from the resource map — "
             "run the base bootstrap first"
         )
-    ecr_repo_arn = (
-        f"arn:aws:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
-    )
     return workspace_iam.ensure_role(
         workspace.client("iam"),
         workspace_id=workspace_id,
@@ -69,11 +71,17 @@ def ensure_worker_role(
             workspace_iam.SKILL_LAB_ROLE_BASE, workspace.region
         ),
         trust_policy=workspace_iam.service_trust_policy(
-            "bedrock-agentcore.amazonaws.com", workspace.account_id
+            aws_clients.service_principal("bedrock-agentcore"), workspace.account_id
         ),
         inline_policies={
             "launchpad-skill-lab-worker": workspace_iam.skill_lab_worker_role_policy(
-                bucket, ecr_repo_arn, workspace.account_id, s3_prefix=f"{S3_PREFIX}/"
+                workspace.region,
+                workspace.account_id,
+                bucket,
+                repo,
+                model_credential=executor.model_credential_name(workspace),
+                runtime_name=worker_runtime_name(),
+                s3_prefix=f"{S3_PREFIX}/",
             )
         },
         description="Assumed by the Launchpad Skill Lab exec-worker runtime",
@@ -82,8 +90,9 @@ def ensure_worker_role(
 
 
 def _find_runtime(client: Any) -> dict[str, Any] | None:
+    wanted = worker_runtime_name()
     for summary in rt.list_runtimes(client):
-        if summary.get("agentRuntimeName") == WORKER_RUNTIME_NAME:
+        if summary.get("agentRuntimeName") == wanted:
             return summary
     return None
 
@@ -101,15 +110,16 @@ def ensure_worker_runtime(
     from app.services.agentcore.client import control_client
 
     client = control_client(workspace)
-    environment = worker_runtime_environment(workspace.region)
+    environment = worker_runtime_environment(workspace)
     filesystem = [{"sessionStorage": {"mountPath": SESSION_STORAGE_MOUNT}}]
     existing = _find_runtime(client)
+    runtime_name = worker_runtime_name()
 
     if existing is None:
         created = retry_iam_propagation(
             lambda: rt.create_container_runtime(
                 client,
-                runtime_name=WORKER_RUNTIME_NAME,
+                runtime_name=runtime_name,
                 container_uri=image_uri,
                 role_arn=role_arn,
                 environment=environment,
@@ -119,7 +129,7 @@ def ensure_worker_runtime(
             log,
         )
         runtime_id = created["agentRuntimeId"]
-        log(f"created runtime {WORKER_RUNTIME_NAME} · {runtime_id}")
+        log(f"created runtime {runtime_name} · {runtime_id}")
     else:
         runtime_id = existing["agentRuntimeId"]
         detail = rt.get_runtime(client, runtime_id)
@@ -131,7 +141,7 @@ def ensure_worker_runtime(
         current_env = detail.get("environmentVariables") or {}
         in_sync = current_uri == image_uri and current_env == environment
         if in_sync and str(detail.get("status") or "") == "READY":
-            log(f"runtime {WORKER_RUNTIME_NAME} up to date · {runtime_id}")
+            log(f"runtime {runtime_name} up to date · {runtime_id}")
             arn = detail.get("agentRuntimeArn", existing.get("agentRuntimeArn", ""))
             return {"runtime_id": runtime_id, "runtime_arn": arn}
         if in_sync:
@@ -139,7 +149,7 @@ def ensure_worker_runtime(
             # interrupted (or failed) create/update from a previous run. Waiting
             # below either sees it through or raises — returning the ARN here
             # would report a broken runtime as provisioned.
-            log(f"runtime {WORKER_RUNTIME_NAME} is {detail.get('status')} · waiting")
+            log(f"runtime {runtime_name} is {detail.get('status')} · waiting")
         else:
             rt.update_container_runtime(
                 client,
@@ -150,7 +160,7 @@ def ensure_worker_runtime(
                 filesystem_configurations=filesystem,
                 lifecycle=WORKER_LIFECYCLE,
             )
-            log(f"updated runtime {WORKER_RUNTIME_NAME} · {runtime_id} (new version)")
+            log(f"updated runtime {runtime_name} · {runtime_id} (new version)")
 
     detail = rt.wait_runtime_ready(
         client,

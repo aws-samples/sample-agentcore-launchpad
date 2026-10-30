@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_respond_response/v1",
+  "title": "I4 POST /v1/respond 200 response",
+  "type": "object",
+  "properties": {
+    "event_seq": {"type": "integer", "minimum": 0},
+    "ts_ns": {"type": "integer", "minimum": 0}
+  },
+  "required": ["event_seq", "ts_ns"],
+  "additionalProperties": false
+}

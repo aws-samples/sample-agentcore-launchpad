@@ -1,0 +1,42 @@
+diff --git a/frontend/src/pages/EvaluationRuntimeCanary.tsx b/frontend/src/pages/EvaluationRuntimeCanary.tsx
+index b7787b57..101eec87 100644
+--- a/frontend/src/pages/EvaluationRuntimeCanary.tsx
++++ b/frontend/src/pages/EvaluationRuntimeCanary.tsx
+@@ -293,8 +293,6 @@ export function RuntimeCanaryView() {
+   const provisioning = !!setup && !liveSetup;
+   const rounds = canary?.artifacts.rounds ?? [];
+   const currentStage = liveSetup?.ramp_stage ?? 0;
+-  // stages before the one setup opened at never ran (a Harness canary that skipped 90/10)
+-  const startStage = liveSetup?.start_stage ?? 0;
+   const terminal = canary?.status !== "running";
+ 
+   const createForm = (
+@@ -565,8 +563,7 @@ export function RuntimeCanaryView() {
+               </StageCard>
+ 
+               {RAMP_STAGES.map((ramp, index) => {
+-                const skipped = index < startStage;
+-                const reached = !!liveSetup && index <= currentStage && !skipped;
++                const reached = !!liveSetup && index <= currentStage;
+                 const current = !!liveSetup && index === currentStage;
+                 const round = rounds.find((item) => item.ramp_stage === index);
+                 const attempts = round?.traffic_attempts ?? [];
+@@ -592,15 +589,10 @@ export function RuntimeCanaryView() {
+                       treatment: ramp.treatment,
+                     })}
+                     active={current && canary.status === "running"}
+-                    done={!skipped && (index < currentStage
+-                      || (index === 2 && !!canary.artifacts.complete))}
++                    done={index < currentStage
++                      || (index === 2 && !!canary.artifacts.complete)}
+                   >
+-                    {skipped && (
+-                      <div className="mono dim" style={{ fontSize: 10 }}>
+-                        {t("canaryPage.stage.skippedStart")}
+-                      </div>
+-                    )}
+-                    {!reached && !skipped && (
++                    {!reached && (
+                       <div className="mono dim" style={{ fontSize: 10 }}>
+                         {t("canaryPage.stage.locked")}
+                       </div>

@@ -1,0 +1,8 @@
+{
+  "gateway_policy_denied": {
+    "event": "policy_denied", "source": "gateway", "tool": "hr-database___create_payout",
+    "reason": "Policy evaluation denied due to pol_payoutadm", "policy_id": "pol_payoutadm",
+    "decision_id": null, "tool_use_id": "tooluse_demo0001", "mode": "enforce",
+    "decision": "deny", "bundle_version": null
+  }
+}

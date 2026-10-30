@@ -1,0 +1,87 @@
+/* V2 Settings → Model Providers (D21) — module styles, scoped under the V2 shell root. */
+.v2 .v2-mp-forbidden {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px;
+  color: var(--v2-ink-3); text-align: center;
+}
+.v2 .v2-mp-forbidden b { color: var(--v2-ink); font-size: 15px; }
+.v2 .v2-mp-forbidden svg { color: var(--v2-warning, #d46b08); }
+
+.v2 .v2-mp-banners { display: grid; gap: 8px; margin-bottom: 16px; }
+
+/* provider cards */
+.v2 .v2-mp-providers { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); margin-bottom: 16px; }
+.v2 .v2-mp-card {
+  border: 1px solid var(--v2-line); border-radius: 8px; background: #fff; padding: 14px 16px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 10px; text-align: left; font: inherit; color: inherit;
+}
+.v2 .v2-mp-card:hover { border-color: var(--v2-primary-hover); }
+.v2 .v2-mp-card.selected { border-color: var(--v2-primary); box-shadow: 0 0 0 2px var(--v2-primary-soft); }
+.v2 .v2-mp-card.off { opacity: .75; }
+.v2 .v2-mp-card .head { display: flex; align-items: center; gap: 8px; }
+.v2 .v2-mp-card .head b { font-size: 15px; color: var(--v2-ink); }
+.v2 .v2-mp-card .head code { font-size: 12px; color: var(--v2-ink-3); }
+.v2 .v2-mp-card .head .end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.v2 .v2-mp-card .meta { display: grid; gap: 4px; font-size: 12.5px; color: var(--v2-ink-2); }
+.v2 .v2-mp-card .meta .k { color: var(--v2-ink-3); margin-right: 6px; }
+.v2 .v2-mp-card .meta code { font-size: 12px; }
+.v2 .v2-mp-card .foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--v2-line-2); padding-top: 10px; }
+.v2 .v2-mp-cred.ok { color: #009a29; }
+.v2 .v2-mp-cred.missing { color: #d25f00; }
+.v2 .v2-mp-cred.env { color: var(--v2-ink-3); }
+
+/* switch */
+.v2 .v2-mp-switch {
+  position: relative; width: 34px; height: 20px; border-radius: 10px; border: 0; padding: 0; cursor: pointer;
+  background: var(--v2-fill-2); transition: background .15s;
+}
+.v2 .v2-mp-switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left .15s; }
+.v2 .v2-mp-switch.on { background: var(--v2-primary); }
+.v2 .v2-mp-switch.on .knob { left: 16px; }
+.v2 .v2-mp-switch:disabled { cursor: not-allowed; opacity: .5; }
+
+/* model table */
+.v2 .v2-mp-model .id { display: block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--v2-ink-3); }
+.v2 .v2-mp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.v2 .v2-mp-chips .v2-tag { font-variant-numeric: tabular-nums; }
+.v2 .v2-mp-chips .v2-tag.off { text-decoration: line-through; opacity: .7; }
+.v2 .v2-mp-star { border: 0; background: none; cursor: pointer; color: var(--v2-ink-4, #bbb); display: inline-flex; padding: 2px; }
+.v2 .v2-mp-star.on { color: #d4a106; }
+.v2 .v2-mp-star:disabled { cursor: not-allowed; }
+
+/* drawers */
+.v2 .v2-mp-form { display: grid; gap: 14px; }
+.v2 .v2-mp-form .cols { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.v2 .v2-mp-form .v2-checks { padding-top: 4px; }
+.v2 .v2-mp-form .src { margin-left: 6px; }
+.v2 .v2-mp-lock { display: inline-flex; align-items: center; gap: 4px; color: var(--v2-ink-3); font-size: 12px; }
+
+/* probe panels */
+.v2 .v2-mp-probe { display: grid; gap: 10px; }
+.v2 .v2-mp-probe .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.v2 .v2-mp-probe .seen { display: flex; flex-wrap: wrap; gap: 4px; max-height: 180px; overflow: auto; }
+.v2 .v2-mp-probe .err { color: #cb2634; font-size: 12.5px; word-break: break-word; }
+.v2 .v2-mp-diff td.changed { background: var(--v2-warning-soft); }
+.v2 .v2-mp-diff code { font-size: 12px; }
+
+/* workspace matrix */
+.v2 .v2-mp-matrix th.ws { white-space: nowrap; }
+.v2 .v2-mp-matrix td.cell { text-align: center; }
+
+/* journal */
+.v2 .v2-mp-diffsum { display: grid; gap: 2px; font-size: 12.5px; }
+.v2 .v2-mp-diffsum code { font-size: 12px; }
+.v2 .v2-mp-json { margin: 0; font-size: 11.5px; max-height: 200px; overflow: auto; background: var(--v2-fill); padding: 8px; border-radius: 6px; }
+.v2 .v2-mp-nowrap { white-space: nowrap; }
+.v2 .v2-mp-referrers { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+
+/* r15-e: the Model roles tab */
+.v2-mp-role { display: flex; flex-direction: column; gap: 4px; max-width: 420px; }
+.v2-mp-role .v2-muted { font-size: 12px; line-height: 1.4; }
+.v2-mp-role code { font-size: 11px; }
+.v2-mp-role-status { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.v2-mp-role-status .v2-muted { font-size: 12px; }
+
+/* N17-obs203 §3 amendment: the operator's advanced option (SSM parameter name), collapsed */
+.v2 .v2-mp-advanced { border-top: 1px dashed var(--v2-line, #e5e7eb); padding-top: 8px; }
+.v2 .v2-mp-advanced > summary { cursor: pointer; color: var(--v2-ink-3); font-size: 12px; }
+.v2 .v2-mp-advanced[open] > summary { margin-bottom: 8px; }

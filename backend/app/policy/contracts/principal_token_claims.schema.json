@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/principal_token_claims/v2",
+  "title": "I1 principal token: claims",
+  "description": "Minted by the hub once per turn (stream A), verified by the interceptor (stream B) with codec.verify_token. D1 revised: an api_key principal is its own type and carries no role.",
+  "type": "object",
+  "properties": {
+    "iss": {"const": "launchpad-hub"},
+    "v": {"const": 1},
+    "ws": {"type": "string", "minLength": 1, "maxLength": 32},
+    "env": {"type": "string", "maxLength": 32},
+    "agt": {"type": "string", "minLength": 1, "maxLength": 32},
+    "aud": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 32},
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true
+    },
+    "sid": {"type": "string", "minLength": 1, "maxLength": 128},
+    "psid": {"type": "string", "pattern": "^[A-Za-z0-9-]{1,128}$"},
+    "tsv": {"type": "integer", "minimum": 0},
+    "generation": {"type": "integer", "minimum": 0},
+    "engine_versions": {
+      "type": "object",
+      "propertyNames": {"pattern": "^pe_[a-zA-Z0-9_]+$"},
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "jti": {"type": "string", "minLength": 8, "maxLength": 64},
+    "iat": {"type": "integer", "minimum": 0},
+    "exp": {"type": "integer", "minimum": 0},
+    "ch": {"enum": ["chat", "console", "v1", "assistant", "eval", "canary", "system"]},
+    "p": {
+      "type": "object",
+      "properties": {
+        "kind": {"enum": ["user", "api_key", "system"]},
+        "id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "label": {"type": "string", "maxLength": 160},
+        "role": {"enum": ["admin", "member"]},
+        "user_id": {"type": "string", "maxLength": 64},
+        "attrs": {"type": "object"}
+      },
+      "required": ["kind", "id"],
+      "additionalProperties": false,
+      "if": {"properties": {"kind": {"const": "user"}}},
+      "then": {"required": ["role"]},
+      "else": {"not": {"required": ["role"]}}
+    }
+  },
+  "required": ["iss", "v", "ws", "env", "agt", "aud", "sid", "psid", "tsv", "jti", "iat", "exp", "ch", "p"],
+  "additionalProperties": false,
+  "dependentRequired": {"engine_versions": ["generation"]}
+}

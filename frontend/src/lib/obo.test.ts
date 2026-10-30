@@ -3,11 +3,10 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_OBO_FORM, oboAvailability, oboFromForm, targetModes } from "./obo";
 
 describe("oboAvailability", () => {
-  it("offers OBO on CustomOauth2 templates except Cognito", () => {
+  it("offers OBO on CustomOauth2 templates only", () => {
     expect(oboAvailability({ id: "custom_oidc", vendor: "CustomOauth2" })).toBe("offered");
     expect(oboAvailability({ id: "custom_endpoints", vendor: "CustomOauth2" })).toBe("offered");
-    expect(oboAvailability({ id: "cognito", vendor: "CustomOauth2" })).toBe("cognito");
-    expect(oboAvailability({ id: "github", vendor: "GithubOauth2" })).toBe("none");
+    expect(oboAvailability({ id: "slack", vendor: "SlackOauth2" })).toBe("none");
     expect(oboAvailability(undefined)).toBe("none");
   });
 });

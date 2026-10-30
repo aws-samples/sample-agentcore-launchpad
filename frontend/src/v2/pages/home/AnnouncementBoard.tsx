@@ -10,6 +10,7 @@ import { Alert, Button, Card, Drawer, LinkButton, Pager, Spin, Tag } from "../..
 import { AnnouncementPreview } from "../announcements/Preview";
 import "../announcements/announcements.css";
 import { readSeenAt, writeSeenAt } from "./common";
+import { formatApiTime, timeMs } from "../../../lib/timestamps";
 
 const BOARD_SIZE = 5;
 const ALL_PAGE_SIZE = 10;
@@ -17,7 +18,7 @@ const ALL_PAGE_SIZE = 10;
 function useDate() {
   const { i18n } = useTranslation();
   return (iso: string, short = false) =>
-    new Date(iso).toLocaleDateString(i18n.language, short ? { month: "2-digit", day: "2-digit" } : { year: "numeric", month: "short", day: "numeric" });
+    formatApiTime(iso, i18n.language, short ? { month: "2-digit", day: "2-digit" } : { year: "numeric", month: "short", day: "numeric" }) ?? iso;
 }
 
 /**
@@ -43,7 +44,7 @@ export function AnnouncementBoard() {
   useEffect(() => {
     if (newest) writeSeenAt(newest);
   }, [newest]);
-  const isNew = (row: PublicAnnouncement) => seenAt !== null && row.published_at > seenAt;
+  const isNew = (row: PublicAnnouncement) => seenAt !== null && timeMs(row.published_at) > timeMs(seenAt);
   const [featured, ...earlier] = rows;
 
   return (
@@ -156,7 +157,7 @@ function AllAnnouncements({ open, onClose, seenAt }: { open: boolean; onClose: (
           <div key={row.id}>
             <div className="meta">
               <time dateTime={row.published_at}>{fmt(row.published_at)}</time>
-              {seenAt !== null && row.published_at > seenAt && <Tag tone="orange">{t("v2.home.board.new")}</Tag>}
+              {seenAt !== null && timeMs(row.published_at) > timeMs(seenAt) && <Tag tone="orange">{t("v2.home.board.new")}</Tag>}
             </div>
             <AnnouncementPreview content={row} />
           </div>

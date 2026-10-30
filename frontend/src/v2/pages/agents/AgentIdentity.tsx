@@ -2,14 +2,12 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { type AgentIdentityDownstream, api } from "../../../lib/api";
-import { useAuth } from "../../../auth/auth-context";
 import { useLoad } from "../../hooks";
 import { Alert, Button, Card, type Column, Descriptions, FlowHeader, Spin, Table, Tag } from "../../ui";
 import "../connections/connections.css";
-import { InboundSwitchCard } from "./InboundAuthFields";
 
 const WORKLOAD_TONE = { ready: "green", none: "gray", managed: "blue", not_deployed: "gray", missing: "red" } as const;
-const CONNECTION_TONE = { ready: "green", missing: "red", unbound: "gray" } as const;
+const CONNECTION_TONE = { ready: "green", missing: "red", unbound: "gray", "n/a": "gray" } as const;
 
 /**
  * 身份 — read-only: who this agent is (its workload identity), how callers reach it
@@ -19,7 +17,6 @@ const CONNECTION_TONE = { ready: "green", missing: "red", unbound: "gray" } as c
 export function AgentIdentity({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
-  const { can } = useAuth();
   const { data, loading, error, reload } = useLoad(() => api.agentIdentity(id), `identity:${id}`);
 
   const columns: Column<AgentIdentityDownstream>[] = [
@@ -50,7 +47,7 @@ export function AgentIdentity({ id }: { id: string }) {
         <span className="v2-identity-downstream">
           <span className="mono">{row.connection ?? "—"}</span>
           <Tag tone={CONNECTION_TONE[row.connection_status]} dot>
-            {t(`v2.agents.identity.connection.${row.connection_status}`)}
+            {t(`v2.agents.identity.connection.${row.connection_status}`, row.connection_status)}
           </Tag>
         </span>
       ),
@@ -105,17 +102,13 @@ export function AgentIdentity({ id }: { id: string }) {
               ]}
             />
           </Card>
-          <InboundSwitchCard
-            agentId={id}
-            mode={data.inbound.mode}
-            pinned={data.inbound.pinned}
-            capable={data.inbound.capable}
-            canSwitch={can("agents.deploy")}
-            busy={false}
-            jwt={data.inbound.jwt}
-            invokeUrl={data.inbound.invoke_url}
-            onSwitched={() => setParams({ view: "detail", id })}
-          />
+          <Card title={t("inboundAuth.title")} sub={t("inboundAuth.detailSub")} testId="v2-agent-inbound-card">
+            <Descriptions
+              items={[
+                { label: t("inboundAuth.modeLabel"), value: <Tag tone="blue">{t("inboundAuth.mode.iam")}</Tag> },
+              ]}
+            />
+          </Card>
           <Card title={t("v2.agents.identity.downstreamTitle")} sub={t("v2.agents.identity.downstreamSub")} flush>
             <Table
               columns={columns}

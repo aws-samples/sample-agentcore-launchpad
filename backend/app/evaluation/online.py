@@ -1,50 +1,51 @@
-"""Per-agent online evaluation: continuous, sampled scoring of live sessions.
+"""Per-agent online evaluation: continuous, sampled scoring of live sessions (N12 E2).
 
-One AWS ``OnlineEvaluationConfig`` per (agent, evaluator set). The ledger keeps
-identifiers only (:class:`OnlineEvalConfig`); every status/rule/evaluator field
-is read back from the control plane. The list surface shows **every** config in
-the workspace account, classified by owner:
+The ``OnlineEvalConfig`` row **is** the config (plan CA-3, §B.3): evaluators, sampling,
+session timeout, filters, mode, execution status and health are columns; nothing is read
+back from a control plane. The scheduler (``online_scheduler.py``) scans each ENABLED
+config's log group for idle sessions, samples them into ``online_samples`` and dispatches
+``online_eval`` jobs to the evaluation worker; the worker's records land in
+``eval_results`` (``source="online"``, ``config_id``), which every read surface here
+aggregates — the per-config results page, the Observability session detail and the
+Overview quality tile.
 
-- ``agent`` — created here for an agent (ledger row): full control.
-- ``experiment`` — ``exp_*`` / ``can_*`` arms owned by the experiment and canary
-  flows (their cleanup deletes them): read-only.
-- ``external`` — anything else (AWS console, CLI, quick start): status and results
-  visible, pause/resume/delete allowed, no edit (the owning agent is unknown).
+Owners (plan §B.9 — ``external`` cannot occur any more):
 
-Live-verified AWS semantics this module leans on (2026-09-02):
+- ``agent`` — created on this page for an agent: full control.
+- ``experiment`` — ``exp_*`` / ``can_*`` arms created by the experiment and canary flows
+  through :func:`create_for_owner` (their cleanup deletes them): read-only here.
 
-- ``Update`` keeps omitted top-level fields but replaces ``rule`` wholesale —
-  :func:`patch_config` always sends the merged, complete rule.
-- ``Create`` validates that the data-source log groups exist — a never-invoked
-  agent is refused with ``online_eval.no_telemetry``.
-- ``Delete`` works while ENABLED; the results log group survives deletion.
+Insights-mode configs sample sessions only; their reports are on-demand insights runs
+over the sampled sessions (:func:`start_report`), listed from the run ledger.
 """
 
 from __future__ import annotations
 
-import json
 import re
-import threading
-import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
-from app.evaluation import agentcore_eval as ac
 from app.evaluation import service as eval_service
-from app.evaluation.models import EvalRun, OnlineEvalConfig
-from app.evaluation.online_evaluators import normalize_online_evaluators
-from app.evaluation.service import EVAL_SUPPORTED_METHODS, resolve_telemetry
+from app.evaluation.models import EvalResult, EvalRun, OnlineEvalConfig, OnlineSample
+from app.evaluation.online_evaluators import evaluator_polarity, normalize_online_evaluators
+from app.evaluation.service import resolve_telemetry
 from app.models.ledger import Agent
-from app.routers.workspaces import WorkspaceScope
-from app.services.agentcore.client import control_client, data_client
-from app.services.observability import BIN_BY_RANGE, RANGE_HOURS, run_insights_queries
+from app.services import creators, ownership, visibility
+from app.services.observability import RANGE_HOURS
+from app.services.strands_eval import extraction_check
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
+
+if TYPE_CHECKING:
+    from app.routers.auth import Identity
 
 EXPERIMENT_PREFIXES = ("exp_", "can_")
 NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
@@ -55,46 +56,84 @@ FILTER_OPERATORS = (
 )
 MAX_FILTERS = 5
 RECENT_LIMIT = 50
-# Insights mode: a config carries `insights` (+ optional clusteringConfig) INSTEAD of
-# `evaluators` — AWS forbids both. Reports are batch evaluations sourced from the
-# config (AWS-scheduled on the clustering cadence, or on demand from the console).
-INSIGHT_IDS = tuple(ac.INSIGHT_TYPES)
+# Insights mode: a config carries `insights` (+ optional clustering frequencies) INSTEAD
+# of `evaluators`. The ids are the Global contract (the UI renders them by id).
+INSIGHT_IDS = (
+    "Builtin.Insight.FailureAnalysis",
+    "Builtin.Insight.UserIntent",
+    "Builtin.Insight.ExecutionSummary",
+)
 FREQUENCIES = ("DAILY", "WEEKLY", "MONTHLY")
 Mode = str  # "scores" | "insights"
-REPORT_SCAN_LIMIT = 300
 REPORT_RANGES = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
-RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
+# The optional EMF mirror writes each record here too (Settings.eval_results_log_group_prefix);
+# SQLite stays authoritative. The UI shows the name in delete toasts, as it did for AWS.
+RESULTS_LOG_GROUP_PREFIX = "/launchpad/evaluations/results/"
+BUCKET_SECONDS = {"1h": 300, "6h": 900, "24h": 3600, "7d": 6 * 3600}
+QUALITY_RANGE = "24h"
+SESSION_SCORES_LIMIT = 200
+RESULTS_SOURCE = "online"
 
-Owner = str  # "agent" | "experiment" | "external"
+Owner = str  # "agent" | "experiment"
+RunQueries = Callable[..., Any]  # legacy keyword on the cross-surface reads; ignored
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
 
-def _exc_name(exc: Exception) -> str:
-    return type(exc).__name__
-
-
-def _is_not_found(exc: Exception) -> bool:
-    return _exc_name(exc) in {"ResourceNotFoundException", "NotFoundException"}
-
-
 def _iso(value: Any) -> str | None:
     if isinstance(value, datetime):
-        return value.isoformat()
+        return _aware(value).isoformat()
     return str(value) if value else None
 
 
-def owner_of(name: str, config_id: str, ledger_ids: set[str]) -> Owner:
-    if config_id in ledger_ids:
-        return "agent"
-    if str(name or "").startswith(EXPERIMENT_PREFIXES):
-        return "experiment"
-    return "external"
+def _aware(value: datetime) -> datetime:
+    """SQLite hands timestamps back naive; every column here is written in UTC."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def mode_of(aws: dict[str, Any]) -> Mode:
-    return "insights" if aws.get("insights") else "scores"
+def _ts(value: datetime) -> str:
+    """Logs-Insights-shaped timestamp (``YYYY-MM-DD HH:MM:SS.mmm``) the UI already parses."""
+    value = _aware(value)
+    return value.strftime("%Y-%m-%d %H:%M:%S.") + f"{value.microsecond // 1000:03d}"
+
+
+def _ws_id(ws: Any) -> str:
+    return str(ws.id)
+
+
+def _ctx(ws: Any) -> WorkspaceContext:
+    return ws.context if hasattr(ws, "context") else ws
+
+
+def _logs_client(ctx: WorkspaceContext) -> Any:
+    return ctx.client("logs")
+
+
+@contextmanager
+def _session(db: Session | None):
+    """The caller's session, or a short-lived one for the E3-facing helpers."""
+    if db is not None:
+        yield db
+        return
+    own = SessionLocal()
+    try:
+        yield own
+    finally:
+        own.close()
+
+
+def owner_of(name: str, *_legacy: Any) -> Owner:
+    """``experiment`` for the arm configs the experiment / canary flows create, else ``agent``."""
+    return "experiment" if str(name or "").startswith(EXPERIMENT_PREFIXES) else "agent"
+
+
+def results_log_group(config_id: str) -> str:
+    return f"{RESULTS_LOG_GROUP_PREFIX}{config_id}"
+
+
+def mode_of(row: OnlineEvalConfig) -> Mode:
+    return "insights" if row.mode == "insights" or row.insights else "scores"
 
 
 def validate_insights(
@@ -127,26 +166,19 @@ def _mode_conflict(msg: str) -> AppError:
 
 
 def generate_name(agent_name: str, suffix: str | None = None) -> str:
-    """``oe_<agent-slug>_<6hex>`` — always matches the AWS name regex."""
+    """``oe_<agent-slug>_<6hex>`` — always matches :data:`NAME_RE`."""
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", agent_name or "agent").strip("_")[:24] or "agent"
     return f"oe_{slug}_{suffix or uuid.uuid4().hex[:6]}"
 
 
-def build_rule(
-    sampling_percentage: float, session_timeout_minutes: int, filters: Sequence[dict[str, Any]]
-) -> dict[str, Any]:
-    """The complete ``rule`` — Create and Update both take it as one value."""
-    rule: dict[str, Any] = {
-        "samplingConfig": {"samplingPercentage": float(sampling_percentage)},
-        "sessionConfig": {"sessionTimeoutMinutes": int(session_timeout_minutes)},
-    }
-    if filters:
-        rule["filters"] = [dict(f) for f in filters]
-    return rule
+def new_config_id(name: str) -> str:
+    """``<name>-<10hex>`` — the Global ids were ``<name>-<10 chars>``; the UI treats them
+    opaquely."""
+    return f"{name}-{uuid.uuid4().hex[:10]}"
 
 
 def validate_filters(filters: Sequence[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Shape-check filters the way AWS will (key regex, operator enum, one typed value)."""
+    """Shape-check filters (key regex, operator enum, exactly one typed value)."""
     out: list[dict[str, Any]] = []
     for raw in filters or ():
         key = str(raw.get("key", "")).strip()
@@ -170,181 +202,296 @@ def validate_filters(filters: Sequence[dict[str, Any]] | None) -> list[dict[str,
     return out
 
 
-def _agent_log_group_matchers(db: Session, ws: WorkspaceScope) -> list[tuple[Agent, str, bool]]:
-    """(agent, log-group needle, is_prefix) for every deployed agent in the workspace.
+def _normalize(config: OnlineEvalConfig | dict[str, Any], **_legacy: Any) -> dict[str, Any]:
+    """The console row shape (frozen key-set, plan §A.1) from a ledger row.
 
-    Derived offline: runtime methods log to ``runtimes/<resource_id>-DEFAULT``; a
-    harness's backing runtime logs under ``runtimes/harness_<name>-*`` (see
-    evaluation-agent-eligibility.md). Used only for the best-effort
-    ``matched_agent`` hint on external configs.
+    A plain dict in the row's column names is accepted too (the contract key-set test
+    feeds one); unknown keys simply read as ``None``.
     """
-    rows = db.scalars(
-        select(Agent).where(Agent.workspace_id == ws.id, Agent.status == "active")
-    ).all()
-    out: list[tuple[Agent, str, bool]] = []
-    for agent in rows:
-        if not agent.resource_id or agent.method not in EVAL_SUPPORTED_METHODS:
-            continue
-        if agent.method == "harness":
-            base = agent.resource_id.rsplit("-", 1)[0]
-            out.append((agent, f"{RUNTIME_LOG_GROUP_PREFIX}harness_{base}-", True))
-        else:
-            out.append((agent, f"{RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-DEFAULT", False))
-    return out
+    if isinstance(config, dict):
+        def get(key: str) -> Any:
+            return config.get(key)
+    else:
+        def get(key: str) -> Any:
+            return getattr(config, key, None)
 
-
-def _match_agent(
-    log_groups: Sequence[str], matchers: Sequence[tuple[Agent, str, bool]]
-) -> dict[str, str] | None:
-    for lg in log_groups:
-        for agent, needle, is_prefix in matchers:
-            if (lg.startswith(needle) if is_prefix else lg == needle):
-                return {"id": agent.id, "name": agent.name}
-    return None
-
-
-def _normalize(
-    aws: dict[str, Any], *, owner: Owner, row: OnlineEvalConfig | None,
-    matched_agent: dict[str, str] | None = None, detailed: bool,
-) -> dict[str, Any]:
-    """One row shape for list summaries and Get details (``detailed`` marks which)."""
-    config_id = aws["onlineEvaluationConfigId"]
-    rule = aws.get("rule") or {}
-    ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
-    output = ((aws.get("outputConfig") or {}).get("cloudWatchConfig")) or {}
-    filters = list(rule.get("filters") or [])
-    out: dict[str, Any] = {
+    config_id = get("config_id")
+    name = get("name") or ""
+    filters = list(get("filters") or [])
+    log_group = get("log_group")
+    log_groups = list(get("log_groups") or ([log_group] if log_group else []))
+    return {
         "config_id": config_id,
-        "arn": aws.get("onlineEvaluationConfigArn"),
-        "name": aws.get("onlineEvaluationConfigName"),
-        "description": aws.get("description") or "",
-        "owner": owner,
-        "status": aws.get("status"),
-        "execution_status": aws.get("executionStatus"),
-        "failure_reason": aws.get("failureReason"),
-        "agent_id": row.agent_id if row else None,
-        "agent_name": row.agent_name if row else None,
-        "matched_agent": matched_agent,
-        "detailed": detailed,
-        "evaluators": [e.get("evaluatorId") for e in aws.get("evaluators") or []],
-        "sampling_percentage": (rule.get("samplingConfig") or {}).get("samplingPercentage"),
-        "session_timeout_minutes": (rule.get("sessionConfig") or {}).get(
-            "sessionTimeoutMinutes"
-        ),
+        "arn": get("config_arn"),
+        "name": name or None,
+        "description": get("description") or "",
+        "owner": owner_of(name),
+        "status": get("status"),
+        "execution_status": get("execution_status"),
+        "failure_reason": get("failure_reason"),
+        "agent_id": get("agent_id") or None,  # a log-source config has no agent
+        "agent_name": get("agent_name"),
+        "matched_agent": None,
+        "detailed": True,
+        "evaluators": list(get("evaluators") or []),
+        "sampling_percentage": get("sampling_percentage"),
+        "session_timeout_minutes": get("session_timeout_minutes"),
         "filter_count": len(filters),
         "filters": filters,
         "data_source": {
-            "log_groups": list(ds.get("logGroupNames") or ([row.log_group] if row else [])),
-            "service_name": (ds.get("serviceNames") or [row.service_name if row else None])[0],
+            "log_groups": log_groups,
+            "service_name": get("service_name"),
         },
-        "mode": mode_of(aws),
-        "insights": [i.get("insightId") for i in aws.get("insights") or []],
-        "clustering_frequencies": list(
-            (aws.get("clusteringConfig") or {}).get("frequencies") or []
-        ),
-        "execution_role_arn": aws.get("evaluationExecutionRoleArn"),
-        "results_log_group": output.get("logGroupName")
-        or ac.online_eval_results_log_group(config_id),
+        "mode": get("mode") or ("insights" if get("insights") else "scores"),
+        "insights": list(get("insights") or []),
+        "clustering_frequencies": list(get("clustering_frequencies") or []),
+        # P3.2 (additive): the judge snapshotted at create; null on older rows (those read
+        # the `judge` model role at each dispatch)
+        "judge_model_id": get("judge_model_id"),
+        "judge_inference": get("judge_inference"),
+        "execution_role_arn": None,
+        "results_log_group": results_log_group(config_id) if config_id else None,
         "duplicate_enabled": False,
-        "created_at": _iso(aws.get("createdAt")),
-        "updated_at": _iso(aws.get("updatedAt")),
+        "created_at": _iso(get("created_at")),
+        "updated_at": _iso(get("updated_at")),
+        # console-created configs only: experiment / canary-owned ones record no creator
+        "created_by": get("created_by"),
+        "created_by_name": get("created_by_name"),
+        # N17-obs445 (additive): an experiment-owned config's owning canary / experiment
+        # (filled by the reads that hold a session — ``_out``); null on agent-owned configs
+        "owner_run": None,
     }
+
+
+def _judge_snapshot() -> dict[str, Any]:
+    """P3.2 (N17-obs350): the `judge` model role NOW and its inference config, pinned on a
+    new config so every dispatch of the series uses the same judge."""
+    from app.evaluation.judge_budget import judge_inference
+
+    judge = judge_inference()
+    return {"judge_model_id": judge["model_id"], "judge_inference": judge}
+
+
+def _rows(db: Session, workspace_id: str) -> list[OnlineEvalConfig]:
+    return list(db.scalars(
+        select(OnlineEvalConfig).where(OnlineEvalConfig.workspace_id == workspace_id)
+    ).all())
+
+
+def _row(db: Session, workspace_id: str, config_id: str) -> OnlineEvalConfig:
+    row = db.scalars(
+        select(OnlineEvalConfig).where(
+            OnlineEvalConfig.workspace_id == workspace_id,
+            OnlineEvalConfig.config_id == config_id,
+        )
+    ).first()
+    if row is None:
+        raise NotFoundError(
+            "online_eval.not_found", f"online evaluation config {config_id} not found"
+        )
+    return row
+
+
+def _not_found(config_id: str) -> NotFoundError:
+    return NotFoundError(
+        "online_eval.not_found", f"online evaluation config {config_id} not found"
+    )
+
+
+def _parent_creators(db: Session, workspace_id: str, name: str) -> list[str | None]:
+    """The creators of the canary that owns an arm config — its name carries the
+    owner's id prefix (``can_<id8>_…``; legacy ``exp_<id8>_…`` arms of the retired
+    configuration experiment resolve to nobody, N13-obs2); ``[]`` for an agent-owned
+    config or an owner row that is gone."""
+    if owner_of(name) != "experiment":
+        return []
+    from app.optimization.models import RuntimeCanary
+
+    tag = ""
+    for prefix in EXPERIMENT_PREFIXES:
+        if str(name).startswith(prefix):
+            tag = str(name)[len(prefix):].split("_", 1)[0]
+            break
+    if not tag:
+        return []
+    return [
+        row.created_by
+        for row in db.scalars(
+            select(RuntimeCanary).where(
+                RuntimeCanary.workspace_id == workspace_id, RuntimeCanary.id.like(f"{tag}%")
+            )
+        )
+    ]
+
+
+def config_visible(db: Session, viewer: Viewer, row: OnlineEvalConfig) -> bool:
+    """Workspace isolation: an agent-owned config follows its own creator; an
+    experiment / canary-owned arm follows its OWNER's creator (the arm records none)."""
+    if not viewer.filters:
+        return True
+    parents = _parent_creators(db, row.workspace_id, row.name)
+    if parents:
+        return all(visibility.sees(viewer, db, created_by) for created_by in parents)
+    return visibility.sees(viewer, db, row.created_by)
+
+
+def _visible_row(db: Session, ws: Any, config_id: str, viewer: Viewer) -> OnlineEvalConfig:
+    """``_row`` + the isolation check: a hidden config reads exactly like a missing one."""
+    row = _row(db, _ws_id(ws), config_id)
+    if not config_visible(db, viewer, row):
+        raise _not_found(config_id)
+    return row
+
+
+def _require_creator(row: OnlineEvalConfig, identity: Identity | None, action: str) -> None:
+    """N17-obs426: creator-or-admin on every config mutation (``ownership``,
+    users-and-ownership §8) — a member may not pause / resume / edit / delete another
+    member's or an administrator's config (a NULL creator's is an administrator's). Runs
+    after the visibility lookup (a hidden config stays a 404) and before any change.
+    ``identity=None`` is an in-process caller (tests, the scheduler), never a route."""
+    if identity is None:
+        return
+    ownership.require_creator_or_admin(
+        row, identity, "online_config.forbidden",
+        message=f"only the config's creator or an administrator may {action} it",
+        detail={"config_id": row.config_id, "action": action},
+    )
+
+
+def _require_run_creator(row: OnlineEvalConfig, run: Any, identity: Identity | None,
+                         action: str) -> None:
+    """N17-obs445: creator-or-admin on an arm config, against its owning run's creator."""
+    if identity is None:
+        return
+    ownership.require_creator_or_admin(
+        run, identity, "online_config.forbidden",
+        message=f"only the canary's creator or an administrator may {action} its arm",
+        detail={"config_id": row.config_id, "action": action, "owner_run": run.id},
+    )
+
+
+def _require_owner(row: OnlineEvalConfig, allowed: Sequence[Owner], action: str) -> None:
+    owner = owner_of(row.name)
+    if owner not in allowed:
+        raise AppError(
+            "online_eval.read_only",
+            f"{action} is not available for {owner}-owned configs",
+            {"owner": owner, "action": action},
+            status_code=403,
+        )
+
+
+# N17-obs445: the owning run's statuses after which its arm configs may be paused / resumed
+TERMINAL_OWNER_STATUSES = {
+    "canary": frozenset({"completed", "rolled_back", "cleaned"}),
+    # the retired configuration experiment's own terminal states (models.Experiment)
+    "experiment": frozenset({"promoted", "cleaned", "failed"}),
+}
+
+
+def _owning_run(db: Session, row: OnlineEvalConfig) -> tuple[str, Any] | None:
+    """``(kind, row)`` of the canary / experiment an arm config belongs to (its name's
+    ``can_<id8>_`` / ``exp_<id8>_`` tag); ``None`` for an agent-owned config, or when no
+    single run of the workspace carries the tag."""
+    from app.optimization.models import Experiment, RuntimeCanary
+
+    name = str(row.name or "")
+    if owner_of(name) != "experiment":
+        return None
+    kind, model = ("canary", RuntimeCanary) if name.startswith("can_") else (
+        "experiment", Experiment)
+    tag = name.split("_", 2)[1] if name.count("_") >= 2 else ""
+    if not tag:
+        return None
+    runs = list(db.scalars(select(model).where(
+        model.workspace_id == row.workspace_id, model.id.startswith(tag))).all())
+    return (kind, runs[0]) if len(runs) == 1 else None
+
+
+def _owner_run_out(db: Session, row: OnlineEvalConfig) -> dict[str, Any] | None:
+    owning = _owning_run(db, row)
+    if owning is None:
+        return None
+    kind, run = owning
+    return {"kind": kind, "id": run.id, "status": run.status,
+            "terminal": run.status in TERMINAL_OWNER_STATUSES[kind],
+            "created_by": run.created_by, "created_by_name": run.created_by_name}
+
+
+def _out(db: Session, row: OnlineEvalConfig) -> dict[str, Any]:
+    out = _normalize(row)
+    if out["owner"] == "experiment":
+        out["owner_run"] = _owner_run_out(db, row)
     return out
 
 
-def _ledger_rows(db: Session, ws: WorkspaceScope) -> dict[str, OnlineEvalConfig]:
-    rows = db.scalars(
-        select(OnlineEvalConfig).where(OnlineEvalConfig.workspace_id == ws.id)
-    ).all()
-    return {r.config_id: r for r in rows}
+def _auto_description(agent_name: str | None, name: str) -> str:
+    return (f"Launchpad online evaluation · {agent_name or name}")[:200]
 
 
-def _require_owner(config: dict[str, Any], allowed: Sequence[Owner], action: str) -> None:
-    if config["owner"] not in allowed:
-        raise AppError(
-            "online_eval.read_only",
-            f"{action} is not available for {config['owner']}-owned configs",
-            {"owner": config["owner"], "action": action},
-            status_code=403,
-        )
+def _delete_samples(db: Session, config_ids: Iterable[str]) -> None:
+    ids = list(config_ids)
+    if not ids:
+        return
+    for sample in db.scalars(select(OnlineSample).where(OnlineSample.config_id.in_(ids))):
+        db.delete(sample)
 
 
 # ─── read side ──────────────────────────────────────────────────────────────
 
 
-def list_configs(db: Session, ws: WorkspaceScope, control: Any = None) -> list[dict[str, Any]]:
-    """Every config in the account, newest-updated first, classified + enriched.
+def _watched(config: dict[str, Any]) -> str:
+    """What a config judges: its agent, or (a log-source config) its service."""
+    return config["agent_id"] or f"service:{config['data_source']['service_name']}"
 
-    Summaries lack evaluators / rule, so agent- and external-owned rows get one
-    ``Get`` each (experiment rows stay summary-only — their page is elsewhere).
-    A failing ``Get`` degrades that row to its summary rather than failing the list.
-    """
-    control = control or control_client(ws.context)
-    ledger = _ledger_rows(db, ws)
-    matchers: list[tuple[Agent, str, bool]] | None = None
-    out: list[dict[str, Any]] = []
-    for summary in ac.list_online_eval_configs(control):
-        config_id = summary["onlineEvaluationConfigId"]
-        owner = owner_of(summary.get("onlineEvaluationConfigName", ""), config_id, set(ledger))
-        row = ledger.get(config_id)
-        aws, detailed = summary, False
-        if owner != "experiment":
-            try:
-                aws, detailed = ac.get_online_eval_config(control, config_id=config_id), True
-            except Exception:  # noqa: BLE001 — degrade to the summary
-                pass
-        matched = None
-        if owner == "external" and detailed:
-            if matchers is None:
-                matchers = _agent_log_group_matchers(db, ws)
-            ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
-            matched = _match_agent(ds.get("logGroupNames") or [], matchers)
-        out.append(_normalize(aws, owner=owner, row=row, matched_agent=matched,
-                              detailed=detailed))
+
+def list_configs(db: Session, ws: Any, *, viewer: Viewer = Viewer.ALL) -> list[dict[str, Any]]:
+    """Every config of the workspace ``viewer`` may see, newest-updated first, with the
+    duplicate flag: two ENABLED agent-owned configs on one agent judge the same
+    sessions twice."""
+    out = [_out(db, row) for row in _rows(db, _ws_id(ws)) if config_visible(db, viewer, row)]
     enabled_by_agent: dict[str, int] = {}
     for c in out:
         if c["owner"] == "agent" and c["execution_status"] == "ENABLED":
-            enabled_by_agent[c["agent_id"]] = enabled_by_agent.get(c["agent_id"], 0) + 1
+            enabled_by_agent[_watched(c)] = enabled_by_agent.get(_watched(c), 0) + 1
     for c in out:
         c["duplicate_enabled"] = (
             c["owner"] == "agent"
             and c["execution_status"] == "ENABLED"
-            and enabled_by_agent.get(c["agent_id"], 0) > 1
+            and enabled_by_agent.get(_watched(c), 0) > 1
         )
     out.sort(key=lambda c: c.get("updated_at") or c.get("created_at") or "", reverse=True)
     return out
 
 
 def get_config(
-    db: Session, ws: WorkspaceScope, config_id: str, control: Any = None
+    db: Session, ws: Any, config_id: str, *, viewer: Viewer = Viewer.ALL
 ) -> dict[str, Any]:
-    control = control or control_client(ws.context)
-    ledger = _ledger_rows(db, ws)
-    try:
-        aws = ac.get_online_eval_config(control, config_id=config_id)
-    except Exception as exc:
-        if _is_not_found(exc):
-            raise NotFoundError(
-                "online_eval.not_found", f"online evaluation config {config_id} not found"
-            ) from exc
-        raise
-    owner = owner_of(aws.get("onlineEvaluationConfigName", ""), config_id, set(ledger))
-    matched = None
-    if owner == "external":
-        ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
-        matched = _match_agent(ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws))
-    return _normalize(aws, owner=owner, row=ledger.get(config_id), matched_agent=matched,
-                      detailed=True)
+    return _out(db, _visible_row(db, ws, config_id, viewer))
 
 
 # ─── write side ─────────────────────────────────────────────────────────────
 
 
+def _log_group_exists(ctx: WorkspaceContext, log_group: str, logs: Any = None) -> bool:
+    """A never-invoked agent has no runtime log group yet — the scheduler would scan
+    nothing. Unknown (permission / transient error) reads as present: the config is
+    then validated by the first scan instead."""
+    try:
+        resp = (logs or _logs_client(ctx)).describe_log_groups(
+            logGroupNamePrefix=log_group, limit=5
+        )
+    except Exception:  # noqa: BLE001 — cannot tell; let the scheduler find out
+        return True
+    return any(g.get("logGroupName") == log_group for g in resp.get("logGroups", []))
+
+
 def create_config(
     db: Session,
-    ws: WorkspaceScope,
-    agent: Agent,
+    ws: Any,
+    agent: Agent | None,
     *,
+    log_source: dict[str, Any] | None = None,
     evaluators: Sequence[str] | None,
     sampling_percentage: float,
     session_timeout_minutes: int,
@@ -354,11 +501,40 @@ def create_config(
     mode: Mode = "scores",
     insights: Sequence[str] | None = None,
     clustering_frequencies: Sequence[str] | None = None,
-    control: Any = None,
     logs: Any = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
-    control = control or control_client(ws.context)
-    service_name, log_group = resolve_telemetry(agent, ws.context, logs)
+    ctx = _ctx(ws)
+    log_groups: list[str] | None = None
+    if agent is None:
+        # N17-obs337: a CloudWatch log source (BYOC / external agent) — no platform agent
+        if not log_source:
+            raise AppError("online_eval.target_required",
+                           "exactly one target required: agent_id or log_source",
+                           status_code=422)
+        service_name = str(log_source["service_name"])
+        log_groups = list(dict.fromkeys(str(g) for g in log_source["log_group_names"]))
+        missing = [g for g in log_groups if not _log_group_exists(ctx, g, logs)]
+        if missing:
+            raise AppError(
+                "online_eval.no_telemetry",
+                "these log groups do not exist — check the names and the workspace region",
+                {"log_groups": missing},
+                status_code=400,
+            )
+        log_group = log_groups[0]
+    else:
+        service_name, log_group = resolve_telemetry(agent, ctx)
+        if not _log_group_exists(ctx, log_group, logs):
+            raise AppError(
+                "online_eval.no_telemetry",
+                "this agent has no telemetry log group yet — run at least one "
+                "chat/invoke session first, then create the online evaluation",
+                {"log_group": log_group},
+                status_code=400,
+            )
+    agent_id = agent.id if agent is not None else ""
+    agent_name = agent.name if agent is not None else service_name
     chosen: list[str] = []
     chosen_insights: list[str] = []
     freqs: list[str] = []
@@ -369,615 +545,538 @@ def create_config(
     else:
         if insights or clustering_frequencies:
             raise _mode_conflict("scores mode takes no insights / clustering_frequencies")
-        chosen = normalize_online_evaluators(evaluators, control, code_prefix="online_eval")
-    rule = build_rule(sampling_percentage, session_timeout_minutes, validate_filters(filters))
-    role_arn = ws.context.resources.get("execution_role_arn")
-    if not role_arn:
-        raise AppError(
-            "online_eval.workspace_not_bootstrapped",
-            "this workspace has no execution role yet — run bootstrap first",
-            status_code=400,
+        chosen = normalize_online_evaluators(
+            evaluators, db, code_prefix="online_eval", workspace_id=_ws_id(ws)
         )
-    text = (description or f"Launchpad online evaluation · {agent.name}")[:200]
-
-    created: dict[str, Any] | None = None
-    name = generate_name(agent.name)
-    for attempt in (0, 1):
-        try:
-            created = ac.create_online_eval_config(
-                control, name=name, description=text, log_group=log_group,
-                service_name=service_name, evaluators=chosen, rule=rule,
-                role_arn=role_arn, enable_on_create=enable_on_create,
-                insights=chosen_insights, clustering_frequencies=freqs,
-            )
-            break
-        except Exception as exc:
-            kind = _exc_name(exc)
-            if kind == "ConflictException" and attempt == 0:
-                name = generate_name(agent.name)  # fresh suffix, one retry
-                continue
-            if kind == "ConflictException":
-                raise AppError("online_eval.conflict", str(exc), {"name": name},
-                               status_code=409) from exc
-            if kind == "ValidationException" and "log group" in str(exc).lower():
-                raise AppError(
-                    "online_eval.no_telemetry",
-                    "this agent has no telemetry log group yet — run at least one "
-                    "chat/invoke session first, then create the online evaluation",
-                    {"log_group": log_group},
-                    status_code=400,
-                ) from exc
-            raise
-    assert created is not None
+    clean_filters = validate_filters(filters)
+    name = generate_name(agent_name)
+    config_id = new_config_id(name)
     row = OnlineEvalConfig(
-        workspace_id=ws.id,
-        agent_id=agent.id,
-        agent_name=agent.name,
-        config_id=created["onlineEvaluationConfigId"],
-        config_arn=created["onlineEvaluationConfigArn"],
+        workspace_id=_ws_id(ws),
+        agent_id=agent_id,
+        agent_name=agent_name[:64],
+        config_id=config_id,
+        config_arn=ctx.arn("launchpad", f"online-evaluation-config/{config_id}"),
         name=name,
         service_name=service_name,
         log_group=log_group,
+        log_groups=log_groups,
+        description=(description or "").strip()[:200] or _auto_description(agent_name, name),
+        mode=mode,
+        evaluators=chosen,
+        insights=chosen_insights,
+        clustering_frequencies=freqs,
+        sampling_percentage=float(sampling_percentage),
+        session_timeout_minutes=int(session_timeout_minutes),
+        filters=clean_filters,
+        execution_status="ENABLED" if enable_on_create else "DISABLED",
+        status="ACTIVE",
+        **_judge_snapshot(),
     )
+    creators.stamp(row, creator)
     db.add(row)
     db.commit()
-    # Create returns status/executionStatus/outputConfig but not the config body;
-    # merge the request so the response is a complete row without a second call.
-    aws = {
-        **created,
-        "onlineEvaluationConfigName": name,
-        "description": text,
-        "rule": rule,
-        "dataSourceConfig": {
-            "cloudWatchLogs": {"logGroupNames": [log_group], "serviceNames": [service_name]}
-        },
-        "evaluators": [{"evaluatorId": e} for e in chosen],
-        "insights": [{"insightId": i} for i in chosen_insights],
-        "clusteringConfig": {"frequencies": freqs} if freqs else None,
-        "evaluationExecutionRoleArn": role_arn,
-    }
-    return _normalize(aws, owner="agent", row=row, detailed=True)
+    db.refresh(row)
+    return _normalize(row)
 
 
 def patch_config(
-    db: Session, ws: WorkspaceScope, config_id: str, patch: dict[str, Any], control: Any = None
+    db: Session, ws: Any, config_id: str, patch: dict[str, Any], *, viewer: Viewer = Viewer.ALL,
+    identity: Identity | None = None,
 ) -> dict[str, Any]:
     """Update description / evaluators / sampling / timeout / filters on an agent config.
-
-    AWS replaces ``rule`` as a unit, so any rule field in the patch triggers a
-    Get → merge → send-complete-rule sequence; the other fields go through
-    unchanged because omitted top-level fields are kept.
-    """
-    control = control or control_client(ws.context)
-    current = get_config(db, ws, config_id, control)
-    _require_owner(current, ("agent",), "edit")
-    fields: dict[str, Any] = {}
+    Mode is immutable: each mode accepts only its own analysis fields."""
+    row = _visible_row(db, ws, config_id, viewer)
+    _require_owner(row, ("agent",), "edit")
+    _require_creator(row, identity, "edit")
+    changed = False
     if patch.get("description") is not None:
-        # AWS requires 1..200 chars (min 1): a cleared description falls back to
-        # the same auto text Create uses instead of a botocore ParamValidationError.
         text = str(patch["description"]).strip()[:200]
-        fields["description"] = text or (
-            f"Launchpad online evaluation · {current['agent_name'] or current['name']}"
-        )[:200]
-    # Mode is immutable: each mode accepts only its own analysis fields.
-    if current["mode"] == "insights":
+        row.description = text or _auto_description(row.agent_name, row.name)
+        changed = True
+    if mode_of(row) == "insights":
         if patch.get("evaluators") is not None:
             raise _mode_conflict("this config runs insights — evaluators cannot be set")
         if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
             ids, freqs = validate_insights(
-                current["insights"] if patch.get("insights") is None else patch["insights"],
-                current["clustering_frequencies"]
+                row.insights if patch.get("insights") is None else patch["insights"],
+                row.clustering_frequencies
                 if patch.get("clustering_frequencies") is None
                 else patch["clustering_frequencies"],
             )
-            if patch.get("insights") is not None:
-                fields["insights"] = [{"insightId": i} for i in ids]  # top-level replace
-            if patch.get("clustering_frequencies") is not None:
-                # complete list; [] clears clustering (AWS then reports null)
-                fields["clusteringConfig"] = {"frequencies": freqs}
+            row.insights, row.clustering_frequencies = ids, freqs
+            changed = True
     else:
         if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
             raise _mode_conflict("this config runs evaluators — insights cannot be set")
         if patch.get("evaluators") is not None:
-            chosen = normalize_online_evaluators(
-                patch["evaluators"], control, code_prefix="online_eval"
+            row.evaluators = normalize_online_evaluators(
+                patch["evaluators"], db, code_prefix="online_eval", workspace_id=_ws_id(ws)
             )
-            fields["evaluators"] = [{"evaluatorId": e} for e in chosen]
-    rule_keys = {"sampling_percentage", "session_timeout_minutes", "filters"}
-    if any(patch.get(k) is not None for k in rule_keys):
-        sampling = patch.get("sampling_percentage")
-        timeout = patch.get("session_timeout_minutes")
-        filters = patch.get("filters")
-        fields["rule"] = build_rule(
-            current["sampling_percentage"] if sampling is None else sampling,
-            current["session_timeout_minutes"] if timeout is None else timeout,
-            current["filters"] if filters is None else validate_filters(filters),
-        )
-    if not fields:
-        return current
-    ac.update_online_eval_config(control, config_id=config_id, **fields)
-    return get_config(db, ws, config_id, control)
+            changed = True
+    if patch.get("sampling_percentage") is not None:
+        row.sampling_percentage = float(patch["sampling_percentage"])
+        changed = True
+    if patch.get("session_timeout_minutes") is not None:
+        row.session_timeout_minutes = int(patch["session_timeout_minutes"])
+        changed = True
+    if patch.get("filters") is not None:
+        row.filters = validate_filters(patch["filters"])
+        changed = True
+    if changed:
+        row.updated_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(row)
+    return _normalize(row)
 
 
 def set_execution_status(
-    db: Session, ws: WorkspaceScope, config_id: str, *, enabled: bool, control: Any = None
+    db: Session, ws: Any, config_id: str, *, enabled: bool, viewer: Viewer = Viewer.ALL,
+    identity: Identity | None = None,
 ) -> dict[str, Any]:
-    control = control or control_client(ws.context)
-    current = get_config(db, ws, config_id, control)
-    _require_owner(current, ("agent", "external"), "resume" if enabled else "pause")
-    ac.update_online_eval_config(
-        control, config_id=config_id, executionStatus="ENABLED" if enabled else "DISABLED"
-    )
-    return get_config(db, ws, config_id, control)
+    row = _visible_row(db, ws, config_id, viewer)
+    action = "resume" if enabled else "pause"
+    owning = _owning_run(db, row)
+    if owning is not None and owning[1].status in TERMINAL_OWNER_STATUSES[owning[0]]:
+        # N17-obs445: a finished canary's / experiment's arm may be paused or resumed —
+        # creator-or-admin against the owning run's creator (an arm records none)
+        _require_run_creator(row, owning[1], identity, action)
+    else:
+        _require_owner(row, ("agent",), action)
+        _require_creator(row, identity, action)
+    if enabled and row.execution_status == "DISABLED":
+        # N17-obs444: a resume samples from now on — nothing active while paused is back-filled
+        row.sampling_since = datetime.now(UTC)
+    row.execution_status = "ENABLED" if enabled else "DISABLED"
+    if enabled:
+        # a FAILED config (worker missing, bad filter) gets another chance — the
+        # scheduler re-validates on its next tick
+        row.status, row.failure_reason = "ACTIVE", None
+    row.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(row)
+    return _out(db, row)
 
 
 def delete_config(
-    db: Session, ws: WorkspaceScope, config_id: str, control: Any = None
+    db: Session, ws: Any, config_id: str, *, viewer: Viewer = Viewer.ALL,
+    identity: Identity | None = None,
 ) -> dict[str, Any]:
-    """Delete on AWS, drop the ledger row; the results log group is left in place."""
-    control = control or control_client(ws.context)
-    ledger = _ledger_rows(db, ws)
-    row = ledger.get(config_id)
-    try:
-        current = get_config(db, ws, config_id, control)
-    except NotFoundError:
-        if row is None:
-            raise
-        current = None  # AWS already lost it — reconcile the ledger below
-    if current is not None:
-        _require_owner(current, ("agent", "external"), "delete")
-        try:
-            ac.delete_online_eval_config(control, config_id=config_id)
-        except Exception as exc:
-            if not _is_not_found(exc):
-                raise
-    if row is not None:
-        db.delete(row)
-        db.commit()
+    """Drop the row and its samples; the results stay (AWS left the log group too)."""
+    row = _visible_row(db, ws, config_id, viewer)
+    _require_owner(row, ("agent",), "delete")
+    _require_creator(row, identity, "delete")
+    _delete_samples(db, [config_id])
+    db.delete(row)
+    db.commit()
     return {
         "config_id": config_id,
         "deleted": True,
-        "results_log_group": ac.online_eval_results_log_group(config_id),
+        "results_log_group": results_log_group(config_id),
     }
 
 
-# ─── results (CloudWatch Logs Insights over the results log group) ───────────
-
-_RESULT_FILTER = 'filter name = "gen_ai.evaluation.result"'
-_FIELDS = (
-    "fields attributes.gen_ai.evaluation.name as evaluator, "
-    "attributes.aws.bedrock_agentcore.evaluation_level as level, "
-    "attributes.gen_ai.evaluation.score.value as score, "
-    "attributes.gen_ai.evaluation.score.label as label, "
-    "attributes.session.id as session_id"
-)
+def mark_failed(db: Session, row: OnlineEvalConfig, reason: str) -> None:
+    """The scheduler's verdict on a config it cannot serve (validation error, no worker)."""
+    row.status, row.failure_reason = "FAILED", reason[:1000]
+    row.updated_at = datetime.now(UTC)
+    db.commit()
 
 
-def results_queries(range_key: str) -> dict[str, str]:
-    return {
-        "summary": f"""
-{_FIELDS}
-| {_RESULT_FILTER} and ispresent(score)
-| stats avg(score) as mean, count(*) as count, count_distinct(session_id) as sessions
-  by evaluator, level
-""",
-        "labels": f"""
-{_FIELDS}
-| {_RESULT_FILTER} and ispresent(score) and ispresent(label)
-| stats count(*) as count by evaluator, label
-""",
-        "series": f"""
-{_FIELDS}
-| {_RESULT_FILTER} and ispresent(score)
-| stats avg(score) as mean, count(*) as count by evaluator, bin({BIN_BY_RANGE[range_key]}) as bucket
-| sort bucket asc
-| limit 500
-""",
-        "recent": f"""
-{_FIELDS}, @timestamp as time, traceId as trace_id,
-  attributes.gen_ai.evaluation.explanation as explanation,
-  attributes.error.type as error_type, attributes.error.message as error_message
-| {_RESULT_FILTER}
-| sort @timestamp desc
-| limit {RECENT_LIMIT}
-""",
-        "errors": f"""
-fields attributes.error.message as message
-| {_RESULT_FILTER} and ispresent(message)
-| stats count(*) as count, earliest(message) as first_message
-""",
-    }
+# ─── experiment / canary arms (frozen E3 contract, plan §C.1) ───────────────
 
 
-def _num(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+def _owner_prefixes(owner_id: str) -> tuple[str, ...]:
+    tag = str(owner_id)[:8]
+    return tuple(f"{prefix}{tag}_" for prefix in EXPERIMENT_PREFIXES)
 
 
-def _int(value: Any) -> int:
-    n = _num(value)
-    return int(n) if n is not None else 0
-
-
-def parse_results(rows: dict[str, list[dict[str, str]]]) -> dict[str, Any]:
-    labels: dict[str, dict[str, int]] = {}
-    for r in rows.get("labels", []):
-        if r.get("evaluator") and r.get("label"):
-            labels.setdefault(r["evaluator"], {})[r["label"]] = _int(r.get("count"))
-    evaluators = [
-        {
-            "evaluator_id": r["evaluator"],
-            "level": r.get("level"),
-            "mean": _num(r.get("mean")),
-            "count": _int(r.get("count")),
-            "sessions": _int(r.get("sessions")),
-            "labels": labels.get(r["evaluator"], {}),
-        }
-        for r in rows.get("summary", [])
-        if r.get("evaluator")
-    ]
-    evaluators.sort(key=lambda e: e["evaluator_id"])
-    series: dict[str, list[dict[str, Any]]] = {}
-    for r in rows.get("series", []):
-        if r.get("evaluator") and r.get("bucket"):
-            series.setdefault(r["evaluator"], []).append(
-                {"bucket": r["bucket"], "mean": _num(r.get("mean")), "count": _int(r.get("count"))}
+def create_for_owner(
+    ws: Any,
+    agent: Agent,
+    *,
+    name: str,
+    evaluators: Sequence[str] | None,
+    log_group: str,
+    service_name: str,
+    sampling: float,
+    timeout: int,
+    db: Session | None = None,
+) -> OnlineEvalConfig:
+    """An ``experiment``-owned config for one arm — ``name`` must carry the owner prefix
+    (``exp_<id8>_…`` / ``can_<id8>_…``); the same name twice returns the existing row."""
+    if not str(name).startswith(EXPERIMENT_PREFIXES):
+        raise ValueError(f"an owner config name must start with one of {EXPERIMENT_PREFIXES}")
+    ctx = _ctx(ws)
+    with _session(db) as session:
+        existing = session.scalars(
+            select(OnlineEvalConfig).where(
+                OnlineEvalConfig.workspace_id == _ws_id(ws), OnlineEvalConfig.name == name
             )
-    recent = [
-        {
-            "time": r.get("time"),
-            "session_id": r.get("session_id"),
-            "trace_id": r.get("trace_id"),
-            "evaluator_id": r.get("evaluator"),
-            "level": r.get("level"),
-            "score": _num(r.get("score")),
-            "label": r.get("label"),
-            "explanation": r.get("explanation"),
-            "error": (
-                f"{r.get('error_type') or 'error'}: {r['error_message']}"
-                if r.get("error_message") else None
-            ),
-        }
-        for r in rows.get("recent", [])
-    ]
-    err = (rows.get("errors") or [{}])[0]
+        ).first()
+        if existing is not None:
+            session.refresh(existing)
+            if db is None:
+                session.expunge(existing)
+            return existing
+        chosen = normalize_online_evaluators(
+            evaluators, session, code_prefix="experiment", workspace_id=_ws_id(ws)
+        )
+        config_id = new_config_id(name)
+        row = OnlineEvalConfig(
+            workspace_id=_ws_id(ws), agent_id=agent.id, agent_name=agent.name,
+            config_id=config_id,
+            config_arn=ctx.arn("launchpad", f"online-evaluation-config/{config_id}"),
+            name=name, service_name=service_name, log_group=log_group,
+            description=f"Launchpad experiment online eval · {name}"[:200],
+            mode="scores", evaluators=chosen, insights=[], clustering_frequencies=[],
+            sampling_percentage=float(sampling), session_timeout_minutes=int(timeout),
+            filters=[], execution_status="ENABLED", status="ACTIVE",
+            **_judge_snapshot(),
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        if db is None:
+            session.expunge(row)
+        return row
+
+
+def config_ids_for_owner(ws: Any, owner_id: str, *, db: Session | None = None) -> list[str]:
+    """The arm configs of an experiment / canary that still exist (sorted ids) — the
+    readback the architect's conversation purge trusts instead of ``act_cleanup``'s
+    return value (``assistant.purge``)."""
+    prefixes = _owner_prefixes(owner_id)
+    with _session(db) as session:
+        return sorted(row.config_id for row in _rows(session, _ws_id(ws))
+                      if str(row.name).startswith(prefixes))
+
+
+def disable_for_owner(ws: Any, owner_id: str, *, db: Session | None = None) -> list[str]:
+    """Set every ENABLED arm config of an experiment / canary to DISABLED, keeping the rows
+    (N17-obs442: a finished experiment stops judging traffic); returns the ids it disabled.
+    On the caller's session it does not commit — the caller's transition does."""
+    prefixes = _owner_prefixes(owner_id)
+    disabled: list[str] = []
+    with _session(db) as session:
+        now = datetime.now(UTC)
+        for row in _rows(session, _ws_id(ws)):
+            if str(row.name).startswith(prefixes) and row.execution_status == "ENABLED":
+                row.execution_status, row.updated_at = "DISABLED", now
+                disabled.append(row.config_id)
+        if db is None:
+            session.commit()
+    return disabled
+
+
+def delete_for_owner(ws: Any, owner_id: str, *, db: Session | None = None) -> list[str]:
+    """Delete every arm config of an experiment / canary (+ their samples); returns the ids."""
+    prefixes = _owner_prefixes(owner_id)
+    deleted: list[str] = []
+    with _session(db) as session:
+        for row in _rows(session, _ws_id(ws)):
+            if str(row.name).startswith(prefixes):
+                deleted.append(row.config_id)
+                session.delete(row)
+        _delete_samples(session, deleted)
+        session.commit()
+    return deleted
+
+
+def results_for_owner(
+    ws: Any, owner_id: str, since: datetime, arm_map: dict[str, str], *,
+    db: Session | None = None,
+) -> dict[str, Any]:
+    """Scored online records of an owner's arm configs since ``since``, grouped by
+    evaluator and arm (``arm_map``: session id → ``C`` | ``T1``) — the input of W-E3's
+    ``routing.ab_results`` (Welch over the two lists)."""
+    prefixes = _owner_prefixes(owner_id)
+    arms = sorted(set(arm_map.values())) or ["C", "T1"]
+    with _session(db) as session:
+        configs = sorted(
+            row.config_id for row in _rows(session, _ws_id(ws))
+            if str(row.name).startswith(prefixes)
+        )
+        rows = _result_rows(session, _ws_id(ws), configs, since) if configs else []
+    by_evaluator: dict[str, dict[str, list[float]]] = {}
+    sessions: dict[str, set[str]] = {arm: set() for arm in arms}
+    unassigned = 0
+    for rec in rows:
+        if rec.score is None:
+            continue
+        arm = arm_map.get(rec.session_id)
+        if arm is None:
+            unassigned += 1
+            continue
+        slots = by_evaluator.setdefault(rec.evaluator_id, {a: [] for a in arms})
+        slots.setdefault(arm, []).append(float(rec.score))
+        sessions.setdefault(arm, set()).add(rec.session_id)
     return {
-        "evaluators": evaluators,
-        "series": series,
-        "recent": recent,
-        "errors": {"count": _int(err.get("count")), "first_message": err.get("first_message")},
+        "configs": configs,
+        "by_evaluator": by_evaluator,
+        "sessions": {arm: len(ids) for arm, ids in sessions.items()},
+        "records": sum(len(v) for slots in by_evaluator.values() for v in slots.values()),
+        "unassigned": unassigned,
     }
+
+
+# ─── results (aggregated over eval_results) ─────────────────────────────────
+
+
+def bucket_seconds(range_key: str) -> int:
+    return BUCKET_SECONDS[range_key]
+
+
+def bucket_label(value: datetime, range_key: str) -> str:
+    width = bucket_seconds(range_key)
+    stamp = int(_aware(value).timestamp())
+    return _ts(datetime.fromtimestamp(stamp - stamp % width, UTC))
+
+
+def _result_rows(
+    db: Session, workspace_id: str, config_ids: Sequence[str], since: datetime | None,
+    *, session_id: str | None = None, scored_only: bool = False,
+) -> list[EvalResult]:
+    query = select(EvalResult).where(
+        EvalResult.workspace_id == workspace_id,
+        EvalResult.source == RESULTS_SOURCE,
+    )
+    if config_ids:
+        query = query.where(EvalResult.config_id.in_(list(config_ids)))
+    if since is not None:
+        query = query.where(EvalResult.created_at >= since)
+    if session_id is not None:
+        query = query.where(EvalResult.session_id == session_id)
+    if scored_only:
+        query = query.where(EvalResult.score.is_not(None))
+    return list(db.scalars(query.order_by(EvalResult.created_at.asc())).all())
+
+
+def _error_text(rec: EvalResult) -> str | None:
+    if not rec.error_message:
+        return None
+    return f"{rec.error_type or 'error'}: {rec.error_message}"
 
 
 def results(
-    ws: WorkspaceScope,
-    config_id: str,
-    range_key: str,
-    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
+    db: Session, ws: Any, config_id: str, range_key: str, *, viewer: Viewer = Viewer.ALL
 ) -> dict[str, Any]:
-    """Aggregate the config's results log group. A missing group (nothing evaluated
-    yet) yields empty collections — the UI explains the session-timeout delay."""
+    """The config's results in the window: per-evaluator summary (+ label histogram),
+    mean series per bucket, the newest records and the error counter."""
     if range_key not in RANGE_HOURS:
         raise AppError("online_eval.bad_range", f"range must be one of {sorted(RANGE_HOURS)}",
                        status_code=422)
-    log_group = ac.online_eval_results_log_group(config_id)
-    run = run_queries or run_insights_queries
-    rows = run(results_queries(range_key), RANGE_HOURS[range_key],
-               log_groups=[log_group], workspace=ws.context)
-    return {"range": range_key, "log_group": log_group, **parse_results(rows)}
-
-
-# ─── insights reports (batch evaluations sourced from a config) ──────────────
-#
-# A report is a batch evaluation whose data source is the config
-# (`dataSourceConfig.onlineEvaluationConfigSource`). AWS creates them on the
-# clustering cadence; the console starts one on demand through the run queue.
-# Live facts (research/report-attribution.md): such a batch echoes NEITHER
-# `evaluators` NOR `insights` in its record, so summaries with neither key are the
-# attribution candidates; the source ARN is only on Get — cached per batch id
-# because a batch's data source never changes.
-
-_ATTRIBUTION_CAP = 1000
-# batch id → (source arn | None, Get detail). The detail is kept because List
-# summaries of config-sourced batches carry no session counts (live-verified) —
-# the row takes them from the Get. Only terminal batches are cached (their
-# counts and status are final); in-flight ones are re-read on every listing.
-_attribution: dict[str, tuple[str | None, dict[str, Any]]] = {}
-_attribution_lock = threading.Lock()
-_TERMINAL = frozenset({"COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "STOPPED"})
-
-
-def reset_attribution_cache() -> None:
-    _attribution.clear()
-
-
-def _source_info(data: Any, batch_id: str) -> tuple[str | None, dict[str, Any]]:
-    with _attribution_lock:
-        if batch_id in _attribution:
-            return _attribution[batch_id]
-    try:
-        detail = ac.get_batch_evaluation(data, batch_id=batch_id)
-    except Exception:
-        return None, {}  # not cached: retried on the next listing
-    info = (ac.report_source_arn(detail), detail)
-    if detail.get("status") in _TERMINAL:
-        with _attribution_lock:
-            if len(_attribution) >= _ATTRIBUTION_CAP:
-                _attribution.pop(next(iter(_attribution)))
-            _attribution[batch_id] = info
-    return info
-
-
-def _sessions(res: dict[str, Any]) -> dict[str, Any]:
-    """Session counters; AWS omits ``totalNumberOfSessions`` on config-sourced
-    batches (live), so the total falls back to the sum of the parts."""
-    completed = res.get("numberOfSessionsCompleted", 0) or 0
-    failed = res.get("numberOfSessionsFailed", 0) or 0
-    in_progress = res.get("numberOfSessionsInProgress", 0) or 0
-    total = res.get("totalNumberOfSessions")
+    _visible_row(db, ws, config_id, viewer)  # a hidden config's results read as missing
+    since = datetime.now(UTC) - timedelta(hours=RANGE_HOURS[range_key])
+    rows = _result_rows(db, _ws_id(ws), [config_id], since)
+    summary: dict[str, dict[str, Any]] = {}
+    series: dict[str, dict[str, list[float]]] = {}
+    for rec in rows:
+        if rec.score is None:
+            continue
+        acc = summary.setdefault(rec.evaluator_id, {
+            "evaluator_id": rec.evaluator_id, "level": rec.level, "sum": 0.0, "count": 0,
+            "sessions": set(), "labels": {},
+        })
+        acc["sum"] += float(rec.score)
+        acc["count"] += 1
+        acc["sessions"].add(rec.session_id)
+        if rec.label:
+            acc["labels"][rec.label] = acc["labels"].get(rec.label, 0) + 1
+        bucket = bucket_label(rec.created_at, range_key)
+        series.setdefault(rec.evaluator_id, {}).setdefault(bucket, []).append(float(rec.score))
+    evaluators = [
+        {
+            "evaluator_id": acc["evaluator_id"],
+            "level": acc["level"],
+            "mean": round(acc["sum"] / acc["count"], 4),
+            "count": acc["count"],
+            "sessions": len(acc["sessions"]),
+            "labels": acc["labels"],
+        }
+        for acc in sorted(summary.values(), key=lambda a: a["evaluator_id"])
+    ]
+    series_out = {
+        evaluator: [
+            {"bucket": bucket, "mean": round(sum(vals) / len(vals), 4), "count": len(vals)}
+            for bucket, vals in sorted(buckets.items())
+        ]
+        for evaluator, buckets in series.items()
+    }
+    recent = [
+        {
+            "time": _ts(rec.created_at),
+            "session_id": rec.session_id,
+            "trace_id": rec.trace_id,
+            # N17-obs317 (additive): the judged call and the turn's reconciliation
+            "span_id": rec.span_id,
+            "tool_name": rec.tool_name,
+            "extraction_status": rec.extraction_status,
+            "evaluator_id": rec.evaluator_id,
+            "level": rec.level,
+            "score": None if rec.score is None else float(rec.score),
+            "label": rec.label,
+            "explanation": rec.explanation,
+            "error": _error_text(rec),
+        }
+        for rec in sorted(rows, key=lambda r: _aware(r.created_at), reverse=True)[:RECENT_LIMIT]
+    ]
+    errored = [rec for rec in rows if rec.error_message]
+    in_window = {rec.session_id for rec in rows}
+    checks = {
+        sample.session_id: sample.extraction_check
+        for sample in db.scalars(select(OnlineSample).where(
+            OnlineSample.config_id == config_id, OnlineSample.extraction_check.is_not(None)))
+        if sample.session_id in in_window
+    }
     return {
-        "completed": completed,
-        "failed": failed,
-        "in_progress": in_progress,
-        "total": total if total is not None else completed + failed + in_progress,
+        "range": range_key,
+        "log_group": results_log_group(config_id),
+        # eval accuracy item 1 (additive): the extraction reconciliation summary of the
+        # sessions scored in the window (extraction_check.summarise) — null when none was
+        # checked
+        "extraction_check": extraction_check.summarise(checks) if checks else None,
+        "evaluators": evaluators,
+        "series": series_out,
+        "recent": recent,
+        "errors": {
+            "count": len(errored),
+            "first_message": errored[0].error_message if errored else None,
+        },
     }
 
 
-def _report_row(summary: dict[str, Any], *, origin: str, run: EvalRun | None = None,
-                insights: Sequence[str] | None = None,
-                detail: dict[str, Any] | None = None) -> dict[str, Any]:
-    res = summary.get("evaluationResults") or (detail or {}).get("evaluationResults") or {}
-    return {
-        "batch_id": summary.get("batchEvaluationId") or (run.batch_eval_id if run else None),
-        "name": summary.get("batchEvaluationName"),
-        "status": summary.get("status") or (run.status.upper() if run else None),
-        "run_status": run.status if run else None,
-        "created_at": _iso(summary.get("createdAt")) or (_iso(run.created_at) if run else None),
-        "updated_at": _iso(summary.get("updatedAt")) or (_iso(run.updated_at) if run else None),
-        "insights": list(insights or []),
-        "sessions": _sessions(res),
-        "origin": origin,
-        "run_id": run.id if run else None,
-        "error": (summary.get("errorDetails") or [None])[0] or (run.error if run else None),
-    }
+# ─── insights reports (on-demand insights runs over the sampled sessions) ───
 
 
-def _console_runs(db: Session, ws: WorkspaceScope, config_id: str) -> list[EvalRun]:
+def _console_runs(
+    db: Session, workspace_id: str, config_id: str, *, viewer: Viewer = Viewer.ALL
+) -> list[EvalRun]:
+    """The console-started reports of one config — only those ``viewer`` may see
+    (workspace isolation on the run's creator)."""
     return list(db.scalars(
-        select(EvalRun).where(EvalRun.workspace_id == ws.id,
-                              EvalRun.dataset_name == f"online:{config_id}")
+        select(EvalRun).where(EvalRun.workspace_id == workspace_id,
+                              EvalRun.dataset_name == f"online:{config_id}",
+                              visibility.clause(viewer, EvalRun.created_by))
         .order_by(EvalRun.created_at.desc())
     ).all())
 
 
-def reports(
-    db: Session, ws: WorkspaceScope, config_id: str, *, data: Any = None, control: Any = None,
-) -> dict[str, Any]:
-    """Every report of one config: console-started runs (ledger) merged with
-    AWS-scheduled batches attributed by their source ARN, newest first."""
-    config = get_config(db, ws, config_id, control)
-    data = data or data_client(ws.context)
-    runs = _console_runs(db, ws, config_id)
-    # The ledger half of the list must survive an AWS listing failure (throttle /
-    # outage): console runs are still shown, flagged, and AWS-scheduled rows wait.
-    aws_unavailable = False
-    try:
-        summaries = {b.get("batchEvaluationId"): b
-                     for b in ac.list_batch_evaluations(data, limit=REPORT_SCAN_LIMIT)}
-    except Exception:
-        summaries = {}
-        aws_unavailable = True
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for run in runs:  # console runs first — queued ones have no batch yet
-        summary = summaries.get(run.batch_eval_id or "", {})
-        detail = None
-        if run.batch_eval_id and summary and not summary.get("evaluationResults"):
-            detail = _source_info(data, run.batch_eval_id)[1]
-        rows.append(_report_row(summary, origin="console", run=run, insights=run.evaluators,
-                                detail=detail))
-        if run.batch_eval_id:
-            seen.add(run.batch_eval_id)
-    for batch_id, summary in summaries.items():
-        if not batch_id or batch_id in seen:
-            continue
-        if summary.get("evaluators") or summary.get("insights"):
-            continue  # a cloudWatchLogs-sourced batch (console run) — never a report
-        arn, detail = _source_info(data, batch_id)
-        if arn != config["arn"]:
-            continue
-        rows.append(_report_row(summary, origin="aws_scheduled", insights=config["insights"],
-                                detail=detail))
-    rows.sort(key=lambda r: r["created_at"] or "", reverse=True)
-    return {"config_id": config_id, "mode": config["mode"], "reports": rows,
-            "aws_unavailable": aws_unavailable}
+def _run_sessions(run: EvalRun) -> dict[str, int]:
+    total = len(run.session_ids or [])
+    completed = total if run.status == "completed" else 0
+    failed = total if run.status in ("failed", "stopped") else 0
+    in_progress = total - completed - failed
+    return {"completed": completed, "failed": failed, "in_progress": in_progress, "total": total}
 
 
-def report_detail(
-    db: Session, ws: WorkspaceScope, config_id: str, batch_id: str, *,
-    data: Any = None, control: Any = None,
-) -> dict[str, Any]:
-    config = get_config(db, ws, config_id, control)
-    data = data or data_client(ws.context)
-    try:
-        batch = ac.get_batch_evaluation(data, batch_id=batch_id)
-    except Exception as exc:
-        if _is_not_found(exc):
-            raise NotFoundError("online_eval.report_not_found", f"report {batch_id}") from exc
-        raise
-    if ac.report_source_arn(batch) != config["arn"]:
-        raise NotFoundError("online_eval.report_not_found",
-                            f"report {batch_id} is not sourced from {config_id}")
-    res = batch.get("evaluationResults") or {}
+def _report_row(run: EvalRun) -> dict[str, Any]:
     return {
-        "batch_id": batch.get("batchEvaluationId"),
-        "name": batch.get("batchEvaluationName"),
-        "status": batch.get("status"),
-        "created_at": _iso(batch.get("createdAt")),
-        "updated_at": _iso(batch.get("updatedAt")),
-        "time_range": {
-            k: _iso(v) for k, v in (
-                ((batch.get("dataSourceConfig") or {}).get("onlineEvaluationConfigSource")
-                 or {}).get("timeRange") or {}
-            ).items()
-        },
-        "sessions": _sessions(res),
-        "insights": ac.parse_insights(batch),
-        "error_details": list(batch.get("errorDetails") or []),
+        "batch_id": run.batch_eval_id,
+        "name": run.name or f"run_{run.id[:8]}",
+        "status": run.status.upper(),
+        "run_status": run.status,
+        "created_at": _iso(run.created_at),
+        "updated_at": _iso(run.updated_at),
+        "insights": list(run.evaluators or []),
+        "sessions": _run_sessions(run),
+        "origin": "console",
+        "run_id": run.id,
+        "error": run.error,
+        # console-started reports only
+        **creators.fields(run),
     }
 
 
-def start_report(
-    db: Session, ws: WorkspaceScope, config_id: str, range_key: str, *, control: Any = None,
+def reports(
+    db: Session, ws: Any, config_id: str, *, viewer: Viewer = Viewer.ALL
 ) -> dict[str, Any]:
-    """RUN REPORT NOW: an on-demand insights report over the sessions this config
-    sampled in the window, through the bounded run queue (shared 5-active quota)."""
+    """Every report of one config, newest first. ``aws_unavailable`` stays in the
+    shape (always ``False``: the list is the ledger, nothing remote is consulted)."""
+    row = _visible_row(db, ws, config_id, viewer)
+    runs = _console_runs(db, _ws_id(ws), config_id, viewer=viewer)
+    return {"config_id": config_id, "mode": mode_of(row),
+            "reports": [_report_row(run) for run in runs], "aws_unavailable": False}
+
+
+def report_detail(
+    db: Session, ws: Any, config_id: str, batch_id: str, *, viewer: Viewer = Viewer.ALL
+) -> dict[str, Any]:
+    _visible_row(db, ws, config_id, viewer)
+    run = next(
+        (r for r in _console_runs(db, _ws_id(ws), config_id, viewer=viewer)
+         if batch_id in (r.batch_eval_id, r.id)),
+        None,
+    )
+    if run is None:
+        raise NotFoundError("online_eval.report_not_found",
+                            f"report {batch_id} is not a report of {config_id}")
+    return {
+        "batch_id": run.batch_eval_id or run.id,
+        "name": run.name or f"run_{run.id[:8]}",
+        "status": run.status.upper(),
+        "created_at": _iso(run.created_at),
+        "updated_at": _iso(run.updated_at),
+        "time_range": {},
+        "sessions": _run_sessions(run),
+        "insights": dict(run.insights or {}),
+        "error_details": [run.error] if run.error else [],
+    }
+
+
+def sampled_sessions(
+    db: Session, config_id: str, since: datetime | None = None
+) -> list[str]:
+    """Session ids the scheduler sampled for the config (newest first), optionally since."""
+    query = select(OnlineSample).where(OnlineSample.config_id == config_id)
+    if since is not None:
+        query = query.where(OnlineSample.sampled_at >= since)
+    rows = db.scalars(query.order_by(OnlineSample.sampled_at.desc())).all()
+    return list(dict.fromkeys(r.session_id for r in rows))
+
+
+def start_report(
+    db: Session, ws: Any, config_id: str, range_key: str, *,
+    creator: creators.Creator | None = None, viewer: Viewer = Viewer.ALL,
+) -> dict[str, Any]:
+    """RUN REPORT NOW: an insights run over the sessions this config sampled in the
+    window, through the bounded run queue (W-E1's ``submit_run``)."""
     if range_key not in REPORT_RANGES:
         raise AppError("online_eval.bad_range", f"range must be one of {sorted(REPORT_RANGES)}",
                        status_code=422)
-    config = get_config(db, ws, config_id, control)
-    _require_owner(config, ("agent",), "run a report for")
-    if config["mode"] != "insights":
+    row = _visible_row(db, ws, config_id, viewer)
+    _require_owner(row, ("agent",), "run a report for")
+    if mode_of(row) != "insights":
         raise _mode_conflict("reports exist only for insights-mode configs")
-    agent = db.get(Agent, config["agent_id"]) if config["agent_id"] else None
-    if agent is None or agent.workspace_id != ws.id:
+    agent = db.get(Agent, row.agent_id) if row.agent_id else None
+    if agent is None or agent.workspace_id != _ws_id(ws):
         raise NotFoundError("online_eval.not_found", f"agent of {config_id} is gone")
-    now = datetime.now(UTC)
-    time_range = {"startTime": now - timedelta(hours=REPORT_RANGES[range_key]), "endTime": now}
+    since = datetime.now(UTC) - timedelta(hours=REPORT_RANGES[range_key])
+    sessions = sampled_sessions(db, config_id, since)
+    if not sessions:
+        raise AppError(
+            "online_eval.no_sampled_sessions",
+            f"no session was sampled for this config in the last {range_key} — the report "
+            "needs sessions the scheduler has picked (sampling + session timeout apply)",
+            {"range": range_key}, status_code=409,
+        )
     run = eval_service.submit_run(
-        agent=agent, workspace=ws.context, dataset_items=[], dataset_id=None,
-        dataset_name=f"online:{config_id}", evaluators=list(config["insights"]),
-        mode="insights", insights=list(config["insights"]), time_range=time_range,
-        online_config_arn=config["arn"],
+        agent=agent, workspace=_ctx(ws), dataset_items=[], dataset_id=None,
+        dataset_name=f"online:{config_id}", evaluators=list(row.insights),
+        mode="insights", insights=list(row.insights), session_ids=sessions,
+        creator=creator,
     )
     return {
         "run_id": run.id, "status": run.status, "queue_position": run.queue_position,
         "range": range_key, "config_id": config_id,
     }
+
+
 # ─── cross-surface reads (Observability session detail + Overview tile) ──────
-#
-# Both read EVERY config's results at once through a prefix source, so neither
-# has to list configs first (and neither hits the 50-group cap of logGroupNames).
-# ``_start_query`` treats a ``SOURCE`` query as un-targeted, like SPANS_SOURCE.
-
-RESULTS_SOURCE = f"SOURCE logGroups(namePrefix: ['{ac.ONLINE_EVAL_RESULTS_PREFIX}'])"
-SESSION_SCORES_LIMIT = 200
-QUALITY_RANGE = "24h"
-_NAMES_TTL_SECONDS = 120.0
-_names_cache: dict[str, tuple[float, dict[str, str]]] = {}
-_names_lock = threading.Lock()
 
 
-def session_scores_query(session_id: str) -> str:
-    """Every online result record for one session, across all configs."""
-    sid = json.dumps(session_id)
-    return f"""
-{RESULTS_SOURCE}
-| {_RESULT_FILTER} and attributes.session.id = {sid}
-| fields @timestamp as time, onlineEvaluationConfigId as config_id,
-  attributes.gen_ai.evaluation.name as evaluator,
-  attributes.aws.bedrock_agentcore.evaluation_level as level,
-  attributes.gen_ai.evaluation.score.value as score,
-  attributes.gen_ai.evaluation.score.label as label,
-  attributes.gen_ai.evaluation.explanation as explanation, traceId as trace_id
-| sort @timestamp desc
-| limit {SESSION_SCORES_LIMIT}
-"""
-
-
-def quality_queries(config_ids: Sequence[str]) -> dict[str, str]:
-    """Per-(evaluator, config) means plus account-wide distinct counters, limited
-    to the given (agent-owned) config ids."""
-    ids = ", ".join(json.dumps(c) for c in config_ids)
-    base = f"""
-{RESULTS_SOURCE}
-| {_RESULT_FILTER} and ispresent(attributes.gen_ai.evaluation.score.value)
-  and onlineEvaluationConfigId in [{ids}]
-"""
-    return {
-        "pairs": base + """| stats avg(attributes.gen_ai.evaluation.score.value) as mean,
-  count(*) as count
-  by attributes.gen_ai.evaluation.name as evaluator, onlineEvaluationConfigId as config_id
-""",
-        "totals": base + """| stats count_distinct(attributes.session.id) as sessions,
-  count_distinct(onlineEvaluationConfigId) as configs
-""",
-    }
-
-
-def config_names(workspace: WorkspaceContext, control: Any = None) -> dict[str, str]:
-    """``{config_id: name}`` for every config in the account (one paginated List,
-    cached 120 s per workspace). Only feeds owner classification of results that
-    no ledger row explains; a failure degrades to ``{}`` (→ ``external``)."""
-    hit = _names_cache.get(workspace.id)
-    if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
-        return hit[1]
-    with _names_lock:
-        hit = _names_cache.get(workspace.id)
-        if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
-            return hit[1]
-        try:
-            names = {
-                c["onlineEvaluationConfigId"]: c.get("name", "")
-                for c in ac.list_online_eval_configs(control or control_client(workspace))
-                if c.get("onlineEvaluationConfigId")
-            }
-        except Exception:
-            names = {}
-        _names_cache[workspace.id] = (time.monotonic(), names)
-        return names
-
-
-def reset_names_cache() -> None:
-    _names_cache.clear()
-
-
-def _agent_ledger_rows(db: Session, workspace_id: str) -> dict[str, OnlineEvalConfig]:
-    rows = db.scalars(
-        select(OnlineEvalConfig).where(OnlineEvalConfig.workspace_id == workspace_id)
-    ).all()
-    return {r.config_id: r for r in rows}
-
-
-def parse_session_scores(
-    rows: Sequence[dict[str, str]],
-    ledger: dict[str, OnlineEvalConfig],
-    names: dict[str, str],
-) -> dict[str, Any]:
-    """Group result records by config, classified by owner (agent rows first)."""
-    grouped: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        config_id = r.get("config_id") or ""
-        if not config_id or not r.get("evaluator"):
-            continue
-        block = grouped.get(config_id)
-        if block is None:
-            row = ledger.get(config_id)
-            block = grouped[config_id] = {
-                "config_id": config_id,
-                "config_name": row.name if row else (names.get(config_id) or None),
-                "owner": owner_of(names.get(config_id, ""), config_id, set(ledger)),
-                "agent": {"id": row.agent_id, "name": row.agent_name} if row else None,
-                "records": [],
-            }
-        block["records"].append({
-            "time": r.get("time"),
-            "evaluator_id": r["evaluator"],
-            "level": r.get("level"),
-            "score": _num(r.get("score")),
-            "label": r.get("label"),
-            "explanation": r.get("explanation"),
-            "trace_id": r.get("trace_id"),
-        })
-    order = {"agent": 0, "experiment": 1, "external": 2}
-    configs = sorted(grouped.values(), key=lambda b: (order[b["owner"]], b["config_id"]))
-    return {
-        "configs": configs,
-        "total": sum(len(b["records"]) for b in configs),
-        "unavailable": False,
-    }
+def _agent_rows(db: Session, workspace_id: str) -> dict[str, OnlineEvalConfig]:
+    return {r.config_id: r for r in _rows(db, workspace_id)}
 
 
 def session_online_scores(
@@ -985,27 +1084,58 @@ def session_online_scores(
     workspace: WorkspaceContext,
     session_id: str,
     hours: int,
-    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
+    run_queries: RunQueries | None = None,
     logs: Any = None,
     control: Any = None,
 ) -> dict[str, Any]:
-    """Online scores for one session — an additive, fail-soft block on the
-    Observability session detail. A Logs Insights failure here must never take
-    the traces/transcript down with it, hence the separate query + try/except.
-    ``configs_exist`` lets the UI hide the panel on workspaces that never
-    created a config (and show a "not judged yet" state on those that did)."""
-    ledger = _agent_ledger_rows(db, workspace.id)
-    exists = bool(ledger)
-    run = run_queries or run_insights_queries
+    """Online scores for one session — an additive, fail-soft block on the Observability
+    session detail. A ledger failure here must never take the traces down with it.
+    ``configs_exist`` lets the UI hide the panel on workspaces that never created a
+    config (and show a "not judged yet" state on those that did). The legacy query
+    keywords are accepted and ignored."""
     try:
-        rows = run({"scores": session_scores_query(session_id)}, hours,
-                   logs=logs, workspace=workspace)["scores"]
-    except Exception:
-        return {"configs": [], "total": 0, "unavailable": True, "configs_exist": exists}
-    names = config_names(workspace, control) if any(
-        (r.get("config_id") or "") not in ledger for r in rows
-    ) else {}
-    return {**parse_session_scores(rows, ledger, names), "configs_exist": exists}
+        ledger = _agent_rows(db, workspace.id)
+        since = datetime.now(UTC) - timedelta(hours=hours)
+        rows = _result_rows(db, workspace.id, [], since, session_id=session_id)
+    except Exception:  # noqa: BLE001 — fail-soft by contract
+        return {"configs": [], "total": 0, "unavailable": True, "configs_exist": False}
+    grouped: dict[str, dict[str, Any]] = {}
+    newest_first = sorted(rows, key=lambda r: _aware(r.created_at), reverse=True)
+    for rec in newest_first[:SESSION_SCORES_LIMIT]:
+        config_id = rec.config_id or ""
+        if not config_id:
+            continue
+        block = grouped.get(config_id)
+        if block is None:
+            row = ledger.get(config_id)
+            block = grouped[config_id] = {
+                "config_id": config_id,
+                "config_name": row.name if row else None,
+                "owner": owner_of(row.name) if row else "agent",
+                "agent": {"id": row.agent_id or None, "name": row.agent_name} if row else None,
+                "records": [],
+            }
+        block["records"].append({
+            "time": _ts(rec.created_at),
+            "evaluator_id": rec.evaluator_id,
+            "level": rec.level,
+            "score": None if rec.score is None else float(rec.score),
+            "label": rec.label,
+            "explanation": rec.explanation,
+            "trace_id": rec.trace_id,
+        })
+    order = {"agent": 0, "experiment": 1}
+    # agent-owned first, live configs before a deleted config's leftover scores, then by id
+    configs = sorted(
+        grouped.values(),
+        key=lambda b: (order.get(b["owner"], 2), b["config_id"] not in ledger, b["config_id"]),
+    )
+    return {
+        "configs": configs,
+        "total": sum(len(b["records"]) for b in configs),
+        "unavailable": False,
+        "configs_exist": bool(ledger),
+    }
 
 
 def _empty_quality(configs: int = 0) -> dict[str, Any]:
@@ -1013,39 +1143,54 @@ def _empty_quality(configs: int = 0) -> dict[str, Any]:
             "agents": 0, "configs": configs, "evaluators": []}
 
 
-def parse_quality(rows: dict[str, list[dict[str, str]]],
-                  ledger: dict[str, OnlineEvalConfig]) -> dict[str, Any]:
-    """Polarity-normalised, count-weighted mean over every (evaluator, config)
-    pair — a Refusal mean of 0.1 contributes 0.9, so the tile reads "higher is
-    better" regardless of the evaluator mix. ``evaluators`` keeps the RAW per-
-    evaluator means (what the online page shows) plus the polarity applied.
-    ``configs`` counts the workspace's agent-owned configs (the ledger), not
-    only the ones that scored — the tile tells "configured, nothing judged yet"
-    apart from "no config at all" with it; ``agents`` counts agents WITH scores."""
-    weighted = 0.0
-    total = 0
-    per_eval: dict[str, dict[str, float]] = {}
-    scored: set[str] = set()
-    for r in rows.get("pairs", []):
-        evaluator, mean, count = r.get("evaluator"), _num(r.get("mean")), _int(r.get("count"))
-        if not evaluator or mean is None or count <= 0:
-            continue
-        polarity = ac.evaluator_polarity(evaluator)
-        weighted += (1 - mean if polarity < 0 else mean) * count
-        total += count
-        scored.add(r.get("config_id") or "")
-        acc = per_eval.setdefault(evaluator, {"sum": 0.0, "count": 0, "polarity": polarity})
-        acc["sum"] += mean * count
-        acc["count"] += count
-    if total == 0:
+def online_quality(
+    db: Session,
+    workspace: WorkspaceContext,
+    run_queries: RunQueries | None = None,
+    logs: Any = None,
+    *,
+    viewer: Viewer = Viewer.ALL,
+) -> dict[str, Any]:
+    """24 h online quality over the workspace's agent-owned configs: the polarity-
+    normalised, count-weighted mean of every score — a Refusal mean of 0.1 contributes
+    0.9, so the tile reads "higher is better" regardless of the evaluator mix.
+    ``evaluators`` keeps the RAW per-evaluator means (what the online page shows) plus
+    the polarity applied; ``configs`` counts the agent-owned configs (so "configured,
+    nothing judged yet" differs from "no config at all"); ``agents`` counts agents WITH
+    scores. No agent config → the empty payload without any ledger scan."""
+    # the viewer's configs only (workspace isolation): a member's tile covers their view
+    ledger = {
+        cid: row for cid, row in _agent_rows(db, workspace.id).items()
+        if owner_of(row.name) == "agent" and config_visible(db, viewer, row)
+    }
+    if not ledger:
+        return _empty_quality()
+    since = datetime.now(UTC) - timedelta(hours=RANGE_HOURS[QUALITY_RANGE])
+    rows = _result_rows(db, workspace.id, sorted(ledger), since, scored_only=True)
+    if not rows:
         return _empty_quality(len(ledger))
-    totals = (rows.get("totals") or [{}])[0]
+    weighted = 0.0
+    per_eval: dict[str, dict[str, float]] = {}
+    sessions: set[str] = set()
+    agents: set[str] = set()
+    for rec in rows:
+        if rec.score is None or rec.config_id not in ledger:
+            continue  # scored_only + the config filter already guarantee this
+        polarity = evaluator_polarity(rec.evaluator_id)
+        score = float(rec.score)
+        weighted += 1 - score if polarity < 0 else score
+        sessions.add(rec.session_id)
+        config = ledger[rec.config_id]
+        agents.add(config.agent_id or f"service:{config.service_name}")
+        acc = per_eval.setdefault(rec.evaluator_id, {"sum": 0.0, "count": 0, "polarity": polarity})
+        acc["sum"] += score
+        acc["count"] += 1
     return {
         "range": QUALITY_RANGE,
-        "mean": round(weighted / total, 3),
-        "scores": total,
-        "sessions": _int(totals.get("sessions")),
-        "agents": len({ledger[c].agent_id for c in scored if c in ledger}),
+        "mean": round(weighted / len(rows), 3),
+        "scores": len(rows),
+        "sessions": len(sessions),
+        "agents": len(agents),
         "configs": len(ledger),
         "evaluators": sorted(
             (
@@ -1056,20 +1201,3 @@ def parse_quality(rows: dict[str, list[dict[str, str]]],
             key=lambda e: e["evaluator_id"],
         ),
     }
-
-
-def online_quality(
-    db: Session,
-    workspace: WorkspaceContext,
-    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
-    logs: Any = None,
-) -> dict[str, Any]:
-    """24 h online quality over the workspace's agent-owned configs. No agent
-    config → the empty payload WITHOUT touching Logs Insights."""
-    ledger = _agent_ledger_rows(db, workspace.id)
-    if not ledger:
-        return _empty_quality()
-    run = run_queries or run_insights_queries
-    rows = run(quality_queries(sorted(ledger)), RANGE_HOURS[QUALITY_RANGE],
-               logs=logs, workspace=workspace)
-    return parse_quality(rows, ledger)

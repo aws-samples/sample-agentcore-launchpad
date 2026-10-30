@@ -1,6 +1,6 @@
 """Architect assistant API (SE-039) — the member-facing conversation with the
 protected ``aws-agent-solution-architect`` preset and the separate approval that
-turns one reviewed proposal into one regular managed-Harness deploy job.
+turns one reviewed proposal into one regular self-built-Harness deploy job.
 
 Authorization comes from ``ROUTE_POLICY`` (member for discussion — parity with Chat;
 ``perm:agents.deploy`` for approval — parity with ``POST /api/agents``) and is
@@ -13,28 +13,31 @@ admin may share one with the whole workspace: every member may then work on it
 """
 
 import json as _json
-from collections.abc import Iterator
+import logging
 from dataclasses import replace
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import Path as PathParam
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.assistant import evaluation_repair, preparation, service
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import principal_of
-from app.core.db import SessionLocal, get_db
+from app.core.db import SQLITE_MAX_INT, get_db
+from app.core.display_time import DisplayTimeJSONResponse
 from app.core.errors import AppError
-from app.models.ledger import Workspace
+from app.models.ledger import Job, Workspace
 from app.routers.agents import _agent_out
 from app.routers.auth import Identity, require_identity, require_permission, resolve_identity
 from app.routers.auth import enabled as auth_enabled
 from app.routers.workspaces import WorkspaceScope, _authorize, require_workspace
-from app.services.chat import sse_encode
+from app.services import live_turns
 
 router = APIRouter(prefix="/api/assistant/architect", tags=["assistant"])
+logger = logging.getLogger("launchpad.assistant")
 
 # Ingress cap for every assistant write (bytes actually received, whatever
 # Content-Length says): the largest legitimate body is a 100k-char prompt.
@@ -96,42 +99,11 @@ class AssistantBodyCap:
             await send({"type": "http.response.body", "body": body})
 
 
-class TurnResponse(StreamingResponse):
-    """A streaming response that owns its turn: whatever way the response ends —
-    completion, ASGI 2.0 disconnect (task-group cancel) or ASGI 2.4 send error — the
-    turn is finalized deterministically (upstream stream closed, generator closed,
-    partial answer persisted as interrupted, claim released), never left to GC."""
-
-    def __init__(self, run: service.TurnRun, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._run = run
-
-    async def __call__(self, scope, receive, send) -> None:
-        run = self._run
-
-        async def receive_watch():
-            message = await receive()
-            if message.get("type") == "http.disconnect":
-                run.signal()  # close upstream NOW; the blocked worker read returns
-            return message
-
-        async def send_watch(message):
-            try:
-                await send(message)
-            except BaseException:
-                # ASGI 2.4: a failed send (OSError, or the cancellation it turns into
-                # further up the stack) IS the disconnect signal — close the upstream
-                # now, before anything waits for the worker thread to unwind
-                run.signal()
-                raise
-
-        try:
-            await super().__call__(scope, receive_watch, send_watch)
-        finally:
-            import anyio
-
-            with anyio.CancelScope(shield=True):  # cleanup survives a cancelled scope
-                await anyio.to_thread.run_sync(self._run.cancel)
+# N-ARCH-obs15: the streaming response owns its SUBSCRIPTION to a turn — never the turn;
+# the class and the SSE framing are shared with the Chat playground (services/live_turns.py).
+TurnStreamResponse = live_turns.TurnStreamResponse
+_sse_body = live_turns.sse_body
+_SSE_HEADERS = live_turns.SSE_HEADERS
 
 
 def _caller(request: Request) -> Identity:
@@ -218,7 +190,9 @@ def list_conversations(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return {"conversations": service.list_conversations(db, ws.id, principal_of(_caller(request)))}
+    """The caller's own conversations plus the shared ones; an administrator lists
+    every member's (another member's unshared one carries ``read_only``)."""
+    return {"conversations": service.list_conversations(db, ws.id, _caller(request))}
 
 
 @router.post("/conversations", status_code=201)
@@ -242,9 +216,11 @@ def get_conversation(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    principal = principal_of(_caller(request))
-    row = service.accessible_conversation(db, ws.id, principal, conversation_id)
-    return service.conversation_detail(db, row, viewer=principal)
+    """The owner's, a shared one for any member, or — read-only — any conversation of
+    the workspace for an administrator (``read_only: true`` while unshared)."""
+    identity = _caller(request)
+    row = service.viewable_conversation(db, ws.id, identity, conversation_id)
+    return service.conversation_detail(db, row, viewer=principal_of(identity))
 
 
 class ShareRequest(BaseModel):
@@ -260,8 +236,9 @@ def set_sharing(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Admin-only: open (or close) one conversation to every member of the
-    workspace. Deleting it stays with the owner."""
+    """The owner or an administrator opens (or closes) one conversation to every
+    member of the workspace (an admin may share any conversation it reads — that is
+    how a read-only one becomes a collaboration). Deleting it stays with the owner."""
     identity = _caller(request)
     row = service.set_shared(db, ws.id, identity, conversation_id, req.shared)
     return service.conversation_summary(db, row, viewer=principal_of(identity))
@@ -290,8 +267,11 @@ def turn(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> StreamingResponse:
     """One discussion turn as SSE. Nothing here can create AWS resources: the only
-    cloud call is ``InvokeHarness`` on the preset; a proposal block in the reply
-    becomes an inert revision. Refusals (404/409/413) happen before the stream opens."""
+    cloud call is ``InvokeAgentRuntime`` on the preset's self-built Harness runtime; a
+    proposal block in the reply becomes an inert revision. Refusals (404/409/413)
+    happen before the stream opens. N-ARCH-obs15: the turn runs on a server-side driver
+    thread; this response is its first subscriber (each frame carries ``id: <seq>``) —
+    closing it detaches the subscriber only, and ``GET …/turns/{turn}/stream`` reattaches."""
     identity = _caller(request)
     principal = principal_of(identity)
     conversation = service.accessible_conversation(db, ws.id, principal, conversation_id)
@@ -307,35 +287,41 @@ def turn(
             plan_revision=req.evaluation_plan_repair.plan_revision,
             plan_hash=req.evaluation_plan_repair.plan_hash,
         )
-    workspace_row, workspace = ws.row, ws.context
-    run = service.TurnRun()
+    live = service.start_turn(conversation_id, ws.id, ws.row, ws.context, identity, prompt,
+                              retry_of=req.retry_of_turn)
+    return TurnStreamResponse(_sse_body(live.subscribe(0)), media_type="text/event-stream",
+                              headers=_SSE_HEADERS)
 
-    def generate() -> Iterator[str]:
-        # The stream outlives the request scope → its own session.
-        session = SessionLocal()
-        try:
-            conversation = service.accessible_conversation(
-                session, ws.id, principal, conversation_id
-            )
-            run.inner = service.run_turn(
-                session, conversation, workspace_row, workspace, identity, prompt, run=run,
-                retry_of=req.retry_of_turn,
-            )
-            for event in run.inner:
-                yield sse_encode(event)
-        except AppError as exc:  # a claim refusal after the response started
-            yield sse_encode({"event": "error", "data": {"code": exc.code,
-                                                        "message": exc.message}})
-        finally:
-            session.close()
 
-    run.generator = generate()
-    return TurnResponse(
-        run,
-        run.generator,
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+@router.get("/conversations/{conversation_id}/turns/{turn}/stream")
+def turn_stream(
+    conversation_id: str,
+    # N16-obs86 (same class as the chat reattach): bounded integer parameters
+    turn: Annotated[int, PathParam(ge=0, le=SQLITE_MAX_INT)],
+    request: Request,
+    from_seq: Annotated[str | None, Query(
+        alias="from",
+        description="Replay the persisted events with seq > from (default 0); an integer in "
+                    "0..2^63-1, else 422 assistant.invalid_seq",
+    )] = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> StreamingResponse:
+    """Reattach to a turn (N-ARCH-obs15): replays the persisted events with
+    ``seq > from`` (``?from=<seq>``, default 0), then tails the turn while it runs,
+    then its terminal event (``done`` / ``error``). ``404 assistant.turn_not_found`` for
+    a turn the conversation never reached; ``409 assistant.turn_not_yours`` when another
+    member sent it. A read-only viewer (an administrator on another member's unshared
+    conversation) tails any turn: the stream writes nothing, and that viewer has no
+    turn of its own to reattach to. ``422 assistant.invalid_seq`` for a ``from`` outside
+    ``0..2^63-1`` (N16-obs86; ``validation.invalid_request`` for such a ``turn``)."""
+    identity = _caller(request)
+    conversation = service.viewable_conversation(db, ws.id, identity, conversation_id)
+    service.require_turn(db, conversation, turn, identity,
+                         read_only=service.is_read_only_viewer(conversation, identity))
+    after = live_turns.parse_from(from_seq, "assistant.invalid_seq")
+    return TurnStreamResponse(_sse_body(service.stream_turn(conversation_id, turn, after)),
+                              media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @router.put("/conversations/{conversation_id}/preparation")
@@ -430,7 +416,7 @@ def approve_proposal(
         except Exception:  # the job is durable; a later retry or startup resume re-wakes it
             service.logger.exception("assistant: deploy starter failed for job %s",
                                      outcome.job_id)
-    return JSONResponse(
+    return DisplayTimeJSONResponse(
         status_code=202 if outcome.started else 200,
         content={
             "proposal": service.proposal_out(db, outcome.proposal),
@@ -458,19 +444,6 @@ class PlanEdit(BaseModel):
     content: dict[str, Any]
 
 
-class LambdaRevisionReview(BaseModel):
-    """SE-049 reviewed recovery of the first-initialization RevisionId conflict. Every
-    field names what the administrator verified; the CloudTrail event is read
-    server-side, never trusted from the client."""
-
-    model_config = ConfigDict(extra="forbid")
-    plan_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    expected_created_revision_id: str = Field(min_length=1, max_length=128)
-    expected_current_revision_id: str = Field(min_length=1, max_length=128)
-    cloudtrail_event_id: str = Field(min_length=1, max_length=128)
-    reason: str = Field(min_length=1, max_length=1000)
-
-
 class PlanMaterialize(BaseModel):
     plan_revision: int = Field(ge=1)
     plan_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
@@ -490,7 +463,7 @@ def _plan_state(db: Session, row) -> dict[str, Any]:
             "assertions and evaluator rubrics of this plan to the workspace Evaluation console "
             "(Datasets / Evaluators), where every member of the workspace can read them. The "
             "conversation transcript itself stays private. Nothing is deployed, run, synced to "
-            "AWS Datasets or invoked; created assets are registered — they have not passed."
+            "a dataset snapshot or invoked; created assets are registered — they have not passed."
         ),
     }
 
@@ -503,9 +476,10 @@ def get_evaluation_plan(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Ledger-only: every plan revision of the caller's conversation and the recorded
-    materialization operations (no AWS read, no AWS write)."""
+    materialization operations (no AWS read, no AWS write). An administrator reads
+    any conversation's plan; the writes below still need a collaboration."""
     identity = _caller(request)
-    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.viewable_conversation(db, ws.id, identity, conversation_id)
     return _plan_state(db, row)
 
 
@@ -551,8 +525,8 @@ def materialize_evaluation_plan(
     """A collaborator holding ``agents.deploy``: claim exactly one plan revision/hash for
     materialization. 202 when this call created the operation (worker launched), 200
     with the recorded operation for a repeated / concurrent request. Creates a local
-    Dataset, AgentCore evaluators and one Lambda + role per code evaluator; never
-    deploys, runs, syncs or invokes anything."""
+    Dataset, local evaluator rows and — only with ``eval_code_evaluators_enabled`` — one
+    Lambda + role per code evaluator; never deploys, runs, publishes or invokes anything."""
     require_permission(request, assets.PERMISSION)  # belt and braces with ROUTE_POLICY
     identity = _caller(request)
     if not req.acknowledge_disclosure:
@@ -589,13 +563,14 @@ def materialize_evaluation_plan(
     outcome = assets.approve_plan(
         db, row, ws_row, plan_revision=req.plan_revision, plan_hash=req.plan_hash,
         approved_by=identity.username, approver_user_id=identity.user_id, recheck=recheck,
+        approver_is_admin=identity.is_admin,  # N17-obs227: the judges' visibility gate
     )
     if outcome.started or (
         outcome.operation.status in ("queued", "running")
         and assets.live_worker(outcome.operation.id) is None
     ):
         assets.start_async(outcome.operation.id)
-    return JSONResponse(
+    return DisplayTimeJSONResponse(
         status_code=202 if outcome.started else 200,
         content={"operation": assets.operation_out(outcome.operation),
                  "started": outcome.started},
@@ -610,9 +585,9 @@ def get_evaluation_operation(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Ledger-only status (no AWS call, no mutation)."""
+    """Ledger-only status (no AWS call, no mutation); readable by any viewer."""
     identity = _caller(request)
-    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.viewable_conversation(db, ws.id, identity, conversation_id)
     return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id))}
 
 
@@ -636,55 +611,6 @@ def retry_evaluation_operation(
             "started": started}
 
 
-@router.post("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}"
-             "/lambda-revision-review")
-def review_lambda_revision(
-    conversation_id: str,
-    operation_id: str,
-    req: LambdaRevisionReview,
-    request: Request,
-    db: Session = Depends(get_db),
-    ws: WorkspaceScope = Depends(require_workspace),
-) -> dict[str, Any]:
-    """``agents.deploy`` + owner reviewed recovery of ONE conflict: the Lambda's RevisionId
-    moved between CreateFunction (Pending) and Active. Reads the nominated CloudTrail
-    CreateFunction event and the settled function server-side, records an append-only
-    review and re-queues the ordinary worker. No cloud write happens in this route."""
-    require_permission(request, assets.PERMISSION)
-    identity = _caller(request)
-    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
-    op = assets.owned_operation(db, row, operation_id)
-    ws_row = db.get(Workspace, ws.id)
-    if ws_row is None:
-        raise AppError("workspace.not_found", "workspace not found", status_code=404)
-    _authorize(db, identity, ws_row)
-
-    def recheck(session: Session) -> Identity:
-        fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
-        if fresh is None:
-            raise AppError("auth.required", "Authentication required", status_code=401)
-        if principal_of(fresh) != principal_of(identity):
-            raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
-            raise assets.permission_error()
-        fresh_ws = session.get(Workspace, ws.id)
-        if fresh_ws is None:
-            raise AppError("workspace.not_found", "workspace not found", status_code=404)
-        _authorize(session, fresh, fresh_ws)
-        service.accessible_conversation(session, ws.id, principal_of(fresh), conversation_id)
-        return fresh if auth_enabled() else replace(fresh, username="river")
-
-    outcome = assets.review_lambda_initial_revision(
-        db, op, plan_hash=req.plan_hash, expected_created=req.expected_created_revision_id,
-        expected_current=req.expected_current_revision_id, event_id=req.cloudtrail_event_id,
-        reason=req.reason, reviewer=identity.username, reviewer_user_id=identity.user_id,
-        recheck=recheck,
-    )
-    db.expire_all()
-    return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id)),
-            "review": outcome.review, "started": outcome.started}
-
-
 @router.delete("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/assets")
 def cleanup_evaluation_operation(
     conversation_id: str,
@@ -693,8 +619,8 @@ def cleanup_evaluation_operation(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Delete exactly the cloud artifacts the operation created (evaluators, Lambda,
-    its role/log group, the additive role policy). The local Dataset stays."""
+    """Delete exactly the artifacts the operation created (evaluator rows and, when a
+    code chain was built, the Lambda with its role/log group). The local Dataset stays."""
     require_permission(request, assets.PERMISSION)
     identity = _caller(request)
     row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
@@ -718,8 +644,9 @@ def conversation_footprint(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """What CLEAR would remove for this conversation (Agents deployed from its
-    approvals, evaluation-assets operations with their cloud resources, the local
-    Datasets they created) and what currently blocks it. Ledger read only; owner-bound."""
+    approvals, the Runtime canaries run on them, evaluation-assets operations
+    with their cloud resources, the local Datasets they created), what currently blocks
+    it, and the newest clear attempt (``purge``). Ledger read only; owner-bound."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
     fp = purge_mod.footprint(db, row)
@@ -730,15 +657,28 @@ def conversation_footprint(
 def delete_conversation(
     conversation_id: str,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Delete the conversation and everything it created: fenced cleanup of every
-    evaluation-assets operation, the local Datasets, every deployed Agent (the same
-    teardown as DELETE /api/agents/{id}), then the ledger rows. Owner-bound; the caller
-    also needs ``agents.deploy`` for cloud assets and ``agents.delete`` for an Agent.
-    Refuses (409, nothing deleted) while a turn, an operation or a deployment job is
-    still running, and stops (409) if an operation cannot be fully cleaned."""
+    """Delete the conversation and everything it created. Owner-bound; the caller also
+    needs ``agents.deploy`` for cloud assets and ``agents.delete`` for an Agent, and must
+    be the creator (or an administrator) of every canary and Agent the clear tears down
+    (403 before any side effect). Refuses (409, nothing deleted) while a turn, an
+    operation, a deployment job or a canary action is still running.
+
+    A transcript-only conversation is deleted inline (200, ``deleted: true``). Anything
+    with cloud resources becomes a durable clear job (202, ``job_id``; poll
+    ``GET /api/jobs/{job_id}``): canaries first, then evaluation assets, Datasets and
+    Agents, each read back gone before the next — see ``assistant.purge``.
+    A repeated DELETE while that job is live returns the same job; after a failed job it
+    starts a new attempt that resumes from the verified checkpoints."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
-    return purge_mod.purge(db, row, ws.context, can=identity.can)
+    job, done = purge_mod.request_purge(db, row, identity=identity)
+    if done is not None:
+        return done
+    purge_mod.start_purge_async(job.id)
+    response.status_code = 202
+    db.expire_all()
+    return purge_mod.job_result(db.get(Job, job.id))

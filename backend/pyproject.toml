@@ -9,13 +9,19 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "pydantic-settings>=2.5,<3",
     "pyyaml>=6.0,<7",
-    "boto3>=1.43.103",
+    "boto3>=1.43.109",
     "bedrock-agentcore[simulation]==1.17.*",
+    # N12: Strands evaluation / optimizer stack (plan §F); the worker zip pins the same.
+    "strands-agents[openai]==1.47.0",
+    "strands-agents-evals==1.5.0",
+    "strands-harness-optimizer==0.0.1",
     "pip>=24",
     "playwright>=1.40,<2",
-    "claude-agent-sdk>=0.2.116",
     "pypdf>=6.1,<7",
     "pillow>=12.0,<13",
+    "cedarpy==4.12.1",
+    # principal-token codec (app/policy/contracts/codec.py); already in the tree via strands/mcp
+    "cryptography>=44",
 ]
 
 [dependency-groups]
@@ -24,6 +30,10 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
     "pytest-xdist>=3.6",
+    "schemathesis>=4.31,<5",
+    "mutmut==3.8.0",
+    # stage-0 contract tests (tests/policy_principal)
+    "jsonschema>=4.23",
 ]
 
 [tool.ruff]
@@ -32,10 +42,14 @@ target-version = "py312"
 # Fixtures under tests/fixtures/ are verbatim sample code (exported harness
 # agents) consumed as text by the harness-conversion tests; they intentionally
 # preserve their original, un-linted formatting, so exclude them from ruff.
-extend-exclude = ["tests/fixtures"]
+extend-exclude = ["tests/fixtures", "mutants"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# verbatim Global AgentCore Evaluations template text (N17-obs335 / obs339)
+"app/services/strands_eval/global_templates.py" = ["E501"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends"]
@@ -43,8 +57,75 @@ extend-immutable-calls = ["fastapi.Depends"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "property: round-16 property / model tests (tests/property) — Hypothesis-driven",
     "name_reservation: keeps the workspace-ledger half of evaluator name reservation active",
+    "slow: round-16 soak variants (10x steps) — run only with LAUNCHPAD_SOAK=1",
 ]
+
+# Mutation-testing baseline (round 16, N16-obs60; docs/cn/interfaces/testing.md § "Mutation testing
+# & discovery KPIs"). NOT part of `make verify` — run `make mutation` from the repo root. Only the
+# validation layer and the guards named in BUG-DISCOVERY-PLAN.md §4 are mutated; the whole `app/`
+# package is copied beside them so the mutated modules import. The test selection is the directly
+# related test files only, so one run finishes in < 20 min on the 32-core host (mutmut runs, per
+# mutant, only the tests its stats phase saw reach the mutated function).
+[tool.mutmut]
+source_paths = [
+    "app/schemas/agent.py",
+    "app/deployer/harness_local.py",
+    "app/services/ownership.py",
+    "app/services/visibility.py",
+    "app/services/login_guard.py",
+    "app/services/users.py",
+    "app/services/builtin_tools.py",
+    # app/assistant/evaluation_plan.py (2 161 mutants, 40 % of the set) is DEFERRED to the next
+    # baseline run (lead decision 2026-10-19, N16-obs67); its tests are test_evaluation_plan_*,
+    # test_assistant_evaluation_repair / _readonly_evaluation / _validation_errors / _proposal_edit_carry.
+]
+also_copy = ["app"]
+pytest_add_cli_args_test_selection = [
+    # app/schemas/agent.py
+    "tests/test_model_catalog.py",
+    "tests/test_agent_timeout_defaults.py",
+    # (tests/test_native_tools_defaults.py reads ../frontend — outside the mutants/ copy)
+    "tests/test_model_support.py",
+    "tests/test_agent_spec_filesystem.py",
+    "tests/test_catalog_hint.py",
+    # app/deployer/harness_local.py
+    "tests/test_harness_local.py",
+    "tests/test_max_tokens_recovery.py",
+    "tests/test_deployer_build_dir.py",
+    # app/services/ownership.py
+    "tests/test_mutation_ownership.py",
+    "tests/test_agent_ownership.py",
+    # app/services/visibility.py
+    "tests/test_visibility.py",
+    "tests/test_visibility_cn.py",
+    "tests/test_chat_session_visibility.py",
+    # app/services/login_guard.py
+    "tests/test_login_protection.py",
+    "tests/test_v1_key_rate_limit.py",
+    "tests/test_registration_abuse.py",
+    # app/services/users.py
+    "tests/test_users_api.py",
+    "tests/test_password_policy.py",
+    "tests/test_users_patch_validation.py",
+    "tests/test_users_approval_grants.py",
+    "tests/test_user_federation.py",
+    # app/services/builtin_tools.py (r15-h)
+    "tests/test_architect_builtin_tools.py",
+    "tests/test_harness_browser_tool.py",
+]
+# Every mutant worker is forked from a pytest-free fork server and imports the suite afresh:
+# `tests/conftest.py` binds ONE SQLite file per process at import time, so forking workers from a
+# process that already imported it (mutmut's default) would share that ledger between all
+# concurrent workers and kill mutants with "database is locked" instead of with assertions.
+process_isolation = "forkserver"
+forkserver_warmup = "none"
+# A worker's wall-clock limit is (estimated test time + timeout_constant) × timeout_multiplier;
+# the fresh import above costs 5–20 s wall under 24-way load, so the defaults (1 s, ×15 → 15 s for a
+# 3 ms test) reported ~25 % false "timeout" on the first baseline attempt. 10 s + ×6 = 60 s floor.
+timeout_constant = 10.0
+timeout_multiplier = 6.0
 
 [build-system]
 requires = ["hatchling"]

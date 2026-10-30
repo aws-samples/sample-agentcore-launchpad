@@ -1,0 +1,58 @@
+# Launchpad policy engine, one shard per instance (@0, @1) — design §13.5 H1.
+# Installed by policy-engine/packaging/install.sh; NOT restarted by scripts/host-update.sh
+# (that script restarts launchpad-backend / launchpad-frontend only). Upgrade with a
+# rolling restart: `systemctl restart launchpad-policy-engine@0` then `@1`.
+[Unit]
+Description=Launchpad policy engine shard %i
+Requires=launchpad-policy-engine@%i.socket
+After=network-online.target launchpad-policy-engine@%i.socket
+
+[Service]
+Type=simple
+User=lp-policy
+Group=lp-policy
+UMask=0027
+EnvironmentFile=-/etc/launchpad-policy-engine/engine.env
+ExecStart=/opt/launchpad-policy-engine/bin/launchpad-policy-engine \
+    --shard %i --shards ${LP_ENGINE_SHARDS} \
+    --state-dir /var/lib/launchpad-policy-engine \
+    --control /run/launchpad-policy-engine/control-%i.sock \
+    --key-file /etc/launchpad-policy-engine/engine-key \
+    --audit /var/lib/launchpad-policy-engine/audit/shard-%i.jsonl
+Restart=always
+RestartSec=1
+RuntimeDirectory=launchpad-policy-engine
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+StateDirectory=launchpad-policy-engine
+StateDirectoryMode=0750
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=65536
+# Per shard (follow-up item 3). Bench peak RSS ~17 MB; request bodies held in flight are capped
+# at 64 MiB (--max-inflight-body-bytes) and connection threads at 1024 x 256 KiB stacks.
+MemoryMax=512M
+TasksMax=2048
+
+[Install]
+WantedBy=multi-user.target

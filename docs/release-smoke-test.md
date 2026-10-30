@@ -63,7 +63,9 @@ Since 2026-08-04 every script parses its arguments through `argparse`, so `--hel
 way to read its flags. That was **not** true before, and the fix exists because of a real
 incident worth keeping in mind here:
 
-> `uv run python scripts/e2e_experiment.py --help` was run on the dev box to check its flags.
+> `uv run python scripts/e2e_experiment.py --help` was run on the dev box to check its flags
+> (`e2e_experiment.py` no longer exists — it tested the optimization/experiment feature
+> removed for the CN build; the lesson below still applies to every remaining script).
 > The script had no `argparse`, so `--help` was ignored and it **resumed a live experiment and
 > drove it through to `promote`** — stopping the A/B test, applying the treatment system prompt
 > plus two tool-description overrides to the production agent, and deploying a new runtime
@@ -131,10 +133,6 @@ import sqlite3
 c = sqlite3.connect("/home/ubuntu/workspace/agentcore_launchpad/data/launchpad.db")
 for label, sql in [
     ("agents",        "select name, method, status from agents order by name"),
-    ("datasets",      "select name, kind from eval_datasets order by name"),
-    ("eval_runs",     "select count(*) from eval_runs"),
-    ("experiments",   "select id, status, stage from experiments"),
-    ("canaries",      "select id, status from runtime_canaries"),
     ("chat_sessions", "select count(*) from chat_sessions"),
 ]:
     print(f"{label}: {c.execute(sql).fetchall()}")
@@ -157,17 +155,12 @@ These are invisible from the code and each one can waste a whole run.
 
 | Check | Why | How |
 |---|---|---|
-| Evaluation batch capacity free | **5 active batch evaluations per AWS account** (Launchpad runs up to 3 concurrently) — the dev box in us-west-2 shares the quota, so a busy account can still queue an eval step | ask, or check the Evaluation page on both consoles |
-| No experiment row in `status=running` | `POST /api/experiments` returns 409 `experiment.already_running` | `experiments` line of the inventory above |
-| No active A/B test on the shared experiment gateway | AgentCore allows **one active A/B test per gateway**, and configuration A/B shares `launchpad-exp-gw` | preflight of the `gateway`/`abtest` stages returns `experiment.gateway_busy` |
 | `hr-assistant` exists and is `active` | `e2e_chat_memory.py`, `e2e_observability.py`, `e2e_traces.py` all chat with this persistent agent | `agents` line of the inventory |
 
-**Known stale row (as of 2026-08-04):** experiment `451c26a538b5` sits at
-`status=running`, `stage=recommend`, created 2026-08-02. Its only artifact is `agent_meta`,
-so it owns **no** AWS resources — it blocks new experiments purely through the guard above.
-Recommended fix before the Extended tier: run its `cleanup` action (deletes nothing on AWS,
-flips the row to `cleaned`). Do not skip the investigation on a *different* stuck row — one
-that reached `gateway`/`abtest` **does** own a gateway, bundles, and an A/B test.
+**Removed for the CN build:** the evaluation-batch-capacity, running-experiment and
+A/B-gateway-busy checks that used to live here applied to the Evaluation and
+Optimization/Experiment features deleted in Tasks 3/5 of the CN foundation node; there
+is nothing to check for them anymore.
 
 ## Core tier (~30–40 min)
 
@@ -182,17 +175,21 @@ BASE=http://127.0.0.1:8000
 | # | Step | Command | Expected signal | Time |
 |---|---|---|---|---|
 | 1 | Service map | `curl -s $BASE/api/overview` (authenticated) + open the console in a browser | every AgentCore service green; console renders past login | 2 min |
-| 2 | Harness deploy (方式B) | `uv run python scripts/e2e_harness.py --base $BASE` | stages `generate→provision→deploy→register` succeed, `2+2?` answered `4`, agent deleted | 3–5 min |
 | 3 | Zip runtime deploy | `uv run python scripts/e2e_zip_runtime.py --base $BASE` | pip/zip/S3/create/READY, calculator-tool answer, agent deleted | 5–8 min |
 | 4 | Registry | `uv run python scripts/e2e_registry.py --base $BASE` | MCP ×2 + AGENT_SKILLS defaults sync, A2A record auto-created, `DRAFT→PENDING_APPROVAL→APPROVED`, search endpoint answers with well-formed records (`fresh record indexed: False` is normal — see below), one record disabled | 4–6 min |
 | 5 | Chat + memory | `uv run python scripts/e2e_chat_memory.py --base $BASE` | session A turn 2 shows turn-1 continuity (short-term); a stated preference appears as an extracted long-term record; session B is influenced by it | 4–6 min |
 | 6 | Observability | `uv run python scripts/e2e_observability.py` | all five `/api/observability` endpoints answer; one real trace tree with model + tool spans; 2nd identical call <300 ms (cache) | 3–5 min |
 | 6b | Traces | `uv run python scripts/e2e_traces.py` | the just-chatted session's span tree appears in `aws/spans` | 2–4 min |
-| 7 | Managed KB | `PYTHONPATH=. uv run python scripts/e2e_knowledge_base.py` | KB created, docs uploaded, data source `AVAILABLE`, ingestion `COMPLETE`, playground answers cite the docs. **Prints `KB_ID=…` and does NOT clean up — delete that KB yourself** | 8–12 min |
-| 8 | Evaluation | `uv run python scripts/e2e_eval_run.py --base $BASE` | 3-item dataset, Correctness + Helpfulness scores return, insights run produces a failure/intent excerpt | 6–10 min |
 
 Steps 6 and 6b default to `http://localhost:8000` when `--base` is omitted — correct on this
 box, and part of why the whole tier is run *on* the box.
+
+**Removed for the CN build:** step 2 (Harness deploy, `e2e_harness.py`) posted
+`method="harness"`, which the agents router now rejects with 503
+`feature.unavailable` until N7 registers the harness method — the script exercised
+nothing and has been deleted. Steps 7 (Managed KB, `e2e_knowledge_base.py`) and 8
+(Evaluation, `e2e_eval_run.py`) tested the AWS-managed Knowledge Bases and Evaluation
+implementations removed in Tasks 3/5 of the CN foundation node; both scripts are gone.
 
 ### Step 4's search step reports rather than asserts — and why
 
@@ -224,9 +221,7 @@ own cleanup and does not leave `e2e-registry-agent` behind.
 
 **Why this order:** 2 before 3 (cheapest real deploy first — if the pipeline is broken, learn
 it in 3 minutes, not 8). 5 before 6/6b (they read back the spans the chat just produced;
-running them first tests nothing). 7 before 8 only because 8 takes the account-wide
-evaluation slot and is the most likely to queue — leave it last so everything else is
-already green.
+running them first tests nothing).
 
 ## Extended tier
 
@@ -235,25 +230,24 @@ independently runnable.
 
 | Step | Command | Notes | Time |
 |---|---|---|---|
-| Container path (方式A) + native evaluation | `uv run python scripts/e2e_claude_sdk.py --base $BASE --skip-local --with-eval` | CodeBuild + ECR + native Claude Observability + one Batch Evaluation. `--skip-local` skips the local docker smoke (no docker on the box) | 20–35 min |
-| Full evaluation | `uv run python scripts/e2e_eval_extended.py` | window scopes, custom evaluators, insight subsets, cloud-dataset runs; takes the account batch slot repeatedly | 15–25 min |
-| Configuration A/B experiment | `uv run python scripts/e2e_experiment.py` | needs **no** `running` experiment and a free shared gateway; online-eval aggregation alone is 10–15 min | 25–40 min |
-| Runtime canary | `uv run python scripts/e2e_runtime_canary.py` | service layer, no HTTP. Mints a candidate version, 90/10 real traffic split, then rolls back | 15–25 min |
-| Policy / governance | `uv run python scripts/e2e_policy.py` and `scripts/e2e_gateway_policy_management.py` | Cedar engine, LOG_ONLY→ACTIVE promotion, gateway attach | 8–15 min |
-| Gateway tool | `uv run python scripts/e2e_gateway_tool.py --base $BASE` | HR question answered through the Cedar-enforced gateway | 4–6 min |
+| Gateway tool | `uv run python scripts/e2e_gateway_tool.py --base $BASE` | HR question answered through the gateway | 4–6 min |
+
+**Removed for the CN build:** the container-path/native-evaluation, full-evaluation,
+configuration A/B experiment, runtime canary, and policy/governance rows tested the
+方式A container path, Evaluation/Optimization, and Cedar Policy features deleted in
+Tasks 2/3 of the CN foundation node; their scripts (`e2e_eval_extended.py`,
+`e2e_experiment.py`, `e2e_runtime_canary.py`, `e2e_policy.py`,
+`e2e_gateway_policy_management.py`) no longer exist.
 
 `e2e_golden_path.py --base $BASE` is a compressed alternative to the Core tier
-(bootstrap → harness agent → chat ×2 → gateway tool → registry → mini eval → cleanup, ~10 min).
+(bootstrap → harness agent → chat ×2 → gateway tool → registry → cleanup, ~10 min).
 Use it for a quick confidence check, not as a replacement — it skips zip, KB, observability,
 and traces.
 
 ## Teardown
 
-Most scripts delete what they created unless you pass `--keep`. **Two exceptions bite:**
+Most scripts delete what they created unless you pass `--keep`. **One exception bites:**
 
-- **`e2e_knowledge_base.py` never cleans up** — no `--keep` flag, no delete. It leaves a KB
-  that owns an **OpenSearch collection and keeps billing**. Take the `KB_ID=` it prints and
-  `DELETE /api/knowledge-bases/{kb_id}` (or use the Knowledge Bases page).
 - **Any script that aborts mid-run skips its own cleanup.** Step 4 used to do this every time
   before its search assertion was fixed; any step that dies for a *new* reason will do the
   same, so always finish with the inventory diff below rather than trusting exit codes.
@@ -263,16 +257,13 @@ After the run:
 1. Re-run the [inventory probe](#3-inventory-snapshot-the-before-state) — **including the two
    API snapshots**, since KBs and registry records are invisible to the ledger diff — and
    compare against the before state. Anything your run added and did not remove is a
-   **finding**, not a footnote. Expect two legitimate deltas: `eval_runs` and `chat_sessions`
-   grow, because they are append-only history rather than live resources.
+   **finding**, not a footnote. Expect one legitimate delta: `chat_sessions` grows, because
+   it is append-only history rather than a live resource.
 2. For a script that died midway, delete its agent by name (they are prefixed `e2e-`):
    ```bash
    curl -s $BASE/api/agents | python3 -c "import json,sys;[print(a['id'],a['name']) for a in json.load(sys.stdin)['agents'] if a['name'].startswith('e2e-')]"
    curl -s -X DELETE $BASE/api/agents/<id>      # with the session cookie
    ```
-   Datasets: `DELETE /api/eval/datasets/{dataset_id}`. A half-built KB must be deleted
-   from the Knowledge Bases page — it owns an OpenSearch collection and keeps costing
-   money.
 3. `data/launchpad.db` was backed up during the deploy; the smoke test only adds rows, so
    that backup stays a valid floor if the ledger needs restoring.
 
@@ -287,24 +278,27 @@ prod now carries two generations of default records (the older `hr-db` / `pirate
 the current `hr-database` / `office-facts` / `expense-report-writer` set).
 
 Notably **not** covered by that run: the Extended tier in full, so the bounded-concurrency
-gateway send that v0.0.3 is named for is still unverified against real AWS — it needs
-`e2e_experiment.py`.
+gateway send that v0.0.3 is named for was never verified against real AWS before the
+feature it exercised (`e2e_experiment.py` / Configuration A/B experiments) was removed
+for the CN build (Task 3 of the CN foundation node) — this record is kept as a reminder
+that this run predates the CN build and some of what it covered no longer exists.
 
 ## Known gaps
 
 State these honestly rather than implying full coverage:
 
-- **方式C (Strands Studio canvas) has no e2e script.** Creation-method coverage is
-  harness (方式B) + zip_runtime + container (方式A, Extended) + A2A. Studio must be
-  clicked through by hand if the release touched it.
-- **Five scripts default `--base` to `http://localhost:8000`** (`e2e_experiment`,
-  `e2e_eval_extended`, `e2e_observability`, `e2e_traces`, `e2e_policy`). They accept the flag,
-  but omitting it targets the local box — pass it explicitly if you mean somewhere else.
-- **Three scripts bypass HTTP entirely** (`e2e_knowledge_base`, `e2e_kb_gateway`,
-  `e2e_runtime_canary`) — they import `app.services.*`, so they need `PYTHONPATH=.` and the
-  box's credentials, and they do **not** exercise the API or auth layer.
+- **方式C (Strands Studio canvas) and the harness method (方式B) have no e2e
+  script.** Creation-method coverage is zip_runtime + A2A only. 方式B 503s until N7
+  registers the harness method, so `e2e_harness.py` (which only exercised that
+  method) has been removed — see "Removed for the CN build" above. Studio must be
+  clicked through by hand if the release touched it. (方式A — the
+  container/Claude Agent SDK path — was removed for the CN build along with
+  `e2e_claude_sdk.py`, which no longer exercised a live creation method.)
+- **Two scripts default `--base` to `http://localhost:8000`** (`e2e_observability`,
+  `e2e_traces`). They accept the flag, but omitting it targets the local box — pass it
+  explicitly if you mean somewhere else.
 - **The console UI is only spot-checked.** No automated browser coverage in this procedure.
-- **`e2e_kb_gateway.py` takes a KB id** (optional positional, with a hardcoded default that
-  may no longer exist) and needs a Cognito user token; it is not in either tier above. Run it
-  by hand — `uv run python scripts/e2e_kb_gateway.py <kb-id>` — against a KB from step 7 if
-  the KB gateway changed.
+- **Removed for the CN build:** the Managed KB (`e2e_knowledge_base.py`) and KB gateway
+  (`e2e_kb_gateway.py`) bypass-HTTP scripts tested the AWS-managed Knowledge Bases
+  implementation and the AgentCore KB connector gateway, both deleted in Tasks 1/5 of the
+  CN foundation node; neither script exists anymore.

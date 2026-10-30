@@ -2,8 +2,9 @@
 
 Audience: an AI agent (or operator) that must start, update, verify, or debug a
 Launchpad deployment running in **prod mode**. Two supported shapes: the
-built-in launcher (§2) and a systemd deployment (§3 — the reference layout used
-by the real us-east-1 box). Paired doc: [agent-runbook-dev.md](agent-runbook-dev.md).
+built-in launcher (§2) and a systemd deployment (§3 — the reference layout; the
+CN template is `infra/ec2/launchpad-cn-ec2.yaml`). Paired doc:
+[agent-runbook-dev.md](agent-runbook-dev.md).
 
 ## 0. What prod mode means (`LAUNCHPAD_RUN_MODE=prod`)
 
@@ -44,7 +45,7 @@ python3 start.py --stop
 `PLATFORM_UI_PORT`. It waits on `/api/health` and `/` and prints log tails on
 failure.
 
-## 3. Shape B — systemd (reference: the us-east-1 box)
+## 3. Shape B — systemd (reference: `infra/ec2/launchpad-cn-ec2.yaml`)
 
 Two units, `launchpad-backend` + `launchpad-frontend` (frontend `Requires=` the
 backend). Key facts an agent must know before touching them:
@@ -53,13 +54,16 @@ backend). Key facts an agent must know before touching them:
   `ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host
   127.0.0.1 --port 8000`, env carries `LAUNCHPAD_RUN_MODE=prod`,
   `LAUNCHPAD_AUTH_USERNAME/PASSWORD`, `LAUNCHPAD_AUTH_COOKIE_SECURE=true`, and
-  a **region drop-in** overriding the unit's default region (us-east-1 there —
-  check with `systemctl show launchpad-backend -p Environment`). Hardening:
+  a **region drop-in** overriding the unit's default region (the instance's own
+  region — `cn-northwest-1` for the CN template; check with
+  `systemctl show launchpad-backend -p Environment`). Hardening:
   `NoNewPrivileges`, **`PrivateTmp=true`** (consequences in §5),
   `ProtectSystem=full`.
 - Frontend unit: `npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`
   over `frontend/dist` — **a rebuild is required for any frontend change**.
-- Both bind loopback; CloudFront (or any fronting proxy) terminates TLS.
+- Both bind loopback; nginx on the instance terminates TLS (`TlsMode=selfsigned`)
+  or serves plain HTTP inside the trusted `AllowedCidr` (`TlsMode=none`) — no
+  CloudFront, no public ALB (spec decision).
 - **`LAUNCHPAD_PUBLIC_BASE_URL` must name the public origin** the browser
   uses (`https://<public-host>`: scheme + host, no path, no trailing slash).
   It feeds the as_user (3LO) OAuth return URL `{public_base_url}/auth/return`,
@@ -131,7 +135,7 @@ or Docker execution settings, and never requires changing production configurati
   answer — never from an ad-hoc process.
 - Infra changes need an explicit `cdk deploy` with the region pinned
   (`CDK_DEFAULT_REGION=...`); `make bootstrap` skips CDK on an existing stack
-  and `infra/app.py` defaults to us-west-2 when unset.
+  and `infra/app.py` defaults to cn-northwest-1 when unset.
 - A public endpoint takes constant internet scanning — 401 floods in the
   journal from unknown IPs are background noise, not an incident.
 

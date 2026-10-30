@@ -13,13 +13,20 @@ import {
   type StageInfo,
 } from "../../../lib/api";
 import { isFishbone, type ProposalEditDraft } from "../../../lib/assistant";
-import { MODEL_CATALOG, type ModelSource } from "../../../lib/models";
+import { defaultModelFor, MODEL_CATALOG, type ModelSource } from "../../../lib/models";
 import { fmtTime } from "../../format";
 import { Alert, Descriptions, Field, Select, Table, Tag } from "../../ui";
 import { AGENT_TONE, JOB_TONE, shortId, STAGE_TONE } from "./common";
 import { V2Fishbone } from "./Fishbone";
+import { ValidationErrorList } from "./ValidationErrors";
+import { errorDetails } from "../../../lib/validation-errors";
+import { EvalGateBadge } from "../../../components/EvalGateBadge";
+import { recommendationGate, recommendationNote, recommendationText } from "../../../lib/evalPlanGate";
+import { awsStatusLabel } from "../../awsStatus";
 
 const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+// recommendation entries may be strings OR structured objects — never String() them
+const entries = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 function Section({ title, children, testId }: { title: string; children: React.ReactNode; testId?: string }) {
   return (
@@ -87,11 +94,15 @@ export function ProposalView({
       {proposal.status === "invalid" && (
         <Alert tone="error">
           {t("assistantPage.invalidNote")}
-          <ul className="v2-list">
-            {proposal.validation_errors.map((e, i) => (
-              <li key={i} className="mono" style={{ fontSize: 12 }}>{e}</li>
-            ))}
-          </ul>
+          {proposal.validation_errors.length > 1 && (
+            <div data-testid="v2-assistant-proposal-error-count" style={{ marginTop: 6 }}>
+              {t("assistantPage.invalidCount", { count: proposal.validation_errors.length })}
+            </div>
+          )}
+          <ValidationErrorList
+            errors={errorDetails(proposal.validation_errors, proposal.validation_error_details)}
+            testId="v2-assistant-proposal-errors"
+          />
         </Alert>
       )}
       <Descriptions
@@ -174,7 +185,6 @@ export function ProposalView({
               <li key={kb.kb_id}>
                 kb → {kb.kb_id}
                 {kb.name ? ` (${kb.name})` : ""}
-                {b.resources?.kb_gateway ? ` · via ${b.resources.kb_gateway.gateway_id}` : ""}
               </li>
             ))}
             <li>
@@ -238,9 +248,21 @@ export function ProposalView({
           />
         </Section>
       )}
-      {list(c.evaluator_recommendations).length > 0 && (
+      {entries(c.evaluator_recommendations).length > 0 && (
         <Section title={t("assistantPage.evaluators")}>
-          <ul>{list(c.evaluator_recommendations).map((x, i) => <li key={i} className="mono">{x}</li>)}</ul>
+          <ul>
+            {entries(c.evaluator_recommendations).map((x, i) => {
+              const gate = recommendationGate(x);
+              const note = recommendationNote(x);
+              return (
+                <li key={i} className="mono" data-testid={`v2-assistant-proposal-rec-${i}`}>
+                  {recommendationText(x)}
+                  {gate && <>{" · "}<EvalGateBadge blocking={gate.blocking} threshold={gate.threshold} metric={gate.metric} /></>}
+                  {note && <div className="v2-muted" style={{ fontSize: 12 }}>{note}</div>}
+                </li>
+              );
+            })}
+          </ul>
         </Section>
       )}
     </div>
@@ -286,13 +308,11 @@ export function ProposalEditor({
         <Field label={t("assistantPage.field.modelSource")}>
           <Select
             value={draft.model_source}
-            options={[
-              { value: "bedrock", label: "bedrock" },
-              { value: "mantle", label: "mantle" },
-            ]}
+            options={[{ value: "bedrock", label: "bedrock" }]}
             onChange={(v) => {
               const source = v as ModelSource;
-              onChange({ ...draft, model_source: source, model_id: MODEL_CATALOG[source][0].model_id });
+              // r15-e: the configured `agent_default` role (an approval creates a Harness spec)
+              onChange({ ...draft, model_source: source, model_id: defaultModelFor(source) });
             }}
           />
         </Field>
@@ -306,7 +326,10 @@ export function ProposalEditor({
           />
           <datalist id="v2-assistant-models">
             {models.map((m) => (
-              <option key={m.model_id} value={m.model_id}>{m.label}</option>
+              // N-R6-obs1: a disabled datalist row is not suggested; the server refuses it anyway
+              <option key={m.model_id} value={m.model_id} disabled={!m.available}>
+                {m.available ? m.label : `${m.label} · ${t("models.unavailableShort")}`}
+              </option>
             ))}
           </datalist>
         </Field>
@@ -349,12 +372,12 @@ export function ProposalEditor({
             {catalog.skills.length === 0 && <span className="v2-muted">{t("assistantPage.catalogNone")}</span>}
           </div>
         </Field>
-        <Field label={t("assistantPage.field.kbs")} hint={capabilities.kb_gateway ? undefined : t("assistantPage.kbGatewayMissing")}>
+        <Field label={t("assistantPage.field.kbs")}>
           <div className="v2-checks">
             {catalog.knowledge_bases.map((x) =>
               check(
                 draft.knowledge_bases.includes(x.kb_id),
-                resourcesLocked || !capabilities.kb_gateway,
+                resourcesLocked || !capabilities.knowledge_bases,
                 x.name || x.kb_id,
                 () => toggle("knowledge_bases", x.kb_id),
               ))}
@@ -454,7 +477,11 @@ export function Outcome({
             value: (
               <span className="v2-row">
                 <span className="mono">{shortId(approval.job_id)}</span>
-                {jobStatus && <Tag tone={JOB_TONE[jobStatus] ?? "gray"}>{String(jobStatus).toUpperCase()}</Tag>}
+                {jobStatus && (
+                  <Tag tone={JOB_TONE[jobStatus] ?? "gray"} title={String(jobStatus)} testId="v2-assistant-outcome-job">
+                    {awsStatusLabel(t, String(jobStatus))}
+                  </Tag>
+                )}
               </span>
             ),
           },
@@ -470,7 +497,13 @@ export function Outcome({
                   {t(`create.stages.${s.name}`, { defaultValue: s.name })}
                 </div>
                 <div className="d">
-                  <Tag tone={STAGE_TONE[s.status] ?? "gray"}>{t(`assistantPage.stage.${s.status}`)}</Tag>
+                  {/* N17-obs457: cancelled / interrupted have no assistantPage key — the agent page's
+                      stage labels, then the shared status vocabulary, never the key path */}
+                  <Tag tone={STAGE_TONE[s.status] ?? "gray"}>
+                    {t(`assistantPage.stage.${s.status}`, {
+                      defaultValue: t(`v2.agents.stage.${s.status}`, { defaultValue: awsStatusLabel(t, s.status) }),
+                    })}
+                  </Tag>
                 </div>
               </div>
             </div>

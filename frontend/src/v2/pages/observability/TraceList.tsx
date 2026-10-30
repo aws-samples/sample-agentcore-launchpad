@@ -6,7 +6,8 @@ import { api, type ObsTraceRow, type V2Range } from "../../../lib/api";
 import { fmtDuration, fmtNumber, fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
 import { Card, type Column, FilterSelect, LinkButton, Pager, SearchInput, Table, Tag } from "../../ui";
-import { approxCost, isSystemTrace, shortId, TIMEOUT_MS, useReportCache } from "./common";
+import { isSystemTrace, shortId, TIMEOUT_MS, useReportCache } from "./common";
+import { TelemetryScopeNote } from "./TelemetryScopeNote";
 
 export function TraceStatusTag({ status, durationMs }: { status: "ok" | "error"; durationMs: number }) {
   const { t } = useTranslation();
@@ -91,17 +92,9 @@ export function TraceList({
     },
     {
       key: "tokens",
-      title: t("v2.observability.col.tokensCost"),
+      title: t("v2.observability.col.tokens"),
       className: "num nowrap",
-      render: (row) =>
-        row.tokens.total > 0 ? (
-          <>
-            {fmtNumber(row.tokens.total)}
-            <span className="sub">{approxCost(row.est_cost_usd)}</span>
-          </>
-        ) : (
-          "—"
-        ),
+      render: (row) => (row.tokens.total > 0 ? fmtNumber(row.tokens.total) : "—"),
     },
     {
       key: "status",
@@ -118,6 +111,7 @@ export function TraceList({
 
   return (
     <Card>
+      <TelemetryScopeNote />
       <div className="v2-toolbar">
         <FilterSelect
           label="Agent"

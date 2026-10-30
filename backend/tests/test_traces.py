@@ -18,6 +18,7 @@ import json
 import pytest
 
 from app.core.errors import AppError
+from app.services import observability as obs
 from app.services import traces
 
 from .conftest import ws_ctx
@@ -109,11 +110,28 @@ def test_query_uses_the_shared_multi_group_source(insights):
     """Pins the fix: a regression to a single log group fails here."""
     traces.session_trace(SID, ws_ctx())
     query = insights.queries[0]
-    assert traces.SPANS_SOURCE in query
+    # Default mode ("both") is byte-identical to the module constant.
+    assert obs.SPANS_SOURCE in query
     assert "aws/spans" in query
     assert "/aws/bedrock-agentcore/runtimes/" in query
     # substring match, not attributes.session.id equality — see session_span_query
     assert f'@message like "{SID}"' in query
+
+
+def test_query_narrows_to_runtime_logs_only(insights, monkeypatch):
+    """`observability_spans_source=runtime_logs` must narrow this rail's query too —
+    not just the Observability page's own q_* builders."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LAUNCHPAD_OBSERVABILITY_SPANS_SOURCE", "runtime_logs")
+    get_settings.cache_clear()
+    try:
+        traces.session_trace(SID, ws_ctx())
+        query = insights.queries[0]
+        assert "/aws/bedrock-agentcore/runtimes/" in query
+        assert "'aws/spans'" not in query
+    finally:
+        get_settings.cache_clear()
 
 
 def test_primary_group_is_the_biggest_contributor(monkeypatch):
@@ -127,8 +145,11 @@ def test_primary_group_is_the_biggest_contributor(monkeypatch):
 
     assert result["log_group"] == AGENT_GROUP
     assert result["log_groups"][0] == AGENT_GROUP
-    # the deep link must escape a nested group path, not only aws/spans
-    assert "$252Faws$252Fbedrock-agentcore$252Fruntimes" in result["cloudwatch_url"]
+    # the group deep link must escape a nested group path, not only aws/spans
+    assert "$252Faws$252Fbedrock-agentcore$252Fruntimes" in result["log_group_url"]
+    # …and the Insights link (cloudwatch_url) lists BOTH contributing groups as source
+    assert "*2faws*2fbedrock-agentcore*2fruntimes" in result["cloudwatch_url"]
+    assert "$2527aws*2fspans" in result["cloudwatch_url"]
 
 
 def test_lookback_hours_is_passed_through(insights):
@@ -154,7 +175,8 @@ def test_no_spans_falls_back_to_the_shared_group_link(monkeypatch):
     assert result["span_count"] == 0
     assert result["log_groups"] == []
     assert result["log_group"] == SHARED
-    assert "aws$252Fspans" in result["cloudwatch_url"]
+    assert "aws$252Fspans" in result["log_group_url"]
+    assert "$2527aws*2fspans" in result["cloudwatch_url"]  # Insights source falls back too
     assert result["unavailable_reason"] is None
 
 
@@ -170,20 +192,10 @@ def test_malformed_message_is_skipped(monkeypatch):
 
 
 def test_response_keeps_the_fields_the_chat_rail_consumes(insights):
-    """frontend/src/pages/Chat.tsx reads exactly these."""
+    """frontend/src/pages/Chat.tsx and v2/pages/chat/TracePanel.tsx read these."""
     result = traces.session_trace(SID, ws_ctx())
-    for field in ("span_count", "spans", "cloudwatch_url"):
+    for field in ("span_count", "spans", "cloudwatch_url", "log_group_url", "unavailable_reason"):
         assert field in result
     for span in result["spans"]:
         assert set(span) >= {"name", "category", "start_ms", "duration_ms", "trace_id"}
 
-
-def test_route_returns_the_rail(client, monkeypatch):
-    import app.routers.governance as gov
-
-    monkeypatch.setattr(gov.trace_service, "run_insights_queries", FakeInsights())
-    res = client.get(f"/api/traces/{SID}")
-    assert res.status_code == 200
-    body = res.json()
-    assert body["span_count"] == 4
-    assert set(body["log_groups"]) == {SHARED, AGENT_GROUP}

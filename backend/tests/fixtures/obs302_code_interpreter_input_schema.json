@@ -1,0 +1,398 @@
+{
+ "$defs": {
+  "CodeInterpreterInput": {
+   "properties": {
+    "action": {
+     "discriminator": {
+      "mapping": {
+       "executeCode": "#/$defs/ExecuteCodeAction",
+       "executeCommand": "#/$defs/ExecuteCommandAction",
+       "initSession": "#/$defs/InitSessionAction",
+       "listFiles": "#/$defs/ListFilesAction",
+       "listLocalSessions": "#/$defs/ListLocalSessionsAction",
+       "readFiles": "#/$defs/ReadFilesAction",
+       "removeFiles": "#/$defs/RemoveFilesAction",
+       "writeFiles": "#/$defs/WriteFilesAction"
+      },
+      "propertyName": "type"
+     },
+     "oneOf": [
+      {
+       "$ref": "#/$defs/InitSessionAction"
+      },
+      {
+       "$ref": "#/$defs/ListLocalSessionsAction"
+      },
+      {
+       "$ref": "#/$defs/ExecuteCodeAction"
+      },
+      {
+       "$ref": "#/$defs/ExecuteCommandAction"
+      },
+      {
+       "$ref": "#/$defs/ReadFilesAction"
+      },
+      {
+       "$ref": "#/$defs/ListFilesAction"
+      },
+      {
+       "$ref": "#/$defs/RemoveFilesAction"
+      },
+      {
+       "$ref": "#/$defs/WriteFilesAction"
+      }
+     ],
+     "title": "Action"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "title": "CodeInterpreterInput",
+   "type": "object"
+  },
+  "ExecuteCodeAction": {
+   "description": "Execute code in a specific programming language within an existing session. Use this for running Python\nscripts, JavaScript/TypeScript code, data analysis, calculations, or any programming task. The session maintains\nstate between executions.",
+   "properties": {
+    "type": {
+     "const": "executeCode",
+     "description": "Execute code in the code interpreter",
+     "title": "Type",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, uses the default session which will be auto-created if needed.",
+     "title": "Session Name"
+    },
+    "code": {
+     "description": "Required code to execute",
+     "title": "Code",
+     "type": "string"
+    },
+    "language": {
+     "$ref": "#/$defs/LanguageType",
+     "default": "python",
+     "description": "Programming language for code execution"
+    },
+    "clear_context": {
+     "default": false,
+     "description": "Whether to clear the execution context before running code",
+     "title": "Clear Context",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "type",
+    "code"
+   ],
+   "title": "ExecuteCodeAction",
+   "type": "object"
+  },
+  "ExecuteCommandAction": {
+   "description": "Execute shell/terminal commands within the sandbox environment. Use this for system operations like installing\npackages, running scripts, file management, or any command-line tasks that need to be performed in the session.",
+   "properties": {
+    "type": {
+     "const": "executeCommand",
+     "description": "Execute a shell command in the code interpreter",
+     "title": "Type",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, uses the default session.",
+     "title": "Session Name"
+    },
+    "command": {
+     "description": "Required shell command to execute",
+     "title": "Command",
+     "type": "string"
+    }
+   },
+   "required": [
+    "type",
+    "command"
+   ],
+   "title": "ExecuteCommandAction",
+   "type": "object"
+  },
+  "FileContent": {
+   "description": "Represents a file with its path and text content for writing to the sandbox file system. Used when creating or\nupdating files during code execution sessions.",
+   "properties": {
+    "path": {
+     "description": "The file path where content should be written",
+     "title": "Path",
+     "type": "string"
+    },
+    "text": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Text content for the file",
+     "title": "Text"
+    },
+    "blob": {
+     "anyOf": [
+      {
+       "format": "binary",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Base64-encoded binary content for the file",
+     "title": "Blob"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "title": "FileContent",
+   "type": "object"
+  },
+  "InitSessionAction": {
+   "description": "Create a new isolated code execution environment. Use this when starting a new coding task, data analysis\nproject, or when you need a fresh sandbox environment. Each session maintains its own state, variables,\nand file system.",
+   "properties": {
+    "type": {
+     "const": "initSession",
+     "description": "Initialize a new code interpreter session",
+     "title": "Type",
+     "type": "string"
+    },
+    "description": {
+     "description": "Required description of what this session will be used for",
+     "title": "Description",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, a default session will be used.",
+     "title": "Session Name"
+    }
+   },
+   "required": [
+    "type",
+    "description"
+   ],
+   "title": "InitSessionAction",
+   "type": "object"
+  },
+  "LanguageType": {
+   "description": "Supported programming languages for code execution.",
+   "enum": [
+    "python",
+    "javascript",
+    "typescript"
+   ],
+   "title": "LanguageType",
+   "type": "string"
+  },
+  "ListFilesAction": {
+   "description": "Browse and list files and directories within the sandbox file system. Use this to explore the directory\nstructure, find files, or understand what's available in the session before reading or manipulating files.",
+   "properties": {
+    "type": {
+     "const": "listFiles",
+     "description": "List files in a directory",
+     "title": "Type",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, uses the default session.",
+     "title": "Session Name"
+    },
+    "path": {
+     "default": ".",
+     "description": "Directory path to list (defaults to current directory)",
+     "title": "Path",
+     "type": "string"
+    }
+   },
+   "required": [
+    "type"
+   ],
+   "title": "ListFilesAction",
+   "type": "object"
+  },
+  "ListLocalSessionsAction": {
+   "description": "View all active code interpreter sessions managed by this tool instance. Use this to see what sessions are\navailable, check their status, or find the session name you need for other operations.",
+   "properties": {
+    "type": {
+     "const": "listLocalSessions",
+     "description": "List all local sessions managed by this tool instance",
+     "title": "Type",
+     "type": "string"
+    }
+   },
+   "required": [
+    "type"
+   ],
+   "title": "ListLocalSessionsAction",
+   "type": "object"
+  },
+  "ReadFilesAction": {
+   "description": "Read the contents of one or more files from the sandbox file system. Use this to examine data files,\nconfiguration files, code files, or any other files that have been created or uploaded to the session.",
+   "properties": {
+    "type": {
+     "const": "readFiles",
+     "description": "Read files from the code interpreter",
+     "title": "Type",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, uses the default session.",
+     "title": "Session Name"
+    },
+    "paths": {
+     "description": "List of file paths to read",
+     "items": {
+      "type": "string"
+     },
+     "title": "Paths",
+     "type": "array"
+    }
+   },
+   "required": [
+    "type",
+    "paths"
+   ],
+   "title": "ReadFilesAction",
+   "type": "object"
+  },
+  "RemoveFilesAction": {
+   "description": "Delete one or more files from the sandbox file system. Use this to clean up temporary files, remove outdated\ndata, or manage storage space within the session. Be careful as this permanently removes files.",
+   "properties": {
+    "type": {
+     "const": "removeFiles",
+     "description": "Remove files from the code interpreter",
+     "title": "Type",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, uses the default session.",
+     "title": "Session Name"
+    },
+    "paths": {
+     "description": "Required list of file paths to remove",
+     "items": {
+      "type": "string"
+     },
+     "title": "Paths",
+     "type": "array"
+    }
+   },
+   "required": [
+    "type",
+    "paths"
+   ],
+   "title": "RemoveFilesAction",
+   "type": "object"
+  },
+  "WriteFilesAction": {
+   "description": "Create or update multiple files in the sandbox file system with specified content. Use this to save data,\ncreate configuration files, write code files, or store any text-based content that your code execution will need.",
+   "properties": {
+    "type": {
+     "const": "writeFiles",
+     "description": "Write files to the code interpreter",
+     "title": "Type",
+     "type": "string"
+    },
+    "session_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Session name. If not provided, uses the default session.",
+     "title": "Session Name"
+    },
+    "content": {
+     "description": "Required list of file content to write",
+     "items": {
+      "$ref": "#/$defs/FileContent"
+     },
+     "title": "Content",
+     "type": "array"
+    }
+   },
+   "required": [
+    "type",
+    "content"
+   ],
+   "title": "WriteFilesAction",
+   "type": "object"
+  }
+ },
+ "properties": {
+  "code_interpreter_input": {
+   "$ref": "#/$defs/CodeInterpreterInput",
+   "description": "Parameter code_interpreter_input"
+  }
+ },
+ "required": [
+  "code_interpreter_input"
+ ],
+ "type": "object"
+}

@@ -1,8 +1,9 @@
-import { KeyRound, ShieldCheck, Trash2, UserCheck, UserX } from "lucide-react";
+import { KeyRound, LockOpen, ShieldCheck, Trash2, UserCheck, UserX } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { AGENT_PERMISSIONS, api } from "../../../lib/api";
+import { hasFeature, useFeatures } from "../../../lib/capabilities";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { fmtTime } from "../../format";
 import { useLoad } from "../../hooks";
@@ -18,6 +19,8 @@ import { GrantChip, RoleTag, StateTag, ValidityCell } from "./tags";
  */
 export function UserDetail({ username }: { username: string }) {
   const { t } = useTranslation();
+  const { features } = useFeatures();
+  const policyOn = hasFeature(features, "policy");
   const [, setParams] = useSearchParams();
   const { workspaces } = useWorkspace();
   const loaded = useLoad(async () => {
@@ -83,6 +86,12 @@ export function UserDetail({ username }: { username: string }) {
                 {t(user.status === "active" ? "v2.users.action.disable" : "v2.users.action.enable")}
               </Button>
             )}
+            {user.locked_until ? (
+              <Button disabled={busy} onClick={() => actions.unlock(user)} testId="v2-users-detail-unlock">
+                <LockOpen size={14} aria-hidden="true" />
+                {t("v2.users.action.unlock")}
+              </Button>
+            ) : null}
             <Button disabled={busy} onClick={() => actions.ask("reset", user)} testId="v2-users-detail-reset">
               <KeyRound size={14} aria-hidden="true" />
               {t("v2.users.action.resetPassword")}
@@ -98,6 +107,11 @@ export function UserDetail({ username }: { username: string }) {
       {user.state === "pending" && <Alert tone="info">{t("v2.users.pendingAlert")}</Alert>}
       {user.state === "expired" && <Alert tone="warn">{t("v2.users.expiredAlert")}</Alert>}
       {user.state === "disabled" && <Alert tone="warn">{t("v2.users.disabledAlert")}</Alert>}
+      {user.locked_until && (
+        <Alert tone="warn">
+          {t("v2.users.lockedAlert", { time: fmtTime(user.locked_until), count: user.failed_logins })}
+        </Alert>
+      )}
 
       <Card title={t("v2.users.overview")} testId="v2-users-overview">
         <Descriptions
@@ -110,6 +124,7 @@ export function UserDetail({ username }: { username: string }) {
             { label: t("v2.users.col.created"), value: fmtTime(user.created_at) },
             { label: t("v2.users.col.lastLogin"), value: fmtTime(user.last_login_at) },
             { label: t("v2.users.field.logins"), value: user.login_count },
+            { label: t("v2.users.field.failedLogins"), value: user.failed_logins },
             { label: t("v2.users.field.createdBy"), value: user.created_by || "—" },
             { label: "ID", value: <span className="mono">{user.id}</span> },
           ]}
@@ -147,7 +162,9 @@ export function UserDetail({ username }: { username: string }) {
           <span className="v2-muted">{t("v2.users.allByRole")}</span>
         ) : (
           <div className="v2-users-chips">
-            {AGENT_PERMISSIONS.map((key) => {
+            {/* R15: "agents.convert" stays in AGENT_PERMISSIONS (stored member rows
+                may list it) but its UI label row is retired — flagged N8. */}
+            {AGENT_PERMISSIONS.filter((key) => key !== "agents.convert" && (key !== "policy.manage" || policyOn)).map((key) => {
               const granted = user.permissions?.[key] !== false;
               return (
                 <GrantChip

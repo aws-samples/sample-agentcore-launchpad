@@ -4,20 +4,19 @@
 Drives the Model-1 canary end-to-end at the SERVICE layer (no HTTP/backend
 process needed) on an existing active zip_runtime agent:
 
-  setup   → mint a candidate version + dedicated gateway + stable/treatment
-            named endpoints + qualifier targets + per-variant online-eval + a
-            90/10 target-based A/B test
-  route   → active_canary_route returns the live-gateway form
-  invoke  → invoke_agent_text routes real traffic through the canary gateway
+  setup   → mint a candidate version + stable/treatment named endpoints +
+            per-variant local online-eval configs + the local 90/10 A/B row
+  route   → routing.active_owner answers the canary with endpoint qualifiers
+  invoke  → invoke_agent_text sends real traffic with ``qualifier=stable…|treat…``
   rollback→ roll-forward: re-deploy the current spec so DEFAULT returns to
             v_current behavior (production never keeps the untested candidate)
-  cleanup → tear down the dedicated gateway + both endpoints + targets + eval
-            + A/B test (the agent keeps throwaway runtime versions — harmless)
+  cleanup → tear down both endpoints + the online-eval configs + assignments
+            (the agent keeps throwaway runtime versions — harmless)
 
-Validates the real AgentCore shapes that unit tests stub (named endpoints,
-qualifier targets, per-canary gateway, SigV4 gateway invoke, roll-forward).
-The chosen agent's DEFAULT is restored by rollback; only throwaway versions and
-the (deleted) dedicated resources are created.
+CN (N12 W-E3): no per-canary Gateway, targets or AgentCore A/B test exist in
+aws-cn; the split lives in Launchpad's invoke chain. Validates the real AgentCore
+shapes that unit tests stub (named endpoints — R-7 probe —, UpdateAgentRuntime
+versions, roll-forward). The chosen agent's DEFAULT is restored by rollback.
 
 Run:  cd backend && uv run python scripts/e2e_runtime_canary.py [agent-name]
 """
@@ -28,6 +27,7 @@ import time
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.optimization import canary_service as cs
+from app.optimization import routing
 from app.optimization.canary_routers import CandidateEdit, _resolve_edited_spec
 from app.optimization.models import RuntimeCanary
 from app.services.agentcore.client import control_client
@@ -110,37 +110,49 @@ def main() -> int:
     cleaned = False
     try:
         # ── setup ────────────────────────────────────────────────────────────
-        print("── setup (mint candidate + gateway + endpoints + A/B)…", flush=True)
+        print("── setup (mint candidate + endpoints + local A/B row)…", flush=True)
         setup = cs.act_setup(canary_id, log)
         for key in (
             "v_current", "v_candidate", "stable_endpoint", "treatment_endpoint",
-            "gateway_id", "gateway_url", "ab_test_id", "runtime_id",
+            "ab_test_id", "runtime_id",
         ):
             assert setup.get(key), f"setup artifact missing {key!r}: {setup}"
         assert setup["champion"]["target_name"] and setup["challenger"]["target_name"]
         assert setup["v_candidate"] != setup["v_current"], "candidate must be a new version"
         print(
             f"   v_current={setup['v_current']} v_candidate={setup['v_candidate']} "
-            f"gw={setup['gateway_id']} ab={setup['ab_test_id']}", flush=True)
+            f"ab={setup['ab_test_id']}", flush=True)
         print(
             f"   endpoints: stable={setup['stable_endpoint']} "
             f"treatment={setup['treatment_endpoint']} "
             f"targets: {setup['champion']['target_name']}/"
             f"{setup['challenger']['target_name']}", flush=True)
 
-        # ── route: live-gateway form ─────────────────────────────────────────
-        route = cs.active_canary_route(agent.id)
-        assert route and route.get("gateway_url") and route.get("control_target"), \
-            f"expected live-gateway route, got {route}"
-        print(f"── active_canary_route LIVE: control_target={route['control_target']}", flush=True)
+        # ── route: the canary owns the agent's traffic, arms = endpoints ─────
+        db = SessionLocal()
+        try:
+            owner = routing.active_owner(db, agent.id)
+        finally:
+            db.close()
+        assert owner and owner.kind == "canary" and owner.id == canary_id, owner
+        assert owner.arm("C").qualifier == setup["stable_endpoint"]
+        assert owner.arm("T1").qualifier == setup["treatment_endpoint"]
+        print(f"── routing.active_owner LIVE: weights={owner.weights}", flush=True)
 
-        # ── invoke: routed through the canary gateway (real SigV4) ───────────
-        print("── invoke via canary gateway…", flush=True)
+        # ── invoke: routed to a named endpoint by qualifier (R-7 probe) ──────
+        print("── invoke through the canary split…", flush=True)
         fresh = _get_agent(AGENT_NAME)
         result = invoke_agent_text(fresh, "Say hello in five words.")
         text = (result.get("text") or "").strip()
-        assert text, f"gateway-routed invoke returned no text: {result}"
-        print(f"   gateway invoke OK · {text[:120]!r}", flush=True)
+        assert text, f"routed invoke returned no text: {result}"
+        db = SessionLocal()
+        try:
+            arms = routing.assigned_sessions(db, canary_id)
+        finally:
+            db.close()
+        assert result["session_id"] in arms, "live session must be assigned an arm"
+        print(f"   routed invoke OK · arm={arms[result['session_id']]} · {text[:120]!r}",
+              flush=True)
 
         # ── rollback: roll-forward restores v_current on DEFAULT ─────────────
         print("── rollback (roll-forward)…", flush=True)
@@ -150,8 +162,12 @@ def main() -> int:
         print(f"   rolled back · restored_version={rb['restored_version']}", flush=True)
 
         # after rollback the canary is not running → invoke goes direct (DEFAULT
-        # = rolled-forward v_current behavior), no gateway route
-        assert cs.active_canary_route(agent.id) is None, "route should be gone after rollback"
+        # = rolled-forward v_current behavior), no routing owner
+        db = SessionLocal()
+        try:
+            assert routing.active_owner(db, agent.id) is None, "owner should be gone"
+        finally:
+            db.close()
         fresh = _get_agent(AGENT_NAME)
         post = invoke_agent_text(fresh, "Say hello in five words.")
         assert (post.get("text") or "").strip(), f"post-rollback invoke empty: {post}"
@@ -166,25 +182,15 @@ def main() -> int:
         skipped = [r for r in results if r.get("status") != "deleted"]
         assert not skipped, f"cleanup skipped: {[r['category'] for r in skipped]}"
 
-        # ── verify no leaks: dedicated gateway + named endpoints gone ────────
-        # DeleteGateway is accepted async; poll until it drops from the list.
+        # ── verify no leaks: both named endpoints gone ───────────────────────
         control = control_client(workspace)
-        gw_name = f"lp-canary-{canary_id}"
-        for _ in range(30):
-            gateways = control.list_gateways(maxResults=100).get("items", [])
-            if not any(g.get("name") == gw_name for g in gateways):
-                break
-            # Real-AWS cleanup polling is intentionally paced and attempt-bounded.
-            time.sleep(4)  # nosemgrep: arbitrary-sleep
-        else:
-            raise AssertionError("dedicated canary gateway still present after cleanup")
         eps = control.list_agent_runtime_endpoints(
             agentRuntimeId=setup["runtime_id"], maxResults=50
         ).get("runtimeEndpoints", [])
         ep_names = {e.get("name") for e in eps}
         assert setup["stable_endpoint"] not in ep_names, "stable endpoint leaked"
         assert setup["treatment_endpoint"] not in ep_names, "treatment endpoint leaked"
-        print("── no leaks: dedicated gateway + both named endpoints deleted", flush=True)
+        print("── no leaks: both named endpoints deleted", flush=True)
 
         if skipped:
             print(f"!! cleanup had {len(skipped)} non-deleted categories", flush=True)

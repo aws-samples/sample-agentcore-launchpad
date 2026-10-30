@@ -15,7 +15,6 @@ import app.routers.agents as agents_router
 import app.routers.public_api as public_api
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation.models import EvalDataset, EvalRun
 from app.main import create_app
 from app.models.ledger import (
     Agent,
@@ -23,11 +22,8 @@ from app.models.ledger import (
     ChatMessage,
     ChatSession,
     Job,
-    PolicyChange,
-    PolicyDecision,
     Workspace,
 )
-from app.optimization.models import Experiment, RuntimeCanary
 from app.routers.workspaces import WORKSPACE_HEADER
 from app.services import users as users_service
 
@@ -91,7 +87,9 @@ def _workspace(workspace_id: str = OTHER, region: str = "us-west-1", **columns) 
                 account_id="444455556666",
                 region=region,
                 bootstrap_status=columns.pop("bootstrap_status", "ready"),
-                resources=columns.pop("resources", {"gateway_id": "gw-2"}),
+                resources=columns.pop(
+                    "resources", {"gateway_id": "gw-2", "artifacts_bucket": "launchpad-other-art"},
+                ),
                 **columns,
             )
         )
@@ -99,24 +97,6 @@ def _workspace(workspace_id: str = OTHER, region: str = "us-west-1", **columns) 
     finally:
         db.close()
     return workspace_id
-
-
-def _eval_run(workspace_id: str, agent_name: str = "queue-owner") -> str:
-    db = SessionLocal()
-    try:
-        run = EvalRun(
-            workspace_id=workspace_id,
-            agent_id=_agent(workspace_id, name=f"{agent_name}-{workspace_id}"),
-            agent_name=agent_name,
-            mode="evaluators",
-            evaluators=[],
-            status="queued",
-        )
-        db.add(run)
-        db.commit()
-        return run.id
-    finally:
-        db.close()
 
 
 def _agent(workspace_id: str, name: str = "boundary-agent") -> str:
@@ -271,156 +251,6 @@ class TestForeignIdsAreInvisible:
         assert admin.get(f"/api/chat/{foreign_agent}/sessions").status_code == 404
         assert admin.get("/api/apikeys").json()["keys"] == []
 
-    def test_eval_experiment_and_canary_ids_are_404(self, admin):
-        """The Evaluation and Experiment surfaces are the second half of the sweep:
-        their rows are as workspace-owned as an agent's."""
-        _workspace()
-        foreign_agent = _agent(OTHER, name="eval-owner")
-        db = SessionLocal()
-        try:
-            run = EvalRun(
-                workspace_id=OTHER, agent_id=foreign_agent, agent_name="eval-owner",
-                mode="evaluators", evaluators=[], status="completed",
-            )
-            dataset = EvalDataset(
-                workspace_id=OTHER, name="foreign-ds", items=[{"prompt": "p"}],
-            )
-            experiment = Experiment(
-                workspace_id=OTHER, name="EXP-foreign", agent_id=foreign_agent,
-                agent_name="eval-owner", artifacts={},
-            )
-            canary = RuntimeCanary(
-                workspace_id=OTHER, name="CANARY-foreign",
-                champion_agent_id=foreign_agent, champion_agent_name="eval-owner",
-                challenger_agent_id=foreign_agent, challenger_agent_name="eval-owner",
-                artifacts={},
-            )
-            db.add_all([run, dataset, experiment, canary])
-            db.commit()
-            ids = (run.id, dataset.id, experiment.id, canary.id)
-        finally:
-            db.close()
-        run_id, dataset_id, exp_id, canary_id = ids
-
-        assert admin.get(f"/api/eval/runs/{run_id}").status_code == 404
-        assert admin.put(
-            f"/api/eval/datasets/{dataset_id}", json={"name": "renamed"}
-        ).status_code == 404
-        assert admin.delete(f"/api/eval/datasets/{dataset_id}").status_code == 404
-        assert admin.get(f"/api/experiments/{exp_id}").status_code == 404
-        assert admin.get(f"/api/runtime-canaries/{canary_id}").status_code == 404
-        # ...and the list surfaces do not mention them either
-        assert admin.get("/api/eval/runs").json()["runs"] == []
-        assert admin.get("/api/eval/datasets").json()["datasets"] == []
-        assert admin.get("/api/experiments").json()["experiments"] == []
-        assert admin.get("/api/runtime-canaries").json()["canaries"] == []
-
-    def test_the_eval_queue_names_only_this_workspaces_runs(self, admin, monkeypatch):
-        """One process serves every workspace, so the queue itself is global — its
-        depth and cap are honest numbers to report. The run ids are not: naming a
-        foreign run discloses that it exists."""
-        from app.evaluation import routers as eval_routers
-
-        _workspace()
-        mine = _eval_run(DEFAULT_WORKSPACE_ID)
-        foreign = _eval_run(OTHER)
-        monkeypatch.setattr(
-            eval_routers.run_queue,
-            "state",
-            lambda: {
-                "running": [foreign, mine],
-                "queued": [foreign],
-                "locked": True,
-                "max_concurrency": 3,
-            },
-        )
-
-        state = admin.get("/api/eval/queue").json()
-
-        assert state["running"] == [mine]
-        assert state["queued"] == []
-        # the capacity signal survives: it is what the console renders "QUEUED" from
-        assert (state["locked"], state["max_concurrency"]) == (True, 3)
-
-    def test_policy_decisions_are_per_workspace(self, admin):
-        _workspace()
-        db = SessionLocal()
-        try:
-            db.add(
-                PolicyDecision(
-                    workspace_id=OTHER, principal="demo@hr-analyst",
-                    tool="hr-database___list", outcome="DENY", reason="cedar said no",
-                )
-            )
-            db.commit()
-        finally:
-            db.close()
-
-        assert admin.get("/api/governance/decisions").json()["decisions"] == []
-        elsewhere = admin.get(
-            "/api/governance/decisions", headers={WORKSPACE_HEADER: OTHER}
-        ).json()["decisions"]
-        assert [row["tool"] for row in elsewhere] == ["hr-database___list"]
-
-    def test_a_policy_operation_and_its_audit_trail_stay_in_their_workspace(self, admin):
-        """Both take a caller-supplied id (operation id, gateway id) and answer from
-        the ledger alone — so the workspace predicate is the whole boundary. The
-        snapshots carry the other environment's gateway, engine and policy content."""
-        _workspace()
-        db = SessionLocal()
-        try:
-            change = PolicyChange(
-                workspace_id=OTHER,
-                gateway_id="gw-foreign",
-                gateway_arn="arn:aws:bedrock-agentcore:us-west-1:1:gateway/gw-foreign",
-                gateway_name="foreign-gw",
-                operation="engine_attach",
-                status="succeeded",
-                before={},
-                requested={"mode": "ENFORCE"},
-                operator="operator",
-            )
-            db.add(change)
-            db.commit()
-            operation_id = change.id
-        finally:
-            db.close()
-
-        assert admin.get(f"/api/governance/operations/{operation_id}").status_code == 404
-        assert admin.get(
-            "/api/governance/gateways/gw-foreign/audit"
-        ).json()["changes"] == []
-        # ...and visible from the workspace that owns it
-        with_header = {WORKSPACE_HEADER: OTHER}
-        assert admin.get(
-            f"/api/governance/operations/{operation_id}", headers=with_header
-        ).status_code == 200
-        owned = admin.get(
-            "/api/governance/gateways/gw-foreign/audit", headers=with_header
-        ).json()["changes"]
-        assert [row["id"] for row in owned] == [operation_id]
-
-    def test_memory_sessions_do_not_name_a_foreign_agent(self, admin, monkeypatch):
-        """The memory console joins AWS actor ids back to ledger rows; the join must
-        not reveal an agent from another environment."""
-        from app.services import memory_console as mc
-
-        _workspace()
-        foreign_agent = _agent(OTHER, name="foreign-memory-agent")
-        monkeypatch.setattr(
-            mc, "require_memory_id", lambda _ws: "launchpad_memory-x"
-        )
-        monkeypatch.setattr(
-            mc,
-            "data_client",
-            lambda _ws=None: _StubMemory(f"{foreign_agent}__river"),
-        )
-
-        items = admin.get("/api/memory/actors").json()["items"]
-
-        assert [row["agent_id"] for row in items] == [foreign_agent]
-        assert [row["agent_name"] for row in items] == [None]  # not resolved here
-
     def test_a_name_is_free_again_in_another_workspace(self, admin, monkeypatch):
         """Agent names are unique per workspace: each environment owns its own
         AgentCore resource namespace."""
@@ -429,7 +259,7 @@ class TestForeignIdsAreInvisible:
         _agent(DEFAULT_WORKSPACE_ID, name="shared-name")
         spec = {
             "name": "shared-name",
-            "method": "harness",
+            "method": "zip_runtime",
             "system_prompt": "Answer concisely.",
         }
 
@@ -605,13 +435,3 @@ class TestStamping:
             assert (deployment.workspace_id, job.workspace_id) == (OTHER, OTHER)
         finally:
             db.close()
-
-
-class _StubMemory:
-    """Just enough of the Memory data plane for the actor-listing join."""
-
-    def __init__(self, actor_id: str) -> None:
-        self._actor_id = actor_id
-
-    def list_actors(self, **_kwargs):
-        return {"actorSummaries": [{"actorId": self._actor_id}]}

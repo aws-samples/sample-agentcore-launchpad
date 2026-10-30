@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import type { OverviewInfo } from "../../../lib/api";
+import { useFeatures } from "../../../lib/capabilities";
+import { serviceDetailText } from "../../../lib/service-detail";
 import { Alert, Card, Spin } from "../../ui";
-import { SERVICES } from "./common";
+import { services } from "./common";
 
 /** 平台服务状态 — the classic Overview's service-health panel, one row per AgentCore service. */
 export function ServiceHealth({
@@ -19,6 +21,9 @@ export function ServiceHealth({
   activeAgents: number | null;
 }) {
   const { t } = useTranslation();
+  const { features } = useFeatures();
+  // a feature-gated row (policy) waits for the server's answer instead of flashing in
+  const rows = services().filter((s) => !s.feature || features?.has(s.feature) === true);
   return (
     <Card title={t("v2.home.health.title")} sub={t("v2.home.health.sub")} testId="v2-home-health">
       {/* never answered: every row would otherwise claim "not created yet" */}
@@ -33,9 +38,9 @@ export function ServiceHealth({
         <Spin />
       ) : (
         <ul className="v2-home-health">
-          {SERVICES.map(({ id, kind, to }) => {
+          {rows.map(({ id, kind, to }) => {
             const ready = id === "runtime" ? (activeAgents ?? 0) > 0 : Boolean(info.services[id]);
-            const detail = id === "runtime" ? "" : (info.service_detail[id] ?? "");
+            const detail = id === "runtime" ? "" : serviceDetailText(t, id, info.service_detail);
             const state = ready ? "ok" : kind === "usage" ? "idle" : "warn";
             const text =
               id === "runtime" && ready

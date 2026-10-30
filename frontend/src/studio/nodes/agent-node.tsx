@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { Bot, Settings, X } from 'lucide-react';
+import { catalogModelLabel } from '../lib/models';
 
 interface AgentNodeData {
   label?: string;
@@ -26,7 +27,8 @@ export function AgentNode({ data, selected, id }: NodeProps) {
   const {
     label = 'Agent',
     modelProvider = 'AWS Bedrock',
-    modelName = 'Claude 3.7 Sonnet',
+    modelId,
+    modelName = catalogModelLabel(modelId),
   } = nodeData;
 
   const handleDelete = (event: React.MouseEvent) => {

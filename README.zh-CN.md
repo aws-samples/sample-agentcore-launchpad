@@ -12,15 +12,12 @@ AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的**企业 Agent O
 Launchpad 由 React 控制台、FastAPI 后端和一套 CDK 共享基础设施组成，另带一个
 vendored Strands Studio 子应用。主要能力包括：
 
-- **四种创建方式，共用一条部署流水线。** 用户可以选择**方式B（Managed Harness）**，
-  通过模型、提示词、工具、技能和记忆创建 Harness，无需编写代码或构建产物；
-  选择**方式C（Strands Studio）**，在可视化画布中生成 Strands 代码；
-  选择**方式A（其他 Agent SDK）**，自带 Agent SDK（目前为 Claude Agent
-  SDK）并打包成 ARM64 容器镜像；也可以选择**自带代码（BYOC）**，上传自己编写的
-  Agent 代码 zip 或 Dockerfile 构建上下文，或引用本账户私有 ECR 中的现有镜像，
-  开发者无需任何 AWS 权限。
-  所有方式都进入同一条五阶段流水线，最终部署到 AgentCore Runtime
-  （方式A/C/BYOC）或托管 Harness 服务（方式B）。
+- **三种创建方式，共用一条部署流水线。** 用户可以选择**方式C（Strands Studio）**，
+  在可视化画布中生成 Strands 代码；选择**自带代码（BYOC）**，上传自己编写的
+  Agent 代码 zip、Dockerfile 构建上下文，或引用现有的私有 ECR 镜像，开发者无需
+  任何 AWS 权限；也可以选择自建的**方式B（Harness）**（筹备中——用一个自托管的
+  Strands 模板代替中国区不存在的 AgentCore Harness 服务）。所有方式都进入同一条
+  五阶段流水线，最终部署到 AgentCore Runtime。
 - **注册中心。** 通过 AgentCore Registry 登记和查找三类资产：Agent（A2A）、
   MCP 工具和 Skill，并支持提交、审批等生命周期操作。
 - **知识库。** 托管 Bedrock 知识库——全托管 RAG，向量库、嵌入与重排都由服务负责。
@@ -32,13 +29,6 @@ vendored Strands Studio 子应用。主要能力包括：
 - **Chat 交互页面和公开 `/v1` API。** 选中任意已激活的 Agent 即可对话，支持
   流式响应、多轮历史和 session 级记忆。外部系统可通过带 `X-Api-Key` 鉴权的
   `/v1` 接口调用同一条链路，因此 API 与控制台的行为一致。
-- **治理。** Cedar 策略在 AgentCore Gateway 上执行 Allow/Deny，并返回作出判定的
-  policy id。控制台还提供决策日志，以及从 CloudWatch Logs 的旧版共享
-  `aws/spans` 目标和按 Agent 统一日志组中读取的端到端 trace。
-- **评估与优化。** 直接调用 AgentCore 的 batch 和 online 评估服务，提供 13 个
-  内置评估器、自定义 LLM-as-a-judge 和失败归因（insights）。优化流程会生成
-  control/treatment **配置包（configuration bundles）**，通过网关运行 A/B 和
-  canary 流量，再决定是否晋级胜出版本。
 - **工作区（多账号 / 多区域）。** 一个控制台管理多套 AWS 环境：一个**工作区**
   对应一个 `(账号, 区域)` 组合，拥有独立的 AgentCore 资源集，由管理页里可恢复的
   十阶段引导作业直接创建——不需要 CDK，也不需要登录服务器。管理员可在顶栏自由
@@ -53,6 +43,11 @@ vendored Strands Studio 子应用。主要能力包括：
 
 ## 快速开始（约 10 分钟）
 
+**在其他账号部署中国区版本或复现实验，请先阅读
+[中国区交付部署指南](docs/cn/distribution.md)。** 该流程使用固定版本、
+独立环境配置，并安装策略引擎；[IT 服务台实验包](samples/itsm-cn/README.md)
+包含可参数化的初始化脚本和中国区学员手册。全新基础设施的准备时间通常超过下面的本地快速开始。
+
 > [!IMPORTANT]
 > **🤖 Coding Agent（Claude Code、Codex、Kiro、Cursor、Copilot 等）：请先阅读运维手册。**
 > 在启动、停止、更新或调试本平台之前，先加载
@@ -64,14 +59,16 @@ vendored Strands Studio 子应用。主要能力包括：
 
 ### 前置条件
 
-- AWS 账号已在 `us-west-2` 开启 Bedrock AgentCore 预览（Runtime、Harness、
-  Gateway、Policy、Evaluation）；Agent Registry 已 GA（自 2026-08-06 起使用
-  `agent-registry` 命名空间，见 [docs/registry-ga-migration.md](docs/registry-ga-migration.md)），
-  无需开启预览
-- 具备管理员级权限的凭证（`aws sts get-caller-identity` 可用）
-- `uv` ≥ 0.8、Node.js ≥ 20（`npm`）、AWS CDK CLI v2（`npm i -g aws-cdk`）
-- Docker，且支持 ARM64（仅方式A容器路径需要）
-- 每个账号/区域执行一次 CDK bootstrap：`cdk bootstrap aws://<account>/us-west-2`
+- 一个 `cn-northwest-1` 区域的 AWS 账号——AgentCore Runtime、Gateway、Identity
+  和 Observability 在该区域已正式可用，无需开启预览
+- 一个**Global**（海外）AWS 账号的 Amazon Bedrock API key，能访问
+  `global.zai.glm-5.3` 和/或 `global.moonshotai.kimi-k3`（中国区暂无 Bedrock
+  模型，CN Runtime 通过跨 partition 的方式访问它们——见
+  [docs/architecture.md](docs/architecture.md)）
+- `cn-northwest-1` 账号内具备管理员级权限的凭证（`aws sts get-caller-identity` 可用）
+- `uv` ≥ 0.8、Node.js ≥ 20（`npm`）、AWS CDK CLI v2（`npm i -g aws-cdk`）；只有
+  计划使用 BYOC 的 Dockerfile 路径时才需要 Docker
+- 每个账号/区域执行一次 CDK bootstrap：`cdk bootstrap aws://<account>/cn-northwest-1`
 
 ### 1. 安装依赖
 
@@ -89,8 +86,7 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 
 这个命令会在缺失时部署 CDK 栈 `launchpad-base`，创建或复用 AgentCore Registry、
 Memory 和 Gateway，并生成 `config/launchpad.yaml`。命令可以重复执行；已有资源只会
-显示为 `reused`。Policy 采用显式配置：bootstrap 不创建 Policy Engine 或 Policy，
-也不把 Engine 挂载到 Gateway；请在治理页面中按需完成这些操作。
+显示为 `reused`。
 
 ### 3. 本地运行
 
@@ -168,7 +164,7 @@ UI 和 API 服务都绑定到 `0.0.0.0`。**如果没有配置密码，登录网
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin                # 内置 admin(仅来自配置,不入库)
 export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # 仅在 HTTPS 前置(如 CloudFront/ALB)时开启
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # 仅在 HTTPS 前置(如 nginx/ALB)时开启
 ./start.py --prod
 ```
 
@@ -200,9 +196,10 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 修改 `LAUNCHPAD_AUTH_PASSWORD` 会使**所有**会话失效，因为 Cookie 签名密钥由该密码
 派生。公开 `/v1` 接口仍使用独立的 `X-Api-Key` 认证，不受控制台 Cookie 影响。
 
-实际部署所需的 systemd 单元、nginx origin-key 校验、CloudFront 配置与更新流程见
+实际部署所需的 systemd 单元、nginx 反向代理、基于 `AllowedCidr` 的安全组
+与更新流程见
 [docs/setup.zh-CN.md](docs/setup.zh-CN.md#生产部署) 与
-[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box)。
+[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md#3-shape-b--systemd-reference-infraec2launchpad-cn-ec2yaml)。
 
 ### 停止服务
 
@@ -220,12 +217,11 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 
 | 路径 | 内容 |
 |---|---|
-| `backend/` | FastAPI 后端：部署流水线、调用链、评估与优化、SQLite 台账 |
+| `backend/` | FastAPI 后端：部署流水线、调用链、SQLite 台账 |
 | `backend/app/routers/` | 控制台 `/api` + 公开 `/v1` 接口 |
-| `backend/app/deployer/` | 统一流水线 + 各方式的阶段实现（harness、zip_runtime、container、studio、byoc） |
-| `frontend/` | React 控制台（Vite）：Overview、Create Agent、Registry、Chat、Governance、Evaluation |
+| `backend/app/deployer/` | 统一流水线 + 各方式的阶段实现（zip_runtime、studio、byoc） |
+| `frontend/` | React 控制台（Vite，`/v2` 下的 V2 体验）：工作台、Agent、Registry、知识库、Chat、记忆、连接、Gateway、可观测、评估、Skill Lab、视频、系统管理 |
 | `infra/` | AWS CDK 应用：`launchpad-base` 共享栈 |
-| `apps/studio/` | vendored Strands Studio 子应用（方式C），已接入平台流水线 |
 | `start.py`、`stop.sh` | 后台本地服务生命周期、健康检查、PID 归属与日志 |
 | `scripts/` | `bootstrap.py`、`teardown.py`、`dev.sh`、`verify.sh`、`i18n_check.py`、`i18n_zh_punct.py` |
 | `config/` | `launchpad.example.yaml`（已提交）；`launchpad.yaml`（生成、gitignored） |
@@ -252,12 +248,12 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 通常不高，实际金额取决于各项能力的使用量：
 
 - **Runtime / Harness 调用**：每次调用都会产生模型 token 费用（默认模型为
-  `global.anthropic.claude-sonnet-5`，Sonnet 4.6 仍可按 Agent 选择），以及托管
-  runtime/session 的计算费用。
-- **容器构建（方式A）**：CodeBuild 按 ARM64 构建时长计费，每个 Agent 构建约 2 分钟。
-  方式B（Harness）无需构建，方式C 使用更快的 zip 路径。
-- **批量评估（batch evaluation）**：LLM-as-a-judge 的模型 token 用量会随
-  评估器数量和数据集条目数增加；insights 运行更重，耗时也更长。
+  `global.zai.glm-5.3`，`global.moonshotai.kimi-k3` 仍可按 Agent 选择），以及
+  托管 runtime/session 的计算费用。
+- **容器构建（BYOC）**：CodeBuild ARM64 构建分钟数，每次构建约 2 分钟（开启
+  镜像加速后，首次会额外产生一次 ECR 拉取/推送——见
+  [docs/cn/interfaces/deploy.md](docs/cn/interfaces/deploy.md)）；方式C 走更快的
+  zip 路径。
 - **CloudWatch Transaction Search**：可观测性开启期间会产生 trace/span 摄取与存储费用。
 - **存储**：每次构建都会增加 S3 zip 产物和 ECR 容器镜像；AgentCore Memory
   还会保存 session 事件和抽取出的偏好。

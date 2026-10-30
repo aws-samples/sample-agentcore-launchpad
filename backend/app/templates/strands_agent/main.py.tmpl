@@ -2,15 +2,16 @@
 
 Platform contracts baked into every generated agent:
 - **Config bundle (A/B experiments):** the system prompt and tool descriptions
-  are read from ``BedrockAgentCoreContext.get_config_bundle()`` at request time,
-  falling back to the defaults below when no bundle is routed.
+  are read from the request's bundle pointer (``launchpad.bundle=<id>:<v>`` in the
+  baggage / Custom header / payload — N12 CA-2) → the immutable S3 copy, falling
+  back to the defaults below when no bundle is routed.
 - **Observability (ADOT):** the runtime entrypoint launches this file through
   ``opentelemetry-instrument`` so traces land in CloudWatch automatically.
 - **Streaming (Chat contract):** the entrypoint is an async generator that
   yields ``delta`` / ``tool`` / ``complete`` events (plus ``heartbeat`` frames
-  during quiet periods) — the same envelope the Claude SDK container template
-  emits, so the platform shows a zip runtime's tokens and tool calls live,
-  exactly like a Managed Harness agent.
+  during quiet periods) — the same envelope every Launchpad runtime emits, so
+  the platform shows a zip runtime's tokens and tool calls live, exactly like
+  a Managed Harness agent.
 
 Template lineage: adapted from agentcore_eva_opt lab4 deploy pattern
 (github.com/xiehust/agentcore_eva_opt).
@@ -18,6 +19,7 @@ Template lineage: adapted from agentcore_eva_opt lab4 deploy pattern
 
 import ast
 import asyncio
+import logging
 import operator
 import os
 import time
@@ -28,74 +30,53 @@ from pathlib import Path
 from typing import Any
 
 import boto3
-from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
-from bedrock_agentcore.memory.integrations.strands.session_manager import (
-    AgentCoreMemorySessionManager,
-)
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
 from strands import Agent, tool
+from strands.models import BedrockModel
 
 LAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'
 
 __LAUNCHPAD_ATTACHMENT_SOURCE__
 
-# Shared AgentCore Memory (short-term events + long-term strategies), injected
-# by the platform at deploy time.
-MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
-
-
-def _memory_client():
-    return boto3.client("bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-west-2"))
-
-
-def recall_context(actor_id: str, query: str) -> str:
-    if not MEMORY_ID:
-        return ""
-    lines: list[str] = []
-    try:
-        client = _memory_client()
-        for namespace in (f"/preferences/{actor_id}", f"/facts/{actor_id}"):
-            records = client.retrieve_memory_records(
-                memoryId=MEMORY_ID,
-                namespace=namespace,
-                searchCriteria={"searchQuery": query[:900] or "user context", "topK": 3},
-            ).get("memoryRecordSummaries", [])
-            lines += [r.get("content", {}).get("text", "") for r in records]
-    except Exception:
-        return ""
-    return "\n".join(x for x in lines if x)
-
-
-# Message batching: buffer messages locally and persist them in one batch call
-# per turn instead of one create_event round-trip per message. With batching on,
-# the session manager flushes after every agent invocation (AfterInvocationEvent)
-# and again when `invoke`'s ExitStack closes it, so a request never ends with
-# unflushed messages. 100 is the SDK maximum.
-MEMORY_BATCH_SIZE = 100
-
-
-def memory_session_manager(
-    actor_id: str, session_id: str
-) -> AgentCoreMemorySessionManager | None:
-    if not MEMORY_ID:
-        return None
-    config = AgentCoreMemoryConfig(
-        memory_id=MEMORY_ID,
-        actor_id=actor_id,
-        session_id=session_id,
-        batch_size=MEMORY_BATCH_SIZE,
-    )
-    return AgentCoreMemorySessionManager(config, region_name=os.environ.get("AWS_REGION"))
-
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
+# <launchpad-model-constants>  # --- CN harness (N7) ---
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
-# Which hosting surface MODEL_ID belongs to: "bedrock" (Converse API) or
-# "mantle" (Bedrock Mantle, OpenAI-compatible Responses API).
-MODEL_SOURCE = "__LAUNCHPAD_MODEL_SOURCE__"
-# Mantle models are hosted in their own region, independent of where this
-# runtime runs (AWS_REGION is us-west-2 here, where they are not offered).
-MANTLE_REGION = os.environ.get("LAUNCHPAD_MANTLE_REGION", "us-east-1")
+# A Global Bedrock cross-region profile is entered from MODEL_REGION with the workspace's
+# Global Bedrock API key (spec C3/C4). The key lives in the AgentCore Identity API-key
+# credential provider MODEL_CREDENTIAL in THIS runtime's region; `_resolve_bedrock_api_key`
+# exchanges the Runtime-injected workload token for it once per process. An
+# OpenAI-compatible catalog model (N-R6) uses MODEL_PROVIDERS below instead of both.
+MODEL_REGION = os.environ.get("LAUNCHPAD_MODEL_REGION", "__LAUNCHPAD_MODEL_REGION__")
+MODEL_CREDENTIAL = os.environ.get("LAUNCHPAD_MODEL_CREDENTIAL", "__LAUNCHPAD_MODEL_CREDENTIAL__")
+# GLM 5.3 reasons before it answers; a ceiling under ~200 tokens is spent on reasoning
+# and the text block comes back empty — the platform never renders a value below 256.
+MODEL_MAX_TOKENS = __LAUNCHPAD_MODEL_MAX_TOKENS__
+# Converse `inferenceConfig` fields each catalog model accepts, inlined from the hub's one
+# capability table (schemas.agent.MODEL_CAPABILITIES) — N12-bug11: Kimi K3 rejects
+# `temperature` (ValidationException "This model doesn't support the temperature field"),
+# GLM 5.3 accepts it; `_launchpad_bedrock_model` drops what the model refuses.
+MODEL_INFERENCE_PARAMS: dict[str, dict[str, bool]] = __LAUNCHPAD_MODEL_INFERENCE_PARAMS__
+# N-R6: which provider serves each catalog model, inlined from the hub's one provider table
+# (schemas.agent.model_provider_table). A Bedrock row carries base_url None; an
+# OpenAI-compatible row (SiliconFlow …) names its endpoint, the model id the endpoint
+# receives and the Identity API-key credential provider holding its key. A model outside
+# the table is Bedrock (the historical path) — `_launchpad_chat_model` dispatches on this.
+MODEL_PROVIDERS: dict[str, dict[str, Any]] = __LAUNCHPAD_MODEL_PROVIDERS__
+# D21 (M1-d): the model-registry catalog version this runtime was rendered from (the journal
+# id the console compares with the current one to raise the Redeploy hint) and the resolved
+# DESCRIPTOR of MODEL_ID — the catalog row the hub published at deploy
+# (schemas.agent.model_descriptor: kind, base_url, api_model_name, credential_provider,
+# streaming, inference_params …). `LAUNCHPAD_MODEL_DESCRIPTOR` (JSON: one descriptor or a
+# list / {model_id: descriptor} map) overrides or extends it without a re-render.
+# `_model_provider` reads descriptors FIRST and falls back to the MODEL_PROVIDERS table.
+MODEL_CATALOG_VERSION = __LAUNCHPAD_MODEL_CATALOG_VERSION__
+MODEL_DESCRIPTOR: dict[str, Any] | None = __LAUNCHPAD_MODEL_DESCRIPTOR__
+MODEL_DESCRIPTOR_ENV = "LAUNCHPAD_MODEL_DESCRIPTOR"
+# botocore authenticates bedrock-runtime with a bearer token when this is set at client
+# creation (signing name "bedrock"); the api key is exported here, never written anywhere.
+BEDROCK_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK"
+# </launchpad-model-constants>
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__
 SKILLS_ROOT = Path(__file__).parent / "skills"
@@ -104,14 +85,118 @@ DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "current_utc_time": "Return the current UTC date and time in ISO-8601 format.",
     **__LAUNCHPAD_KB_TOOL_DESCRIPTIONS__,
     **__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__,
+    **__LAUNCHPAD_A2A_TOOL_DESCRIPTIONS__,
     **__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__,
 }
 
 
-def _config_bundle() -> dict[str, Any]:
-    """Active config bundle for this request, or {} when none is routed."""
+# <launchpad-bundle-reader:v2>
+# N12 CA-2: the pointer `launchpad.bundle=<bundle_id>:<version>` of this request → the
+# immutable S3 copy `bundles/<agent_id>/<bundle_id>/v<version>.json` → components.configuration
+import json as _lp_json
+import logging as _lp_logging
+import os as _lp_os
+import urllib.parse as _lp_url
+from contextvars import ContextVar as _LPContextVar
+
+import boto3 as _lp_boto3
+from bedrock_agentcore.runtime.context import BedrockAgentCoreContext as _LPBundleContext
+
+LAUNCHPAD_BUNDLE_HEADER = "x-amzn-bedrock-agentcore-runtime-custom-launchpad-bundle"
+LAUNCHPAD_BUNDLE_BAGGAGE_KEY = "launchpad.bundle"
+_launchpad_bundle_ref_var = _LPContextVar("launchpad_bundle_ref", default=None)
+_launchpad_bundle_cache = {}
+_launchpad_bundle_logger = _lp_logging.getLogger("launchpad.bundle")
+_launchpad_bundle_logger.setLevel(_lp_logging.INFO)
+
+
+def _launchpad_bundle_log(level, message):
+    """One line per fetch outcome (N12-obs37). The line names key / version / byte size /
+    exception class only — never the bundle body. A stderr handler of our own is attached
+    only when the host configured no logging at all (Python's last-resort handler drops INFO)."""
+    if not _launchpad_bundle_logger.hasHandlers():
+        handler = _lp_logging.StreamHandler()
+        handler.setFormatter(_lp_logging.Formatter("%(levelname)s %(message)s"))
+        _launchpad_bundle_logger.addHandler(handler)
+    _launchpad_bundle_logger.log(level, message)
+
+
+def _launchpad_capture_bundle_ref(payload):
+    """Channel 3 (payload alias): call once at the entrypoint with the request payload."""
+    ref = None
+    if isinstance(payload, dict) and isinstance(payload.get("launchpad"), dict):
+        ref = payload["launchpad"].get("bundle")
+    _launchpad_bundle_ref_var.set(str(ref).strip() if ref else None)
+
+
+def _launchpad_bundle_ref():
+    """The bundle pointer of this request: payload alias → Custom header → baggage."""
+    ref = _launchpad_bundle_ref_var.get()
+    if ref:
+        return ref
     try:
-        return BedrockAgentCoreContext.get_config_bundle() or {}
+        headers = _LPBundleContext.get_request_headers() or {}
+    except Exception:
+        headers = {}
+    for key, value in headers.items():
+        if str(key).lower() == LAUNCHPAD_BUNDLE_HEADER and value:
+            return str(value).strip()
+    for key, value in headers.items():
+        if str(key).lower() != "baggage" or not value:
+            continue
+        for entry in str(value).split(","):
+            name, _, raw = entry.strip().partition("=")
+            if name.strip() == LAUNCHPAD_BUNDLE_BAGGAGE_KEY:
+                return _lp_url.unquote(raw.split(";", 1)[0].strip())
+    return None
+
+
+def _launchpad_fetch_bundle(ref):
+    """`components.configuration` of the pointed bundle version, cached per ref.
+
+    Fail-soft (a failure means the production prompt, as before) but never silent: one INFO
+    line per fetch, one WARNING per failure, one WARNING when the reader cannot run at all.
+    """
+    cached = _launchpad_bundle_cache.get(ref)
+    if cached is not None:
+        return cached
+    bundle_id, _, version = str(ref).rpartition(":")
+    agent_id = _lp_os.environ.get("LAUNCHPAD_AGENT_ID", "")
+    if not agent_id:
+        _launchpad_bundle_log(
+            _lp_logging.WARNING,
+            "launchpad.bundle: bundle reader disabled: LAUNCHPAD_AGENT_ID not set (ref=%s)" % ref,
+        )
+        return {}
+    key = "bundles/%s/%s/v%s.json" % (agent_id, bundle_id, version)
+    try:
+        body = _lp_boto3.session.Session().client("s3").get_object(
+            Bucket=_lp_os.environ.get("LAUNCHPAD_BUNDLE_BUCKET", ""), Key=key
+        )["Body"].read()
+        components = (_lp_json.loads(body) or {}).get("components") or {}
+        configuration = dict(components.get("configuration") or {})
+    except Exception as exc:  # NoSuchKey / AccessDenied / timeout / bad JSON — all fail-soft
+        detail = " ".join(str(exc).split())[:200]
+        _launchpad_bundle_log(
+            _lp_logging.WARNING,
+            "launchpad.bundle: fetch failed key=%s error=%s: %s"
+            % (key, type(exc).__name__, detail),
+        )
+        return {}
+    _launchpad_bundle_log(
+        _lp_logging.INFO,
+        "launchpad.bundle: fetched key=%s bytes=%d version=%s" % (key, len(body), version),
+    )
+    _launchpad_bundle_cache[ref] = configuration
+    return configuration
+# </launchpad-bundle-reader:v2>
+
+
+def _config_bundle() -> dict[str, Any]:
+    """Active config bundle for this request, or {} when none is routed (CA-2 pointer)."""
+    try:
+        ref = _launchpad_bundle_ref()
+        return _launchpad_fetch_bundle(ref) if ref else {}
     except Exception:
         return {}
 
@@ -168,16 +253,20 @@ def current_utc_time() -> str:
     return datetime.now(UTC).isoformat()
 
 
-__LAUNCHPAD_DIRECT_KB_SOURCE__
-
-
 __LAUNCHPAD_TOOLKIT_SOURCE__
 
 
 __LAUNCHPAD_GATEWAY_SOURCE__
 
+__LAUNCHPAD_PRINCIPAL_SOURCE__
 
 __LAUNCHPAD_IDENTITY_SOURCE__
+
+# --- CN A2A consumer (N11 r3-C, N10v2-bug5) ---
+# One `ask_<agent>` tool per mounted APPROVED A2A record, calling the peer Runtime through
+# InvokeAgentRuntime with this runtime's role; renders as an inert stub when none is mounted.
+__LAUNCHPAD_A2A_SOURCE__
+# --- end CN A2A consumer ---
 
 # Per-request Gateway MCP tool loader. Rendered as the real loader only when this
 # spec carries a `gateway` ToolRef; otherwise a no-op, so an agent without one
@@ -200,27 +289,300 @@ IDENTITY_AUTH_NOTICES = __LAUNCHPAD_IDENTITY_NOTICES_FN__
 TOOLKIT_TOOLS = __LAUNCHPAD_TOOLKIT_TOOLS__
 
 
-def build_model() -> Any:
-    """Model to hand to ``Agent(model=...)``.
+# <launchpad-model-helpers>  # --- CN harness (N7) ---
+try:  # strands-agents[openai] — every platform-rendered requirements set carries it (N-R6)
+    from strands.models.openai import OpenAIModel
+except ImportError:  # pragma: no cover - a hand-written requirements set without the extra
+    OpenAIModel = None  # type: ignore[assignment,misc]
+# N17-obs302: the tool input-schema normalizer (app/templates/tool_schema.py, inlined) —
+# `_launchpad_chat_model` wraps every model it builds with it.
+__LAUNCHPAD_TOOL_SCHEMA_SOURCE__
 
-    Bedrock Converse accepts a bare model id string. Bedrock Mantle needs an
-    explicit model object: ``bedrock_mantle_config`` makes the Strands SDK mint a
-    short-lived bearer token from this runtime's execution role on every request,
-    so there is no API key to provision, and the SDK derives the endpoint itself.
+_BEDROCK_API_KEY: dict[str, str] = {}
+# N-R6: keys of the OTHER providers (OpenAI-compatible endpoints), per credential provider.
+_PROVIDER_API_KEYS: dict[str, str] = {}
+# The Runtime-injected workload token, captured ON THE REQUEST PATH into a process slot:
+# the A2A server's middleware copies it off the request header, the evaluation worker
+# copies it out of the SDK's per-request context before it spawns the job thread
+# (`_capture_workload_token`). Threads that never see that context — strands-evals' /
+# asyncio's own pools, the A2A executor — read this slot. The HTTP runtime and the
+# Harness never write it and read the context directly.
+_WORKLOAD_TOKEN: dict[str, str] = {}
+# N12-bug8 / N10v3-bug5 (live correction): a RUNTIME-LINKED workload identity cannot mint
+# its own token — Identity answers ValidationException "WorkloadIdentity is linked to a
+# service and cannot retrieve an access token by the caller". Self-mint on
+# LAUNCHPAD_WORKLOAD_NAME is therefore a last resort tried ONCE per process; after that
+# refusal the branch is disabled and a token-less request fails fast with the real cause
+# instead of hammering Identity from every judge / tool call.
+_SELF_MINT: dict[str, str] = {}
+_SELF_MINT_REFUSAL = "cannot retrieve an access token"
 
-    The ``OpenAIResponsesModel`` import is function-local on purpose. That module
-    reads the ``openai`` package version at import time, so importing it at module
-    scope would make a bedrock-source agent — which never installs the ``openai``
-    extra — fail to start.
-    """
-    if MODEL_SOURCE == "mantle":
-        from strands.models.openai_responses import OpenAIResponsesModel
 
-        return _launchpad_mantle_model_class(OpenAIResponsesModel)(
-            bedrock_mantle_config={"region": MANTLE_REGION},
-            model_id=MODEL_ID,
+def _identity_client():
+    from bedrock_agentcore.services.identity import IdentityClient
+
+    return IdentityClient(os.environ.get("AWS_REGION", "cn-northwest-1"))
+
+
+def _capture_workload_token() -> str | None:
+    """Request-path hook: copy the Runtime-injected token (the invoke carried runtimeUserId)
+    out of the SDK's per-request context into the process slot, so a thread without that
+    context still finds it. Returns the token now known to the process, if any."""
+    try:
+        injected = BedrockAgentCoreContext.get_workload_access_token()
+    except Exception:
+        injected = None
+    if injected:
+        _WORKLOAD_TOKEN["value"] = injected
+    return _WORKLOAD_TOKEN.get("value") or None
+
+
+def _self_mint_workload_token(workload: str) -> str | None:
+    """Last resort: GetWorkloadAccessToken for this runtime's own identity. Works only for
+    an identity NOT linked to the Runtime; the linked-identity refusal disables the branch
+    for the rest of the process (no retry storm) and returns None."""
+    if _SELF_MINT.get("disabled"):
+        return None
+    try:
+        return _identity_client().get_workload_access_token(workload)["workloadAccessToken"]
+    except Exception as exc:
+        code = str((getattr(exc, "response", None) or {}).get("Error", {}).get("Code", ""))
+        if "linked to a service" in str(exc) or (
+            code == "ValidationException" and _SELF_MINT_REFUSAL in str(exc)
+        ):
+            _SELF_MINT["disabled"] = "linked"
+            return None
+        raise
+
+
+def _workload_access_token() -> str | None:
+    """Captured token first (the request path wrote the freshest one), then the
+    Runtime-injected token straight from the SDK context; self-mint on
+    LAUNCHPAD_WORKLOAD_NAME only as a last resort (see `_self_mint_workload_token`)."""
+    captured = _WORKLOAD_TOKEN.get("value")
+    if captured:
+        return captured
+    try:
+        injected = BedrockAgentCoreContext.get_workload_access_token()
+    except Exception:
+        injected = None
+    if injected:
+        return injected
+    workload = os.environ.get("LAUNCHPAD_WORKLOAD_NAME", "")
+    if not workload:
+        return None
+    return _self_mint_workload_token(workload)
+
+
+def _no_workload_token_error() -> RuntimeError:
+    if _SELF_MINT.get("disabled"):
+        return RuntimeError(
+            "no workload access token: this runtime's workload identity is linked to the "
+            "AgentCore Runtime and cannot self-mint one (Identity refused "
+            "GetWorkloadAccessToken for LAUNCHPAD_WORKLOAD_NAME) — the caller must send "
+            "runtimeUserId so the Runtime injects the token into the request"
         )
-    return MODEL_ID
+    return RuntimeError(
+        "no workload access token: the invoke must carry runtimeUserId (the platform "
+        "always sends it) — a runtime-linked workload identity cannot self-mint one, so "
+        "LAUNCHPAD_WORKLOAD_NAME is only a last resort for an unlinked identity"
+    )
+
+
+def _resolve_bedrock_api_key() -> str:
+    """The Global Bedrock API key from MODEL_CREDENTIAL, fetched once per process.
+
+    Raises instead of returning "" — a model call without the key would fail with an
+    opaque signing error against the Global endpoint. Resolve it on the REQUEST thread
+    (`_prefetch_bedrock_api_key`) when later work runs on threads of its own.
+    """
+    cached = _BEDROCK_API_KEY.get("key")
+    if cached:
+        return cached
+    token = _workload_access_token()
+    if not token:
+        raise _no_workload_token_error()
+    response = _identity_client().dp_client.get_resource_api_key(
+        workloadIdentityToken=token, resourceCredentialProviderName=MODEL_CREDENTIAL
+    )
+    key = str(response.get("apiKey") or "")
+    if not key:
+        raise RuntimeError(f"GetResourceApiKey({MODEL_CREDENTIAL}) returned no apiKey")
+    _BEDROCK_API_KEY["key"] = key
+    return key
+
+
+def _resolve_api_key(credential_provider: str) -> str:
+    """N-R6: any provider's API key from the Identity API-key provider `credential_provider`,
+    fetched once per process through the same workload-token exchange as the Bedrock key
+    (which keeps its own slot above). Never exported to the environment — an
+    OpenAI-compatible model takes it as a client argument."""
+    if credential_provider == MODEL_CREDENTIAL:
+        return _resolve_bedrock_api_key()
+    cached = _PROVIDER_API_KEYS.get(credential_provider)
+    if cached:
+        return cached
+    token = _workload_access_token()
+    if not token:
+        raise _no_workload_token_error()
+    response = _identity_client().dp_client.get_resource_api_key(
+        workloadIdentityToken=token, resourceCredentialProviderName=credential_provider
+    )
+    key = str(response.get("apiKey") or "")
+    if not key:
+        raise RuntimeError(f"GetResourceApiKey({credential_provider}) returned no apiKey")
+    _PROVIDER_API_KEYS[credential_provider] = key
+    return key
+
+
+# D21 (M1-d): resolved model descriptors by model id — the rendered one for MODEL_ID, any the
+# environment carries (MODEL_DESCRIPTOR_ENV) and, in the evaluation worker, the ones each job
+# payload brings (`models`). Read before the inlined MODEL_PROVIDERS / MODEL_INFERENCE_PARAMS
+# tables, so a catalog edit reaches a worker through its job and a runtime through its env
+# without a re-render; the tables stay the fallback for every other id.
+MODEL_DESCRIPTORS: dict[str, dict[str, Any]] = {}
+
+
+def _launchpad_register_descriptors(descriptors: Any) -> int:
+    """Register one descriptor, a list of them or a ``{model_id: descriptor}`` map; for the
+    same model id a strictly newer ``catalog_version`` wins, an equal one replaces (so an
+    operator override beats the rendered row). Returns how many were kept."""
+    if not descriptors:
+        return 0
+    if isinstance(descriptors, dict) and "model_id" in descriptors:
+        items: list[Any] = [descriptors]
+    elif isinstance(descriptors, dict):
+        items = list(descriptors.values())
+    else:
+        items = list(descriptors)
+    kept = 0
+    for item in items:
+        if not isinstance(item, dict) or not item.get("model_id"):
+            continue
+        model_id = str(item["model_id"])
+        current = MODEL_DESCRIPTORS.get(model_id)
+        if current is not None and int(current.get("catalog_version") or 0) > int(
+            item.get("catalog_version") or 0
+        ):
+            continue
+        MODEL_DESCRIPTORS[model_id] = dict(item)
+        kept += 1
+    return kept
+
+
+def _launchpad_env_descriptors() -> Any:
+    """The MODEL_DESCRIPTOR_ENV JSON (one descriptor / a list / a map), or None when unset;
+    a malformed value is a loud error at import, never a silent fallback."""
+    import json
+
+    raw = os.environ.get(MODEL_DESCRIPTOR_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{MODEL_DESCRIPTOR_ENV} is not valid JSON: {exc}") from exc
+
+
+_launchpad_register_descriptors(MODEL_DESCRIPTOR)
+_launchpad_register_descriptors(_launchpad_env_descriptors())
+
+
+def _model_provider(model_id: str) -> dict[str, Any]:
+    """The provider row for `model_id`: its registered descriptor (D21) first, else the
+    MODEL_PROVIDERS row; a model outside both is Bedrock (the historical path)."""
+    descriptor = MODEL_DESCRIPTORS.get(model_id)
+    if descriptor is not None:
+        return descriptor
+    return MODEL_PROVIDERS.get(model_id) or {
+        "kind": "bedrock", "base_url": None, "api_model_name": model_id,
+        "credential_provider": MODEL_CREDENTIAL, "streaming": True,
+    }
+
+
+def _resolve_model_api_key(model_id: str | None = None) -> str:
+    """The key THIS runtime's model (or `model_id`) needs — Bedrock's or its provider's."""
+    return _resolve_api_key(str(_model_provider(model_id or MODEL_ID)["credential_provider"]))
+
+
+def _prefetch_bedrock_api_key() -> str:
+    """Request-thread hook (N12-bug8): capture the injected token, then resolve and cache
+    the key MODEL_ID needs so threads that never see the request context — judge pools, the
+    A2A executor — find both without touching Identity. (Name kept from the Bedrock-only
+    days; it resolves whichever provider's key the runtime's model is served by.)"""
+    _capture_workload_token()
+    return _resolve_model_api_key()
+
+
+def _supported_model_config(config: dict[str, Any]) -> dict[str, Any]:
+    """``config`` without the inference parameters this model rejects (N12-bug11): its
+    registered descriptor's `inference_params` (D21) first, else the MODEL_INFERENCE_PARAMS
+    table; a model outside both keeps every field."""
+    model_id = str(config.get("model_id") or "")
+    accepts: Any = (MODEL_DESCRIPTORS.get(model_id) or {}).get("inference_params")
+    if not isinstance(accepts, dict):
+        accepts = MODEL_INFERENCE_PARAMS.get(model_id, {})
+    return {key: value for key, value in config.items() if accepts.get(key, True)}
+
+
+def _launchpad_bedrock_model(*, api_key: str, **config: Any) -> Any:
+    """``BedrockModel(api_key=…)`` for Strands 1.47, which has no api_key kwarg: botocore
+    reads the bearer from the environment when the bedrock-runtime client is created,
+    so export it first, then construct — minus the fields the model rejects."""
+    os.environ[BEDROCK_BEARER_ENV] = api_key
+    return BedrockModel(**_supported_model_config(config))
+
+
+def _launchpad_openai_model(*, api_key: str, base_url: str, model_id: str,
+                            api_model_name: str, streaming: bool = True, **config: Any) -> Any:
+    """``OpenAIModel`` on an OpenAI-compatible endpoint (N-R6: SiliconFlow …). The key is a
+    client argument only — never written to the environment or disk; `config` (max_tokens,
+    temperature …) becomes the chat-completions body minus the fields MODEL_INFERENCE_PARAMS
+    says this model rejects, exactly like the Bedrock path."""
+    if OpenAIModel is None:
+        raise RuntimeError(
+            "strands-agents[openai] is not installed in this runtime — the platform "
+            "requirements carry the extra; redeploy the agent"
+        )
+    params = _supported_model_config({"model_id": model_id, **config})
+    params.pop("model_id", None)
+    return OpenAIModel(
+        client_args={"base_url": base_url, "api_key": api_key},
+        model_id=api_model_name,
+        params=params,
+        stream=streaming,
+    )
+
+
+def _launchpad_chat_model(*, model_id: str, **config: Any) -> Any:
+    """The one dispatch every runtime model goes through (N-R6): the catalog's provider row
+    decides between the Global Bedrock profile (bearer from MODEL_CREDENTIAL) and an
+    OpenAI-compatible endpoint (its own Identity credential provider). Either way the
+    model normalizes every tool spec it is handed (N17-obs302)."""
+    provider = _model_provider(model_id)
+    if provider["kind"] == "openai_compatible":
+        model = _launchpad_openai_model(
+            api_key=_resolve_api_key(str(provider["credential_provider"])),
+            base_url=str(provider["base_url"]),
+            model_id=model_id,
+            api_model_name=str(provider["api_model_name"]),
+            streaming=bool(provider.get("streaming", True)),
+            **config,
+        )
+    else:
+        model = _launchpad_bedrock_model(
+            api_key=_resolve_bedrock_api_key(),
+            model_id=model_id,
+            region_name=MODEL_REGION,
+            **config,
+        )
+    return launchpad_normalize_model_tool_schemas(model)
+
+
+def build_model() -> Any:
+    """Model to hand to ``Agent(model=...)`` — MODEL_ID on its provider with the key."""
+    return _launchpad_chat_model(model_id=MODEL_ID, max_tokens=MODEL_MAX_TOKENS)
+# </launchpad-model-helpers>
 
 
 def skill_plugins() -> list:
@@ -237,15 +599,29 @@ def skill_plugins() -> list:
     return [AgentSkills(skills=str(SKILLS_ROOT))]
 
 
+# --- CN memory/KB (N6) ---
+# The self-hosted memory library (S3 session snapshots · SQS extraction · OpenSearch
+# recall) and the direct KB tools that reuse its OpenSearch/Titan clients. Both are
+# env-driven and no-ops when the workspace has no substrate; the library needs the
+# model block above (_resolve_bedrock_api_key / MODEL_REGION / BEDROCK_BEARER_ENV).
+__LAUNCHPAD_MEMORY_SOURCE__
+
+
+__LAUNCHPAD_DIRECT_KB_SOURCE__
+# --- end CN memory/KB (N6) ---
+
+
 def build_agent(
     actor_id: str,
     session_id: str,
     extra_tools: list | None = None,
-    session_manager: AgentCoreMemorySessionManager | None = None,
+    session_manager: Any | None = None,
 ) -> Agent:
     tools = list(TOOLKIT_TOOLS) or [calculator, current_utc_time]
     if MOUNTED_KBS:
         tools += [kb_search, kb_deep_search]
+    # mounted A2A agents (empty list when none) — N11 r3-C
+    tools += list(A2A_TOOLS)
     # Gateway MCP tools, discovered per request — they only exist while the MCP
     # session the caller opened is alive, so they arrive as an argument rather
     # than from a module global.
@@ -271,16 +647,24 @@ def build_agent(
         "tools": tools,
     }
     if session_manager is None:
-        session_manager = memory_session_manager(actor_id, session_id)
+        session_manager = make_session_manager(actor_id, session_id)
     if session_manager is not None:
         kwargs["session_manager"] = session_manager
     plugins = skill_plugins()
     if plugins:
         kwargs["plugins"] = plugins
+    # --- CN memory/KB (N6) ---
+    # one turn → one snapshot event + one extraction message (no-op without a store)
+    hooks = make_memory_hooks(actor_id, session_id)
+    if hooks:
+        kwargs["hooks"] = hooks
+    # --- end CN memory/KB (N6) ---
+    __LAUNCHPAD_PRINCIPAL_EXECUTOR__
     return Agent(**kwargs)
 
 
 app = BedrockAgentCoreApp()
+_launchpad_log = logging.getLogger("launchpad.runtime")
 
 # Keep this frame larger than the backend's 32-byte SSE read chunk, and the
 # interval shorter than any idle timeout between the Runtime and the console.
@@ -335,6 +719,181 @@ async def _events_with_heartbeat(
             await close()
 
 
+# <launchpad-max-tokens:v1>  # --- CN N-SCN-bug4 ---
+# Strands raises MaxTokensReachedException (unwrapped) when one completion stops on
+# `max_tokens`; the partial assistant message is already in the agent's history, so the
+# documented recovery is to call the agent again. Without this the AgentCore SDK turns the
+# exception into a terminal `{"error": ...}` frame and the console loses the turn. The
+# already-streamed partial text stays; a `truncated` marker separates it from the
+# continuation; a turn that still cannot finish ends with a visible notice, a normal
+# `complete` carrying `truncated: true` and the marker - never an error. Bounded by
+# LAUNCHPAD_MAX_TOKENS_CONTINUATIONS (default 1; 0 = notice only, never continue).
+# Same semantics as the Harness template (harness_runtime/main.py.tmpl).
+LAUNCHPAD_MAX_TOKENS_CONTINUATION_PROMPT = (
+    "Your previous answer was cut off at the token limit. "
+    "Finish it concisely - final answer only."
+)
+LAUNCHPAD_MAX_TOKENS_NOTICE = "[response truncated at the model's token limit]"
+
+
+def _launchpad_max_tokens_continuations() -> int:
+    raw = os.environ.get("LAUNCHPAD_MAX_TOKENS_CONTINUATIONS", "1")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1
+
+
+def _launchpad_is_max_tokens(exc: BaseException) -> bool:
+    """Matched by class name: the exception lives in strands.types.exceptions today and
+    the SDK is a moving preview target, so no import is required to recognise it."""
+    return any(klass.__name__ == "MaxTokensReachedException" for klass in type(exc).__mro__)
+
+
+def _launchpad_output_tokens(event: dict[str, Any]) -> int | None:
+    raw = event.get("event")
+    if not isinstance(raw, dict):
+        return None
+    usage = raw.get("metadata", {}).get("usage", {})
+    tokens = usage.get("outputTokens") if isinstance(usage, dict) else None
+    return tokens if isinstance(tokens, int) else None
+
+
+def _launchpad_continuation_max_tokens() -> int:
+    """N-SCN-bug4 (5): the lower output cap a continuation call uses; 0 = the model's own."""
+    raw = os.environ.get("LAUNCHPAD_CONTINUATION_MAX_TOKENS", "0")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _launchpad_cap_max_tokens(agent: Any, cap: int) -> Any:
+    """Lower the agent model's max_tokens to `cap` for one continuation; returns the
+    callable that restores the previous value. Works on both Strands model families:
+    BedrockModel keeps `max_tokens` at the top of its config, OpenAIModel inside `params`.
+    Any other model is left untouched. Same helper as the Harness template."""
+    model = getattr(agent, "model", None)
+    get_config = getattr(model, "get_config", None)
+    update_config = getattr(model, "update_config", None)
+    if cap <= 0 or get_config is None or update_config is None:
+        return lambda: None
+    try:
+        config = dict(get_config() or {})
+        if isinstance(config.get("params"), dict):
+            before = dict(config["params"])
+            update_config(params={**before, "max_tokens": cap})
+            return lambda: update_config(params=before)
+        before_cap = config.get("max_tokens")
+        update_config(max_tokens=cap)
+        return lambda: update_config(max_tokens=before_cap)
+    except Exception as exc:  # a model that refuses the update keeps its own cap
+        _launchpad_log.warning("continuation cap not applied: %s: %s", type(exc).__name__, exc)
+        return lambda: None
+# </launchpad-max-tokens:v1>
+
+
+# <launchpad-tool-summaries:v1>  # --- CN N16-obs85 ---
+# Bounded tool-call summaries for the console. Strands yields one `message` event when the
+# assistant message (its `toolUse` blocks carry the complete arguments) and the tool-result
+# message (`toolResult` blocks) join the conversation; each block becomes one additive
+# `tool_input` / `tool_result` frame. Every field is cut at a fixed size - never a tool's
+# full output, never a page's text (the browser builtin's result is reduced to its title,
+# final URL and text length). A hub that does not know these frames ignores them.
+import json as _launchpad_json
+import re as _launchpad_re
+
+LAUNCHPAD_TOOL_INPUT_CHARS = 512
+LAUNCHPAD_TOOL_RESULT_CHARS = 256
+# C4 (rev-r16): a `<name>=<value>` / `<name>: <value>` pair whose name smells like a credential
+# is reduced to `<name>=[redacted]` before anything is cut; the native shell / file tools get
+# NO result summary at all (their output is arbitrary host text) - status only.
+_LAUNCHPAD_SECRET_RE = _launchpad_re.compile(
+    r"\b(\w*(?:token|secret|password|bearer|credential|authorization)\w*|\w*key)\b"
+    r"[\"']?\s*[=:]\s*(?:[\"'][^\"']*[\"']|\S+)"
+    r"|\b(bearer)\s+\S+",
+    _launchpad_re.IGNORECASE,
+)
+LAUNCHPAD_UNSUMMARISED_TOOLS = frozenset({"shell", "file_operations"})
+_LAUNCHPAD_TOOL_NAMES = {}  # toolUseId -> tool name, from the assistant's toolUse blocks
+
+
+def _launchpad_redact(text):
+    return _LAUNCHPAD_SECRET_RE.sub(lambda m: f"{m.group(1) or m.group(2)}=[redacted]", text)
+
+
+def _launchpad_bounded(text, limit):
+    text = _launchpad_redact(" ".join(str(text if text is not None else "").split()))
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... [+{len(text) - limit} chars]"
+
+
+def _launchpad_result_text(result):
+    parts = []
+    for item in result.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("text"), str):
+            parts.append(item["text"])
+        elif "json" in item:
+            parts.append(_launchpad_json.dumps(item["json"], ensure_ascii=False, default=str))
+        elif "image" in item:
+            parts.append("[image]")
+        elif "document" in item:
+            parts.append("[document]")
+    return "\n".join(parts)
+
+
+def _launchpad_result_summary(result):
+    """`title: ... | url: ... | text: N chars` for the browser builtin's `title / url /
+    blank / text` result shape (the page text itself is never summarised); otherwise the
+    first LAUNCHPAD_TOOL_RESULT_CHARS characters of the result text."""
+    text = _launchpad_result_text(result)
+    lines = text.split("\n", 3)
+    if len(lines) >= 3 and lines[0].startswith("title: ") and lines[1].startswith("url: "):
+        body = lines[3] if len(lines) > 3 else ""
+        return _launchpad_bounded(
+            f"{lines[0]} | {lines[1]} | text: {len(body)} chars", LAUNCHPAD_TOOL_RESULT_CHARS
+        )
+    return _launchpad_bounded(text, LAUNCHPAD_TOOL_RESULT_CHARS)
+
+
+def _launchpad_tool_frames(event):
+    """The `tool_input` / `tool_result` frames one Strands stream event carries (0..n)."""
+    message = event.get("message") if isinstance(event, dict) else None
+    if not isinstance(message, dict):
+        return []
+    frames = []
+    for block in message.get("content") or []:
+        if not isinstance(block, dict):
+            continue
+        use = block.get("toolUse")
+        if isinstance(use, dict) and use.get("name"):
+            arguments = _launchpad_json.dumps(use.get("input"), ensure_ascii=False, default=str)
+            tool_id = str(use.get("toolUseId") or "") or None
+            if tool_id:
+                _LAUNCHPAD_TOOL_NAMES[tool_id] = str(use["name"])
+            frames.append({
+                "event": "tool_input", "id": tool_id, "name": str(use["name"]),
+                "input": _launchpad_bounded(arguments, LAUNCHPAD_TOOL_INPUT_CHARS),
+            })
+        result = block.get("toolResult")
+        if isinstance(result, dict):
+            tool_id = str(result.get("toolUseId") or "") or None
+            name = _LAUNCHPAD_TOOL_NAMES.pop(tool_id, "") if tool_id else ""
+            frames.append({
+                "event": "tool_result", "id": tool_id, "name": name,
+                "status": str(result.get("status") or ""),
+                "summary": (
+                    "" if name in LAUNCHPAD_UNSUMMARISED_TOOLS
+                    else _launchpad_result_summary(result)
+                ),
+            })
+    return frames
+# </launchpad-tool-summaries:v1>
+
+
 async def agent_events(agent: Agent, prompt: str | list) -> AsyncIterator[dict[str, Any]]:
     """Map Strands ``stream_async`` events onto the platform's runtime envelope.
 
@@ -343,29 +902,93 @@ async def agent_events(agent: Agent, prompt: str | list) -> AsyncIterator[dict[s
     event; the final ``AgentResult`` closes the turn as ``complete``. The
     platform (``rt._runtime_payload_events``) parses this identically to the
     Claude SDK container stream and to InvokeHarness's content blocks.
+
+    A ``max_tokens`` stop (N-SCN-bug4) is recovered here, see the block above:
+    ``truncated`` marker → one bounded continuation → notice + ``complete``
+    ``{truncated: true}`` when the turn still cannot finish.
     """
     seen_tool_ids: set[str] = set()
     result: Any = None
-    async for event in agent.stream_async(prompt):
-        if not isinstance(event, dict):
-            continue
-        text = event.get("data")
-        if isinstance(text, str) and text:
-            yield {"event": "delta", "text": text}
-        tool_use = event.get("current_tool_use")
-        if not isinstance(tool_use, dict):
-            raw = event.get("event")
-            if isinstance(raw, dict):
-                tool_use = raw.get("contentBlockStart", {}).get("start", {}).get("toolUse")
-        if isinstance(tool_use, dict) and tool_use.get("name"):
-            tool_id = str(tool_use.get("toolUseId") or "")
-            key = tool_id or str(tool_use["name"])
-            if key not in seen_tool_ids:
-                seen_tool_ids.add(key)
-                yield {"event": "tool", "name": str(tool_use["name"]), "id": tool_id or None}
-        if "result" in event:
-            result = event["result"]
-    yield {"event": "complete", "result": str(result) if result is not None else ""}
+    streamed: list[str] = []
+    output_tokens: int | None = None
+    budget = _launchpad_max_tokens_continuations()
+    cap = _launchpad_continuation_max_tokens()
+    attempts = 0
+    truncated = False
+    next_prompt: str | list = prompt
+    while True:
+        # the continuation (attempts > 0) runs under the lower output cap, if one is set
+        restore_cap = _launchpad_cap_max_tokens(agent, cap) if attempts else (lambda: None)
+        try:
+            async for event in agent.stream_async(next_prompt):
+                if not isinstance(event, dict):
+                    continue
+                for tool_frame in _launchpad_tool_frames(event):  # N16-obs85
+                    yield tool_frame
+                tokens = _launchpad_output_tokens(event)
+                if tokens is not None:
+                    output_tokens = tokens
+                # GLM 5.3 / Kimi K3 stream `reasoningContent` before the answer (spec C3: ignored)
+                if event.get("reasoning") or "reasoningText" in event:
+                    continue
+                text = event.get("data")
+                if isinstance(text, str) and text:
+                    streamed.append(text)
+                    yield {"event": "delta", "text": text}
+                tool_use = event.get("current_tool_use")
+                if not isinstance(tool_use, dict):
+                    raw = event.get("event")
+                    if isinstance(raw, dict):
+                        tool_use = raw.get("contentBlockStart", {}).get("start", {}).get("toolUse")
+                if isinstance(tool_use, dict) and tool_use.get("name"):
+                    tool_id = str(tool_use.get("toolUseId") or "")
+                    key = tool_id or str(tool_use["name"])
+                    if key not in seen_tool_ids:
+                        seen_tool_ids.add(key)
+                        yield {"event": "tool", "name": str(tool_use["name"]), "id": tool_id or None}
+                if "result" in event:
+                    result = event["result"]
+            truncated = False
+        except Exception as exc:
+            if not _launchpad_is_max_tokens(exc):
+                raise
+            truncated = True
+            _launchpad_log.warning(
+                "max_tokens stop: stop_reason=max_tokens output_tokens=%s continuation=%d/%d "
+                "streamed_chars=%d continuation_cap=%d",
+                output_tokens, attempts, budget, sum(len(t) for t in streamed), cap,
+            )
+            if attempts < budget:
+                attempts += 1
+                yield {"event": "truncated", "truncated": False, "stop_reason": "max_tokens",
+                       "continuations": attempts}
+                if streamed:
+                    streamed.append("\n")
+                    yield {"event": "delta", "text": "\n"}
+                next_prompt = LAUNCHPAD_MAX_TOKENS_CONTINUATION_PROMPT
+                continue
+        finally:
+            try:  # a failing restore must never mask the turn's own outcome
+                restore_cap()
+            except Exception as restore_exc:
+                _launchpad_log.warning("continuation cap not restored: %s: %s",
+                            type(restore_exc).__name__, restore_exc)
+        break
+    if attempts == 0 and not truncated:
+        yield {"event": "complete", "result": str(result) if result is not None else ""}
+        return
+    # a continued or truncated turn: the answer is what the console already saw; a
+    # continuation that finished on its own stop (end_turn) is a normal turn even when it
+    # produced no text (r7-e) - the notice and `truncated: true` are for a max_tokens stop only
+    text = "".join(streamed).strip()
+    if truncated:
+        notice = ("\n\n" if text else "") + LAUNCHPAD_MAX_TOKENS_NOTICE
+        yield {"event": "delta", "text": notice}
+        yield {"event": "truncated", "truncated": True, "stop_reason": "max_tokens",
+               "continuations": attempts}
+        yield {"event": "complete", "result": text + notice, "truncated": True}
+        return
+    yield {"event": "complete", "result": text}
 
 
 async def _turn_events(
@@ -376,19 +999,23 @@ async def _turn_events(
     # of its tools, so it is scoped to the whole turn. GATEWAY_TOOLS is a no-op
     # returning [] for a spec with no gateway tool.
     with ExitStack() as stack:
-        gateway_access_token = str(payload.get("gateway_access_token", "")).strip() or None
-        # Batched memory writes flush after the agent invocation; closing the
-        # session manager with the stack is the backstop that flushes whatever
-        # is still buffered if the turn errors out mid-way.
         session_manager = memory_session_manager(actor_id, session_id)
-        if session_manager is not None:
+        # --- CN memory/KB (N6) ---
+        # Strands' S3SessionManager persists each message as it is appended and is not
+        # a context manager; a batched manager a graft may still supply flushes on
+        # close, so only one that defines __enter__ is scoped to the turn.
+        if session_manager is not None and hasattr(session_manager, "__enter__"):
             stack.enter_context(session_manager)
+        # --- end CN memory/KB (N6) ---
         # as_user revocations the platform asks this turn to honor
         force_reauth = payload.get("force_reauth_providers") or []
+        # peers keep their own conversation per (this session, peer) — N11 r3-C; the
+        # actor is the runtimeUserId every peer invoke carries (N10v3-bug5 correction)
+        a2a_bind_session(session_id, actor_id)
         agent = build_agent(
             actor_id,
             session_id,
-            GATEWAY_TOOLS(stack, gateway_access_token)
+            GATEWAY_TOOLS(stack)
             + IDENTITY_TOOLS(stack, session_id, force_reauth),
             session_manager=session_manager,
         )
@@ -414,12 +1041,14 @@ async def _turn_events(
 async def invoke(
     payload: dict[str, Any], context: Any = None
 ) -> AsyncIterator[dict[str, Any]]:
+    _launchpad_capture_bundle_ref(payload)  # CA-2 channel 3: payload["launchpad"]["bundle"]
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt and not payload.get("attachments"):
         yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
         return
     session_id = str(getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc")
     turn = _turn_events(payload, prompt, session_id)
+    __LAUNCHPAD_PRINCIPAL_CAPTURE__
     async for event in _events_with_heartbeat(turn, SSE_HEARTBEAT_INTERVAL_S):
         yield event
 

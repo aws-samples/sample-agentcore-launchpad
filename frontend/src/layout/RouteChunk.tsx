@@ -1,16 +1,23 @@
-import { Component, Suspense } from "react";
+import { Component, Suspense, useEffect } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "../components";
+import {
+  browserIsOffline,
+  canReloadOnce,
+  clearReloadMark,
+  markReloaded,
+  pageReloader,
+} from "./chunk-reload";
 
 /**
  * A page chunk that never arrived — not a bug in the page.
  *
  * The two real causes are both recoverable by reloading: the box was rebuilt
  * under an open tab, so the content-hashed chunk the loaded shell asks for is
- * gone from `dist/assets` (prod serves a built `dist/` through `vite preview`,
- * see docs/agent-runbook-prod.md), or the dev/preview server is unreachable.
+ * gone from `dist/assets` (nginx answers 404 for it since WB-003 — see
+ * infra/ec2/nginx-site.sh), or the dev/preview server is unreachable.
  * Anything else a page throws is re-thrown untouched, so a genuine render bug
  * still surfaces as it did before this boundary existed instead of being
  * mislabelled as staleness.
@@ -32,47 +39,92 @@ function RoutePending() {
   );
 }
 
+/** Shown for the instant between the stale-chunk error and the automatic reload. */
+function RouteReloading() {
+  const { t } = useTranslation();
+  return (
+    <div className="route-pending" role="status" data-testid="route-chunk-reloading">
+      {t("routeChunk.reloading")}
+    </div>
+  );
+}
+
 /** The shared `LoadError` block, with RELOAD in place of RETRY. */
 function RouteChunkError() {
   const { t } = useTranslation();
   return (
     <LoadError
       message={t("routeChunk.failed")}
-      onRetry={() => window.location.reload()}
+      onRetry={() => pageReloader.reload()}
       retryLabel={t("routeChunk.reload")}
       data-testid="route-chunk-error"
     />
   );
 }
 
-class ChunkErrorBoundary extends Component<{ children: ReactNode }, { error: unknown }> {
-  state: { error: unknown } = { error: null };
+/** Mounted as the Suspense boundary's last child: with `createRoot`, its effect
+ * runs only when every sibling resolved — i.e. the page chunk really loaded. */
+function ChunkLoaded() {
+  useEffect(() => {
+    clearReloadMark(window.location.pathname);
+  }, []);
+  return null;
+}
 
-  static getDerivedStateFromError(error: unknown) {
-    return { error };
+type BoundaryState = { error: unknown; reloading: boolean };
+
+class ChunkErrorBoundary extends Component<{ children: ReactNode }, BoundaryState> {
+  state: BoundaryState = { error: null, reloading: false };
+
+  static getDerivedStateFromError(error: unknown): BoundaryState {
+    return {
+      error,
+      reloading:
+        isChunkLoadError(error) && !browserIsOffline() && canReloadOnce(window.location.pathname),
+    };
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    console.error("[route] page failed to render", error, info.componentStack);
+    if (!isChunkLoadError(error)) {
+      console.error("[route] page failed to render", error, info.componentStack);
+      return;
+    }
+    const pathname = window.location.pathname;
+    if (browserIsOffline()) {
+      console.warn("[route] page chunk missing while offline — manual state", pathname);
+      return;
+    }
+    if (!canReloadOnce(pathname)) {
+      console.warn("[route] page chunk still missing after a reload — manual state", pathname);
+      return;
+    }
+    console.warn("[route] page chunk missing — reloading once", pathname);
+    markReloaded(pathname);
+    pageReloader.reload();
   }
 
   render() {
-    const { error } = this.state;
+    const { error, reloading } = this.state;
     if (!error) return this.props.children;
     if (!isChunkLoadError(error)) throw error;
-    return <RouteChunkError />;
+    return reloading ? <RouteReloading /> : <RouteChunkError />;
   }
 }
 
 /**
  * The Shell's content-area boundary for lazily loaded pages: a translated
- * pending line while the chunk is in flight, the reload state when it cannot be
- * fetched. Sits inside `.view` so the sidebar, topbar and footer never move.
+ * pending line while the chunk is in flight, one automatic reload when it
+ * cannot be fetched (none while the browser is offline), the manual reload
+ * state after that. Sits inside `.view`
+ * so the sidebar, topbar and footer never move.
  */
 export function RouteChunk({ children }: { children: ReactNode }) {
   return (
     <ChunkErrorBoundary>
-      <Suspense fallback={<RoutePending />}>{children}</Suspense>
+      <Suspense fallback={<RoutePending />}>
+        {children}
+        <ChunkLoaded />
+      </Suspense>
     </ChunkErrorBoundary>
   );
 }

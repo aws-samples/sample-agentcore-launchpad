@@ -110,6 +110,14 @@
 }
 .v2 .v2-observability-expl.open { display: block; white-space: pre-wrap; max-width: none; }
 
+.v2 .v2-score-source { display: block; min-width: 0; max-width: 32rem; }
+.v2 .v2-score-source .mono { display: block; overflow-wrap: anywhere; }
+.v2 .v2-table .v2-score-source { min-width: 12rem; max-width: 20rem; margin-top: 6px; }
+.v2 .v2-score-sources { margin-bottom: 12px; font-size: 13px; }
+.v2 .v2-score-sources p { margin: 0 0 8px; }
+.v2 .v2-score-sources ul { list-style: none; margin: 0; padding: 0; }
+.v2 .v2-score-sources li { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 16px; padding: 6px 0; }
+
 @media (max-width: 1100px) {
   .v2 .v2-observability-trace { grid-template-columns: 1fr; }
   .v2 .v2-observability-side { position: static; }

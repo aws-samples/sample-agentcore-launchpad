@@ -32,7 +32,7 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
   const [, setParams] = useSearchParams();
   const tasksets = useTasksets("skill-lab-tasksets:taskgen");
   const [recordIds, setRecordIds] = useState<string[]>([]);
-  const [backend, setBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
+  const [backend, setBackend] = useState<SkillLabTargetBackend>("opencode_exec");
   const [model, setModel] = useState("");
   const [count, setCount] = useState(5);
   const [guidance, setGuidance] = useState("");

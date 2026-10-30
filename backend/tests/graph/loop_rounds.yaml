@@ -1,0 +1,190 @@
+# The loop-engine round ledger (round 17, r17-b; user ruling 2026-10-19 relayed by the lead).
+#
+# The GRAPH + LOOP discovery loop runs round after round with no fixed cap. After each round:
+#   * it FOUND bugs (reproduced, classified, registered — PRODUCT / TEST / DOC all count)
+#     → the next round runs the SAME method;
+#   * it found NONE → the next round MUST use a DIFFERENT method / idea (walks → cross-graph
+#     interleaving → fault-injected walks on the recorded seam error shapes → time-shifted walks
+#     (clock injection) → role-swapped walks → concurrency pairs → …);
+#   * the loop STOPS only after THREE CONSECUTIVE zero-yield rounds; any finding resets the streak.
+# Prime-path coverage and capture–recapture are reference metrics only (testing.md §6.8).
+#
+# METHOD LADDER (what a zero-yield round switches to, in order): cross-graph interleaving (rounds
+# 1–5) → FAULT-INJECTED WALKS on the recorded seam error shapes (/home/ubuntu/designs/seams-20261019:
+# Runtime / Browser / OpenSearch responses replayed at the data-plane seams while the graphs walk;
+# the oracle = the graphs' own contract answers + no half-written row) → time-shifted walks (clock
+# injection: expiries, lockouts, retention sweeps mid-walk) → role-swapped walks (member / admin /
+# other member at EVERY edge) → concurrency pairs (two walkers, one shared entity) → …
+# ROUND 6 = fault-injected walks (round 5 yielded 0 → the method changed; testing.md §6.9). Round 6 FOUND
+# bugs (12) → ROUND 7 kept the method (fresh window LAUNCHPAD_LOOP_ROUND=7, the canary cleanup / KB ingest /
+# registry S3 seams) and FOUND bugs (4) → ROUND 8 kept the method (window 8: the eval poller's S3 artefact
+# store, the extractor's SQS redelivery, the Identity vault behind the connection delete) and FOUND bugs (2)
+# → ROUND 9 kept the method (window 9: the architect purge's AWS readbacks, the Skill Lab subprocess harness;
+# Gateway targets are AWS-only state) and yielded ZERO → zero-yield streak 1/3 → ROUND 10 MUST SWITCH METHOD:
+# TIME-SHIFTED WALKS with clock injection (expiries, lockouts, retention sweeps, the canary / purge / chat-claim
+# deadlines mid-walk); role-swapped walks and concurrency pairs follow on the ladder.
+#
+# Append-only. `tests/graph/loop_report.py` renders the rounds into docs/cn/reports/graph-coverage.md
+# ("round N · method · findings · streak") and scripts/quality_metrics.py reads those lines
+# (`loop_round`, `loop_round_method`, `loop_round_findings`, `loop_zero_streak`).
+rounds:
+  - round: 1
+    date: 2026-10-19
+    branch: cn/r17-b
+    method: seeded random walks + bug-neighbourhood paths + cross-graph walks (agent × canary, agent × chat, dataset × run) + soak (all edge pairs, 200 seeds × graph, 60 × pairing)
+    findings: [N17-obs10, N17-obs11, N17-obs12, N17-obs13, N17-obs14, N17-obs15, N17-obs16]
+    note: >-
+      6 findings — 1 PRODUCT (N17-obs13), 2 DOC (obs12 / obs15), 3 TEST graph-model (obs10 / 11 / 14);
+      soak 4 332 tests, 6 min 22 s; verify-shaped graph suite 1 490 / 154 xfailed. Review added
+      N17-obs16 (redeploy under a running canary) to round 1's yield (7). Next round: same method
+      (a round that found bugs keeps its method).
+  - round: 2
+    date: 2026-10-20
+    branch: cn/r17-e
+    method: seeded random walks + bug-neighbourhood paths + cross-graph walks (agent × canary, agent × chat, dataset × run, agent × run; delete AND redeploy injected) + soak — fresh seed window (LAUNCHPAD_LOOP_ROUND=2; walks 200–399, cross 60–119)
+    findings: [N17-obs17, N17-obs18]
+    note: >-
+      2 findings — N17-obs17 DOC (eval-run create / rerun: the agent-status gate answers before body
+      validation and the dataset lookup), N17-obs18 PRODUCT (DELETE agent accepted with a queued run;
+      the run dispatches against the deleted agent). Soak 4 542 tests, 12 min 29 s wall (4 474 passed,
+      57 xfailed, 3 failed → 1 obs17 extension + 2 harness fixes). FIXED neighbourhoods (obs88,
+      obs117) and the obs13 publish-under-job rule stayed green; N17-obs16 is a KNOWN pin until
+      cn/r17-d. Streak 0 → round 3 keeps the method.
+  - round: 3
+    date: 2026-10-20
+    branch: cn/r17-g
+    method: seeded random walks + bug-neighbourhood paths + cross-graph walks (agent × canary, agent × chat, dataset × run, agent × run, agent × KB/memory, canary × dataset; delete AND redeploy AND admin visibility flip injected) + soak — fresh seed window (LAUNCHPAD_LOOP_ROUND=3; walks 400–599, cross 120–179)
+    findings: [N17-obs30, N17-obs31]
+    note: >-
+      1 new finding + 1 rediscovery — N17-obs30 DOC, new (a non-creator member's dataset ?force reads the
+      §8 ownership 403 before the §22 force 403); N17-obs31 PRODUCT medium = N16-obs34 (round 16, open
+      since r16-d: the self-hosted KB force-delete never strips the mount from the agents' specs — the
+      ledger scan fires; one fix closes both, cn/r17-h). Soak 5 048 tests, 7 min 23 s wall
+      (5 019 passed, 21 xfailed = the obs31 pins, 2 failed → both the same harness defect: the world
+      expected the memory store delete to pass after the agent was deleted while a same-name re-created
+      agent pinned it — fixed). All five FIXED neighbourhoods (obs88 / 117 / 13 / 16 / 18) and the
+      visibility flips stayed green. Streak 0 → round 4 keeps the method.
+  - round: 4
+    date: 2026-10-20
+    branch: cn/r17-i
+    method: seeded random walks + bug-neighbourhood paths + cross-graph walks (six pairings; delete / redeploy / visibility-flip injections) + the refusal × non-happy-state matrix (agent state × caller × visibility × body on every refusal edge) + strip/unlink oracles on every force / delete seam + soak — fresh seed window (LAUNCHPAD_LOOP_ROUND=4; walks 600–799, cross 180–239)
+    findings: [N17-obs50, N17-obs51, N17-obs52]
+    note: >-
+      3 findings — 2 DOC (gate order): N17-obs50 (eval rerun answers its own 404 / 422 before the
+      agent-status 400), N17-obs51 (another member's agent delete under a live deploy job reads the
+      ownership 403 before the deploy-job 409); 1 TEST found by the round's own gate: N17-obs52 (the
+      shared SSE test parser split frames with splitlines(), cutting a data: JSON string at U+2028-class
+      characters — fixed). The matrix ran 662 of its 978 soak grid cells (504 of 741 in verify; 631 ok,
+      31 unordered — all tagged to obs50 / obs51): no hidden-id leak, no refusal that
+      writes. Real coverage: the canary refusals ran at `active` only (the canary owns the agent,
+      N17-obs16 / §1.1), `agent × run` misses `deleted` where the ACTIVE run owns it (obs18), and 7
+      agent-graph edges have no cells (source nodes outside AGENT_STATES) — skips reported since
+      cn/r17-j. The strip oracles rediscovered N16-obs35 (registry skill delete leaves skills/<name>/
+      objects; cross-referenced, pinned KNOWN) and confirmed the KB / memory / dataset / evaluator
+      seams. Soak 5 297 tests, 7 min 44 s wall (5 292 passed, 1 xfailed, 0 failed). All six FIXED
+      neighbourhoods green. Streak 0 → round 5 keeps the method.
+  - round: 5
+    date: 2026-10-20
+    branch: cn/r17-k
+    method: seeded random walks + bug-neighbourhood paths + cross-graph walks (seven pairings incl. the new agent × offboarding — admin disables / re-enables / deletes the creator mid-walk) + the refusal matrix with a SECOND fresh agent (deploying / cold-redeploying / absent cells) + strip oracles + soak — fresh seed window (LAUNCHPAD_LOOP_ROUND=5; walks 800–999, cross 240–299)
+    findings: []
+    note: >-
+      0 findings. The offboarding pairing confirmed every sentence it asserts (401 auth.required for the
+      disabled creator's cookie, her /v1 key offboarded eagerly and never re-enabled by her return, the
+      live turn finishing, workers unfiltered, the dangling creator admin-only under isolated); the
+      matrix's second-agent states (710 cells in the soak, 680 ok / 30 unordered all
+      registered) found no hidden-id leak — the duplicate-name 409 masks a hidden agent's id. The 12 soak
+      failures were two harness gaps of the new pairing (fixed; no row). Soak 5 354 tests, 7 min 54 s
+      wall. Zero-yield streak 1/3 → ROUND 6 MUST SWITCH METHOD: fault-injected walks on the
+      seams-20261019 shapes (see the ladder in this header). Deferred inputs for whoever runs it with
+      the cross-graph method again later: skill_lab × registry, memory × chat consolidation.
+  - round: 6
+    date: 2026-10-20
+    branch: cn/r17-l
+    method: FAULT-INJECTED WALKS — the recorded seam error shapes (designs/seams-20261019 → tests/fixtures/seams, tests/faults, REAL_FAULTS) served at the data-plane seams while the agent / chat / run / memory / reference graphs walk (1–3 faults per walk, transition seams first; oracles = the contract's answer, no half-written row, the envelope, the terminal state, the resume / reattach / redelivery path), the refusal × seam-faulted axis, agent × chat with the shared delete seam faulted; LAUNCHPAD_LOOP_ROUND=6 (fault seeds 100–119 per family)
+    findings: [N17-obs90, N17-obs91, N17-obs92, N17-obs93, N17-obs94, N17-obs95, N17-obs96, N17-obs97, N17-obs98, N17-obs99, N17-obs100, N17-obs101]
+    note: >-
+      12 findings (+ 1 rediscovery) — 9 PRODUCT: N17-obs90 (extractor supersede half-write when the second write fails),
+      N17-obs91 (console delete of a chain head with the delete faulted revives the predecessor),
+      N17-obs92 (memory _guard echoes the raw OpenSearch body / IAM role ARN in the 502 message),
+      N17-obs93 (memory store delete: row gone, unguarded S3 purge raises → 502 and no index purge),
+      N17-obs94 (botocore transport exceptions have no envelope on any route — bare 500), N17-obs95
+      (/v1 invoke on the SDK terminal error frame is a bare 500), N17-obs96 (a partial SSE frame alone
+      is rendered verbatim as the reply), N17-obs97 (a REJECTED JSON body is rendered as the reply), N17-obs100 (a cold re-publish failing
+      after a deploy-stage failure flips the agent back to active), N17-obs101 (a stale candidate read
+      breaks the dedupe invariant — two active near-duplicates);
+      3 DOC: N17-obs98 (the chat error event drops the frame's error_type — §8 parity names no
+      exception), N17-obs99 (the KB force delete's cleanup_warnings carry raw seam text) and the DOC
+      halves of obs93 / obs94; N16-obs32 REDISCOVERED (one fault on the extractor's job bookkeeping
+      escapes raw — cross-referenced, pinned, not a new id) (memory-backend.md names the OpenSearch purge
+      only; api.md names no transport family). Soak (LAUNCHPAD_LOOP_ROUND=6, -n 8 on the loaded 32-core host): 1 279 tests, 5 min 19 s wall — 760
+      fault walks (180 per graph less the families a graph has no seam for: 141 skips), 60 faulted cross
+      walks, ~450 refusal × seam cells; run 2: 1 043 passed, 91 xfailed (every one mapped to a register id),
+      4 failed = obs100 ×1, obs101 ×1, the obs91 middle/tail variant ×2 (registered after the run). Run 1 (before
+      five harness-fidelity fixes — the console aws.* envelope carries the IAM sentence by contract, the
+      NotFound stop plane stays NotFound, a never-provisioned agent's delete detail, the eval `once` variant
+      on non-transient shapes, the stale-read cascade) had 184 failures, none a finding beyond these. Streak 0 → round 7 keeps
+      the method.
+  - round: 7
+    date: 2026-10-20
+    branch: cn/r17-m
+    method: "FAULT-INJECTED WALKS, same method as round 6 with fresh inputs — LAUNCHPAD_LOOP_ROUND=7 window (fault seeds 120–139 per family); symptom pins anchored on the failing step's edge (rev-r17 nit B); new seams: the canary cleanup's AWS calls (a sixth fault world, `CanaryFaults`), the KB ingest Lambda (S3 get_object / embedding model / OpenSearch bulk — probes), the registry skill sweep's per-key delete, the S3 DeleteObjects partial-failure body on the memory purge; new shapes bedrock_embed_{validation,throttle,5xx}, s3_delete_partial"
+    findings: [N17-obs118, N17-obs119, N17-obs120, N17-obs121]
+    note: >-
+      4 findings — 3 PRODUCT: N17-obs118 (registry skill sweep reports objects_deleted: true while the
+      per-key delete was refused — _delete_keys swallows every exception), N17-obs119 (the memory purge
+      never reads a DeleteObjects 200's Errors[]; refused keys stay), N17-obs120 (a transient Bedrock
+      embedding fault on one chunk fails the KB document permanently — one attempt, the shared transient
+      predicate never consulted); 1 DOC: N17-obs121 (a canary `cleaned` with a refused endpoint delete
+      carries a cleanup_blockers entry, yet `cleaned` never blocks the agent delete — the two sentences
+      leave the endpoint behind with no retry path named). The canary cleanup itself held its N-SCN-obs3
+      contract on every shape (skipped categories, `cleaned` either way, `endpoints_pending`, a healthy
+      cleanup again clears the blockers). Soak (LAUNCHPAD_LOOP_ROUND=7, -n 8 on the loaded 32-core host): 1 609 tests, 7 min 17 s wall — 920 fault walks
+      (six graphs × 9 families × 20 seeds less 161 no-seam skips), 60 faulted cross walks, ~500 refusal × seam
+      cells, 15 storage probes; 1 324 passed, 105 xfailed (every one mapped to a register id), 19 failed = ONE
+      harness mismatch on the canary endpoint seam (the modelled exception class name vs the bare ClientError;
+      fixed, re-run green) — no finding beyond the four. Streak 0 → round 8 keeps the method.
+  - round: 8
+    date: 2026-10-20
+    branch: cn/r17-r
+    method: "FAULT-INJECTED WALKS, same method as rounds 6–7 with fresh inputs — LAUNCHPAD_LOOP_ROUND=8 window (fault seeds 140–159 per family); new seams: the eval worker's S3 artefact store as the hub's poller reads it (status.json / results.jsonl, `OnceFaultyStore`; recovery = recheck), the extractor Lambda's SQS redelivery (duplicate delivery of a processed add / supersede; the redelivery after obs90's half-write), the Identity control plane behind the connection delete (vault delete / listing faults, a provider vanished between listing and delete)"
+    findings: [N17-obs122, N17-obs123]
+    note: >-
+      2 findings, both PRODUCT — N17-obs122 (the SQS redelivery after a half-written supersede cannot
+      repair it: the successor is now the nearest candidate, the replayed op is a self-supersede noop,
+      the original stays active for good — raises obs90's severity), N17-obs123 (one transient S3 fault
+      on the poller's status.json / results.jsonl read fails the run while the worker job completes
+      unread; only a manual recheck re-attaches it). Held: redelivery idempotency of a processed add
+      (one record) and supersede (no chain growth), the Identity vault seam (row + grants untouched on a
+      vault fault, two attempts converge when the provider vanished between listing and delete, a
+      throttled listing refuses before any write). Soak (LAUNCHPAD_LOOP_ROUND=8, -n 8 on the loaded 32-core host): 1 625 tests, 12 min 28 s wall — 919
+      fault walks (six graphs × 9 families × 20 seeds less 162 no-seam skips), 60 faulted cross walks, ~500
+      refusal × seam cells, 24 probes; 1 360 passed, 103 xfailed (every one mapped to a register id), 0 failed. Streak 0 → round 9 keeps
+      the method.
+  - round: 9
+    date: 2026-10-20
+    branch: cn/r17-s
+    method: "FAULT-INJECTED WALKS, same method as rounds 6–8 with fresh inputs — LAUNCHPAD_LOOP_ROUND=9 window (fault seeds 160–179 per family); new seams: the architect purge's AWS readbacks (a seventh fault world, `ProposalFaults` over the CLEAR job — GetAgentRuntime in `_wait_gone`, ListAgentRuntimeEndpoints, DeleteAgentRuntime, the residue role step; the retry as the recovery oracle), the Skill Lab subprocess harness (FAIL / ERROR knobs of the stub CLI); Gateway targets not probed (AWS-only state)"
+    findings: []
+    note: >-
+      0 findings — every seam held: the purge job fails with the named blocker (purge_step_failed /
+      purge_agent_conflict / purge_role_remains), conversation + Agent rows kept, an accepted delete
+      carried forward (the retry never re-issues DeleteAgentRuntime), the retry converges; the Skill Lab
+      verdicts (all rollouts failed → failed with the infra / exec split; one scored rollout → succeeded;
+      non-zero exit → failed with the code) as written. Soak (LAUNCHPAD_LOOP_ROUND=9, -n 6, loaded host, final code):
+      1 924 tests, 12 min 22 s — 1 059 fault walks (seven graphs), 60 faulted cross walks, ~560 axis cells,
+      45 probes; 1 605 passed, 116 xfailed (all mapped), 0 failed. The first soak run had 2 failures = one
+      harness-layer mismatch (the readback stub raised above the wrapper's not-found swallow) and the
+      gate caught the generator filling transition slots from refusals on a one-seam graph — both fixed
+      (transition slots now carry forward; `FaultWalk.slot_kinds`), re-soaked green. The carry-forward rule
+      CHANGED THE SEED→WALK MAPPING FOR ROUNDS ≤ 8 (rev-r17 item on cn/r17-s: 27/216 verify walks,
+      170/1080 round-6, 185/1080 round-7, 185/1080 round-8 walks differ; the first divergence is always the
+      old generator serving a transition slot on a refusal edge); findings stay reproducible via strict
+      pins / KNOWN_SYMPTOMS; windows 6–8 re-soaked under the new generator on 2026-10-20:
+      window 6 — 1 609 passed / 202 skipped / 106 xfailed / 0 failed, 13 min 13 s;
+      window 7 — 1 607 / 202 / 108 / 0, 12 min 22 s; window 8 — 1 614 / 203 / 100 / 0, 12 min 24 s
+      (-n 6, loaded host; 1 060 / 1 060 / 1 059 fault walks per window). 0 new observations: every xfail
+      maps to a register id (obs94 / 95 / 90 / 92 / 91 / 118–123 / 93 / 96–98 / 100 / 101, N16-obs32, N14-obs4 — the
+      pins the fixers flip on their branches) and the 23 observation classes of the fault reports are exactly
+      the 23 of the original round-6 / 7 / 8 reports (none new, none gone). Zero-yield streak 1/3 →
+      ROUND 10 MUST SWITCH METHOD: time-shifted walks with clock injection (see the ladder header).

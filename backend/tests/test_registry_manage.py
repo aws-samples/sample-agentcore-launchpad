@@ -1,38 +1,62 @@
-"""Registry registration + lifecycle management endpoints (console mocked —
-the real transitions were probed live: DEPRECATED is terminal, REJECTED can
-still be approved, delete works from any settled state)."""
+"""Registry registration + lifecycle management endpoints, end-to-end on the
+real local backend (ledger-backed state machine, no AWS Agent Registry — spec
+C5). The attachables catalog (Task 5) is covered in test_registry_attachables.py."""
 
 import json
-from unittest.mock import Mock
 
 import pytest
 
-import app.routers.registry as registry_router
-from app.core.errors import AppError
-from app.services.agentcore import registry as reg
-from tests.conftest import ws_ctx
-
-RECORD = {
-    "recordId": "r-new1", "name": "external-search", "descriptorType": "MCP",
-    "status": "DRAFT", "recordVersion": "1.0.0", "descriptors": {},
-}
+from app.services import aws_clients
+from app.services import registry_backend as reg
+from tests.conftest import set_default_resources, ws_ctx
 
 
-def test_register_mcp_record(client, monkeypatch):
-    calls = {}
+class FakePaginator:
+    def __init__(self, keys):
+        self._keys = keys
 
-    def fake_register(_ws, name, description, url):
-        calls.update(name=name, url=url)
-        return RECORD
+    def paginate(self, Bucket, Prefix):  # noqa: N803 (boto3 kwarg names)
+        yield {"Contents": [{"Key": k} for k in self._keys if k.startswith(Prefix)]}
 
-    monkeypatch.setattr(registry_router.console, "register_mcp_server", fake_register)
+
+class FakeS3:
+    def __init__(self, existing=None):
+        self.existing = list(existing or [])
+        self.uploaded: list[str] = []
+        self.deleted: list[str] = []
+        self.put: list[str] = []
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        # a listing reflects the bucket: pre-existing + uploaded + put, minus deleted (N16-obs35's
+        # sweep lists what the registration uploaded)
+        live = [k for k in [*self.existing, *self.uploaded, *self.put] if k not in self.deleted]
+        return FakePaginator(live)
+
+    def upload_file(self, src, bucket, key):
+        self.uploaded.append(key)
+
+    def put_object(self, Bucket, Key, Body):  # noqa: N803
+        self.put.append(Key)
+
+    def delete_object(self, Bucket, Key):  # noqa: N803
+        self.deleted.append(Key)
+
+    def delete_objects(self, Bucket, Delete, **kw):  # noqa: N803 — boto kwargs
+        for obj in Delete.get("Objects", []):
+            self.delete_object(Bucket=Bucket, Key=obj["Key"])
+        return {"Deleted": [{"Key": o["Key"]} for o in Delete.get("Objects", [])]}
+
+
+def test_register_mcp_record(client):
     res = client.post("/api/registry/records", json={
         "type": "MCP", "name": "external-search",
         "description": "team search service", "url": "https://mcp.internal/sse",
     })
     assert res.status_code == 201
-    assert res.json()["record_id"] == "r-new1"
-    assert calls == {"name": "external-search", "url": "https://mcp.internal/sse"}
+    rid = res.json()["record_id"]
+    records = reg.get_backend().list_records(ws_ctx(), "MCP")
+    assert any(r["recordId"] == rid and r["status"] == "DRAFT" for r in records)
 
 
 def test_register_mcp_requires_url(client):
@@ -56,115 +80,51 @@ def test_register_rejects_bad_name(client):
 
 
 def test_register_skill_routes_to_console(client, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(
-        registry_router.console, "register_skill",
-        lambda _ws, name, description, skill_md: seen.update(name=name, md=skill_md)
-        or {**RECORD, "descriptorType": "AGENT_SKILLS", "name": name},
-    )
+    set_default_resources({"artifacts_bucket": "bkt", "registry_id": "local-default"})
+    fake = FakeS3()
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake)
     res = client.post("/api/registry/records", json={
         "type": "AGENT_SKILLS", "name": "report-writer",
         "skill_md": "---\nname: report-writer\n---\n# Report writer",
     })
     assert res.status_code == 201
-    assert seen["name"] == "report-writer" and "# Report writer" in seen["md"]
+    body = res.json()
+    assert body["name"] == "report-writer"
+    assert fake.uploaded == ["skills/report-writer/SKILL.md"]
+    assert "# Report writer" in body["descriptors"]["agentSkills"]["skillMd"]["inlineContent"]
 
 
-def test_delete_record_endpoint(client, monkeypatch):
-    deleted = []
-    monkeypatch.setattr(
-        registry_router.console, "console_delete",
-        lambda _ws, rid: deleted.append(rid),
+def test_delete_record_endpoint(client):
+    backend = reg.get_backend()
+    ws = ws_ctx({"registry_id": "local-default"})
+    record, _ = backend.upsert_record(
+        ws, name="to-delete", description="d", descriptor_type="MCP",
+        descriptors=reg.build_mcp_descriptors(
+            target="to-delete", description="d", gateway_url="https://x.example/mcp",
+            tools=None,
+        ),
     )
-    res = client.delete("/api/registry/records/r-gone")
+    rid = record["recordId"]
+    res = client.delete(f"/api/registry/records/{rid}")
     assert res.status_code == 200 and res.json()["deleted"] is True
-    assert deleted == ["r-gone"]
+    assert res.json()["record_id"] == rid
 
 
-def test_reject_action_routes(client, monkeypatch):
-    actions = []
-    monkeypatch.setattr(
-        registry_router.console, "console_action",
-        # the route now passes the caller's role explicitly (SE-043)
-        lambda _ws, rid, act, is_admin=False: actions.append((rid, act)),
+def test_reject_action_routes(client):
+    backend = reg.get_backend()
+    ws = ws_ctx({"registry_id": "local-default"})
+    record, _ = backend.upsert_record(
+        ws, name="to-reject", description="d", descriptor_type="MCP",
+        descriptors=reg.build_mcp_descriptors(
+            target="to-reject", description="d", gateway_url="https://x.example/mcp",
+            tools=None,
+        ),
     )
-    monkeypatch.setattr(
-        registry_router.console, "console_get", lambda _ws, rid: RECORD
-    )
-    res = client.post("/api/registry/records/r-1/action", json={"action": "reject"})
+    rid = record["recordId"]
+    backend.submit_record(ws, rid)  # reject needs PENDING_APPROVAL first
+    res = client.post(f"/api/registry/records/{rid}/action", json={"action": "reject"})
     assert res.status_code == 200
-    assert actions == [("r-1", "reject")]
-
-
-def test_attachables_endpoint_caches_and_returns(client, monkeypatch):
-    calls = []
-
-    def fake_attachables(_ws):
-        calls.append(1)
-        return {"mcp_servers": [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp",
-                                 "gateway": False, "description": "", "record_id": "r1"}],
-                "skills": [{"name": "meeting-summarizer", "path": "s3://b/skills/meeting-summarizer/",
-                            "description": "", "record_id": "r2"}]}
-
-    monkeypatch.setattr(registry_router.console, "attachable_records", fake_attachables)
-    registry_router._attachables_cache.clear()
-    first = client.get("/api/registry/attachables").json()
-    second = client.get("/api/registry/attachables").json()
-    assert first == second
-    assert first["mcp_servers"][0]["gateway"] is False
-    assert first["skills"][0]["path"].startswith("s3://")
-    assert calls == [1]  # second hit served from the 60s cache
-    registry_router._attachables_cache.clear()
-
-
-def test_attachables_parsing_splits_gateway_and_remote(monkeypatch):
-    """APPROVED-only sourcing + gateway/remote split on the server URL."""
-    import app.services.registry_console as console_mod
-
-    gw_url = "https://gw.example/mcp"
-    records = {
-        "g1": {"recordId": "g1", "name": "hr-database", "description": "gw target",
-               "descriptors": {"mcp": {"server": {"inlineContent":
-                   json.dumps({"remotes": [{"url": gw_url}]})}}}},
-        "x1": {"recordId": "x1", "name": "deepwiki", "description": "public docs",
-               "descriptors": {"mcp": {"server": {"inlineContent":
-                   json.dumps({"remotes": [{"url": "https://mcp.deepwiki.com/mcp"}]})}}}},
-        "s1": {"recordId": "s1", "name": "meeting-summarizer", "description": "",
-               "descriptors": {"agentSkills": {"skillDefinition": {"inlineContent":
-                   json.dumps({"path": "s3://b/skills/meeting-summarizer/",
-                               "description": "summarize"})}}}},
-        "bad": {"recordId": "bad", "name": "broken", "descriptors": {}},
-    }
-    summaries = [
-        {"recordId": rid, "descriptorType": "AGENT_SKILLS" if rid == "s1" else "MCP"}
-        for rid in records
-    ]
-    monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: object())
-    monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
-    monkeypatch.setattr(console_mod.reg, "list_records",
-                        lambda c, r, t, s: summaries if s == "APPROVED" else [])
-    monkeypatch.setattr(console_mod.reg, "get_record",
-                        lambda c, r, rid: records[rid])
-
-    out = console_mod.attachable_records(
-        ws_ctx({"gateway_url": gw_url}),
-        gateways=[
-            {
-                "gatewayId": "gw-1",
-                "gatewayArn": "arn:gw-1",
-                "gatewayUrl": gw_url,
-                "name": "launchpad-gw",
-                "protocolType": "MCP",
-                "authorizerType": "CUSTOM_JWT",
-            }
-        ]
-    )
-    by_name = {m["name"]: m for m in out["mcp_servers"]}
-    assert by_name["hr-database"]["gateway"] is True
-    assert by_name["hr-database"]["gateway_id"] == "gw-1"
-    assert by_name["deepwiki"]["gateway"] is False
-    assert out["skills"][0]["name"] == "meeting-summarizer"
-    assert "broken" not in by_name  # malformed descriptor skipped
+    assert res.json()["status"] == "REJECTED"
 
 
 def test_mcp_descriptors_without_tools():
@@ -179,82 +139,41 @@ def test_mcp_descriptors_without_tools():
     assert server["remotes"][0]["url"] == "https://mcp.internal/sse"
 
 
-@pytest.mark.parametrize("failure", [None, "missing", "ambiguous", "unavailable", "external"])
-def test_legacy_gateway_catalog_uses_verified_names_without_widening(monkeypatch, failure):
-    from copy import deepcopy
+@pytest.fixture
+def backend_ready(client, monkeypatch):
+    set_default_resources({"artifacts_bucket": "bkt", "registry_id": "local-default"})
+    fake = FakeS3()
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake)
+    return fake
 
-    from app.services import registry_console as console
 
-    url = "https://shared.example/mcp"
-    records = {
-        target: {
-            "recordId": target, "name": target, "description": f"Gateway target {target}",
-            "descriptors": reg.build_mcp_descriptors(
-                target=target, description="", gateway_url=url,
-                tools=[{"name": "read"}, {"name": f"{target}___lookup"}],
-            ),
-        }
-        for target in ("hr", "office")
+def test_register_same_mcp_name_twice_is_409(client, backend_ready):
+    body = {"type": "MCP", "name": "external-search", "description": "d",
+            "url": "https://mcp.internal/sse"}
+    assert client.post("/api/registry/records", json=body).status_code == 201
+    dup = client.post("/api/registry/records", json=body)
+    assert dup.status_code == 409 and dup.json()["code"] == "registry.name_exists"
+
+
+def test_invalid_lifecycle_transition_is_409(client, backend_ready):
+    rid = client.post("/api/registry/records", json={
+        "type": "MCP", "name": "ext", "url": "https://mcp.internal/sse"}).json()["record_id"]
+    res = client.post(f"/api/registry/records/{rid}/action", json={"action": "approve"})
+    assert res.status_code == 409 and res.json()["code"] == "registry.invalid_transition"
+    assert res.json()["detail"] == {
+        "record_id": rid, "from_status": "DRAFT", "to_status": "APPROVED",
     }
-    original = deepcopy(records)
-    monkeypatch.setattr(console.reg, "list_records", lambda *args: [
-        {"recordId": key, "descriptorType": "MCP"} for key in records
-    ])
-    monkeypatch.setattr(console.reg, "get_record", lambda c, r, key: records[key])
-    names = ["hr___read", "hr___lookup", "office___read", "office___lookup", "secret___write"]
-    if failure == "missing":
-        names.remove("hr___read")
-    if failure == "ambiguous":
-        names.append("read")
-    discover = Mock(return_value=[{"name": name} for name in names])
-    if failure == "unavailable":
-        discover.side_effect = AppError("gateway.unauthorized", "denied", status_code=403)
-    monkeypatch.setattr(console.mcp_client, "tools_list", discover)
-    gateway = {
-        "gatewayId": "shared", "gatewayArn": "arn:gateway:shared", "gatewayUrl": url,
-        "name": "launchpad-gw", "protocolType": "MCP", "authorizerType": "NONE",
-    }
-    result = console.attachable_records(
-        ws_ctx({"gateway_url": "https://other.example/mcp" if failure == "external" else url}),
-        registry_client=object(), registry_id="r", gateways=[gateway],
-    )
-    by_name = {item["name"]: item for item in result["mcp_servers"]}
-    assert all(item["attachable"] for item in by_name.values())
-    if failure:
-        assert by_name["hr"]["runtime_tools"] is None
-    else:
-        assert by_name["hr"]["runtime_tools"] == ["hr___lookup", "hr___read"]
-        assert by_name["office"]["runtime_tools"] == ["office___lookup", "office___read"]
-    if failure == "external":
-        discover.assert_not_called()
-    else:
-        assert discover.call_count == 1
-    assert records == original  # read-only normalization, no Registry rewrite
-    assert all("secret___write" not in (item["runtime_tools"] or []) for item in by_name.values())
 
 
-def test_gateway_catalog_preserves_full_names_without_legacy_discovery(monkeypatch):
-    from app.services import registry_console as console
+def test_action_route_stamps_the_admin_as_decider(client, backend_ready):
+    rid = client.post("/api/registry/records", json={
+        "type": "MCP", "name": "ext", "url": "https://mcp.internal/sse"}).json()["record_id"]
+    client.post(f"/api/registry/records/{rid}/action", json={"action": "submit"})
+    client.post(f"/api/registry/records/{rid}/action", json={"action": "approve"})
+    record = reg.get_backend().get_record(ws_ctx(), rid)
+    assert record["decidedBy"]  # the hermetic client is the built-in admin identity
 
-    names = ["hr___read", "office___lookup", "x_amz_bedrock_agentcore_search"]
-    record = {
-        "recordId": "r", "name": "whole-gateway",
-        "descriptors": reg.build_mcp_descriptors(
-            target="whole-gateway", description="", gateway_url="https://gateway.example/mcp",
-            tools=[{"name": name} for name in names],
-        ),
-    }
-    monkeypatch.setattr(console.reg, "list_records", lambda *args: [
-        {"recordId": "r", "descriptorType": "MCP"},
-    ])
-    monkeypatch.setattr(console.reg, "get_record", lambda *args: record)
-    discover = Mock(side_effect=AssertionError("fully qualified catalog needs no legacy lookup"))
-    monkeypatch.setattr(console.mcp_client, "tools_list", discover)
-    result = console.attachable_records(
-        ws_ctx(), registry_client=object(), registry_id="registry",
-        gateways=[{"gatewayId": "g", "gatewayArn": "arn:g",
-                   "gatewayUrl": "https://gateway.example/mcp", "name": "gateway",
-                   "protocolType": "MCP", "authorizerType": "NONE"}],
-    )
-    assert result["mcp_servers"][0]["runtime_tools"] == names
-    discover.assert_not_called()
+
+def test_list_route_rejects_an_unknown_type_with_422(client, backend_ready):
+    res = client.get("/api/registry/records", params={"type": "gadget"})
+    assert res.status_code == 422 and res.json()["code"] == "registry.bad_type"

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { api, type CompleteOauthSessionResult, errorMessage } from "../../lib/api";
+import { api, type CompleteOauthSessionResult, detached, errorMessage } from "../../lib/api";
 import { Button } from "../ui";
 import { chatPathFor, parseReturnParams } from "./authReturnParams";
 
@@ -43,7 +43,8 @@ export function AuthReturn() {
     if (!sessionUri) return;
     let pending = posted.get(sessionUri);
     if (!pending) {
-      pending = api.completeOauthSession(sessionUri);
+      // shared across remounts (StrictMode, a re-render): never one mount's signal (N17-obs476)
+      pending = detached(() => api.completeOauthSession(sessionUri));
       posted.set(sessionUri, pending);
     }
     pending
@@ -111,7 +112,7 @@ export function AuthReturn() {
             <Button kind="primary" disabled={phase === "binding"} onClick={backToChat} testId="auth-return-back">
               {t("v2.authReturn.back")}
             </Button>
-            <Link to="/v2/my-connections" className="v2-link" data-testid="auth-return-grants">
+            <Link to="/v2/connections?view=mine" className="v2-link" data-testid="auth-return-grants">
               {t("v2.authReturn.myConnections")}
             </Link>
           </div>

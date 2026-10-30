@@ -192,7 +192,8 @@ def check_revision(row: AssistantConversation, expected: int) -> None:
 def live_catalog(
     workspace: WorkspaceContext, sources: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Merge only server-owned sources and re-read their real bytes on EVERY call."""
+    """Merge only server-owned sources and re-read their real bytes on EVERY call.
+    Unrestricted — conversation paths wrap it in ``service.restrict_catalog``."""
     from app.assistant import service
 
     catalog = service.fetch_catalog(workspace)
@@ -234,7 +235,8 @@ def revise_latest(db: Session, row: AssistantConversation, created_by: str) -> N
     selected = view(db, row)
     raw = {**latest.content, "knowledge_bases": selected["knowledge_bases"],
            "skills": selected["skills"], "tools": selected["tools"]}
-    content, display, _errors = proposal.validate(raw, row.catalog or {})
+    content, display, _errors = proposal.validate(
+        raw, row.catalog or {}, service.owner_model_principal(db, row.owner_principal))
     bindings = proposal.resource_bindings(content, row.catalog or {}) if content else None
     if proposal.revision_hash(display, bindings) == latest.content_hash:
         return
@@ -259,7 +261,10 @@ def save_selection(
     cid, principal = row.id, principal_of(identity)
     sources = list(row.preparation_sources or [])
     selected_tools = request.tools if request.tools is not None else view(db, row)["tools"]
-    catalog = live_catalog(workspace, sources)  # no write lock across AWS reads
+    catalog = service.restrict_catalog(  # no write lock across AWS reads
+        db, row.workspace_id, service.owner_viewer(db, row.workspace_id, row.owner_principal),
+        live_catalog(workspace, sources),
+    )
     # Reuse the exact Harness mount contract; no invented paths or gateway provisioning.
     candidate = proposal.ProposalContent(
         name="prepared-agent", system_prompt="Resource preparation",
@@ -331,14 +336,10 @@ def import_skills(
         raise
     results: list[dict[str, Any]] = []
     try:
-        registry._sweep_staging()
-        entry = registry._staging.get(request.staging_id)
-        if new_count and (
-            entry is None or entry.get("owner_principal") != principal
-            or entry.get("workspace_id") != workspace.id
-        ):
-            raise AppError("registry.staging_expired", "staging session expired or unknown",
-                           status_code=410)
+        if new_count:
+            from app.services import registry_console as console
+
+            console.take_staging(request.staging_id, workspace=workspace, principal=principal)
         for selected in request.selections:
             source = known.get(selected.index)
             if source is None:
@@ -350,7 +351,7 @@ def import_skills(
                                        "conversation not found", status_code=404)
                 imported = agent_skills.import_staged_skills(
                     request.staging_id, [registry.ImportSelection(index=selected.index)],
-                    workspace, consume=False,
+                    workspace, principal=principal, consume=False,
                 )["skills"][0]
                 if not imported["ok"]:
                     results.append({k: imported[k] for k in ("name", "ok", "error")})
@@ -370,7 +371,10 @@ def import_skills(
                 row.preparation_sources = list(sources)
                 db.commit()
             results.append({"name": source["name"], "ok": True, "key": source["key"]})
-        catalog = live_catalog(workspace, sources)
+        catalog = service.restrict_catalog(
+            db, row.workspace_id, service.owner_viewer(db, row.workspace_id, row.owner_principal),
+            live_catalog(workspace, sources),
+        )
         service._lock_conversation(db, cid)
         row = service.accessible_conversation(db, workspace.id, principal, cid)
         require_unlocked(db, cid)

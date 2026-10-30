@@ -1,7 +1,6 @@
 import { Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { splitScopes } from "../../../lib/agent-spec";
@@ -18,6 +17,7 @@ import { targetModes } from "../../../lib/obo";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, type Column, Confirm, Field, LinkButton, Modal, Segmented, Select, Table, Tag } from "../../ui";
 import { KindTag } from "./ConnectionList";
+import { awsStatusLabel } from "../../awsStatus";
 
 const TARGET_NAME_RE = /^([0-9a-zA-Z][-]?){1,100}$/;
 const STATUS_TONE: Record<string, "green" | "orange" | "red"> = {
@@ -32,21 +32,8 @@ export function GatewayTargets() {
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useV2Toast();
-  const navigate = useNavigate();
   const manage = can("identity.manage");
   const { data, loading, error, reload } = useLoad(() => api.listIdentityGatewayTargets(), "identity-targets");
-  // tool-level Cedar: the governance editor, prefilled with this target's exact actions
-  const policyLink = (row: IdentityGatewayTarget) =>
-    data?.gateway_id ? (
-      <LinkButton
-        onClick={() =>
-          navigate(`/v2/governance?${new URLSearchParams({ view: "policy", gateway: data.gateway_id ?? "", target: row.name })}`)
-        }
-        testId={`v2-target-policy-${row.name}`}
-      >
-        {t("v2.connections.targets.policy")}
-      </LinkButton>
-    ) : null;
   const [creating, setCreating] = useState(false);
   const [removing, setRemoving] = useState<IdentityGatewayTarget | null>(null);
   const [busy, setBusy] = useState(false);
@@ -98,7 +85,7 @@ export function GatewayTargets() {
       title: t("v2.connections.targets.colStatus"),
       render: (row) => (
         <Tag tone={STATUS_TONE[row.status] ?? "gray"} dot title={row.status_reasons.join("\n") || undefined}>
-          {row.status || "—"}
+          {awsStatusLabel(t, row.status)}
         </Tag>
       ),
     },
@@ -107,7 +94,6 @@ export function GatewayTargets() {
       title: "",
       render: (row) => (
         <span className="v2-row">
-          {policyLink(row)}
           {row.system ? (
             <Tag tone="gray">{t("v2.connections.source.system")}</Tag>
           ) : manage && row.connection ? (

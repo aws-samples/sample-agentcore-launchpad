@@ -1,25 +1,10 @@
-import { Plus, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import {
-  api,
-  type GovernanceAuthorizationModel,
-  type GovernanceDecisionResponse,
-  type GovernanceGatewayDetail,
-  type GovernanceGatewayMode,
-  type GovernanceGatewayTarget,
-  type GovernancePolicy,
-  type GovernancePolicyListResponse,
-  type GovernanceRegistryPreview,
-} from "../../../lib/api";
-import {
-  governanceError,
-  isGatewayReady,
-  TARGET_SYNC_POLL_INTERVAL_MS,
-  TARGET_SYNC_POLL_MS,
-} from "../../../lib/governance";
+import { api, type GatewayPolicyEngine, type GovernanceGatewayDetail, type GovernanceGatewayTarget } from "../../../lib/api";
+import { governanceError, TARGET_SYNC_POLL_INTERVAL_MS, TARGET_SYNC_POLL_MS } from "../../../lib/governance";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import {
@@ -29,102 +14,63 @@ import {
   type Column,
   Confirm,
   Descriptions,
-  Field,
   FlowHeader,
   LinkButton,
-  Segmented,
-  Select,
   Spin,
   SubTabs,
   Table,
   Tag,
 } from "../../ui";
-import { AuditSection } from "./Audit";
-import { type GatewaySection, GATEWAY_SECTIONS, targetKind, useCopy, useGovernanceOperation } from "./common";
-import { JsonBlock, OperationAlert, SharedEngineAck, StatusTag } from "./widgets";
-import { DecisionsSection } from "./Decisions";
-import { PolicyTestCard } from "./PolicyTest";
+import { type GatewaySection, GATEWAY_SECTIONS, targetKind, useCopy } from "./common";
+import { GatewayPolicyEngineSection } from "./GatewayPolicyEngine";
 import { RateLimitsSection } from "./RateLimits";
+import { StatusTag } from "./widgets";
 
-type ConfirmAction = "manage" | "unmanage" | "import" | "retire" | "engine" | "logOnly" | "enforce" | "deletePolicy";
+type ConfirmAction = "manage" | "unmanage";
 
-const DANGER: ConfirmAction[] = ["unmanage", "retire", "deletePolicy"];
+const DANGER: ConfirmAction[] = ["unmanage"];
 
-interface LoadErrors {
-  registry?: string;
-  policies?: string;
-  decisions?: string;
-}
-
-/** One MCP Gateway: identity, Registry, Policy Engine + mode, IAM, policies, targets, limits, decisions, audit. */
+/** One MCP Gateway: identity, targets + synchronization, rate limits, the attached policy engine. */
 export function GatewayDetail({ gatewayId, section }: { gatewayId: string; section: GatewaySection }) {
   const { t, i18n } = useTranslation();
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
   const copy = useCopy(t);
   const [gateway, setGateway] = useState<GovernanceGatewayDetail | null>(null);
-  const [policies, setPolicies] = useState<GovernancePolicyListResponse | null>(null);
-  const [registry, setRegistry] = useState<GovernanceRegistryPreview | null>(null);
-  const [evidence, setEvidence] = useState<GovernanceDecisionResponse | null>(null);
   const [fatalError, setFatalError] = useState<string | null>(null);
-  const [loadErrors, setLoadErrors] = useState<LoadErrors>({});
   const [refreshing, setRefreshing] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
-  const [policyToDelete, setPolicyToDelete] = useState<GovernancePolicy | null>(null);
-  const [selectedLegacy, setSelectedLegacy] = useState<string[]>([]);
-  const [sharedAcknowledged, setSharedAcknowledged] = useState(false);
-  const [confirmationName, setConfirmationName] = useState("");
-  const [overrideReason, setOverrideReason] = useState("");
-  const [authorizationModel, setAuthorizationModel] = useState<GovernanceAuthorizationModel>("allowlist");
-  const [initialEngineMode, setInitialEngineMode] = useState<GovernanceGatewayMode>("ENFORCE");
-  const [targetGatewayMode, setTargetGatewayMode] = useState<GovernanceGatewayMode>("ENFORCE");
-  const [highRiskAcknowledged, setHighRiskAcknowledged] = useState(false);
-  // rate limits / decisions / audit own their fetches; REFRESH reaches them through this tick
+  // rate limits own their fetch; REFRESH reaches them through this tick
   const [refreshTick, setRefreshTick] = useState(0);
   // SynchronizeGatewayTargets answers 202 and the target sits in SYNCHRONIZING with no
   // operation row to poll, so the detail itself is re-fetched until every target settles
   const [syncingTarget, setSyncingTarget] = useState<string | null>(null);
   const [syncPollStartedAt, setSyncPollStartedAt] = useState<number | null>(null);
+  // the gateway's policy engine attachment (Global `policyEngineConfiguration`) — read with the
+  // detail so the header can name it; the section owns the attach / detach controls
+  const [policyEngine, setPolicyEngine] = useState<GatewayPolicyEngine | null>(null);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     setFatalError(null);
     setRefreshTick((tick) => tick + 1);
-    const [gatewayResult, policyResult, registryResult, decisionResult] = await Promise.allSettled([
-      api.getGovernanceGateway(gatewayId),
-      api.listGovernancePolicies(gatewayId),
-      api.governanceRegistryPreview(gatewayId),
-      api.governanceDecisions(gatewayId, "24h"),
-    ]);
-    if (gatewayResult.status === "fulfilled") {
-      setGateway(gatewayResult.value);
-      const liveMode = gatewayResult.value.policy_engine?.missing ? null : gatewayResult.value.policy_engine?.mode;
-      if (liveMode) setTargetGatewayMode(liveMode);
-    } else {
-      setFatalError(governanceError(gatewayResult.reason));
+    try {
+      setGateway(await api.getGovernanceGateway(gatewayId));
+    } catch (error) {
+      setFatalError(governanceError(error));
+    } finally {
+      setRefreshing(false);
     }
-    if (policyResult.status === "fulfilled") setPolicies(policyResult.value);
-    if (registryResult.status === "fulfilled") {
-      setRegistry(registryResult.value);
-      setSelectedLegacy((current) =>
-        current.filter((id) => registryResult.value.legacy_records.some((record) => record.record_id === id)),
-      );
-    }
-    if (decisionResult.status === "fulfilled") setEvidence(decisionResult.value);
-    setLoadErrors({
-      policies: policyResult.status === "rejected" ? governanceError(policyResult.reason) : undefined,
-      registry: registryResult.status === "rejected" ? governanceError(registryResult.reason) : undefined,
-      decisions: decisionResult.status === "rejected" ? governanceError(decisionResult.reason) : undefined,
-    });
-    setRefreshing(false);
+    // fail-soft: an unreadable attachment leaves the header silent, the section shows the error
+    api.gatewayPolicyEngine(gatewayId).then(setPolicyEngine, () => setPolicyEngine(null));
   }, [gatewayId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const { operation, setOperation, pending: operationPending } = useGovernanceOperation(() => void load());
+  const operationBusy = busy !== null;
 
   const synchronizingTargets = useMemo(
     () => gateway?.targets.filter((target) => target.status === "SYNCHRONIZING") ?? [],
@@ -141,40 +87,17 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
     return () => window.clearTimeout(timer);
   }, [load, syncPollStartedAt, synchronizingTargets]);
 
-  const sharedIds = useMemo(() => gateway?.shared_gateways.map((item) => item.id) ?? [], [gateway]);
-  const needsSharedAck = (gateway?.shared_gateways.length ?? 0) > 1;
-  const operationBusy = busy !== null || operationPending;
-  const evidenceCount = evidence?.log_only_count ?? 0;
-  const hasOverrideReason = overrideReason.trim().length > 0;
-  const engineReady = gateway?.policy_engine?.status.toUpperCase() === "ACTIVE";
-  const iamPass = gateway?.iam_preflight?.status === "pass";
-  const commonMutationReady = !!gateway && gateway.managed && isGatewayReady(gateway) && !operationBusy;
-  const sharedReady = !needsSharedAck || sharedAcknowledged;
-
-  const mutationEnvelope = () => ({
-    expected_gateway_updated_at: gateway?.updated_at,
-    acknowledged_gateway_ids: needsSharedAck ? sharedIds : [],
-    confirmation_name: confirmationName || null,
-    override_reason: evidenceCount === 0 ? overrideReason.trim() || null : null,
-  });
-
   const finishMutation = async (label: string, action: () => Promise<unknown>) => {
     setBusy(label);
     try {
-      const result = await action();
-      // operation-backed mutations answer with the operation row; the rest are synchronous
-      if (result && typeof result === "object" && "operation" in result && "status" in result) {
-        setOperation(result as Parameters<typeof setOperation>[0]);
-      } else {
-        await load();
-      }
+      await action();
+      await load();
       toast("success", t("governance.messages.requestAccepted"));
     } catch (error) {
       toast("error", governanceError(error));
     } finally {
       setBusy(null);
       setConfirmAction(null);
-      setPolicyToDelete(null);
     }
   };
 
@@ -197,58 +120,11 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
 
   const runConfirmedAction = () => {
     if (!gateway || !confirmAction) return;
-    switch (confirmAction) {
-      case "manage":
-        void finishMutation("manage", () => api.manageGovernanceGateway(gateway.id));
-        return;
-      case "unmanage":
-        void finishMutation("unmanage", () => api.unmanageGovernanceGateway(gateway.id));
-        return;
-      case "import":
-        void finishMutation("import", () =>
-          api.importGovernanceRegistry(gateway.id, {
-            ...mutationEnvelope(),
-            record_name: registry?.proposed.name ?? gateway.name,
-            apply_update: registry?.outcome === "changed",
-          }),
-        );
-        return;
-      case "retire":
-        void finishMutation("retire", () =>
-          api.retireGovernanceLegacyRecords(gateway.id, { ...mutationEnvelope(), record_ids: selectedLegacy }),
-        );
-        return;
-      case "deletePolicy": {
-        const policy = policyToDelete;
-        if (!policy) return;
-        void finishMutation("deletePolicy", () =>
-          api.deleteGovernancePolicy(gateway.id, policy.id, {
-            ...mutationEnvelope(),
-            expected_policy_updated_at: policy.updated_at,
-          }),
-        );
-        return;
-      }
-      case "engine":
-        void finishMutation("engine", () =>
-          api.attachGovernanceEngine(gateway.id, {
-            ...mutationEnvelope(),
-            mode: initialEngineMode,
-            authorization_model: authorizationModel,
-            high_risk_acknowledged: highRiskAcknowledged,
-          }),
-        );
-        return;
-      default:
-        void finishMutation("mode", () =>
-          api.setGovernanceGatewayMode(gateway.id, {
-            ...mutationEnvelope(),
-            acknowledged_gateway_ids: [],
-            mode: confirmAction === "enforce" ? "ENFORCE" : "LOG_ONLY",
-            evidence_range: "24h",
-          }),
-        );
+    if (confirmAction === "manage") {
+      void finishMutation("manage", () => api.manageGovernanceGateway(gateway.id));
+      return;
     }
+    void finishMutation("unmanage", () => api.unmanageGovernanceGateway(gateway.id));
   };
 
   const back = () => setParams({});
@@ -274,427 +150,21 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
     );
   }
 
-  const registryApproved = registry?.exact_record?.status === "APPROVED";
-  // A Gateway keeps its Engine reference after the Engine is deleted out-of-band: neither an
-  // attachment nor a clean slate, so the create form is offered and it replaces the stale reference.
-  const liveEngine = gateway.policy_engine && !gateway.policy_engine.missing ? gateway.policy_engine : null;
-  const danglingEngine = gateway.policy_engine?.missing ? gateway.policy_engine : null;
-  const modeBlockers: string[] = [];
-  if (!gateway.managed) modeBlockers.push("notManaged");
-  if (!isGatewayReady(gateway)) modeBlockers.push("gatewayNotReady");
-  if (operationBusy) modeBlockers.push("busy");
-  if (!engineReady) modeBlockers.push("engineNotActive");
-  if (targetGatewayMode === liveEngine?.mode) modeBlockers.push("modeAlreadyActive");
-  if (targetGatewayMode === "ENFORCE") {
-    if (!iamPass) modeBlockers.push("iamPreflight");
-    if (confirmationName !== gateway.name) modeBlockers.push("confirmName");
-    if (evidenceCount === 0 && !hasOverrideReason) modeBlockers.push("evidenceOrOverride");
-  }
-  const engineBlocked =
-    !commonMutationReady || !sharedReady || (authorizationModel === "preserve_traffic" && !highRiskAcknowledged);
-  const policyCount = policies?.policies.length;
-
-  const confirmBody =
-    t(`governance.confirm.${confirmAction ?? "manage"}`, {
-      name: gateway.name,
-      engine: liveEngine?.name ?? t("governance.states.newEngine"),
-      count: selectedLegacy.length,
-      gateways: gateway.shared_gateways.map((item) => item.name).join(", "),
-      policy: policyToDelete?.name ?? "",
-      mode: initialEngineMode,
-    }) +
-    (confirmAction === "engine" && danglingEngine
-      ? ` ${t("governance.confirm.engineReplaces", { arn: danglingEngine.arn })}`
-      : "");
-
   /* ---------------- overview ---------------- */
   const overview = (
-    <>
-      <Card title={t("v2.governance.identity")} testId="v2-governance-identity">
-        {gateway.status_reasons.length > 0 && <Alert tone="error">{gateway.status_reasons.join("; ")}</Alert>}
-        <Descriptions
-          items={[
-            { label: "ARN", value: <span className="mono">{gateway.arn}</span> },
-            { label: t("v2.governance.endpoint"), value: gateway.url ? <span className="mono">{gateway.url}</span> : "—" },
-            { label: t("v2.governance.colAuthorizer"), value: <span className="mono">{gateway.authorizer_type}</span> },
-            { label: t("v2.governance.protocol"), value: gateway.protocol_type },
-            { label: t("v2.governance.role"), value: gateway.role_arn ? <span className="mono">{gateway.role_arn}</span> : "—" },
-            { label: t("v2.governance.awsUpdated"), value: fmtTime(gateway.updated_at) },
-          ]}
-        />
-      </Card>
-
-      <div className="v2-grid-2">
-        <Card
-          title={t("v2.governance.registry")}
-          end={
-            gateway.attachability.attachable ? (
-              <Tag tone="green">{t("v2.governance.attachable")}</Tag>
-            ) : (
-              <Tag tone="orange">{t("v2.governance.catalogOnly")}</Tag>
-            )
-          }
-          testId="v2-governance-registry"
-        >
-          <div className="v2-muted v2-governance-note">{t("governance.detail.catalogSeparate")}</div>
-          {!gateway.attachability.attachable && (
-            <Alert tone="warn">{gateway.attachability.reason ?? t("governance.states.authUnresolved")}</Alert>
-          )}
-          {loadErrors.registry ? (
-            <Alert tone="error">{loadErrors.registry}</Alert>
-          ) : registry ? (
-            <>
-              <Descriptions
-                one
-                items={[
-                  { label: t("v2.governance.previewOutcome"), value: <Tag tone="outline">{registry.outcome}</Tag> },
-                  {
-                    label: t("v2.governance.gatewayRecord"),
-                    value: registry.exact_record ? (
-                      <span className="v2-row">
-                        {registry.exact_record.name} <StatusTag status={registry.exact_record.status} />
-                      </span>
-                    ) : (
-                      t("v2.governance.notCataloged")
-                    ),
-                  },
-                  { label: t("v2.governance.legacyRecords"), value: registry.legacy_records.length },
-                ]}
-              />
-              {registry.name_conflict && (
-                <Alert tone="error">{t("governance.detail.registryConflict", { name: registry.name_conflict.name })}</Alert>
-              )}
-              <div className="v2-row v2-governance-actions">
-                <Button
-                  kind="primary"
-                  disabled={
-                    !commonMutationReady ||
-                    !!registry.name_conflict ||
-                    (registry.outcome === "reused" && registry.exact_record?.status !== "DRAFT")
-                  }
-                  onClick={() => setConfirmAction("import")}
-                  testId="v2-governance-import"
-                >
-                  {registry.outcome === "changed" ? t("v2.governance.syncRegistry") : t("v2.governance.importRegistry")}
-                </Button>
-              </div>
-              {registry.legacy_records.length > 0 && (
-                <div className="v2-governance-legacy">
-                  <div className="v2-sub-title">{t("v2.governance.legacyRecords")}</div>
-                  <div className="v2-stack">
-                    {registry.legacy_records.map((record) => (
-                      <label key={record.record_id} className="v2-check">
-                        <input
-                          type="checkbox"
-                          checked={selectedLegacy.includes(record.record_id)}
-                          onChange={(e) =>
-                            setSelectedLegacy((current) =>
-                              e.target.checked
-                                ? [...current, record.record_id]
-                                : current.filter((id) => id !== record.record_id),
-                            )
-                          }
-                        />
-                        {record.name} <StatusTag status={record.status} />
-                      </label>
-                    ))}
-                  </div>
-                  <div className="v2-row v2-governance-actions">
-                    <Button
-                      kind="danger"
-                      disabled={!commonMutationReady || !registryApproved || selectedLegacy.length === 0}
-                      title={!registryApproved ? t("v2.governance.retireNeedsApproval") : undefined}
-                      onClick={() => setConfirmAction("retire")}
-                    >
-                      {t("v2.governance.retireLegacy")}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <Spin />
-          )}
-        </Card>
-
-        <Card
-          title={t("v2.governance.iam")}
-          end={
-            gateway.iam_preflight ? (
-              <StatusTag status={gateway.iam_preflight.status.toUpperCase()} />
-            ) : (
-              <Tag tone="gray">{t("v2.governance.notAvailable")}</Tag>
-            )
-          }
-          testId="v2-governance-iam"
-        >
-          {gateway.iam_preflight ? (
-            <>
-              {gateway.iam_preflight.status !== "pass" ? (
-                <Alert tone="error">
-                  {gateway.iam_preflight.reason}
-                  {gateway.iam_preflight.operator_error ? ` / ${gateway.iam_preflight.operator_error}` : ""}
-                </Alert>
-              ) : (
-                <Alert tone="success">{t("governance.detail.iamPass")}</Alert>
-              )}
-              <JsonBlock value={gateway.iam_preflight.remediation} />
-              <div className="v2-row v2-governance-actions">
-                <Button size="sm" onClick={() => copy(JSON.stringify(gateway.iam_preflight?.remediation ?? {}, null, 2))}>
-                  {t("v2.governance.copy")}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <div className="v2-muted">{t("governance.detail.iamAfterEngine")}</div>
-          )}
-        </Card>
-      </div>
-
-      <Card
-        title={t("v2.governance.engine")}
-        end={
-          liveEngine ? (
-            <StatusTag status={liveEngine.mode} />
-          ) : danglingEngine ? (
-            <Tag tone="red">{t("v2.governance.engineDeleted")}</Tag>
-          ) : (
-            <Tag tone="gray">{t("v2.governance.notAttached")}</Tag>
-          )
-        }
-        testId="v2-governance-engine"
-      >
-        {liveEngine ? (
-          <>
-            <Descriptions
-              items={[
-                { label: t("v2.governance.engineName"), value: <span className="mono">{liveEngine.name}</span> },
-                { label: t("v2.governance.engineStatus"), value: <StatusTag status={liveEngine.status} /> },
-                { label: t("v2.governance.currentMode"), value: <StatusTag status={liveEngine.mode} /> },
-                { label: t("v2.governance.policyCount"), value: policyCount ?? "—" },
-              ]}
-            />
-            <div className="v2-sub-title">{t("v2.governance.modeRollout")}</div>
-            <div className="v2-form cols-2">
-              <Field label={t("v2.governance.targetMode")}>
-                <div>
-                  <Segmented
-                    value={targetGatewayMode}
-                    onChange={setTargetGatewayMode}
-                    options={(["LOG_ONLY", "ENFORCE"] as GovernanceGatewayMode[]).map((mode) => ({ value: mode, label: mode }))}
-                  />
-                </div>
-              </Field>
-              {targetGatewayMode === "ENFORCE" && (
-                <Field label={t("v2.governance.confirmName")} required hint={t("v2.governance.confirmNameHint", { name: gateway.name })}>
-                  <input
-                    className="v2-input mono"
-                    value={confirmationName}
-                    placeholder={gateway.name}
-                    onChange={(e) => setConfirmationName(e.target.value)}
-                    data-testid="v2-governance-confirm-name"
-                  />
-                </Field>
-              )}
-              {targetGatewayMode === "ENFORCE" &&
-                (evidenceCount === 0 ? (
-                  <Field label={t("v2.governance.overrideReason")} full>
-                    <textarea
-                      className="v2-textarea"
-                      rows={3}
-                      value={overrideReason}
-                      onChange={(e) => setOverrideReason(e.target.value)}
-                    />
-                  </Field>
-                ) : (
-                  <div className="v2-field full">
-                    <Alert tone="success">{t("governance.detail.evidenceReady", { count: evidenceCount })}</Alert>
-                  </div>
-                ))}
-            </div>
-            {targetGatewayMode === "ENFORCE" && loadErrors.decisions && <Alert tone="error">{loadErrors.decisions}</Alert>}
-            <div className="v2-row v2-governance-actions">
-              <Button
-                kind="primary"
-                disabled={modeBlockers.length > 0}
-                onClick={() => setConfirmAction(targetGatewayMode === "ENFORCE" ? "enforce" : "logOnly")}
-                testId="v2-governance-apply-mode"
-              >
-                {t("v2.governance.applyMode")}
-              </Button>
-              {modeBlockers.length > 0 && (
-                <span className="v2-governance-blockers" data-testid="gateway-mode-blockers">
-                  {t("governance.detail.modeBlockedPrefix")} {modeBlockers.map((key) => t(`governance.blockers.${key}`)).join(" · ")}
-                </span>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            {danglingEngine && (
-              <Alert tone="error">
-                {t("governance.detail.danglingEngine")} <span className="mono">{danglingEngine.arn}</span>
-              </Alert>
-            )}
-            <div className="v2-form cols-2">
-              <Field label={t("v2.governance.initialMode")} hint={t("governance.detail.initialGatewayModeHelp")}>
-                <div>
-                  <Segmented
-                    value={initialEngineMode}
-                    onChange={setInitialEngineMode}
-                    options={(["ENFORCE", "LOG_ONLY"] as GovernanceGatewayMode[]).map((mode) => ({ value: mode, label: mode }))}
-                  />
-                </div>
-              </Field>
-              <Field label={t("v2.governance.authorizationModel")} hint={t(`governance.policyEditor.modelHelp.${authorizationModel}`)}>
-                <Select
-                  value={authorizationModel}
-                  options={[
-                    { value: "allowlist", label: t("v2.governance.model.allowlist") },
-                    { value: "preserve_traffic", label: t("v2.governance.model.preserve_traffic") },
-                    { value: "custom", label: t("v2.governance.model.custom") },
-                  ]}
-                  onChange={(v) => setAuthorizationModel(v as GovernanceAuthorizationModel)}
-                />
-              </Field>
-            </div>
-            {initialEngineMode === "ENFORCE" && (
-              <Alert tone="warn">
-                <span>{t("governance.detail.initialEnforceWarning")}</span>
-              </Alert>
-            )}
-            {authorizationModel === "preserve_traffic" && (
-              <Alert tone="error">
-                <label className="v2-check">
-                  <input
-                    type="checkbox"
-                    checked={highRiskAcknowledged}
-                    onChange={(e) => setHighRiskAcknowledged(e.target.checked)}
-                  />
-                  {t("governance.models.highRiskAck")}
-                </label>
-              </Alert>
-            )}
-            <div className="v2-row v2-governance-actions">
-              <Button kind="primary" disabled={engineBlocked} onClick={() => setConfirmAction("engine")} testId="v2-governance-attach-engine">
-                <Plus size={14} aria-hidden="true" />
-                {t("v2.governance.createAttachEngine", { mode: initialEngineMode })}
-              </Button>
-              {!gateway.managed && <span className="v2-governance-blockers">{t("governance.blockers.notManaged")}</span>}
-            </div>
-          </>
-        )}
-      </Card>
-    </>
-  );
-
-  /* ---------------- policies ---------------- */
-  const enforcedActive = (policy: GovernancePolicy) =>
-    policy.enforcement_mode === "ACTIVE" && gateway.policy_engine?.mode === "ENFORCE";
-  const policyColumns: Column<GovernancePolicy>[] = [
-    {
-      key: "name",
-      title: t("v2.governance.colPolicy"),
-      render: (policy) => (
-        <>
-          <LinkButton
-            disabled={!gateway.managed || operationBusy}
-            onClick={() => setParams({ view: "policy", gateway: gateway.id, policy: policy.id })}
-            testId={`v2-governance-policy-${policy.id}`}
-          >
-            {policy.name}
-          </LinkButton>
-          <span className="sub mono">ID: {policy.id}</span>
-        </>
-      ),
-    },
-    {
-      key: "status",
-      title: t("v2.governance.colStatus"),
-      render: (policy) => <StatusTag status={policy.status} title={policy.status_reasons.join("; ") || undefined} />,
-    },
-    { key: "mode", title: t("v2.governance.colPolicyMode"), render: (policy) => <StatusTag status={policy.enforcement_mode} /> },
-    {
-      key: "relation",
-      title: t("v2.governance.colRelation"),
-      render: (policy) => (
-        <span className="mono">
-          {policy.candidate_for
-            ? t("governance.detail.candidateFor", { id: policy.candidate_for })
-            : policy.candidate_id
-              ? t("governance.detail.hasCandidate", { id: policy.candidate_id })
-              : "—"}
-        </span>
-      ),
-    },
-    { key: "updated", title: t("v2.governance.colUpdated"), className: "nowrap", render: (policy) => fmtTime(policy.updated_at) },
-    {
-      key: "ops",
-      title: t("v2.common.actions"),
-      className: "right",
-      render: (policy) => (
-        <div className="v2-actions">
-          <LinkButton
-            disabled={!gateway.managed || operationBusy}
-            onClick={() => setParams({ view: "policy", gateway: gateway.id, policy: policy.id })}
-          >
-            {t("v2.governance.review")}
-          </LinkButton>
-          <LinkButton
-            danger
-            disabled={!commonMutationReady || !sharedReady || enforcedActive(policy)}
-            title={enforcedActive(policy) ? t("governance.detail.deleteEnforcedHint") : undefined}
-            onClick={() => {
-              setPolicyToDelete(policy);
-              setConfirmAction("deletePolicy");
-            }}
-          >
-            {t("v2.common.delete")}
-          </LinkButton>
-        </div>
-      ),
-    },
-  ];
-  const newPolicyBlocked = !commonMutationReady || !liveEngine || !sharedReady;
-  const policiesSection = (
-    <>
-      <Card
-        title={t("v2.governance.section.policies")}
-        sub={t("governance.detail.policyModesSeparate")}
-        end={
-          <Button
-            kind="primary"
-            size="sm"
-            disabled={newPolicyBlocked}
-            title={
-              !gateway.managed
-                ? t("governance.blockers.notManaged")
-                : !liveEngine
-                  ? t("governance.blockers.noEngine")
-                  : !sharedReady
-                    ? t("governance.blockers.sharedAck")
-                    : undefined
-            }
-            onClick={() => setParams({ view: "policy", gateway: gateway.id })}
-            testId="v2-governance-new-policy"
-          >
-            <Plus size={14} aria-hidden="true" />
-            {t("v2.governance.newPolicy")}
-          </Button>
-        }
-        testId="v2-governance-policies"
-      >
-        {loadErrors.policies && <Alert tone="error">{loadErrors.policies}</Alert>}
-        <Table
-          columns={policyColumns}
-          rows={policies?.policies ?? []}
-          rowKey={(policy) => policy.id}
-          loading={!policies && !loadErrors.policies}
-          empty={liveEngine ? t("v2.governance.noPolicies") : t("governance.blockers.noEngine")}
-        />
-      </Card>
-      {gateway.policy_test_available && <PolicyTestCard actions={gateway.actions} />}
-    </>
+    <Card title={t("v2.governance.identity")} testId="v2-governance-identity">
+      {gateway.status_reasons.length > 0 && <Alert tone="error">{gateway.status_reasons.join("; ")}</Alert>}
+      <Descriptions
+        items={[
+          { label: "ARN", value: <span className="mono">{gateway.arn}</span> },
+          { label: t("v2.governance.endpoint"), value: gateway.url ? <span className="mono">{gateway.url}</span> : "—" },
+          { label: t("v2.governance.colAuthorizer"), value: <span className="mono">{gateway.authorizer_type}</span> },
+          { label: t("v2.governance.protocol"), value: gateway.protocol_type },
+          { label: t("v2.governance.role"), value: gateway.role_arn ? <span className="mono">{gateway.role_arn}</span> : "—" },
+          { label: t("v2.governance.awsUpdated"), value: fmtTime(gateway.updated_at) },
+        ]}
+      />
+    </Card>
   );
 
   /* ---------------- targets ---------------- */
@@ -826,7 +296,6 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
   );
 
   const counts: Partial<Record<GatewaySection, number | undefined>> = {
-    policies: policyCount,
     targets: gateway.targets.length,
   };
 
@@ -840,6 +309,11 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
             <Tag tone={gateway.managed ? "green" : "gray"} dot>
               {gateway.managed ? t("v2.governance.managed") : t("v2.governance.unmanaged")}
             </Tag>
+            {policyEngine?.attached && (
+              <Tag tone="blue" title={policyEngine.engine_id ?? undefined} testId="v2-governance-policy-engine-tag">
+                {t("v2.policy.gateway.headerTag", { engine: policyEngine.engine_name ?? policyEngine.engine_id ?? "", mode: t(`v2.policy.attachMode.${(policyEngine.mode ?? "").toLowerCase()}`, { defaultValue: policyEngine.mode ?? "" }) })}
+              </Tag>
+            )}
           </span>
         }
         onBack={back}
@@ -872,31 +346,22 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
         <span className="mono v2-muted">{gateway.id}</span>
       </div>
 
-      {!gateway.managed && <Alert tone="warn">{t("governance.policyEditor.unmanaged")}</Alert>}
-      <OperationAlert operation={operation} />
-      {(needsSharedAck || gateway.shared_engine) && (section === "overview" || section === "policies") && (
-        <SharedEngineAck gateway={gateway} checked={sharedAcknowledged} onChange={setSharedAcknowledged} t={t} />
-      )}
-
       {section === "overview" && overview}
-      {section === "policies" && policiesSection}
       {section === "targets" && targetsSection}
-      {section === "rateLimits" && <RateLimitsSection gateway={gateway} operationBusy={operationBusy} refreshTick={refreshTick} />}
-      {section === "decisions" && <DecisionsSection gateway={gateway} policies={policies} refreshTick={refreshTick} />}
-      {section === "audit" && <AuditSection gateway={gateway} refreshTick={refreshTick} />}
+      {section === "rate-limits" && <RateLimitsSection gateway={gateway} operationBusy={operationBusy} refreshTick={refreshTick} />}
+      {section === "policy-engine" && (
+        <GatewayPolicyEngineSection gateway={gateway} current={policyEngine} refreshTick={refreshTick} onChanged={setPolicyEngine} />
+      )}
 
       <Confirm
         open={confirmAction !== null}
         title={t(`v2.governance.confirmTitle.${confirmAction ?? "manage"}`)}
-        body={confirmBody}
+        body={t(`governance.confirm.${confirmAction ?? "manage"}`, { name: gateway.name })}
         confirmLabel={t("v2.common.confirm")}
         danger={confirmAction !== null && DANGER.includes(confirmAction)}
         busy={busy !== null}
         onConfirm={runConfirmedAction}
-        onClose={() => {
-          setConfirmAction(null);
-          setPolicyToDelete(null);
-        }}
+        onClose={() => setConfirmAction(null)}
       />
     </>
   );

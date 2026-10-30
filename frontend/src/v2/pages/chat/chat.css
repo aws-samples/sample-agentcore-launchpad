@@ -66,6 +66,8 @@
 .v2 .v2-chat-msg.user .v2-chat-bub { background: var(--v2-primary-soft); color: var(--v2-ink); border-top-right-radius: 2px; }
 .v2 .v2-chat-msg.user .v2-chat-text { white-space: pre-wrap; }
 .v2 .v2-chat-msg.agent .v2-chat-bub { background: #fff; border: 1px solid var(--v2-line); border-top-left-radius: 2px; }
+/* N-SCN-bug4: inline notice under an answer the runtime closed at the model's token limit */
+.v2 .v2-chat-truncated { margin-top: 6px; font-size: 12px; color: #b04800; }
 .v2 .v2-chat-bub .md { font-size: 14px; }
 .v2 .v2-chat-bub .md pre, .v2 .v2-chat-bub .md code { border-radius: 4px; }
 .v2 .v2-chat-bub .md strong { color: inherit; }
@@ -73,9 +75,14 @@
 .v2 .v2-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: text-bottom; background: var(--v2-primary); animation: v2chatblink 1s steps(2) infinite; }
 @keyframes v2chatblink { 50% { opacity: 0; } }
 .v2 .v2-chat-tool {
-  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 13px;
+  align-self: flex-start; display: flex; flex-direction: column; gap: 4px; max-width: 82%; padding: 5px 10px; font-size: 13px;
   border: 1px dashed var(--v2-line); border-radius: 6px; background: var(--v2-fill); color: var(--v2-ink-2);
 }
+.v2 .v2-chat-tool-head { display: inline-flex; align-items: center; gap: 8px; }
+/* N16-obs85: the bounded call summary (arguments ≤ 512 chars, result ≤ 256) under the row */
+.v2 .v2-chat-tool-detail { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--v2-ink-3); }
+.v2 .v2-chat-tool-detail code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--v2-ink-2); }
+.v2 .v2-chat-tool-label { flex: none; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 .v2 .v2-chat-auth {
   align-self: flex-start; max-width: 82%; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; font-size: 13px;
   border: 1px solid var(--v2-warning); border-radius: var(--v2-radius); background: var(--v2-warning-soft); color: var(--v2-ink);
@@ -91,6 +98,8 @@
 .v2 .v2-chat-policy-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
 .v2 .v2-chat-policy-facts dt { color: var(--v2-ink-3); }
 .v2 .v2-chat-policy-facts dd { margin: 0; overflow-wrap: anywhere; }
+/* N17-obs510: one chip per determining policy, never run together */
+.v2 .v2-chat-policy-list { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; }
 .v2 .v2-chat-memline { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--v2-ink-3); }
 .v2 .v2-chat-memline code { font-size: 11.5px; }
 .v2 .v2-chat-error { max-width: 82%; }
@@ -144,3 +153,7 @@
   .v2 .v2-chat-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; }
   .v2 .v2-chat-pane-main { min-height: 560px; }
 }
+/* A6: the raw English engine text of a policy denial, collapsed by default */
+.v2 .v2-chat-policy-raw { font-size: 12.5px; }
+.v2 .v2-chat-policy-raw summary { cursor: pointer; color: var(--v2-ink-3); }
+.v2 .v2-chat-policy-raw code { display: block; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }

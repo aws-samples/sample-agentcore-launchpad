@@ -1,0 +1,234 @@
+# Lifecycle graph — one policy engine attached to two gateways (E07). Round 17, channel A;
+# rewritten 2026-10-28 (pg-contracts) for the Global AgentCore Policy model of contract
+# amendment 11: the policy ENGINE is a resource, policies belong to it, the engine is ATTACHED to
+# one or many gateways with a mode (`ENFORCE` / `LOG_ONLY`), and the interceptor on each gateway
+# decides the tool calls through that gateway. There is no workspace mode, no switch, no stale
+# carrier and no apply any more (the earlier shape of this graph, r17-bl / N17-obs482, walked
+# those); the engine-down case stays where Global puts it — at the Gateway.
+#
+# Walked: the administrator creates an engine (a member's 403 and a duplicate name's 409 as
+# refusals), publishes a policy into it (the engine's ONE Dogwood set installed on every shard,
+# keyed by the engine id, `<engine>-<n>`), attaches the engine to gateway A in ENFORCE (a bad mode
+# is 422 and rewrites nothing) and to gateway B in LOG_ONLY — two `/3` bundles naming the same set
+# that differ only in gateway and mode; the interceptor Lambda runs in-process over each bundle:
+# the same denied call is REFUSED through A (I8 error, row `mode: ENFORCE`, `gateway_id: A`) and
+# PASSED through B with a `would_deny` row (`mode: LOG_ONLY`, `gateway_id: B`); the hub ingests
+# both lines and the engine's decisions route filters them per gateway; deleting an attached
+# engine is 409; detaching A rewrites its bundle with `attachment: null` and detaches the Lambda,
+# after which a call through A passes without a row (A is unguarded) while B keeps deciding.
+# Hermetic: the policy store's real publish path over the stage-0 fake compiler / fake engine
+# shards, a CAS fake S3 for the bundle writer, a replace-semantics fake Gateway control plane for
+# the Lambda attach, the KMS signer an in-memory P-256 key, the interceptor Lambda in-process.
+graph: policy_principal
+module: E07
+entity: one policy engine attached to two gateways (publish → attach A ENFORCE → attach B LOG_ONLY → decision per gateway → detach A)
+initial: absent
+
+contracts:
+  AM11_ENGINE:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.1 Model"
+    quote: >-
+      **PolicyEngine** (`policy_engines`: `id` = `pe_<12 hex>`, `workspace_id`, `name`
+      `^[A-Za-z][A-Za-z0-9_]{0,47}$` unique per workspace … A workspace may hold many engines.
+      … A new policy still starts `log_only` (amendment 9).
+  AM11_ROUTES:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.1 Model › Routes"
+    quote: >-
+      **Routes** (admin unless noted): `GET/POST /api/policy-engines`, `GET/PUT/DELETE
+      /api/policy-engines/{eid}` (`DELETE` → 409 `policy_engine.attached` while any attachment
+      exists; … `GET /api/policy-engines/{eid}/decisions?gateway_id=`
+  AM11_ATTACH_ROUTE:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.1 Model › Routes"
+    quote: >-
+      Attachment: `GET / PUT / DELETE /api/governance/gateways/{gid}/policy-engine` (lead ruling
+      7; `PUT {engine_id, mode}` → 200, idempotent — changing the engine or the mode rewrites that
+      gateway's bundle; 409 `gateway.policy_engine_busy` while a previous attach or detach is in
+      flight; 422 `gateway.policy_engine_mode_invalid`; `DELETE` → 200 — the bundle is rewritten
+      with `attachment: null` and the interceptor is detached from that gateway; the decisions
+      history is kept).
+  AM11_ONE_PER_GATEWAY:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.1 Model › Attachment"
+    quote: >-
+      A gateway carries at most one attachment: one engine and one mode, `mode ∈ {LOG_ONLY,
+      ENFORCE}` … One engine may be attached to many gateways.
+  AM11_SET:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.2 Engine install"
+    quote: >-
+      **The engine holds one set per ENGINE, keyed by the engine id.** … `policy_set_version`
+      of an engine's set is `<engine id>-<n>`
+  AM11_INSTALL:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.2 Engine install"
+    quote: >-
+      **A publish, retire or enforcement-mode change of a policy re-installs its ENGINE's set on
+      every shard before the change commits … and then rewrites the bundle of EVERY gateway the
+      engine is attached to**; one engine on two gateways therefore yields two bundle writes
+      that name the same set.
+  AM11_BUNDLE:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.3 The bundle"
+    quote: >-
+      **The `workspaces` block is removed.** The bundle describes ONE gateway and carries at most
+      one attachment; the set facts (`policy_set_version`, counts, the entity-formatted action
+      lists of amendment 6) live INSIDE `attachment`, so `attachment: null` carries no set facts
+      at all.
+  AM11_ORDER:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.3 The bundle"
+    quote: >-
+      Attach ⇒ the bundle is written first, then the Lambda is attached (first attach) — the
+      interceptor never runs a gateway whose bundle it cannot read.
+  AM11_DETACH:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.3 The bundle"
+    quote: >-
+      **Detach ⇒ the bundle is rewritten with `attachment: null` AND the interceptor is detached
+      from that gateway**
+  AM11_UNGUARDED:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.4 What the interceptor reads and decides"
+    quote: >-
+      **The interceptor reads `attachment` only.** `attachment: null` ⇒ every call through the
+      gateway passes with the token stripped and no row — the gateway is **unguarded**.
+  AM11_MODE:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.4 What the interceptor reads and decides"
+    quote: >-
+      **`ENFORCE` refuses a `deny` with the I8 error; `LOG_ONLY` records `would_deny` and
+      passes.**
+  AM11_ROWS:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "Contract amendment 11 › 11.4 What the interceptor reads and decides"
+    quote: >-
+      Rows carry `mode` as `LOG_ONLY` or `ENFORCE` … `gateway_id` (NOT NULL on `source: gateway`
+      rows, filled from the bundle's gateway) and `engine_id`; the I7 line gains `gateway_id` and
+      `engine_id`
+  I8_DENY:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "I8 — JSON-RPC shapes the interceptor returns"
+    quote: >-
+      Deny: `{"code": -32002, "message": "Tool Execution Denied: Tool call not allowed due to
+      policy enforcement [<reason>]", "data": {decision_id, policy_id, stage, reason_code}}` — the
+      message is Global's exact text (`contracts.deny_message`) … The interceptor **never raises**
+  I7_AUDIT:
+    doc: docs/cn/interfaces/policy-principal-contracts.md
+    section: "I7 — audit lines"
+    quote: >-
+      CloudWatch JSON lines ingested by `services/policy_audit.py` into the existing
+      `policy_decisions` … idempotent on `decision_id = codec.decision_id(jti,
+      jsonrpc_id, stage)`. … the hub's ingest additionally stamps `ingested_at`
+
+nodes:
+  - id: absent
+  - id: engine_created      # POST /api/policy-engines: a resource of the workspace, no policies, attached nowhere
+  - id: policy_published    # one ACTIVE policy in the engine; the engine's set `<engine>-<n>` installed on every shard
+  - id: attached_a          # attached to gateway A in ENFORCE: bundle A /3 names the set, the Lambda is on A
+  - id: attached_ab         # also attached to gateway B in LOG_ONLY: bundle B names the SAME set, differs in gateway + mode
+  - id: decided             # the interceptor decided the same call through A (refused) and through B (passed, would_deny)
+  - id: audited             # both lines are `policy_decisions` rows with their own gateway_id, listed per gateway
+  - id: a_unguarded         # A detached: bundle A `attachment: null`, Lambda off A, calls pass without a row; B still decides
+    terminal: true
+
+edges:
+  - id: create_engine
+    from: absent
+    to: engine_created
+    via: "the administrator's POST /api/policy-engines {name, description}"
+    expect: {status: 201, id_prefix: pe_, policy_count: 0, attachments: []}
+    cites: [AM11_ENGINE, AM11_ROUTES]
+    ui: null
+  - id: member_create_engine
+    from: engine_created
+    to: engine_created
+    kind: refusal
+    via: "a member's POST /api/policy-engines"
+    expect: {status: 403, nothing_written: true}
+    cites: [AM11_ROUTES]
+    ui: null
+  - id: create_engine_name_taken
+    from: engine_created
+    to: engine_created
+    kind: refusal
+    via: "the administrator's POST /api/policy-engines with the same name"
+    expect: {status: 409, code: policy_engine.name_taken, nothing_written: true}
+    cites: [AM11_ENGINE]
+    ui: null
+  - id: publish_policy
+    from: engine_created
+    to: policy_published
+    via: "POST /api/policy-engines/{eid}/policies (201, draft, enforcement_mode log_only) → POST …/publish → PUT …/enforcement-mode {active}"
+    expect: {status: 201, publish_status: 200, engine_set_key: "the engine id", policy_set_version: "<engine>-<n>", installed_on_every_shard: true, bundles_written: 0}
+    cites: [AM11_ENGINE, AM11_SET, AM11_INSTALL]
+    ui: null
+  - id: attach_a
+    from: policy_published
+    to: attached_a
+    via: "the administrator's PUT /api/governance/gateways/{A}/policy-engine {engine_id, mode: ENFORCE}"
+    expect: {status: 200, bundle_a: {schema: launchpad.policy.gateway/3, attachment: {mode: ENFORCE, policy_set_version: "the engine's set"}, workspaces: absent}, lambda_attached_a: true, bundle_before_lambda: true}
+    cites: [AM11_ATTACH_ROUTE, AM11_BUNDLE, AM11_ORDER]
+    ui: {page: /v2/governance, view: gateway, controls: []}
+  - id: attach_bad_mode
+    from: attached_a
+    to: attached_a
+    kind: refusal
+    via: "PUT /api/governance/gateways/{A}/policy-engine {engine_id, mode: enforce} (the hub's spelling, not Global's)"
+    expect: {status: 422, code: gateway.policy_engine_mode_invalid, bundle_a_unchanged: true, nothing_written: true}
+    cites: [AM11_ATTACH_ROUTE, AM11_ONE_PER_GATEWAY]
+    ui: null
+  - id: attach_b
+    from: attached_a
+    to: attached_ab
+    via: "the administrator's PUT /api/governance/gateways/{B}/policy-engine {engine_id, mode: LOG_ONLY}"
+    expect: {status: 200, bundle_b: {attachment: {mode: LOG_ONLY, policy_set_version: "= bundle A's"}}, bundles_differ_only_in: [gateway_id, gateway_arn, attachment.mode], engine_attachments: 2}
+    cites: [AM11_ATTACH_ROUTE, AM11_ONE_PER_GATEWAY, AM11_INSTALL]
+    ui: null
+  - id: delete_engine_attached
+    from: attached_ab
+    to: attached_ab
+    kind: refusal
+    via: "the administrator's DELETE /api/policy-engines/{eid} while two gateways reference it"
+    expect: {status: 409, code: policy_engine.attached, nothing_written: true}
+    cites: [AM11_ROUTES]
+    ui: null
+  - id: decide_a_enforce
+    from: attached_ab
+    to: attached_ab
+    kind: refusal
+    via: "the interceptor Lambda over bundle A on a tools/call the engine denies at stage BT"
+    expect: {jsonrpc_code: -32002, message: "contracts.deny_message", line: {decision: deny, mode: ENFORCE, gateway_id: A, engine_id: "the engine"}, hub_ledger_untouched: true}
+    cites: [AM11_MODE, AM11_ROWS, I8_DENY]
+    ui: null
+  - id: decide_b_log_only
+    from: attached_ab
+    to: decided
+    via: "the interceptor Lambda over bundle B on the same tools/call"
+    expect: {forwarded: true, token_stripped: true, line: {decision: would_deny, mode: LOG_ONLY, gateway_id: B, engine_id: "the engine"}}
+    cites: [AM11_MODE, AM11_ROWS]
+    ui: null
+  - id: ingest
+    from: decided
+    to: audited
+    via: "ingest_gateway_events over both interceptors' lines, then GET /api/policy-engines/{eid}/decisions?gateway_id=A and ?gateway_id=B"
+    expect: {rows_added: all, gateway_id_per_row: "its own gateway", engine_id: "the engine", status: 200, filtered_per_gateway: true, ingested_at: set}
+    cites: [AM11_ROWS, AM11_ROUTES, I7_AUDIT]
+    ui: {page: /v2/governance, view: decisions, controls: []}
+  - id: detach_a
+    from: audited
+    to: a_unguarded
+    via: "the administrator's DELETE /api/governance/gateways/{A}/policy-engine"
+    expect: {status: 200, bundle_a: {attachment: null}, lambda_attached_a: false, bundle_b_unchanged: true, decisions_kept: true, engine_attachments: 1}
+    cites: [AM11_DETACH, AM11_ATTACH_ROUTE]
+    ui: null
+  - id: unguarded_call
+    from: a_unguarded
+    to: a_unguarded
+    kind: refusal
+    via: "the interceptor Lambda over the rewritten bundle A on the tools/call it refused before"
+    expect: {forwarded: true, token_stripped: true, lines_added: 0, hub_ledger_untouched: true}
+    cites: [AM11_UNGUARDED]
+    ui: null

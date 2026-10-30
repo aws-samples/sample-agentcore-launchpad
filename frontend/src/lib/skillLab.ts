@@ -4,36 +4,50 @@ import type {
   SkillLabTargetBackend,
   SkillLabTasksetInfo,
 } from "./api";
+import { isModelAvailable, judgeModelOptions } from "./models";
+import { timeMs } from "./timestamps";
 
 /** Skill Lab rules shared by the V2 pages (mirrors of the classic wizards). */
 
-/** Upstream studio's fixed backend labels — the values are API contract. */
+/** The one exec backend's label (D16) — the value is API contract. */
 export const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
-  claude_code_exec: "claude_code_exec — Claude Code CLI",
-  codex_exec: "codex_exec — Codex CLI",
+  opencode_exec: "opencode_exec — OpenCode CLI (Global Bedrock, OpenAI-compatible)",
 };
 
 /**
- * Judge suggestions are Converse inference-profile ids (`us.`/`global.`
- * prefixed) — the bedrock_chat judge calls Converse directly, and bare model
- * ids like `openai.gpt-6-sol` are rejected with "use an inference profile".
- * The agentic judge routes by family: openai.* → host codex CLI, else claude.
+ * Judge suggestions are the CN catalog's Global Bedrock cross-region profile ids —
+ * the bedrock_chat judge calls Converse with the workspace's API key, and bare
+ * model ids are rejected with "use an inference profile".
  */
-export const JUDGE_MODEL_SUGGESTIONS = [
-  "us.openai.gpt-6-sol",
-  "global.anthropic.claude-opus-5-5",
-  "us.openai.gpt-5.6-sol",
-  "global.anthropic.claude-opus-5",
-  "us.anthropic.claude-sonnet-5",
-];
+export const JUDGE_MODEL_SUGGESTIONS = ["global.zai.glm-5.3", "global.moonshotai.kimi-k3"];
 
-/** Mirrors backend runner.judge_exec_route's family test. */
-export const isOpenAiJudge = (model: string) => /^((us|eu|apac|global)\.)?openai\./.test(model);
+/** One `<datalist>` row of the judge-model field. */
+export interface JudgeModelSuggestion {
+  model_id: string;
+  /** `false` for a catalog row whose provider has no key here (N-R6-obs1): the option is
+   *  rendered "not configured" and disabled, mirroring the other judge pickers. */
+  available: boolean;
+}
 
-/** The platform's blank-model default for a backend ("" until status lands). */
+/**
+ * N-R6-obs1 follow-up: the judge `<datalist>` mirrors the live catalog (every row of
+ * `GET /api/capabilities` → `models`, judge-capable or not, in catalog order) and still
+ * offers the two static suggestions when the catalog has not loaded. Unavailable rows
+ * stay listed (the operator sees what a key would unlock) but are not selectable.
+ */
+export function judgeModelSuggestions(): JudgeModelSuggestion[] {
+  const out: JudgeModelSuggestion[] = judgeModelOptions().map((o) => ({ model_id: o.model_id, available: o.available }));
+  for (const id of JUDGE_MODEL_SUGGESTIONS) {
+    if (!out.some((o) => o.model_id === id)) out.push({ model_id: id, available: isModelAvailable(id) });
+  }
+  return out;
+}
+
+/** The platform's blank-model default ("" until status lands); one backend, one default. */
 export function modelDefault(status: SkillLabStatus | null, backend: SkillLabTargetBackend): string {
+  void backend; // one backend, one default — kept for the callers' signature
   if (status === null) return "";
-  return backend === "codex_exec" ? status.default_codex_target_model : status.default_target_model;
+  return status.default_target_model;
 }
 
 export const backendsOf = (status: SkillLabStatus | null): SkillLabTargetBackend[] =>
@@ -42,21 +56,18 @@ export const backendsOf = (status: SkillLabStatus | null): SkillLabTargetBackend
     : (Object.keys(BACKEND_LABELS) as SkillLabTargetBackend[]);
 
 /**
- * Agentic-judge readiness for the selected judge model. Two independent host
- * prerequisites have to hold: the sandbox launcher (shared) and the CLI this
- * judge model's route resolves to. auto/agentic still run when one is missing,
- * but artifact tasks fail closed — warn, don't hide.
+ * Agentic-judge readiness. Two independent host prerequisites have to hold: the
+ * sandbox launcher (shared) and the exec CLI every judge model routes to (D16).
+ * auto/agentic still run when one is missing, but artifact tasks fail closed —
+ * warn, don't hide. `_judgeModel` is kept for the callers' signature.
  */
 export function judgeReadiness(status: SkillLabStatus | null, judgeModel: string) {
-  const routesToCodex = isOpenAiJudge(judgeModel);
-  const codexMissing = routesToCodex && status?.judge_codex_ready === false;
-  const claudeMissing = !routesToCodex && status?.judge_claude_ready === false;
-  const ready = status?.agentic_judge_ready !== false && !codexMissing && !claudeMissing;
-  const unreadyKey = codexMissing
-    ? "skillLab.backend.judgeCodexUnready"
-    : claudeMissing
-      ? "skillLab.backend.judgeClaudeUnready"
-      : "skillLab.backend.judgeModeUnready";
+  void judgeModel; // every judge model takes the same route (D16)
+  const cliMissing = status?.judge_opencode_ready === false;
+  const ready = status?.agentic_judge_ready !== false && !cliMissing;
+  const unreadyKey = cliMissing
+    ? "skillLab.backend.judgeOpencodeUnready"
+    : "skillLab.backend.judgeModeUnready";
   return { ready, unreadyKey };
 }
 
@@ -75,8 +86,9 @@ export const isLiveJob = (job: SkillLabJobInfo) => LIVE_STATUSES.includes(job.st
 /** Wall time since start ("—" before the job starts). */
 export function elapsed(job: SkillLabJobInfo): string {
   if (!job.started_at) return "—";
-  const end = job.finished_at ? new Date(job.finished_at) : new Date();
-  const seconds = Math.max(0, (end.getTime() - new Date(job.started_at).getTime()) / 1000);
+  // N17-obs461: naive ledger times are UTC (a finished job's span mixed naive and offset ones)
+  const end = job.finished_at ? timeMs(job.finished_at) : Date.now();
+  const seconds = Math.max(0, (end - timeMs(job.started_at)) / 1000);
   return seconds < 90 ? `${seconds.toFixed(0)}s` : `${(seconds / 60).toFixed(1)}m`;
 }
 

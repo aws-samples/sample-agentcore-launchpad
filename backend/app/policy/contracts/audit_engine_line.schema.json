@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/audit_engine_line/v1",
+  "title": "I7 engine event line (our own audit; the engine's internal log is pruned)",
+  "type": "object",
+  "properties": {
+    "launchpad.policy.engine": {
+      "type": "object",
+      "properties": {
+        "event_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ts_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "action": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "request",
+            "response",
+            "error"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "allow",
+            "deny",
+            null
+          ]
+        },
+        "determining": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "store_epoch": {
+          "type": "string"
+        },
+        "policy_set_version": {
+          "type": "string"
+        },
+        "ws": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "ws",
+        "event_seq",
+        "ts_ns",
+        "session",
+        "action",
+        "kind",
+        "verdict",
+        "determining",
+        "store_epoch",
+        "policy_set_version"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "launchpad.policy.engine"
+  ],
+  "additionalProperties": false,
+  "description": "amendment 3: written by each engine shard to its local JSONL and mirrored by the hub to CloudWatch /launchpad/policy/engine[-env]"
+}

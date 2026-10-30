@@ -55,7 +55,7 @@ export function EvalWizard({ status }: { status: SkillLabStatus | null }) {
   const [source, setSource] = useState<SourceState>(() => initialSource(params.get("record")));
   const [tasksetId, setTasksetId] = useState(params.get("taskset") ?? "");
   const [split, setSplit] = useState("");
-  const [backend, setBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
+  const [backend, setBackend] = useState<SkillLabTargetBackend>("opencode_exec");
   const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");

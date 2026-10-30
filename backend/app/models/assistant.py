@@ -17,6 +17,13 @@ Three tables, all workspace-scoped and owner-bound:
   approval stamps approver, time and the created agent id in the same commit as
   the agent / deployment / job rows, so a retry or a concurrent click converges on
   one recorded outcome.
+* ``assistant_turn_events`` — the per-turn event log (N-ARCH-obs15): every SSE event a
+  turn emitted (``meta``, ``tool``, ``tool_input``, ``delta``, ``retry``, ``proposal``,
+  ``preparation``, ``done`` / ``error``) with a monotonically increasing ``seq``, so a
+  client that lost its connection replays what it missed and tails the rest. The
+  transcript rows above stay the source of truth for the conversation; this log only
+  carries what a reattaching client needs and what the startup sweep salvages from a
+  turn whose process died.
 """
 
 from datetime import datetime
@@ -70,6 +77,10 @@ class AssistantConversation(Base):
     # a revision row (unique index below), so two concurrent writers never share one.
     revision_seq: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open | archived
+    # The newest CLEAR attempt (a ``purge_assistant_conversation`` job): while it is
+    # queued/running every write is refused; a failed one keeps the ownership evidence
+    # and checkpoints the next attempt resumes from (``assistant.purge``).
+    purge_job_id: Mapped[str | None] = mapped_column(String(32), default=None)
     # Admin-published collaboration: every member of the workspace may read AND work
     # on a shared conversation (``may_collaborate``); only deleting it stays bound to
     # ``owner_principal``. Stamped with the admin who toggled it (display username).
@@ -143,9 +154,37 @@ class AssistantProposal(Base):
     job_id: Mapped[str | None] = mapped_column(String(32), default=None)
     rejected_by: Mapped[str | None] = mapped_column(String(64), default=None)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # ``proposal_repaired: …`` notes recorded on the revision itself (N15-obs13: a member
+    # edit that omitted ``evaluation_plan`` had the previous revision's seed carried
+    # forward). Content-level repairs live on their entries inside ``content``.
+    notes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     __table_args__ = (
         UniqueConstraint("conversation_id", "revision", name="uq_assistant_proposals_revision"),
+    )
+
+
+class AssistantTurnEvent(Base):
+    """One SSE event of one turn (N-ARCH-obs15). ``seq`` starts at 1 per turn and is
+    assigned by the turn's single producer, so ``(conversation_id, turn, seq)`` is unique
+    and ordered; heartbeats are transport keep-alives and are never recorded."""
+
+    __tablename__ = "assistant_turn_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("assistant_conversations.id"), index=True
+    )
+    turn: Mapped[int] = mapped_column(default=0)
+    seq: Mapped[int] = mapped_column(default=0)
+    # meta | tool | tool_input | delta | retry | proposal | preparation | done | error
+    event: Mapped[str] = mapped_column(String(24))
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "turn", "seq", name="uq_assistant_turn_events_seq"),
     )
 
 

@@ -15,8 +15,11 @@ recommendations become **if** the plan is later materialized:
   evaluator cannot compute (cross-session predicates, human review, metric baselines,
   external controls) is NOT a plan entry: the golden test is blocked with a reason and
   the obligation lives in the proposal's ``manual_tasks``;
-* ``recommendations`` — every prose recommendation of the source revision, with the
-  plan keys it maps to or an explicit ``unresolved`` / ``declined`` status;
+* ``recommendations`` — every recommendation of the source revision, with the plan keys
+  it maps to or an explicit ``unresolved`` / ``declined`` status, and the **gate intent**
+  it states (``blocking`` / ``threshold`` / ``metric``, from the structured entry or
+  parsed out of the prose — ``recommendation_intent.py``). A recommendation that asks for
+  a gate is carried onto the entries it maps to and may not stay ``unresolved`` (WB-006);
 * ``blocked_golden_tests`` — golden tests deliberately not turned into a scenario.
 
 The plan is bound to one proposal revision (``source_revision`` +
@@ -37,9 +40,16 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.evaluation.agentcore_eval import (
+# N12 (CA-5): the catalog constants come from the CN evaluator ledger module — the
+# Global wrapper of the AgentCore Evaluations control plane does not exist here.
+from app.assistant.recommendation_intent import (
+    REPAIR_NOTE_PREFIX,
+    Intent,
+    recommendation_text,
+    resolve_intent,
+)
+from app.evaluation.evaluators_local import (
     ALL_BUILTIN_EVALUATORS,
-    JUDGE_DEFAULT_MODEL_ID,
     MAX_BATCH_EVALUATORS,
     TRAJECTORY_EVALUATORS,
 )
@@ -50,8 +60,8 @@ PLAN_VERSION = 1
 PLAN_MAX_BYTES = 160_000
 MAX_CLOUD_EVALUATORS = 10  # judge + derived + code per plan (AWS records the operation creates)
 # Every evaluator of a plan — existing AND created — is applied to the dataset run in ONE
-# StartBatchEvaluation, which accepts at most MAX_BATCH_EVALUATORS; a plan listing more
-# can never run and is refused at proposal time.
+# batch evaluation, which accepts at most MAX_BATCH_EVALUATORS; a plan listing more can
+# never run and is refused at proposal time.
 MAX_RUN_EVALUATORS = MAX_BATCH_EVALUATORS
 
 
@@ -60,16 +70,127 @@ def _run_size_error(count: int) -> str:
             f"evaluation accepts at most {MAX_RUN_EVALUATORS} — drop the ones that overlap "
             "(one quality judge, one safety judge, the assertions judge and the exact "
             "invariants usually suffice) or block golden tests the rest would cover")
-# CreateEvaluator / CreateDataset reject a longer ``description`` (EvaluatorDescription
-# and CreateDatasetRequestDescriptionString are both max 200 in the service model).
+# The evaluator and dataset ``description`` limit (the Global service model's 200; kept so
+# plans stay portable between the two builds).
 MAX_DESCRIPTION = 200
+# The other free-text members of an evaluator entry (display only): ``title`` and ``note``.
+MAX_TITLE = 200
+MAX_TEXT = 2000
 MAX_SCENARIOS = 40
 MAX_CODE_CHECKS = 20
-DEFAULT_JUDGE_MODEL = JUDGE_DEFAULT_MODEL_ID  # the platform's judge default
+
+
+def default_judge_model() -> str:
+    """The judge model a plan entry gets when the architect names none: the `judge` model
+    role (model-defaults page) as it stands at THIS call, the built-in constant only
+    while the role is unset (N17-obs202). A pydantic default_factory, never a module
+    constant — the plan follows the page without a restart."""
+    from app.schemas.agent import judge_default_model_id
+
+    return judge_default_model_id()
+
+
 DEFAULT_LAMBDA_TIMEOUT_S = 60
 
 _KEY_RE = r"^[A-Za-z][A-Za-z0-9_-]{0,31}$"
 _EVALUATOR_NAME_RE = r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$"
+# N-ARCH-obs11 (2026-10-14): 4 of 7 first proposals failed on these two entry-shape rules —
+# a hyphen in a custom judge ``name`` (3×) and a ``description`` on a built-in entry (1×) —
+# and pydantic's "String should match pattern …" / "Extra inputs are not permitted" cost a
+# 20–40 s patch turn each. The validator states the rule verbatim; the skill's self-check
+# (§5 "Entry shape") quotes the same pattern, and ``test_architect_prompt_policy`` pins both.
+EVALUATOR_NAME_RULE = (
+    "a `judge` / `derived` / `code` evaluator `name` starts with a letter and contains only "
+    "letters, digits and underscores, at most 48 characters — pattern "
+    f"`{_EVALUATOR_NAME_RE}`; hyphens are not allowed (unlike `key` and `id`)"
+)
+EXISTING_NO_DESCRIPTION_RULE = (
+    "a built-in (`kind: existing`) evaluator entry carries no `description` — remove it and "
+    "put commentary in `note`; only `judge`, `derived` and `code` entries take a `description`"
+)
+# N-ARCH-obs14 (2026-10-14): a judge ``description`` of 201 characters made the whole
+# proposal INVALID with pydantic's "String should have at most 200 characters" and cost a
+# turn. Over-long *display* text on a seed evaluator entry is a repair, not a refusal: the
+# platform trims it at a word boundary with an ellipsis and records a ``proposal_repaired``
+# note on the entry (the WB-009 style), so the proposal stays valid. Identifiers (``key``,
+# ``name``, ``evaluator_id``, ``model_id``), the judge ``instructions`` and rating scale, code
+# rules, ``metric`` and every scenario member are never shortened — a cut there changes what
+# the evaluator does or what the test asks — so they stay (readable) errors. The skill
+# states the limit in the same words (SKILL.md §4, self-check §5 "Entry shape", rule 14,
+# preamble); ``test_architect_prompt_policy`` pins the sentence in all four places.
+JUDGE_DESCRIPTION_RULE = (
+    "`judge.description` ≤ 200 characters — one sentence; put detail in the rubric/instructions"
+)
+# the entry members the platform trims, with their limits (free text only — never ids / keys
+# / names; ``description`` is skipped on ``kind: existing`` so EXISTING_NO_DESCRIPTION_RULE
+# still reports it)
+TRIMMED_TEXT_LIMITS: tuple[tuple[str, int], ...] = (
+    ("title", MAX_TITLE), ("description", MAX_DESCRIPTION),
+)
+ELLIPSIS = "…"
+
+
+def trim_text(value: str, limit: int) -> str:
+    """``value`` shortened to at most ``limit`` characters: cut before the last space in the
+    first ``limit - 1`` characters (never in the first half, so a long run without spaces —
+    CJK prose — is cut hard), trailing punctuation dropped, an ellipsis appended. A value
+    within the limit is returned unchanged."""
+    if len(value) <= limit:
+        return value
+    head = value[: limit - 1]
+    cut = head.rfind(" ")
+    if cut >= limit // 2:
+        head = head[:cut]
+    return head.rstrip(" ,;:.—–-") + ELLIPSIS
+
+
+def _trim_entry(entry: Any) -> Any:
+    """One seed evaluator entry with its over-long ``title`` / ``description`` / ``note``
+    trimmed and a ``proposal_repaired`` note saying what was shortened from what length.
+    Returned **unchanged (same object)** when nothing was trimmed."""
+    if not isinstance(entry, dict):
+        return entry
+    kind = entry.get("kind")
+    label = kind if isinstance(kind, str) and kind in ("existing", *CLOUD_KINDS) else "evaluator"
+    repairs: list[str] = []
+    new = dict(entry)
+    for field, limit in TRIMMED_TEXT_LIMITS:
+        if field == "description" and kind == "existing":
+            continue
+        value = entry.get(field)
+        if isinstance(value, str) and len(value) > limit:
+            new[field] = trim_text(value, limit)
+            repairs.append(f"{label} {field} trimmed from {len(value)} to {len(new[field])} chars")
+    note = entry.get("note")
+    existing = note.strip() if isinstance(note, str) else ""
+    if not repairs and len(existing) <= MAX_TEXT:
+        return entry
+    head = f"{REPAIR_NOTE_PREFIX}: "
+    if len(existing) > MAX_TEXT:
+        # leave room for the separator, the other repairs and the note's own repair sentence
+        reserve = (len(" | ") + len(head) + len("; ".join(repairs))
+                   + len(f"; {label} note trimmed from {len(existing)} to {MAX_TEXT} chars"))
+        trimmed = trim_text(existing, MAX_TEXT - reserve)
+        repairs.append(f"{label} note trimmed from {len(existing)} to {len(trimmed)} chars")
+        existing = trimmed
+    repair = head + "; ".join(repairs)
+    new["note"] = f"{existing} | {repair}" if existing else repair
+    return new
+
+
+def trim_seed_free_text(seed: Any) -> tuple[Any, bool]:
+    """``_trim_entry`` over a proposal's ``evaluation_plan.evaluators``: ``(seed, changed)``.
+    Anything that is not a seed object with an evaluator list is returned untouched (the
+    schema reports it); an untouched seed is returned as the same object."""
+    if not isinstance(seed, dict) or not isinstance(seed.get("evaluators"), list):
+        return seed, False
+    out: list[Any] = []
+    changed = False
+    for entry in seed["evaluators"]:
+        trimmed = _trim_entry(entry)
+        changed = changed or trimmed is not entry
+        out.append(trimmed)
+    return ({**seed, "evaluators": out} if changed else seed), changed
 _EXISTING_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
 _MODEL_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$"
 _SCENARIO_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
@@ -91,7 +212,7 @@ REFERENCE_PLACEHOLDERS = frozenset({"expected_response", "expected_tool_trajecto
 Key = Annotated[str, Field(pattern=_KEY_RE)]
 Short = Annotated[str, Field(max_length=200)]
 Line = Annotated[str, Field(min_length=1, max_length=1000)]
-Text = Annotated[str, Field(max_length=2000)]
+Text = Annotated[str, Field(max_length=MAX_TEXT)]
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +266,7 @@ CODE_CHECK_TYPES = (
     "output_exact",          # final assistant output equals literal ``text``
     "reference_trajectory",  # observed tools ⊇ / == reference expectedTrajectory.toolNames
     "reference_response",    # final assistant output contains reference expectedResponse.text
+    "non_empty_output",      # final assistant output has ≥ ``min`` (default 1) non-blank chars
 )
 
 
@@ -154,6 +276,7 @@ class CodeCheck(BaseModel):
     type: Literal[
         "tool_count", "tool_sequence", "tool_set", "output_contains",
         "output_not_contains", "output_exact", "reference_trajectory", "reference_response",
+        "non_empty_output",
     ]
     tool: Short | None = None
     min: int | None = Field(default=None, ge=0, le=1000)
@@ -194,6 +317,10 @@ def _check_rules(rules: CodeRules) -> list[str]:
             errors.append(f"rules.{c.id}: tool_set needs allowed[] and/or forbidden[]")
         if c.type in ("output_contains", "output_not_contains", "output_exact") and not c.text:
             errors.append(f"rules.{c.id}: {c.type} needs text")
+        if c.type == "non_empty_output" and c.text:
+            errors.append(f"rules.{c.id}: non_empty_output takes no text")
+        if c.type == "non_empty_output" and c.min is not None and c.min < 1:
+            errors.append(f"rules.{c.id}: non_empty_output min must be at least 1")
         if c.type == "reference_trajectory" and c.mode == "subsequence":
             errors.append(f"rules.{c.id}: reference_trajectory mode must be superset or exact")
     return errors
@@ -218,10 +345,59 @@ def _code_level_errors(entry: CodeEvaluator) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def suggest_evaluator_name(value: Any) -> str | None:
+    """The mechanical rename of an evaluator ``name`` that misses ``_EVALUATOR_NAME_RE``
+    (``helpdesk-guardrails-judge`` → ``helpdesk_guardrails_judge``), or ``None`` when
+    nothing sensible is left or the value already conforms."""
+    if not isinstance(value, str):
+        return None
+    candidate = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip()).strip("_")
+    if not candidate:
+        return None
+    if not candidate[0].isalpha():
+        candidate = "e_" + candidate
+    candidate = candidate[:48]
+    if candidate == value or not re.fullmatch(_EVALUATOR_NAME_RE, candidate):
+        return None
+    return candidate
+
+
+def _plan_error_line(err: dict[str, Any], *, prefix: str = "") -> str:
+    """One pydantic error of a plan / seed as a sentence the model can act on in one
+    turn: the two N-ARCH-obs11 shapes quote their rule verbatim (``EVALUATOR_NAME_RULE``,
+    ``EXISTING_NO_DESCRIPTION_RULE``), an unknown member of an evaluator entry names the
+    entry kind; everything else keeps pydantic's message under the member path."""
+    loc = [str(part) for part in err.get("loc", ())]
+    path = f"{prefix}{'.'.join(loc)}" if loc else (prefix.rstrip(".") or "plan")
+    kind = str(err.get("type", ""))
+    leaf = loc[-1] if loc else ""
+    parent = loc[-2] if len(loc) >= 2 else ""
+    if kind == "string_pattern_mismatch" and leaf == "name" and parent in CLOUD_KINDS:
+        value = err.get("input")
+        suggestion = suggest_evaluator_name(value)
+        hint = f" — rename `{value}` to `{suggestion}`" if suggestion else ""
+        return f"{path}: {EVALUATOR_NAME_RULE}{hint}"
+    if kind == "extra_forbidden" and parent == "existing" and leaf == "description":
+        return f"{path}: {EXISTING_NO_DESCRIPTION_RULE}"
+    if kind == "extra_forbidden" and parent in ("existing", *CLOUD_KINDS):
+        return f"{path}: is not a member of a `kind: {parent}` evaluator entry — remove it"
+    ctx = err.get("ctx") or {}
+    value = err.get("input")
+    if kind == "string_too_long" and "max_length" in ctx:
+        # the members the platform does not trim (N-ARCH-obs14): say how long it is and
+        # how long it may be, not pydantic's "String should have at most N characters"
+        have = f"{len(value)} characters; " if isinstance(value, str) else ""
+        return f"{path}: too long ({have}at most {ctx['max_length']}) — shorten it"
+    if kind == "string_too_short" and "min_length" in ctx:
+        have = f"{len(value)} characters; " if isinstance(value, str) else ""
+        return f"{path}: too short ({have}at least {ctx['min_length']})"
+    return f"{path}: {err.get('msg') or 'invalid'}"
+
+
 class _Entry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     key: Key
-    title: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
     golden_test_ids: list[Annotated[str, Field(max_length=64)]] = Field(
         default_factory=list, max_length=40
     )
@@ -230,6 +406,9 @@ class _Entry(BaseModel):
     blocking: bool = False
     # minimum acceptable score (0..1) for display next to the evaluator
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    # the metric the gate is stated on ("pass rate", "通过率") when a recommendation
+    # names one — display only, carried from the recommendation (WB-006)
+    metric: Short | None = None
     note: Text = ""
 
 
@@ -257,7 +436,7 @@ class JudgeEvaluator(_Entry):
     instructions: str = Field(min_length=10, max_length=4000)
     rating_scale: list[RatingScaleItem] = Field(default_factory=lambda: list(DEFAULT_RATING_SCALE),
                                                 min_length=2, max_length=10)
-    model_id: str = Field(default=DEFAULT_JUDGE_MODEL, pattern=_MODEL_ID_RE)
+    model_id: str = Field(default_factory=default_judge_model, pattern=_MODEL_ID_RE)
     level: Literal["TRACE", "SESSION", "TOOL_CALL"] = "TRACE"
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
     # a member-visible flag: the rubric was drafted by the platform from golden-test
@@ -269,7 +448,7 @@ class DerivedEvaluator(_Entry):
     kind: Literal["derived"]
     name: str = Field(pattern=_EVALUATOR_NAME_RE)
     base_evaluator_id: str = Field(pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$")
-    model_id: str = Field(default=DEFAULT_JUDGE_MODEL, pattern=_MODEL_ID_RE)
+    model_id: str = Field(default_factory=default_judge_model, pattern=_MODEL_ID_RE)
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
@@ -440,6 +619,14 @@ class Recommendation(BaseModel):
     mapped_to: list[Key] = Field(default_factory=list, max_length=10)
     status: Literal["mapped", "unresolved", "declined"] = "unresolved"
     note: Text = ""
+    # The gate the recommendation states (WB-006): ``True`` / explicit ``False`` / unstated
+    # ``None``, the threshold (0..1), the metric, and whether the facts were ``stated`` on
+    # the structured entry or ``parsed`` from the prose. Absent on plans drafted before
+    # the fields existed — every such plan validates unchanged.
+    blocking: bool | None = None
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    metric: Short | None = None
+    intent_source: Literal["stated", "parsed"] | None = None
 
 
 class BlockedGoldenTest(BaseModel):
@@ -616,6 +803,40 @@ def reference_dependent(entry: Any) -> bool:
     return False
 
 
+def _short(text: str, limit: int = 80) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _intent_errors(r: Recommendation, intent: Intent, by_key: dict[str, Any]) -> list[str]:
+    """WB-006: a recommendation that asks for a gate (blocking, or a threshold) must be
+    carried by the plan — ``unresolved`` is refused with the recommendation named, and a
+    ``mapped`` one needs every mapped entry to carry the gate. ``declined`` is the
+    member's explicit decision and clears the obligation."""
+    if not intent.has_intent:
+        return []
+    gate = intent.describe()
+    if r.status == "unresolved":
+        return [f"recommendations[{r.index}]: \"{_short(intent.text)}\" asks for a gate "
+                f"({gate}) that no evaluator carries — map it to an evaluator entry (name a "
+                "listed evaluator_id or a seed evaluator key) or decline it explicitly"]
+    if r.status != "mapped":
+        return []
+    errors: list[str] = []
+    for k in r.mapped_to:
+        e = by_key.get(k)
+        if e is None:
+            continue
+        if intent.blocking is True and not e.blocking:
+            errors.append(f"recommendations[{r.index}]: states a blocking gate but evaluator "
+                          f"'{k}' is informational — set blocking: true on it (or decline the "
+                          "recommendation)")
+        if intent.threshold is not None and e.threshold is None:
+            errors.append(f"recommendations[{r.index}]: states threshold {intent.threshold:g} "
+                          f"but evaluator '{k}' has none — set its threshold (or decline the "
+                          "recommendation)")
+    return errors
+
+
 # A drafted scenario the member still has to confirm: expected on every fresh draft of
 # a proposal whose golden tests carry no typed seed scenario, never a proposal defect.
 REVIEW_PENDING = "scenarios need review before assets can be created"
@@ -641,10 +862,7 @@ def validate_plan(
     try:
         plan = EvaluationPlan.model_validate(raw)
     except ValidationError as exc:
-        return None, [
-            f"{'.'.join(str(p) for p in err['loc']) or 'plan'}: {err['msg']}"
-            for err in exc.errors()
-        ][:40]
+        return None, [_plan_error_line(err) for err in exc.errors()][:40]
     errors: list[str] = []
     if plan.source_revision != revision or plan.source_content_hash != content_hash:
         errors.append("plan is bound to another proposal revision/hash than the one selected")
@@ -682,11 +900,13 @@ def validate_plan(
         if isinstance(e, ExistingEvaluator) and e.evaluator_id.startswith("Builtin.") \
                 and e.evaluator_id not in KNOWN_BUILTINS:
             errors.append(f"evaluators.{e.key}: unknown builtin evaluator '{e.evaluator_id}'")
-    prose = [str(x) for x in proposal_content.get("evaluator_recommendations") or []]
+    entries = list(proposal_content.get("evaluator_recommendations") or [])
+    prose = [recommendation_text(x) for x in entries]
     indexes = sorted(r.index for r in plan.recommendations)
     if indexes != list(range(len(prose))):
         errors.append("recommendations must list every evaluator_recommendations entry of the "
                       f"revision exactly once (expected indexes 0..{len(prose) - 1})")
+    by_key = {e.key: e for e in plan.evaluators}
     for r in plan.recommendations:
         if 0 <= r.index < len(prose) and r.text != prose[r.index]:
             errors.append(f"recommendations[{r.index}]: text differs from the revision")
@@ -697,6 +917,8 @@ def validate_plan(
             errors.append(f"recommendations[{r.index}]: mapped without any evaluator key")
         if r.status != "mapped" and r.mapped_to:
             errors.append(f"recommendations[{r.index}]: carries keys but is not 'mapped'")
+        if 0 <= r.index < len(entries):
+            errors += _intent_errors(r, resolve_intent(entries[r.index]), by_key)
     pending = [s.golden_test_id for s in plan.scenarios if s.review_required]
     if pending:
         errors.append(REVIEW_PENDING + ": "
@@ -758,6 +980,82 @@ def _seed_blocked(seed: dict[str, Any], gts: list[dict[str, Any]]) -> list[dict[
             out.append({"golden_test_id": str(b["golden_test_id"]),
                         "reason": str(b["reason"])[:1000]})
     return out
+
+
+def _is_catalog_id(value: str) -> bool:
+    return value in KNOWN_BUILTINS or value.startswith("ThirdParty.")
+
+
+def _token(value: str) -> str:
+    """Hyphen / underscore / case-insensitive form of an evaluator reference, so the prose
+    ``hr-guardrails-judge`` finds the seed judge ``hr_guardrails_judge``."""
+    return value.replace("-", "_").lower()
+
+
+def _seed_lookup(evaluators: list[dict[str, Any]], seeded_keys: set[str]) -> dict[str, str]:
+    """Normalised token → seed evaluator key, for the key, the custom ``name`` and the
+    ``evaluator_id`` of every seeded entry."""
+    out: dict[str, str] = {}
+    for e in evaluators:
+        key = e.get("key")
+        if not isinstance(key, str) or key not in seeded_keys:
+            continue
+        for ref in (key, e.get("name"), e.get("evaluator_id")):
+            if isinstance(ref, str) and ref:
+                out.setdefault(_token(ref), key)
+    return out
+
+
+# Only a COMPOUND token of the prose (one carrying ``-``, ``_`` or ``.``) can name a seed
+# evaluator: a bare word such as ``refusal`` is ordinary language, never a mapping.
+_REF_TOKEN_RE = re.compile(r"(?<![\w-])[A-Za-z][A-Za-z0-9_.-]{2,95}(?![\w-])")
+
+
+def _seed_tokens_in(text: str, lookup: dict[str, str]) -> list[str]:
+    if not lookup:
+        return []
+    keys: list[str] = []
+    for tok in _REF_TOKEN_RE.findall(text):
+        if not any(c in tok for c in "-_."):
+            continue
+        key = lookup.get(_token(tok.strip(".")))
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _apply_intent(entry: dict[str, Any], intent: Intent, index: int) -> None:
+    """Carry a recommendation's gate onto the entry it maps to: ``blocking`` is OR-ed in,
+    a threshold / metric fills an empty one (an explicit seed value is kept), and the
+    entry's note records where the gate came from."""
+    if not intent.has_intent and not intent.metric:
+        return
+    if intent.blocking is True:
+        entry["blocking"] = True
+    if intent.threshold is not None and entry.get("threshold") is None:
+        entry["threshold"] = intent.threshold
+    if intent.metric and not entry.get("metric"):
+        entry["metric"] = intent.metric
+    if intent.has_intent:
+        tag = f"gate from recommendation #{index + 1} (source: {intent.source}): " \
+              f"{intent.describe()}"
+        note = str(entry.get("note") or "")
+        entry["note"] = (f"{note}; {tag}" if note else tag)[:2000]
+
+
+def _recommendation_note(intent: Intent, mapped: list[str], unresolved_why: str) -> str:
+    if mapped:
+        if intent.has_intent:
+            return (f"{intent.describe()} — source: {intent.source}; carried onto "
+                    + ", ".join(mapped))
+        return ""
+    if intent.has_intent:
+        why = f" ({unresolved_why})" if unresolved_why else ""
+        return (f"UNRESOLVED gate: {intent.describe()} — source: {intent.source}; no evaluator "
+                f"carries it{why} — name the evaluator (evaluator_id: a listed Builtin.* id or "
+                "a seed evaluator key) or decline this recommendation")
+    why = f" ({unresolved_why})" if unresolved_why else ""
+    return f"no exact evaluator identified{why} — classify or decline"
 
 
 def draft_plan(
@@ -826,30 +1124,59 @@ def draft_plan(
     }
     recommendations: list[dict[str, Any]] = []
     rec_keys = (seed.get("recommendation_keys") or {}) if seed else {}
-    for i, text in enumerate(content.get("evaluator_recommendations") or []):
-        text = str(text)
+    by_key: dict[str, dict[str, Any]] = {e["key"]: e for e in evaluators}
+    seed_lookup = _seed_lookup(evaluators, seeded_keys)
+    for i, entry in enumerate(content.get("evaluator_recommendations") or []):
+        text = recommendation_text(entry)
+        intent = resolve_intent(entry)
         mapped: list[str] = []
-        for evaluator_id in dict.fromkeys(m for m in _KNOWN_ID_RE.findall(text)
-                                          if m in KNOWN_BUILTINS
-                                          or m.startswith("ThirdParty.")):
+        unresolved_why = ""
+        # 1. catalog ids: the structured ``evaluator_id`` first, then every exact
+        #    ``Builtin.*`` / ``ThirdParty.*`` id the prose names
+        named = [m for m in _KNOWN_ID_RE.findall(text)
+                 if m in KNOWN_BUILTINS or m.startswith("ThirdParty.")]
+        if intent.evaluator_id and _is_catalog_id(intent.evaluator_id):
+            named.insert(0, intent.evaluator_id)
+        for evaluator_id in dict.fromkeys(named):
             key = existing_keys.get(evaluator_id)
             if key is None:
                 key = _unique_key(_slug(evaluator_id.replace(".", "_"), 28), used_keys)
                 existing_keys[evaluator_id] = key
-                evaluators.append({
+                row = {
                     "kind": "existing", "key": key, "title": evaluator_id,
                     "evaluator_id": evaluator_id, "golden_test_ids": [],
                     "blocking": False, "threshold": None,
                     "note": f"named in recommendation #{i + 1}",
-                })
+                }
+                evaluators.append(row)
+                by_key[key] = row
             mapped.append(key)
+        # 2. a seed evaluator: the structured ``evaluator_id`` as its key / name /
+        #    evaluator_id, or such a compound token written in the prose
+        if intent.evaluator_id and not _is_catalog_id(intent.evaluator_id):
+            key = seed_lookup.get(_token(intent.evaluator_id))
+            if key:
+                mapped.append(key)
+            else:
+                unresolved_why = (f"evaluator_id '{intent.evaluator_id}' is neither a listed "
+                                  "evaluator nor a seed evaluator key / name")
+        elif intent.evaluator_id and intent.evaluator_id not in existing_keys:
+            unresolved_why = f"evaluator_id '{intent.evaluator_id}' is not a listed evaluator"
+        mapped += _seed_tokens_in(text, seed_lookup)
+        # 3. the seed's explicit recommendation_keys
         seeded = [str(k) for k in (rec_keys.get(str(i)) or []) if str(k) in seeded_keys]
         mapped = list(dict.fromkeys(mapped + seeded))
-        recommendations.append({
+        for key in mapped:
+            _apply_intent(by_key[key], intent, i)
+        rec: dict[str, Any] = {
             "index": i, "text": text, "mapped_to": mapped,
             "status": "mapped" if mapped else "unresolved",
-            "note": "" if mapped else "no exact evaluator identified — classify or decline",
-        })
+            "note": _recommendation_note(intent, mapped, unresolved_why),
+        }
+        if intent.source:
+            rec.update({"blocking": intent.blocking, "threshold": intent.threshold,
+                        "metric": intent.metric, "intent_source": intent.source})
+        recommendations.append(rec)
     # The platform's assertions judge / expected-tools rule are added only when no seeded
     # entry already scores the same reference input — a duplicate costs one of the ten
     # slots of the batch evaluation for nothing.
@@ -871,7 +1198,7 @@ def draft_plan(
             "name": _slug(f"{agent_name}_gt_assertions", 48),
             "instructions": DRAFT_ASSERTION_RUBRIC,
             "rating_scale": [r.model_dump() for r in DEFAULT_RATING_SCALE],
-            "model_id": DEFAULT_JUDGE_MODEL, "level": "SESSION",
+            "model_id": default_judge_model(), "level": "SESSION",
             "description": f"Drafted for proposal revision {revision}: judges a session "
                            "against the assertions of its own scenario (reference input)",
             "golden_test_ids": [],
@@ -1016,8 +1343,7 @@ def seed_errors(
     try:
         plan = EvaluationPlan.model_validate(probe)
     except ValidationError as exc:
-        return [f"evaluation_plan.{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
-                for err in exc.errors()][:20]
+        return [_plan_error_line(err, prefix="evaluation_plan.") for err in exc.errors()][:20]
     errors: list[str] = []
     blocked_ids = [b.golden_test_id for b in plan.blocked_golden_tests]
     if len(set(blocked_ids)) != len(blocked_ids):
@@ -1093,5 +1419,12 @@ def plan_summary(
         "role_grants": grants,
         "unresolved_recommendations": sum(
             1 for r in plan.get("recommendations") or [] if r.get("status") == "unresolved"
+        ),
+        # WB-006: the subset that asks for a gate — such a plan is invalid until each is
+        # mapped or declined; the card surfaces them prominently
+        "unresolved_blocking_recommendations": sum(
+            1 for r in plan.get("recommendations") or []
+            if r.get("status") == "unresolved"
+            and (r.get("blocking") is True or r.get("threshold") is not None)
         ),
     }

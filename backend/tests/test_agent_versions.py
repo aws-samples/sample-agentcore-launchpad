@@ -14,7 +14,7 @@ import pytest
 import app.routers.agents as agents_router
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
-from app.services.agentcore import harness as harness_api
+from app.services import agent_versions
 from app.services.agentcore import runtime as runtime_api
 
 RUNTIME_ID = "hr_assistant-AbCdEf1234"
@@ -83,12 +83,6 @@ class StubControl:
 
     def list_agent_runtime_endpoints(self, **kw):
         return self._serve("list_agent_runtime_endpoints", kw)
-
-    def list_harness_versions(self, **kw):
-        return self._serve("list_harness_versions", kw)
-
-    def list_harness_endpoints(self, **kw):
-        return self._serve("list_harness_endpoints", kw)
 
     def ops(self) -> list[str]:
         return [op for op, _ in self.calls]
@@ -176,41 +170,6 @@ def test_runtime_list_wrappers_follow_every_page():
     assert control.calls[3][1]["nextToken"] == "e2"
 
 
-def test_harness_list_wrappers_follow_every_page():
-    control = StubControl(
-        {
-            "list_harness_versions": [
-                {"harnessVersions": [{"harnessVersion": "1"}], "nextToken": "p2"},
-                {"harnessVersions": [{"harnessVersion": "2"}]},
-            ],
-            "list_harness_endpoints": [
-                {"endpoints": [{"endpointName": "DEFAULT"}], "nextToken": "e2"},
-                {"endpoints": [{"endpointName": "custom"}]},
-            ],
-        }
-    )
-    assert [
-        v["harnessVersion"] for v in harness_api.list_harness_versions(control, HARNESS_ID)
-    ] == [
-        "1",
-        "2",
-    ]
-    assert [e["endpointName"] for e in harness_api.list_harness_endpoints(control, HARNESS_ID)] == [
-        "DEFAULT",
-        "custom",
-    ]
-    assert control.calls[0] == (
-        "list_harness_versions",
-        {"harnessId": HARNESS_ID, "maxResults": 100},
-    )
-    assert control.calls[1][1]["nextToken"] == "p2"
-    assert control.calls[2] == (
-        "list_harness_endpoints",
-        {"harnessId": HARNESS_ID, "maxResults": 100},
-    )
-    assert control.calls[3][1]["nextToken"] == "e2"
-
-
 # ─── route ───────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("method", ["zip_runtime", "studio", "container"])
 def test_runtime_agent_versions_projects_allow_listed_shape(client, stub, method):
@@ -262,7 +221,7 @@ def test_runtime_agent_versions_projects_allow_listed_shape(client, stub, method
         "version": "3",
         "status": "READY",
         "description": "v3",
-        "last_updated_at": "2026-09-01T12:03:00+00:00",
+        "last_updated_at": "2026-09-01T20:03:00+08:00",  # N17-obs463: the display offset
     }
     # DEFAULT first, then named endpoints alphabetically; canary names flagged
     assert [e["name"] for e in body["endpoints"]] == ["DEFAULT", "stable", "treatment"]
@@ -274,95 +233,13 @@ def test_runtime_agent_versions_projects_allow_listed_shape(client, stub, method
         "target_version": "3",
         "status": "UPDATE_FAILED",
         "description": None,
-        "created_at": "2026-08-01T00:00:00+00:00",
-        "last_updated_at": "2026-09-01T00:00:00+00:00",
+        "created_at": "2026-08-01T08:00:00+08:00",  # N17-obs463: the display offset
+        "last_updated_at": "2026-09-01T08:00:00+08:00",
         "failure_reason": "boom",
     }
     # allow-list: nothing sensitive from the AWS summaries survives
     assert not (_walk(body) & FORBIDDEN_KEYS)
     assert "do-not-leak" not in res.text and "private-role" not in res.text
-
-
-def test_harness_agent_uses_harness_ops(client, stub):
-    control = stub(
-        {
-            "list_harness_versions": [
-                {
-                    "harnessVersions": [
-                        {
-                            "harnessId": HARNESS_ID,
-                            "harnessName": "hr",
-                            "arn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x",
-                            "harnessVersion": "2",
-                            "status": "READY",
-                            "createdAt": datetime(2026, 8, 2, tzinfo=UTC),
-                            "updatedAt": datetime(2026, 8, 3, tzinfo=UTC),
-                        },
-                        {"harnessVersion": "1", "status": "READY"},
-                    ]
-                }
-            ],
-            "list_harness_endpoints": [
-                {
-                    "endpoints": [
-                        {
-                            "harnessId": HARNESS_ID,
-                            "endpointName": "DEFAULT",
-                            "arn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x/ep",
-                            "status": "READY",
-                            "liveVersion": "2",
-                            "targetVersion": "2",
-                            "createdAt": datetime(2026, 8, 2, tzinfo=UTC),
-                            "updatedAt": datetime(2026, 8, 3, tzinfo=UTC),
-                        }
-                    ]
-                }
-            ],
-        }
-    )
-    agent_id = _seed(method="harness", resource_id=HARNESS_ID, version="2")
-
-    res = client.get(f"/api/agents/{agent_id}/versions")
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert control.ops() == ["list_harness_versions", "list_harness_endpoints"]
-    assert all(kw["harnessId"] == HARNESS_ID for _, kw in control.calls)
-    assert body["kind"] == "harness"
-    assert body["latest_version"] == "2" and body["ledger_version"] == "2"
-    # HarnessVersionSummary has no description and uses updatedAt
-    assert body["versions"][0] == {
-        "version": "2",
-        "status": "READY",
-        "description": None,
-        "last_updated_at": "2026-08-03T00:00:00+00:00",
-    }
-    assert body["endpoints"][0]["name"] == "DEFAULT"
-    assert body["endpoints"][0]["last_updated_at"] == "2026-08-03T00:00:00+00:00"
-    assert body["canary_endpoints"] == []
-    assert not (_walk(body) & FORBIDDEN_KEYS)
-
-
-def test_discovered_harness_row_uses_harness_ops(client, stub):
-    control = stub(
-        {
-            "list_harness_versions": [{"harnessVersions": [{"harnessVersion": "5"}]}],
-            "list_harness_endpoints": [{"endpoints": []}],
-        }
-    )
-    agent_id = _seed(
-        method="discovered_runtime",
-        resource_id=HARNESS_ID,
-        version="4",
-        spec={"discovery": {"resource_type": "harness", "aws_status": "READY"}},
-    )
-    res = client.get(f"/api/agents/{agent_id}/versions")
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert control.ops() == ["list_harness_versions", "list_harness_endpoints"]
-    assert body["kind"] == "harness"
-    # ledger vs AWS latest mismatch is reported, not an error
-    assert body["ledger_version"] == "4" and body["latest_version"] == "5"
-    assert body["endpoints"] == []
 
 
 def test_discovered_runtime_row_defaults_to_runtime_ops(client, stub):
@@ -398,7 +275,8 @@ def test_discovered_runtime_row_defaults_to_runtime_ops(client, stub):
     [
         ("zip_runtime", "deploying", None, {}),
         ("harness", "failed", None, {}),
-        ("harness", "deleted", HARNESS_ID, {}),
+        ("discovered_runtime", "active", HARNESS_ID,
+         {"discovery": {"resource_type": "harness", "aws_status": "READY"}}),
         ("discovered_runtime", "active", "x", {"discovery": {"resource_type": "mcp"}}),
     ],
 )
@@ -411,6 +289,16 @@ def test_agent_without_resource_is_409_no_resource(client, stub, method, status,
     assert body["code"] == "agent.no_resource"
     assert body["message"]  # a human reason the UI can show
     assert control.calls == []  # never asked AWS
+
+
+def test_a_deleted_agents_versions_are_404(client, stub):
+    """A deleted row reads as missing on every /api/agents/{id}* route (N10v2-bug7),
+    so its versions panel is 404 agent.not_found rather than 409 no_resource."""
+    stub({})
+    agent_id = _seed(method="harness", status="deleted", resource_id=HARNESS_ID, spec={})
+    res = client.get(f"/api/agents/{agent_id}/versions")
+    assert res.status_code == 404, res.text
+    assert res.json()["code"] == "agent.not_found"
 
 
 def test_agent_from_another_workspace_is_404(client, stub):
@@ -427,3 +315,11 @@ def test_unknown_agent_is_404(client, stub):
     res = client.get("/api/agents/nope/versions")
     assert res.status_code == 404
     assert res.json()["code"] == "agent.not_found"
+
+
+def test_harness_rows_are_runtime_backed():
+    agent = Agent(
+        id="h" * 32, name="h", method="harness", status="active",
+        resource_id="rt-1", spec={},
+    )
+    assert agent_versions.resource_kind(agent) == "runtime"

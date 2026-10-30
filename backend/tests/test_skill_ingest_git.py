@@ -11,7 +11,6 @@ import zipfile
 
 import pytest
 
-import app.routers.registry as registry_router
 from app.services import skill_ingest as si
 
 
@@ -382,56 +381,3 @@ def test_install_git_success_path(monkeypatch):
     res = si.install_git()
     assert res == {"ok": True, "git_version": "2.44.0"}
     assert calls["cmd"] == ["apt-get", "install", "-y", "git"]
-
-
-# ---------- router: capabilities endpoint, git-install, inspect JSON branch ----------
-
-def test_capabilities_endpoint_git_present(client):
-    res = client.get("/api/registry/skills/capabilities")
-    assert res.status_code == 200
-    git = res.json()["git"]
-    assert git["available"] is True  # git IS installed in this dev env
-    assert git["version"]
-    assert "github.com" in git["fallback_hosts"]
-    assert "install" in git
-
-
-def test_git_install_endpoint_dispatches(client, monkeypatch):
-    monkeypatch.setattr(
-        registry_router.si, "install_git",
-        lambda: {"ok": False, "hint": "sudo apt-get install -y git", "package_manager": "apt-get"},
-    )
-    res = client.post("/api/registry/skills/capabilities/git-install")
-    assert res.status_code == 200
-    assert res.json()["ok"] is False
-    assert res.json()["hint"] == "sudo apt-get install -y git"
-
-
-def test_inspect_git_source_json_branch(client, monkeypatch):
-    def fake_bundles_from_git(url, ref=None, subdir=None, token=None):
-        assert token == "sekret"  # token flows through but is never stored/logged
-        b1 = si.bundle_from_inline(_md("alpha", description="A"))
-        b2 = si.bundle_from_inline(_md("beta", description="B"))
-        b1.source = si.SkillSource(kind="git", url=url, ref=ref, subdir="skills/alpha")
-        b2.source = si.SkillSource(kind="git", url=url, ref=ref, subdir="skills/beta")
-        return [b1, b2]
-
-    monkeypatch.setattr(registry_router.si, "bundles_from_git", fake_bundles_from_git)
-    res = client.post("/api/registry/skills/inspect", json={
-        "source": {"kind": "git", "url": "https://github.com/org/skills",
-                   "ref": "main", "token": "sekret"},
-    })
-    assert res.status_code == 200
-    body = res.json()
-    assert body["staging_id"]
-    assert {s["name"] for s in body["skills"]} == {"alpha", "beta"}
-    assert body["skills"][0]["source"]["kind"] == "git"
-
-
-def test_inspect_unsupported_source_kind_400(client):
-    # "url" is a supported kind now (P2); a genuinely unknown kind still 400s.
-    res = client.post(
-        "/api/registry/skills/inspect", json={"source": {"kind": "svn", "url": "x"}}
-    )
-    assert res.status_code == 400
-    assert res.json()["code"] == "registry.invalid_source"

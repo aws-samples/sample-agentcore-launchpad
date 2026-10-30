@@ -31,7 +31,6 @@ CTX = RoleContext(
     region="us-west-2",
     artifacts_bucket="launchpad-artifacts-123456789012-us-west-2",
     ecr_repo_arn="arn:aws:ecr:us-west-2:123456789012:repository/launchpad-agents",
-    memory_id="launchpad_memory-abc123",
 )
 
 REST_OAUTH = {
@@ -244,7 +243,7 @@ def test_create_without_auth_never_reaches_the_vault(client, no_real_deploy, mon
 
     monkeypatch.setattr(agents_router, "control_client", boom)
     res = client.post("/api/agents", json={
-        "name": "plain", "method": "harness", "system_prompt": "p",
+        "name": "plain", "method": "zip_runtime", "system_prompt": "p",
     })
     assert res.status_code == 202
 
@@ -348,7 +347,7 @@ def test_outbound_auth_env_and_workload_name():
 
 def test_runtime_user_id_is_sent_when_a_tool_carries_auth():
     assert runtime_user_id(AgentSpec(**SPEC).model_dump(), "alice")
-    assert runtime_user_id({"tools": [{"type": "rest", "name": "x"}]}, "alice") is None
+    assert runtime_user_id({"tools": [{"type": "rest", "name": "x"}]}, "alice") == "alice"
     assert identity_support.uses_workload_identity(AgentSpec(**SPEC).model_dump())
 
 
@@ -380,7 +379,7 @@ def test_identity_view_reads_workload_identity_and_downstreams():
     control.get_workload_identity.assert_called_once_with(name="auth_agent-xyz")
     assert view["inbound"] == {
         "mode": "iam", "source": "aws", "jwt": None,
-        "capable": True, "pinned": None, "ledger_mode": "iam", "invoke_url": None,
+        "capable": False, "pinned": None, "ledger_mode": "iam", "invoke_url": None,
     }
     by_name = {d["name"]: d for d in view["downstreams"]}
     assert by_name["crm"]["connection_status"] == "ready"
@@ -389,9 +388,7 @@ def test_identity_view_reads_workload_identity_and_downstreams():
 
 def test_identity_view_lists_gateway_targets_behind_an_attached_gateway():
     control = make_control(oauth=("launchpad-gw-m2m", "team-idp"))
-    control.get_agent_runtime.return_value = {
-        "authorizerConfiguration": {"customJWTAuthorizer": {"discoveryUrl": "x"}},
-    }
+    control.get_agent_runtime.return_value = {}
     control.list_gateway_targets.return_value = {"items": [{"targetId": "T1"}]}
     control.get_gateway_target.return_value = {
         "targetId": "T1", "name": "crm-api",
@@ -407,18 +404,30 @@ def test_identity_view_lists_gateway_targets_behind_an_attached_gateway():
     agent = _agent(spec={"name": "g", "tools": [{"type": "gateway", "name": "gw"}]})
     view = identity_view.agent_identity(control, agent, {"gateway_id": "gw-1"})
     assert view["workload_identity"]["status"] == "none"
-    assert view["inbound"]["mode"] == "jwt"
+    assert view["inbound"]["mode"] == "iam"
+    # the agent reaches the shared gateway as itself over SigV4 (N3 W2) — no
+    # Connection on the agent→gateway leg; the Connection-bound target behind
+    # it is unaffected.
     assert [(d["type"], d["connection"], d["via"]) for d in view["downstreams"]] == [
-        ("gateway", "launchpad-gw-m2m", "agent"),
+        ("gateway", None, "agent"),
         ("gateway_target", "team-idp", "gateway"),
     ]
 
 
 def test_identity_view_statuses_for_harness_undeployed_and_deleted_runtime():
     control = make_control()
+    control.get_agent_runtime.return_value = {
+        "workloadIdentityDetails": {
+            "workloadIdentityArn": "arn:aws:bedrock-agentcore:us-west-2:111:"
+            "workload-identity-directory/default/workload-identity/auth_agent-xyz"
+        },
+    }
+    control.get_workload_identity.return_value = {"allowedResourceOauth2ReturnUrls": []}
+    # The self-built harness method reads its workload identity back from the
+    # Runtime exactly like every other RUNTIME_METHODS member — no special case.
     assert identity_view.agent_identity(
         control, _agent(method="harness"), {}
-    )["workload_identity"]["status"] == "managed"
+    )["workload_identity"]["status"] == "ready"
     assert identity_view.agent_identity(
         control, _agent(resource_id=None), {}
     )["workload_identity"]["status"] == "not_deployed"

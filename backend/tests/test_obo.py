@@ -20,7 +20,6 @@ from tests.test_identity_gateway_targets import _create as create_target
 from tests.test_identity_gateway_targets import make_control as make_gateway
 
 IDP = "https://idp.example/.well-known/openid-configuration"
-COGNITO = "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_x/.well-known/openid-configuration"
 EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 OBO_OUT = {"customOauth2ProviderConfig": {"onBehalfOfTokenExchangeConfig": {
     "grantType": "TOKEN_EXCHANGE",
@@ -75,9 +74,11 @@ def test_jwt_authorization_grant_carries_no_actor_config(db):
 
 
 @pytest.mark.parametrize(("over", "probe", "code"), [
-    ({"discovery_url": COGNITO}, None, "identity.obo_unsupported"),
     ({}, _declares("authorization_code", "client_credentials"), "identity.obo_unsupported"),
-    ({"vendor": "GithubOauth2", "discovery_url": None}, None, "identity.obo_vendor_unsupported"),
+    # SlackOauth2 is any still-offered non-Custom vendor here — the case tests the
+    # generic "OBO applies to CustomOauth2 only" dispatch, not Slack itself
+    # (GithubOauth2, the vendor this case used before, is gone — N3 R5).
+    ({"vendor": "SlackOauth2", "discovery_url": None}, None, "identity.obo_vendor_unsupported"),
 ])
 def test_obo_is_refused_before_the_secret_leaves(db, over, probe, code):
     control = make_vault()

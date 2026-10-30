@@ -4,15 +4,12 @@ import { useTranslation } from "react-i18next";
 
 import {
   BUILTIN_TOOLS,
+  optionOffered,
   BYOC_KINDS,
   BYOC_MODELS_MAX,
   BYOC_PYTHON_VERSIONS,
-  byoMountsAllowed,
   DEFAULT_SESSION_MOUNT,
   filesystemIssues,
-  hasByoMounts,
-  MAX_MOUNTS_PER_KIND,
-  type MountRow,
   promptWithToolkit,
   pythonLabel,
   TOOLKITS,
@@ -20,7 +17,7 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
-import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
+import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionLabel, modelOptionsFor, modelUnavailableReason } from "../../../lib/models";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
@@ -59,7 +56,7 @@ export function BasicCard(props: Omit<SectionProps, "cat">) {
           label={t("v2.agents.wizard.systemPrompt")}
           required
           error={err("prompt")}
-          hint={promptLocked ? t("v2.agents.wizard.convertedPromptLocked") : undefined}
+          hint={t(promptLocked ? "v2.agents.wizard.convertedPromptLocked" : "v2.agents.wizard.reservedPlaceholder")}
         >
           <textarea
             className="v2-textarea"
@@ -127,11 +124,50 @@ function RemoteMcpField({ form, set, cat }: SectionProps) {
   );
 }
 
-/* ── managed Harness ───────────────────────────────────────────────────── */
+/** N10v2-bug5: other Launchpad agents (APPROVED A2A records) mounted as ask_<agent> tools.
+ *  A record no live agent of this workspace owns is shown disabled with the reason. */
+function AgentsField({ form, set, cat }: SectionProps) {
+  const { t } = useTranslation();
+  const extra = form.selectedAgents
+    .filter((name) => !cat.agents.some((a) => a.name === name))
+    .map((name) => ({ key: name, label: name }));
+  return (
+    <Field label={t("v2.agents.wizard.agents")} hint={cat.agents.length > 0 ? t("v2.agents.wizard.agentsHint") : undefined}>
+      {cat.loading ? (
+        <Spin />
+      ) : (
+        <CheckList
+          items={cat.agents}
+          keyOf={(a) => a.name}
+          labelOf={(a) => (
+            <>
+              <span className="mono">{a.name}</span>
+              {a.description && <span className="v2-muted">· {a.description}</span>}
+            </>
+          )}
+          hintOf={(a) => a.attachability_reason ?? a.skills.map((s) => s.name).join(", ")}
+          disabledOf={(a) => !a.attachable}
+          selected={form.selectedAgents}
+          onToggle={(n) => set({ selectedAgents: toggle(form.selectedAgents, n) })}
+          empty={t("v2.agents.wizard.noAgents")}
+          extra={extra}
+          testId="v2-agent-a2a-peers"
+        />
+      )}
+    </Field>
+  );
+}
+
+/* ── self-built Harness ────────────────────────────────────────────────── */
 
 export function HarnessToolsCard(props: SectionProps) {
   const { t } = useTranslation();
-  const { form, set } = props;
+  const { form, set, cat } = props;
+  // N15-obs16 / round 16: an option the method's declaration does not list is shown disabled
+  // with the reason instead of offered (the server answers 422 `agent.method_unsupported`)
+  const offered = (n: string) => optionOffered(cat.methodCaps, form.method, "builtin_tools", n);
+  const nativeOffered = (n: string) => optionOffered(cat.methodCaps, form.method, "native_tools", n);
+  const unsupported = (on: boolean) => (on ? undefined : t("v2.agents.wizard.optionUnsupportedHint", { method: form.method }));
   return (
     <Card title={t("v2.agents.wizard.tools")} sub={t("v2.agents.wizard.toolsSub")}>
       <div className="v2-form">
@@ -139,7 +175,14 @@ export function HarnessToolsCard(props: SectionProps) {
           <CheckList
             items={[...BUILTIN_TOOLS]}
             keyOf={(n) => n}
-            labelOf={(n) => t(`v2.agents.wizard.builtin.${n}`)}
+            labelOf={(n) => (
+              <>
+                {t(`v2.agents.wizard.builtin.${n}`)}
+                {!offered(n) && <span className="v2-muted"> · {t("v2.agents.wizard.optionUnsupported")}</span>}
+              </>
+            )}
+            hintOf={(n) => unsupported(offered(n))}
+            disabledOf={(n) => !offered(n)}
             selected={form.tools}
             onToggle={(n) => set({ tools: toggle(form.tools, n) })}
             empty=""
@@ -148,6 +191,7 @@ export function HarnessToolsCard(props: SectionProps) {
         </Field>
         <GatewayField {...props} />
         <RemoteMcpField {...props} />
+        <AgentsField {...props} />
         <Field
           label={t("v2.agents.wizard.nativeTools")}
           hint={form.nativeTools.length === 0 ? t("create.nativeTools.unavailable") : t("v2.agents.wizard.nativeToolsHint")}
@@ -155,7 +199,14 @@ export function HarnessToolsCard(props: SectionProps) {
           <CheckList
             items={[...HARNESS_NATIVE_TOOLS]}
             keyOf={(n) => n}
-            labelOf={(n) => t(`v2.agents.wizard.native.${n}`)}
+            labelOf={(n) => (
+              <>
+                {t(`v2.agents.wizard.native.${n}`)}
+                {!nativeOffered(n) && <span className="v2-muted"> · {t("v2.agents.wizard.optionUnsupported")}</span>}
+              </>
+            )}
+            hintOf={(n) => unsupported(nativeOffered(n))}
+            disabledOf={(n) => !nativeOffered(n)}
             selected={form.nativeTools}
             onToggle={(n) => set({ nativeTools: toggle(form.nativeTools, n as HarnessNativeTool) })}
             empty=""
@@ -172,9 +223,12 @@ export function HarnessToolsCard(props: SectionProps) {
 export function ProtocolCard({
   form,
   set,
+  cat,
   onProtocol,
-}: Omit<SectionProps, "cat" | "err"> & { onProtocol: (next: "http" | "a2a") => void }) {
+}: Omit<SectionProps, "err"> & { onProtocol: (next: "http" | "a2a") => void }) {
   const { t } = useTranslation();
+  // round 16: a protocol the method's declaration does not list is disabled with the reason
+  const protocolOffered = (p: string) => optionOffered(cat.methodCaps, form.method, "protocols", p);
   const rows = form.a2aSkills;
   const patchRow = (i: number, patch: Partial<(typeof rows)[number]>) =>
     set((prev) => ({ a2aSkills: prev.a2aSkills.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
@@ -187,6 +241,8 @@ export function ProtocolCard({
             title={t(`v2.agents.wizard.protocol.${p}`)}
             desc={t(`v2.agents.wizard.protocol.${p}Desc`)}
             on={form.protocol === p}
+            disabled={!protocolOffered(p)}
+            tip={protocolOffered(p) ? undefined : t("v2.agents.wizard.optionUnsupportedHint", { method: form.method })}
             onClick={() => form.protocol !== p && onProtocol(p)}
             testId={`v2-agent-protocol-${p}`}
           />
@@ -268,6 +324,7 @@ export function StrandsToolsCard(props: SectionProps) {
         ) : (
           <>
             <GatewayField {...props} />
+            <AgentsField {...props} />
             <Field label={t("v2.agents.wizard.toolkits")} hint={t("create.configure.toolkitNote")}>
               <div className="v2-checks" data-testid="v2-agent-toolkits">
                 {TOOLKITS.map((kit) => (
@@ -286,58 +343,6 @@ export function StrandsToolsCard(props: SectionProps) {
   );
 }
 
-/* ── other Agent SDK (container) ───────────────────────────────────────── */
-
-export function SdkCard({ form, set }: Omit<SectionProps, "cat" | "err">) {
-  const { t } = useTranslation();
-  return (
-    <Card title={t("v2.agents.wizard.sdkTitle")}>
-      <div className="v2-options">
-        <OptionCard
-          title={t("create.configure.agentSdkClaude")}
-          desc={t("v2.agents.wizard.sdkClaudeDesc")}
-          on={form.agentSdk === "claude_agent_sdk"}
-          onClick={() => set({ agentSdk: "claude_agent_sdk" })}
-          testId="v2-agent-sdk-claude"
-        />
-      </div>
-      <div className="v2-agents-foot">
-        <Alert>{t("create.configure.agentSdkNote")}</Alert>
-      </div>
-    </Card>
-  );
-}
-
-export function ContainerToolsCard(props: SectionProps) {
-  const { t } = useTranslation();
-  const { form, set } = props;
-  return (
-    <Card title={t("v2.agents.wizard.sdkTools")} sub={t("v2.agents.wizard.toolsSub")}>
-      <div className="v2-form">
-        <Field label={t("v2.agents.wizard.builtinTools")}>
-          <div className="v2-row">
-            <Tag tone="blue">{t("v2.agents.wizard.subagents")}</Tag>
-          </div>
-        </Field>
-        <RemoteMcpField {...props} />
-        <Field label={t("v2.agents.wizard.gateways")}>
-          <span className="v2-muted">{t("v2.agents.wizard.gatewayContainer")}</span>
-        </Field>
-        <Field label={t("v2.agents.wizard.mcpJson")} hint={t("v2.agents.wizard.mcpJsonHint")}>
-          <textarea
-            className="v2-textarea code"
-            rows={3}
-            value={form.mcpServers}
-            onChange={(e) => set({ mcpServers: e.target.value })}
-            placeholder='{"docs": {"command": "uvx", "args": ["mcp-server-docs"]}}'
-            data-testid="v2-agent-mcp-json"
-          />
-        </Field>
-      </div>
-    </Card>
-  );
-}
-
 function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: string }) {
   const { t } = useTranslation();
   return (
@@ -350,22 +355,9 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
 export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" | "err"> & { touched: boolean }) {
   const { t } = useTranslation();
   const issues = filesystemIssues(form);
-  // harness / Strands mount managed session storage only — BYO needs the container's VPC wiring
-  const byoAllowed = byoMountsAllowed(form.method);
-  const byo = byoAllowed && hasByoMounts(form);
   const show = (on: boolean, key: string) => (touched && on ? t(key) : undefined);
-  const kinds = [
-    { kind: "s3" as const, field: "s3Mounts" as const, label: "S3 Files", ph: "create.configure.fsS3ArnPlaceholder" },
-    { kind: "efs" as const, field: "efsMounts" as const, label: "EFS", ph: "create.configure.fsEfsArnPlaceholder" },
-  ];
-  const patchRow = (field: "s3Mounts" | "efsMounts", i: number, patch: Partial<MountRow>) =>
-    set((prev) => ({ [field]: prev[field].map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   return (
-    <Card
-      title={t("v2.agents.wizard.fsTitle")}
-      sub={t(byo ? "create.configure.fsNoteByo" : byoAllowed ? "create.configure.fsNote" : "v2.agents.wizard.fsNoteSession")}
-      testId="v2-agent-fs"
-    >
+    <Card title={t("v2.agents.wizard.fsTitle")} sub={t("v2.agents.wizard.fsNoteSession")} testId="v2-agent-fs">
       <div className="v2-form">
         <div className="v2-form cols-2">
           <Field label={t("v2.agents.wizard.fsSession")}>
@@ -386,79 +378,6 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
             </Field>
           )}
         </div>
-        {byoAllowed && kinds.map(({ kind, field, label, ph }) => (
-          <Field key={kind} label={t("v2.agents.wizard.fsMounts", { kind: label })} hint={t("v2.agents.wizard.fsMountsHint", { max: MAX_MOUNTS_PER_KIND })}>
-            {form[field].length > 0 && (
-              <div className="v2-agents-rows">
-                {form[field].map((row, i) => {
-                  const bad = issues.rows[`${kind}:${i}`];
-                  return (
-                    <div key={i}>
-                      <div className="v2-agents-row mount">
-                        <input
-                          className="v2-input mono"
-                          value={row.arn}
-                          placeholder={t(ph)}
-                          aria-label={t("v2.agents.wizard.fsArn")}
-                          onChange={(e) => patchRow(field, i, { arn: e.target.value })}
-                          data-testid={`v2-agent-fs-${kind}-arn-${i}`}
-                        />
-                        <input
-                          className="v2-input mono"
-                          value={row.path}
-                          placeholder="/mnt/data"
-                          aria-label={t("v2.agents.wizard.fsPath")}
-                          onChange={(e) => patchRow(field, i, { path: e.target.value })}
-                          data-testid={`v2-agent-fs-${kind}-path-${i}`}
-                        />
-                        <RemoveButton onClick={() => set((prev) => ({ [field]: prev[field].filter((_, j) => j !== i) }))} />
-                      </div>
-                      {touched && bad && (
-                        <span className="v2-agents-err">
-                          {[bad.arn && t("v2.agents.wizard.errArn"), bad.path && t("v2.agents.wizard.errMount")].filter(Boolean).join(" · ")}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            <div>
-              <Button
-                size="sm"
-                disabled={form[field].length >= MAX_MOUNTS_PER_KIND}
-                onClick={() => set((prev) => ({ [field]: [...prev[field], { arn: "", path: "" }] }))}
-                testId={`v2-agent-fs-add-${kind}`}
-              >
-                <Plus size={13} aria-hidden="true" />
-                {t("v2.agents.wizard.fsAdd", { kind: label })}
-              </Button>
-            </div>
-          </Field>
-        ))}
-        {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
-        {byo && (
-          <div className="v2-form cols-2">
-            <Field label={t("create.configure.fsSubnets")} required error={show(issues.vpc && !form.vpcSubnets.trim(), "v2.agents.wizard.errVpc")}>
-              <input
-                className="v2-input mono"
-                value={form.vpcSubnets}
-                onChange={(e) => set({ vpcSubnets: e.target.value })}
-                placeholder="subnet-0abc, subnet-0def"
-                data-testid="v2-agent-fs-subnets"
-              />
-            </Field>
-            <Field label={t("create.configure.fsSgs")} required error={show(issues.vpc && !form.vpcSgs.trim(), "v2.agents.wizard.errVpc")}>
-              <input
-                className="v2-input mono"
-                value={form.vpcSgs}
-                onChange={(e) => set({ vpcSgs: e.target.value })}
-                placeholder="sg-0abc"
-                data-testid="v2-agent-fs-sgs"
-              />
-            </Field>
-          </div>
-        )}
       </div>
     </Card>
   );
@@ -491,16 +410,19 @@ export function ByocArtifactCard({
   form,
   set,
   err,
+  cat,
   ui,
   onUpload,
   onPython,
-}: Omit<SectionProps, "cat"> & {
+}: SectionProps & {
   ui: WizardUi;
   onUpload: (file: File) => void;
   onPython: (version: ByocPythonVersion) => void;
 }) {
   const { t } = useTranslation();
   const kind = form.byocKind;
+  // round 16: an artifact kind the method's declaration does not list is disabled with the reason
+  const kindOffered = (k: string) => optionOffered(cat.methodCaps, form.method, "byoc_kinds", k);
   const upload = ui.byocUpload;
   const reqs = upload?.detected.requirements;
   const candidates = upload?.detected.entrypoint_candidates ?? [];
@@ -513,6 +435,8 @@ export function ByocArtifactCard({
             title={t(`create.configure.byocKindName.${k}`)}
             desc={t(`create.configure.byocKindDesc.${k}`)}
             on={kind === k}
+            disabled={!kindOffered(k)}
+            tip={kindOffered(k) ? undefined : t("v2.agents.wizard.optionUnsupportedHint", { method: form.method })}
             onClick={() => set({ byocKind: k })}
             testId={`v2-agent-byoc-kind-${k}`}
           />
@@ -525,7 +449,7 @@ export function ByocArtifactCard({
               className="v2-input mono"
               value={form.byocImageUri}
               onChange={(e) => set({ byocImageUri: e.target.value })}
-              placeholder="123456789012.dkr.ecr.us-west-2.amazonaws.com/my-agents:v1"
+              placeholder="123456789012.dkr.ecr.cn-northwest-1.amazonaws.com.cn/my-agents:v1"
               data-testid="v2-agent-byoc-image"
             />
           </Field>
@@ -576,8 +500,24 @@ export function ByocArtifactCard({
             {upload && kind === "code_zip" && !upload.detected.agentcore_sdk_detected && (
               <Alert tone="warn">{t("create.configure.byocNoSdkWarn")}</Alert>
             )}
+            {upload && kind === "code_zip" && upload.detected.telemetry &&
+              (upload.detected.telemetry.adot === "pyproject_only" || upload.detected.telemetry.adot === "absent" ||
+                (upload.detected.telemetry.adot === "requirements" && !form.byocInstallReqs)) && (
+                <div data-testid="v2-agent-byoc-no-telemetry">
+                  <Alert tone="warn">{t(`create.configure.byocNoTelemetry.${upload.detected.telemetry.adot === "requirements" ? "notInstalled" : upload.detected.telemetry.adot}`)}</Alert>
+                </div>
+              )}
             {upload && kind === "container_source" && !upload.detected.has_dockerfile && (
               <Alert tone="warn">{t("create.configure.byocNoDockerfileWarn")}</Alert>
+            )}
+            {upload && kind === "container_source" && upload.detected.telemetry?.cn_exporter === "will_apply" && (
+              <div data-testid="v2-agent-byoc-cn-layer">
+                <Alert tone="info">
+                  {form.byocCnTraceExporter
+                    ? t("create.configure.byocCnLayer.willApply", { version: upload.detected.telemetry.adot_node ?? "" })
+                    : t("create.configure.byocCnLayer.optedOut")}
+                </Alert>
+              </div>
             )}
             {upload && kind === "code_zip" && form.byocInstallReqs && reqs && reqs.status !== "skipped" &&
               (reqs.status === "ok" ? (
@@ -632,6 +572,19 @@ export function ByocArtifactCard({
                 {t("create.configure.byocInstallReqs")}
               </label>
             </Field>
+            {kind !== "code_zip" && (
+              <Field label={t("create.configure.byocCnLayer.label")} hint={t("create.configure.byocCnLayer.hint")}>
+                <label className="v2-check">
+                  <input
+                    type="checkbox"
+                    checked={form.byocCnTraceExporter}
+                    onChange={(e) => set({ byocCnTraceExporter: e.target.checked })}
+                    data-testid="v2-agent-byoc-cn-layer-toggle"
+                  />
+                  {t("create.configure.byocCnLayer.toggle")}
+                </label>
+              </Field>
+            )}
             <Field label={t("v2.agents.wizard.byocContractKind")} hint={t("create.configure.byocRawHint")}>
               <label className="v2-check">
                 <input
@@ -668,12 +621,12 @@ export function ByocModelsCard({
       <div className="v2-form">
         <Field
           label={t("v2.agents.wizard.modelSource")}
-          hint={t(form.modelSource === "mantle" ? "create.configure.modelSourceMantleDesc" : "create.configure.modelSourceBedrockDesc")}
+          hint={t("create.configure.modelSourceBedrockDesc")}
         >
           <div className="v2-row">
 <Segmented
             value={form.modelSource}
-            options={(["bedrock", "mantle"] as ModelSource[]).map((s) => ({ value: s, label: t(`v2.agents.wizard.source.${s}`) }))}
+            options={(["bedrock"] as ModelSource[]).map((s) => ({ value: s, label: t(`v2.agents.wizard.source.${s}`) }))}
             onChange={(s) => {
               if (s === form.modelSource) return;
               applySource(s);
@@ -726,7 +679,16 @@ export function ByocModelsCard({
             options={[
               ...modelOptionsFor(form.modelSource)
                 .filter((o) => !models.includes(o.model_id))
-                .map((o) => ({ value: o.model_id, label: `${o.label} · ${o.model_id}` })),
+                .map((o) => {
+                  // N-R6-obs1: an unconfigured provider's row is disabled, tooltip = the SSM parameter
+                  const reason = modelUnavailableReason(o.model_id);
+                  return {
+                    value: o.model_id,
+                    label: modelOptionLabel(o, t("models.unavailableShort"), true),
+                    disabled: !o.available,
+                    title: reason ? t("models.unavailable", reason) : undefined,
+                  };
+                }),
               { value: CUSTOM_MODEL_OPTION, label: t("v2.agents.wizard.customModel") },
             ]}
           />

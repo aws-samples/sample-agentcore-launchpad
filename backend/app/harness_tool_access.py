@@ -8,8 +8,14 @@ from typing import Any
 NATIVE_HARNESS_TOOLS = ("shell", "file_operations")
 # AgentCore built-in tool configs (ToolRef type "builtin") → the callable names the
 # model sees at runtime (live 2026-10-03: the "code-interpreter" config is called
-# ``code_interpreter``).
-BUILTIN_RUNTIME_TOOLS: dict[str, tuple[str, ...]] = {"code-interpreter": ("code_interpreter",)}
+# ``code_interpreter``; N15-obs16: ``browser`` renders as the ``browser`` tool of
+# ``harness_builtin_browser.py.tmpl``). Every key has a module in
+# ``deployer.harness_local.BUILTIN_MODULES``, and the key set IS the harness method's
+# declared ``builtin_tools`` (round 16: ``pipeline.method_capabilities("harness")``).
+BUILTIN_RUNTIME_TOOLS: dict[str, tuple[str, ...]] = {
+    "code-interpreter": ("code_interpreter",),
+    "browser": ("browser",),
+}
 # HarnessTool.name permits ASCII letters, digits, underscores and hyphens.
 # Leave one character for "@" within HarnessAllowedTool's 64-character limit.
 _DERIVED_GROUP_NAME = re.compile(r"[A-Za-z0-9_-]{1,63}")

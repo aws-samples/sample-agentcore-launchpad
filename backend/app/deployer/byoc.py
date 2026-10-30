@@ -27,37 +27,52 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.naming import default_ecr_repo
 from app.core.runtime_target import pip_platform_args
-from app.deployer.environment import runtime_environment
-from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.deployer import adot_cn, log_retention
+from app.deployer.environment import check_env_budget, runtime_environment
+from app.deployer.pipeline import (
+    MethodCapabilities,
+    StageContext,
+    StageResult,
+    register_method,
+)
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
-from app.services import agent_iam, byoc_uploads
+from app.services import agent_iam, byoc_uploads, ecr, policy_enforcement
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.requirements_txt import (
     RESOLVE_FIX_HINTS,
     RequirementsFileError,
+    describe_exit,
     parse_requirements_txt,
     pip_python_version,
     summarize_resolver_failure,
 )
 from app.services.workspace import WorkspaceContext
 
-from .container import (
+from .image_build import (
     _image_ref,
     _recorded_digest_uri,
     build_and_push_image,
     platform_buildspec_path,
 )
-from .zip_runtime import _compile_lock, sanitize_runtime_name
+from .zip_runtime import (
+    _compile_lock,
+    _raise_if_stopped_with_the_service,
+    find_adoptable_runtime,
+    sanitize_runtime_name,
+)
 
 PACKAGE_KEY_TMPL = "agents/{name}/byoc_package.zip"
 
 
 def _config(spec: AgentSpec) -> ByocConfig:
+    # round 16: the creation-time validator must have refused this — kept as the
+    # last line of defence for stored specs (tests/fail_early_registry.py)
     if spec.byoc is None:  # schema guarantees this; belt for hand-built rows
         raise RuntimeError("byoc spec has no byoc settings block")
     return spec.byoc
@@ -96,10 +111,87 @@ def _stamp_provenance(ctx: StageContext, agent: Agent, provenance: dict[str, Any
         db.close()
 
 
+# N17-obs410: the deploy result names a bundle that cannot emit spans
+NO_TELEMETRY_WARNING = "no telemetry: observability and evaluation unavailable"
+
+
+def adot_status(src_root: Path, cfg: ByocConfig) -> dict[str, Any]:
+    """``{instrumented, reason}`` of the BUILT bundle: instrumented when the ADOT distro and
+    its ``opentelemetry-instrument`` launcher (``opentelemetry.instrumentation.
+    auto_instrumentation``) are both installed at the bundle root — resolved from
+    requirements.txt or vendored. Anything else starts as plain ``python <entrypoint>``: a
+    missing launcher would fail the runtime at start, which no warning is worth."""
+    names = [p.name for p in src_root.iterdir()]
+    distro = (src_root / byoc_uploads.ADOT_PACKAGE).is_dir() or any(
+        n.startswith(f"{byoc_uploads.ADOT_PACKAGE}-") and n.endswith(".dist-info")
+        for n in names)
+    launcher = (src_root / "opentelemetry" / "instrumentation" / "auto_instrumentation").is_dir()
+    if distro and launcher:
+        return {"instrumented": True, "reason": ""}
+    if distro:
+        return {"instrumented": False, "reason": (
+            f"{byoc_uploads.ADOT_DISTRIBUTION} is in the bundle without its "
+            "opentelemetry-instrument launcher (opentelemetry-instrumentation)")}
+
+    def read(name: str) -> str | None:
+        path = src_root / name
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+
+    if byoc_uploads.declares_adot(read("requirements.txt")):
+        return {"instrumented": False, "reason": (
+            f"requirements.txt lists {byoc_uploads.ADOT_DISTRIBUTION} but "
+            "install_requirements is off — nothing was installed"
+            if not cfg.install_requirements else
+            f"requirements.txt lists {byoc_uploads.ADOT_DISTRIBUTION} but it did not install")}
+    if byoc_uploads.declares_adot(read("pyproject.toml")):
+        return {"instrumented": False, "reason": (
+            f"pyproject.toml lists {byoc_uploads.ADOT_DISTRIBUTION}, but only "
+            "requirements.txt is installed — add it there")}
+    return {"instrumented": False, "reason": (
+        f"the bundle does not install {byoc_uploads.ADOT_DISTRIBUTION}")}
+
+
+def _stamp_telemetry(ctx: StageContext, agent: Agent, telemetry: dict[str, Any]) -> None:
+    """Persist the package stage's ADOT verdict on the row (``spec.byoc.telemetry``): the
+    deploy stage of this or a resumed job reads it, and the console renders it."""
+    db = ctx.session()
+    try:
+        row = db.get(Agent, agent.id)
+        spec = dict(row.spec if row is not None else agent.spec)
+        # N17-obs465: the container kinds stamp their layer decision on the same record
+        prior = (spec.get("byoc") or {}).get("telemetry") or {}
+        telemetry = {**prior, **telemetry}
+        spec["byoc"] = {**(spec.get("byoc") or {}), "telemetry": telemetry}
+        if row is not None:  # a row deleted mid-package: the pipeline cancels the job
+            row.spec = spec
+            db.commit()
+        agent.spec = spec
+    finally:
+        db.close()
+
+
+def _runtime_environment(ctx: StageContext, agent: Agent, spec: AgentSpec) -> dict[str, str]:
+    """The merged runtime environment of a BYOC agent: the shared derivation plus the
+    model handles the member's own code reads (``MODEL_ID`` = the primary model,
+    ``ALLOWED_MODEL_IDS`` the comma-separated permitted list; explicit spec.env values win
+    for both). The budget is re-checked after the two additions (rev-r16 on N16-obs72)."""
+    environment = runtime_environment(
+        spec, ctx.workspace.resources, workload_name=agent.resource_id or "", agent_id=agent.id,
+    )
+    environment.setdefault("MODEL_ID", spec.model_id)
+    environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+    check_env_budget(environment, spec)
+    return environment
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
-    """No code to generate — verify the artifact reference and stamp provenance."""
+    """No code to generate — verify the artifact reference and stamp provenance. The merged
+    runtime environment is derived first (no AWS call) so an over-budget map fails here
+    with ``agent.env_budget_exceeded`` rather than at CreateAgentRuntime."""
     spec = AgentSpec(**agent.spec)
     cfg = _config(spec)
+    policy_enforcement.stage_policy(ctx, agent, spec)  # logged once per job
+    _runtime_environment(ctx, agent, spec)
 
     if cfg.artifact_kind == "container_image":
         digest, pushed_at = describe_image(ctx.workspace, cfg.image_uri or "")
@@ -145,6 +237,8 @@ def describe_image(
     """(imageDigest, imagePushedAt ISO) of a private ECR image in THIS
     account+region — refuses other accounts/regions and missing images."""
     parsed = parse_ecr_image_uri(image_uri)
+    # round 16: the creation-time validator must have refused this — kept as the
+    # last line of defence for stored specs (tests/fail_early_registry.py)
     if parsed is None:
         raise RuntimeError(f"'{image_uri}' is not a private ECR image URI")
     account_id, region = parsed
@@ -153,7 +247,7 @@ def describe_image(
             f"image {image_uri} lives in {account_id}/{region}; this workspace "
             f"deploys from {workspace.account_id}/{workspace.region} only"
         )
-    rest = image_uri.split(".amazonaws.com/", 1)[1]
+    rest = image_uri.split(f".{workspace.dns_suffix}/", 1)[1]
     if "@sha256:" in rest:
         repo, _, ref = rest.partition("@")
         image_id = {"imageDigest": ref}
@@ -210,10 +304,13 @@ def resolve_requirements_into(
         text=True,
     )
     if proc.returncode != 0:
+        _raise_if_stopped_with_the_service("pip install", proc.returncode)
         raise RuntimeError(
-            "pip install of the zip's locked requirements failed: "
+            "pip install of the zip's locked requirements failed "
+            f"({describe_exit(proc.returncode)}): "
             + summarize_resolver_failure(
-                proc.stderr or "", python_version=pip_version, hints=RESOLVE_FIX_HINTS
+                proc.stderr or "", python_version=pip_version, hints=RESOLVE_FIX_HINTS,
+                returncode=proc.returncode,
             )
         )
     # the lock ships inside the artifact — the record of what was installed
@@ -268,6 +365,14 @@ def _build_code_zip(
     else:
         ctx.log("install_requirements=false — bundle shipped as uploaded")
 
+    telemetry = adot_status(src_root, cfg)
+    _stamp_telemetry(ctx, agent, telemetry)
+    if telemetry["instrumented"]:
+        ctx.log("ADOT launcher in the bundle — the runtime starts via opentelemetry-instrument")
+    else:
+        ctx.log(f"WARNING {NO_TELEMETRY_WARNING} — {telemetry['reason']}; the runtime starts "
+                f"as `python {cfg.entrypoint}` (see docs: BYOC self-instrumentation)")
+
     final_zip = build_dir / "deployment_package.zip"
     _zip_tree(src_root, final_zip)
     size_mb = final_zip.stat().st_size / 1e6
@@ -280,6 +385,7 @@ def _build_code_zip(
     detail = f"code_zip · {size_mb:.1f}MB · s3 ✓"
     if installed:
         detail += f" · {installed} deps resolved (aarch64)"
+    detail += " · ADOT ✓" if telemetry["instrumented"] else f" · {NO_TELEMETRY_WARNING}"
     return StageResult(detail=detail)
 
 
@@ -310,19 +416,97 @@ def _build_container_source(
     if (src_root / "buildspec.yml").exists():
         ctx.log("upload carries its own buildspec.yml — replaced by the platform's")
     shutil.copy2(platform_buildspec_path(), src_root / "buildspec.yml")
+    # N17-obs465: a Node agent (its package.json depends on ADOT Node) in aws-cn gets the
+    # platform's trace exporter layer on top of its own image
+    package = src_root / "package.json"
+    adot_range = adot_cn.node_adot_in_package_json(
+        package.read_text(encoding="utf-8", errors="replace") if package.is_file() else None)
+    apply, reason = adot_cn.decide(ctx.workspace.partition, cfg.cn_trace_exporter,
+                                   adot_range is not None)
+    if apply:
+        adot_cn.stage_layer(src_root)
+        ctx.log(f"Node agent (ADOT Node {adot_range}) in aws-cn — adding the platform's aws-cn "
+                "trace exporter layer (N17-obs465; opt out: byoc.cn_trace_exporter=false)")
     archive = shutil.make_archive(str(build_dir / "context_src"), "zip", src_root)
-    tag, mins = build_and_push_image(ctx, agent, archive)
+    tag, mins = build_and_push_image(
+        ctx, agent, archive, **({"extra_env": {"LAUNCHPAD_CN_TRACE_LAYER": "1"}} if apply else {}))
     digest = ctx.scratch["image_digest"]
-    return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…")
+    telemetry: dict[str, Any] = {"cn_exporter": reason,
+                                 "runtime": "node" if package.is_file() else ""}
+    if apply:
+        registry, repo, _tag = _image_ref(ctx.workspace, agent)
+        member = ecr.resolve_digest(ctx.workspace.client("ecr"), repo, f"{tag}-member")
+        telemetry |= {"member_image": f"{registry}/{repo}@{member}",
+                      "layer_image": ctx.scratch["image_uri"]}
+        ctx.log(f"member image {registry}/{repo}@{member} · deployed with the aws-cn trace "
+                f"exporter layer {ctx.scratch['image_uri']}")
+    _stamp_telemetry(ctx, agent, telemetry)
+    layer = " · aws-cn trace exporter layer" if apply else ""
+    return StageResult(
+        detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…{layer}")
+
+
+def _package_container_image(ctx: StageContext, agent: Agent, cfg: ByocConfig) -> StageResult:
+    """An existing ECR image: deployed as is, except a Node image in aws-cn, which gets the
+    platform's trace exporter layer FROM it (N17-obs465) — the member's image is unchanged."""
+    uri = cfg.image_uri or ""
+    node: bool | None = False
+    if ctx.workspace.partition == "aws-cn" and cfg.cn_trace_exporter:
+        repo, image_id = _ecr_ref(ctx.workspace, uri)
+        node = adot_cn.image_is_node(ctx.workspace.client("ecr"), repo, image_id)
+    apply, reason = adot_cn.decide(ctx.workspace.partition, cfg.cn_trace_exporter, node)
+    member = f"{uri.split('@')[0].rsplit(':', 1)[0]}@{cfg.provenance.sha256}" if (
+        cfg.provenance and cfg.provenance.sha256) else uri
+    if not apply:
+        ctx.scratch["image_uri"] = uri
+        _stamp_telemetry(ctx, agent, {"cn_exporter": reason, "member_image": member,
+                                      "layer_image": "", "runtime": "node" if node else ""})
+        if reason == "unknown_runtime":
+            ctx.log("WARNING could not read the image config — deployed without the aws-cn "
+                    "trace exporter layer (a Node image would have no traces)")
+        return StageResult(skipped=True, detail="existing image — no build")
+    bucket = ctx.workspace.resources.get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError(
+            "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
+        )
+    ctx.log(f"Node image in aws-cn — building the platform's aws-cn trace exporter layer FROM "
+            f"{member} (N17-obs465; opt out: byoc.cn_trace_exporter=false)")
+    with tempfile.TemporaryDirectory(prefix="launchpad_byoc_layer_") as tmp:
+        root = Path(tmp) / "ctx"
+        root.mkdir()
+        shutil.copy2(platform_buildspec_path(), root / "buildspec.yml")
+        adot_cn.stage_layer(root)
+        archive = shutil.make_archive(str(Path(tmp) / "layer_ctx"), "zip", root)
+        tag, mins = build_and_push_image(ctx, agent, archive, extra_env={
+            "LAUNCHPAD_CN_TRACE_LAYER": "1", "LAUNCHPAD_MEMBER_IMAGE": uri})
+    _stamp_telemetry(ctx, agent, {"cn_exporter": reason, "runtime": "node",
+                                  "member_image": member, "layer_image": ctx.scratch["image_uri"]})
+    ctx.log(f"member image {member} · deployed with the aws-cn trace exporter layer "
+            f"{ctx.scratch['image_uri']}")
+    return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} · aws-cn trace "
+                              f"exporter layer FROM {member[-19:]}")
+
+
+def _ecr_ref(workspace: WorkspaceContext, image_uri: str) -> tuple[str, dict[str, str]]:
+    """(repository, imageId) of a private ECR image URI of this workspace."""
+    rest = image_uri.split(f".{workspace.dns_suffix}/", 1)[1]
+    if "@sha256:" in rest:
+        repo, _, ref = rest.partition("@")
+        return repo, {"imageDigest": ref}
+    repo, _, ref = rest.rpartition(":")
+    return repo, {"imageTag": ref}
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
     cfg = _config(spec)
     if cfg.artifact_kind == "container_image":
-        # nothing to build — deploy pins the URI the generate stage verified
-        ctx.scratch["image_uri"] = cfg.image_uri
-        return StageResult(skipped=True, detail="existing image — no build")
+        # deploy pins the URI the generate stage verified — or, for a Node image in aws-cn,
+        # the platform's trace exporter layer built FROM it (N17-obs465)
+        return _package_container_image(ctx, agent, cfg)
+    # round 16: the creation-time validator must have refused this — kept as the
+    # last line of defence for stored specs (tests/fail_early_registry.py)
     bucket = ctx.workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(
@@ -336,15 +520,24 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
     role_arn, detail = agent_iam.provision_execution_role(
-        agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
+        agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client,
     )
     ctx.scratch["execution_role_arn"] = role_arn
     return StageResult(detail=detail)
 
 
+def _instrumented(cfg: ByocConfig) -> bool:
+    """The package stage's stamped ADOT verdict; a row packaged before it existed (or never
+    packaged) starts uninstrumented, as before."""
+    return bool(cfg.telemetry and cfg.telemetry.instrumented)
+
+
 def _container_uri(ctx: StageContext, agent: Agent, cfg: ByocConfig) -> str:
     if cfg.artifact_kind == "container_image":
-        return cfg.image_uri or ""
+        # N17-obs465: the layer built FROM the member's image, when one was (a resumed job
+        # reads it back from the row's stamp)
+        return (ctx.scratch.get("image_uri") or (cfg.telemetry.layer_image if cfg.telemetry
+                                                 else "") or cfg.image_uri or "")
     registry, repo, tag = _image_ref(ctx.workspace, agent)
     return (
         ctx.scratch.get("image_uri")
@@ -369,14 +562,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         spec = AgentSpec(**row.spec)
         cfg = _config(spec)
         role_arn = ctx.scratch["execution_role_arn"]
-        environment = runtime_environment(spec, ctx.workspace.resources, agent_id=row.id)
-        # The per-agent execution role scopes bedrock:InvokeModel to exactly
-        # spec.allowed_model_ids (agent_iam.allowed_model_resources) — hand the
-        # permitted ids to the user code: MODEL_ID is the primary (= model_id),
-        # ALLOWED_MODEL_IDS the full comma-separated list. Explicit spec.env
-        # values win for both.
-        environment.setdefault("MODEL_ID", spec.model_id)
-        environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+        policy = policy_enforcement.stage_policy(ctx, row, spec)
+        environment = _runtime_environment(ctx, row, spec)
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
@@ -391,9 +578,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "environment": environment,
                     "python_version": cfg.python_version,
                     "entrypoint": cfg.entrypoint,
-                    # user zips don't necessarily vendor the ADOT distro; an
-                    # absent opentelemetry-instrument launcher fails at start
-                    "instrument": False,
+                    # N17-obs410: the launcher only when the package stage found it in
+                    # the built bundle — an absent one fails the runtime at start
+                    "instrument": _instrumented(cfg),
                     # echoed on every update; omitted (None) = IAM/SigV4
                     "authorizer_configuration": authorizer,
                 }
@@ -428,6 +615,18 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         elif row.resource_id:
             runtime_id = row.resource_id
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
+        elif existing := find_adoptable_runtime(client, db, row, role_arn, ctx.log):
+            # N10v2-bug1: the previous process created it but never recorded it
+            runtime_id = existing["agentRuntimeId"]
+            row.resource_id = runtime_id
+            row.arn = existing["agentRuntimeArn"]
+            row.version = str(existing.get("agentRuntimeVersion", "1"))
+            db.commit()
+            ctx.log(
+                f"adopting runtime {runtime_id} ({existing['agentRuntimeName']}, "
+                f"{existing.get('status')}) created before the restart — "
+                "no second CreateAgentRuntime"
+            )
         else:
             created = agent_iam.retry_iam_propagation(
                 lambda: create_fn(
@@ -439,9 +638,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.resource_id = runtime_id
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
-            db.commit()
+            db.commit()  # the identity is on the ledger the moment the API accepts
             ctx.log(
-                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · {row.arn} · "
                 f"inbound auth {resolved_auth.mode}"
             )
 
@@ -457,11 +656,17 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
         db.commit()
+        # stream A: member code never renders the template's principal carrier
+        policy_enforcement.mark_applied(db, row, policy, job_id=ctx.job_id, carrier=False)
+        # N11-obs56: bounded retention on the runtime's log group (fail-soft, idempotent)
+        ctx.log(log_retention.apply_runtime_log_retention(ctx, runtime_id))
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)
         detail = f"READY · {ready['agentRuntimeArn']}"
         if not register_return_url_stage(client, spec, runtime_id, ctx.log):
             detail += f" · {RETURN_URL_WARNING}"
+        if cfg.artifact_kind == "code_zip" and not _instrumented(cfg):
+            detail += f" · {NO_TELEMETRY_WARNING}"  # N17-obs410: non-blocking
         return StageResult(detail=detail)
     finally:
         db.close()
@@ -481,29 +686,47 @@ STAGES = {
     "register": _stage_register,
 }
 
-register_method("byoc", STAGES)
+# N12-obs33/34: a BYOC runtime is versioned like any Runtime, but its source is the
+# member's — the platform can neither verify bundle consumption nor mint a candidate
+# version from an edited spec.
+register_method(
+    "byoc", STAGES,
+    MethodCapabilities(
+        user_source=True, runtime_versions=True,
+        # creation-time domain (round 16): the member's own code decides its tools — a
+        # ToolRef is an outbound-auth declaration only (IAM + LAUNCHPAD_OUTBOUND_AUTH), so
+        # no type is rendered without auth; memory is env only; the artifact kinds below
+        builtin_tools=frozenset(),
+        tool_types=frozenset(),
+        tool_auth_modes=frozenset({"as_agent", "as_user"}),
+        native_tools=frozenset(),
+        protocols=frozenset({"http"}),
+        memory=True, knowledge_bases=False,
+        byoc_kinds=frozenset({"code_zip", "container_source", "container_image"}),
+        requires=frozenset({"artifacts_bucket"}),
+    ),
+)
 
 
 def delete_agent_resources(
     agent: Agent, workspace: WorkspaceContext, ecr_client: Any = None
-) -> None:
+) -> str | None:
     """Runtime + staged upload objects + (container_source) the built image tags.
+    Returns the runtime outcome (``rt.RUNTIME_DELETED`` / ``rt.RUNTIME_ABSENT``, N16-obs87)
+    or ``None`` when the agent never had a runtime id.
 
     Everything after the runtime delete is best-effort: an orphan S3 object or
     ECR tag must never block deleting the agent."""
+    outcome = None
     if agent.resource_id:
-        client = control_client(workspace)
-        try:
-            rt.delete_runtime(client, agent.resource_id)
-        except client.exceptions.ResourceNotFoundException:
-            pass
+        outcome = rt.delete_runtime_if_present(control_client(workspace), agent.resource_id)
     cfg = (agent.spec or {}).get("byoc") or {}
     upload_id = cfg.get("upload_id")
     if upload_id:
         byoc_uploads.delete_upload_objects(workspace, agent.workspace_id, upload_id)
     if cfg.get("artifact_kind") == "container_source":
         # the builds this agent pushed are {name}-v{version} tags on the shared repo
-        repo = (workspace.resources or {}).get("ecr_repo", "launchpad-agents")
+        repo = (workspace.resources or {}).get("ecr_repo", default_ecr_repo())
         try:
             ecr = ecr_client or workspace.client("ecr")
             versions = range(1, int(agent.version or "1") + 1)
@@ -513,3 +736,4 @@ def delete_agent_resources(
             )
         except Exception:  # noqa: BLE001 — cleanup must never block a delete
             pass
+    return outcome

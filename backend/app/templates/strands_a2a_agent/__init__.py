@@ -4,20 +4,18 @@ Same __LAUNCHPAD_*__ marker scheme as the HTTP strands template (brace-safe
 Python; rendered output must always compile). The skills list renders as a
 Python literal via repr().
 
-`spec.model_source` is deliberately IGNORED here: this template always hands the
-bare model id to `Agent(model=...)`, i.e. Bedrock Converse. A Mantle id would
-render and deploy fine and then fail on first invoke, so the wizard pins A2A
-agents to `model_source="bedrock"` (`A2A_MODEL_SOURCE` in CreateAgent.tsx) and
-hides the Model source control for them. Teaching this template the Mantle branch
-also means adding the `openai` extra to `a2a_base_requirements()`, whose wheel set
-is vendored into a ~46 MB zip — deferred until A2A on Mantle is actually asked
-for.
+The model is the Global Bedrock profile `spec.model_id`, entered from
+`spec.model_region` with the Global Bedrock API key fetched from
+`spec.model_credential` — the same `_resolve_bedrock_api_key()` contract as the
+HTTP template (docs/cn/interfaces/model-credential.md).
 """
 
 from pathlib import Path
 
 from app.schemas.agent import AgentSpec
-from app.services.agentcore.registry import A2A_CARD_VERSION
+from app.services.registry_backend import A2A_CARD_VERSION
+from app.templates.memory_support import render_memory_source
+from app.templates.model_support import render_model_source
 
 TEMPLATE_DIR = Path(__file__).parent
 
@@ -28,8 +26,9 @@ def render_a2a_main_py(spec: AgentSpec) -> str:
     return (
         source.replace("__LAUNCHPAD_SKILLS_ENABLED__", repr(bool(spec.skills)))
         .replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
-        .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
+        .replace("__LAUNCHPAD_MODEL_SOURCE__", render_model_source(spec))
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(spec.system_prompt))
+        .replace("__LAUNCHPAD_MEMORY_SOURCE__", render_memory_source())
         .replace("__LAUNCHPAD_AGENT_DESCRIPTION__", repr(spec.system_prompt[:180]))
         .replace("__LAUNCHPAD_A2A_SKILLS__", repr(skills))
         .replace("__LAUNCHPAD_A2A_CARD_VERSION__", repr(A2A_CARD_VERSION))

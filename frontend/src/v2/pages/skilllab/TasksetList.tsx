@@ -5,8 +5,9 @@ import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type SkillLabTasksetInfo } from "../../../lib/api";
 import { countsLabel } from "../../../lib/skillLabTasksets";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Button,
   Card,
@@ -29,6 +30,7 @@ export function TasksetList() {
   const [mode, setMode] = useState("");
   const [q, setQ] = useState("");
   const [pending, setPending] = useState<SkillLabTasksetInfo | null>(null);
+  const mayMutate = useMayMutate(); // creator-or-admin on edit / delete (r13-g)
   const [busy, setBusy] = useState(false);
 
   const all = useMemo(() => data ?? [], [data]);
@@ -84,6 +86,7 @@ export function TasksetList() {
       ),
     },
     { key: "counts", title: t("skillLab.tasksets.col.counts"), className: "nowrap mono", render: (row) => countsLabel(row.counts) },
+    { key: "creator", title: t("v2.common.creator"), render: (row) => creatorLabel(row) },
     { key: "updated", title: t("skillLab.tasksets.col.updated"), className: "nowrap", render: (row) => fmtTime(row.updated_at) },
     {
       key: "ops",
@@ -92,7 +95,7 @@ export function TasksetList() {
       render: (row) => (
         <div className="v2-actions">
           <LinkButton onClick={() => open(row)}>{t("v2.common.view")}</LinkButton>
-          {!row.sample && (
+          {!row.sample && mayMutate(row) && (
             <>
               <LinkButton onClick={() => setParams({ tab: "tasksets", view: "edit", id: row.id })}>
                 {t("v2.common.edit")}

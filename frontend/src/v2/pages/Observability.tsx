@@ -68,7 +68,7 @@ export function V2Observability() {
           </>
         }
       />
-      {tab === "dashboard" && <Dashboard range={range} force={force} onCacheHint={setCacheHint} onForce={() => setForce((n) => n + 1)} />}
+      {tab === "dashboard" && <Dashboard range={range} force={force} onCacheHint={setCacheHint} />}
       {tab === "sessions" && <SessionList range={range} force={force} onCacheHint={setCacheHint} />}
       {tab === "traces" && <TraceList range={range} force={force} onCacheHint={setCacheHint} />}
     </>

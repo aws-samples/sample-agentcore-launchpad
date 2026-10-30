@@ -1,0 +1,229 @@
+{
+  "servicenow": [
+    {
+      "name": "search_tickets",
+      "description": "查询requester本人名下工单。服务台账号可查全部。query可省略；state可为on_hold/pending_approval等。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester"
+        ]
+      }
+    },
+    {
+      "name": "get_ticket",
+      "description": "按完整工单编号查详情；requester必须是工单所有者或服务台账号。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "ticket_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "ticket_id"
+        ]
+      }
+    },
+    {
+      "name": "create_incident",
+      "description": "为requester创建故障工单，返回真实单号。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "title",
+          "description"
+        ]
+      }
+    },
+    {
+      "name": "add_comment",
+      "description": "给工单补充信息或催办；挂起工单补充后转处理中。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "ticket_id": {
+            "type": "string"
+          },
+          "comment": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "ticket_id",
+          "comment"
+        ]
+      }
+    },
+    {
+      "name": "escalate",
+      "description": "把本人故障工单转给支持组。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "ticket_id": {
+            "type": "string"
+          },
+          "assignment_group": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "ticket_id",
+          "assignment_group"
+        ]
+      }
+    },
+    {
+      "name": "resolve_ticket",
+      "description": "仅服务台可将工单标记已解决。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "ticket_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "ticket_id",
+          "resolution"
+        ]
+      }
+    }
+  ],
+  "servicenow-knowledge": [
+    {
+      "name": "search_resolved_tickets",
+      "description": "仅服务台：检索已解决工单，多个关键词用逗号分隔。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "keywords": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "keywords"
+        ]
+      }
+    },
+    {
+      "name": "draft_article",
+      "description": "仅服务台：保存去除个人信息的知识草稿；至少两条已验证的来源工单。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "source_ticket_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "requester",
+          "title",
+          "body",
+          "source_ticket_ids"
+        ]
+      }
+    },
+    {
+      "name": "get_article",
+      "description": "仅服务台：读取知识草稿供用户审核。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "article_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requester",
+          "article_id"
+        ]
+      }
+    },
+    {
+      "name": "publish_article",
+      "description": "仅服务台且用户已明确审核同意：发布知识文章到知识库数据源，之后需要同步。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requester": {
+            "type": "string"
+          },
+          "article_id": {
+            "type": "string"
+          },
+          "human_approved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requester",
+          "article_id",
+          "human_approved"
+        ]
+      }
+    }
+  ]
+}

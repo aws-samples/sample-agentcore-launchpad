@@ -1,4 +1,4 @@
-"""Isolated Claude Code / Codex judge-client worker.
+"""Isolated OpenCode judge-client worker (LAUNCHPAD PATCH D16).
 
 Runs in its own process so target and judge exec globals cannot race. It reads
 a trusted JSON request, applies the judge exec configuration in this process,
@@ -18,24 +18,19 @@ import json
 import sys
 from typing import Any
 
-from skillopt.model.backend_config import (
-    configure_claude_code_exec,
-    configure_codex_exec,
-)
-from skillopt.model.codex_harness import (
-    extract_exec_usage,
-    run_claude_code_exec,
-    run_codex_exec,
+from skillopt.model.codex_harness import extract_exec_usage
+from skillopt.model.opencode_backend import (
+    OPENCODE_BACKEND,
+    configure_opencode_exec,
+    run_opencode_exec,
 )
 
 
 def _select_runner(backend: str):
     # Resolved through the module namespace (not a captured dict) so tests can
-    # monkeypatch ``run_claude_code_exec`` / ``run_codex_exec``.
-    if backend == "claude_code_exec":
-        return run_claude_code_exec
-    if backend == "codex_exec":
-        return run_codex_exec
+    # monkeypatch ``run_opencode_exec``.
+    if backend == OPENCODE_BACKEND:
+        return run_opencode_exec
     return None
 
 
@@ -48,10 +43,8 @@ def _apply_judge_config(request: dict) -> None:
     """
     backend = str(request.get("backend", ""))
     effort = str(request.get("effort", "") or "") or None
-    if backend == "claude_code_exec":
-        configure_claude_code_exec(use_sdk="cli", effort=effort)
-    elif backend == "codex_exec":
-        configure_codex_exec(use_sdk="cli", reasoning_effort=effort)
+    if backend == OPENCODE_BACKEND:
+        configure_opencode_exec(effort=effort)
 
 
 def run_worker_request(request: dict) -> dict[str, Any]:

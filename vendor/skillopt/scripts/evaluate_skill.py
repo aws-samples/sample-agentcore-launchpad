@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SkillOpt skilleval: evaluate an arbitrary skill on a custom task set.
 
-Runs a user-provided SKILL.md inside Claude Code CLI on each task of a
+Runs a user-provided SKILL.md inside the OpenCode CLI on each task of a
 user-provided task file (JSON array / JSONL with id/question/rubric), scores
 every response with an LLM judge against the task's rubric, and writes
 ``results.json`` + ``report.md``.
@@ -9,13 +9,13 @@ every response with an LLM judge against the task's rubric, and writes
 Usage
 -----
     python3 scripts/evaluate_skill.py \
-        --skill ~/.claude/skills/my-skill/SKILL.md \
+        --skill ~/.agents/skills/my-skill/SKILL.md \
         --tasks data/my_tasks.json \
         --out_root outputs/skilleval_myskill
 
 Backend configuration follows the same environment conventions as train.py /
 eval_only.py (AZURE_OPENAI_*, ANTHROPIC_*, etc.); the target backend defaults
-to ``claude_code_exec`` and the judge uses the optimizer backend.
+to ``opencode_exec`` and the judge uses the optimizer backend.
 """
 from __future__ import annotations
 
@@ -53,8 +53,7 @@ from skillopt.envs.skilleval.plugin import (
 )
 from skillopt.envs.skilleval.rollout import run_batch
 from skillopt.model import (
-    configure_claude_code_exec,
-    configure_codex_exec,
+    configure_opencode_exec,
     set_optimizer_backend,
     set_optimizer_deployment,
     set_target_backend,
@@ -77,23 +76,23 @@ def parse_args() -> argparse.Namespace:
                    help="Output directory for results.json / report.md / rollouts/")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--timeout", type=int, default=600,
-                   help="Per-task Claude Code timeout in seconds")
+                   help="Per-task exec agent timeout in seconds")
     p.add_argument("--limit", type=int, default=0,
                    help="Only run the first N tasks (0 = all)")
     p.add_argument("--model", type=str, default="",
-                   help="Target model override for claude_code_exec")
-    p.add_argument("--target_backend", type=str, default="claude_code_exec")
+                   help="Target model override for opencode_exec")
+    p.add_argument("--target_backend", type=str, default="opencode_exec")
     p.add_argument("--optimizer_backend", type=str, default="openai_chat",
                    help="Judge backend")
     p.add_argument("--optimizer_model", type=str, default="",
                    help="Judge model override")
-    p.add_argument("--claude_code_exec_path", type=str, default="claude")
-    p.add_argument("--claude_code_exec_effort", type=str, default="medium")
+    p.add_argument("--opencode_exec_path", type=str, default="opencode")
+    p.add_argument("--opencode_exec_effort", type=str, default="medium")
     # ── Agentic binary judge (independent of the target backend/model) ──────
     p.add_argument("--judge_mode", type=str, default="auto",
                    help="auto | agentic | chat (routes binary-artifact tasks to the agentic judge)")
-    p.add_argument("--judge_exec_backend", type=str, default="claude_code_exec",
-                   help="Judge exec backend: claude_code_exec or codex_exec")
+    p.add_argument("--judge_exec_backend", type=str, default="opencode_exec",
+                   help="Judge exec backend (opencode_exec)")
     p.add_argument("--judge_exec_model", type=str, default="",
                    help="Judge exec model override (blank = backend default)")
     p.add_argument("--judge_exec_timeout", type=int, default=300)
@@ -286,15 +285,12 @@ def _configure_backends(args: argparse.Namespace) -> None:
         set_optimizer_deployment(args.optimizer_model)
     else:
         set_optimizer_deployment(default_model_for_backend(args.optimizer_backend))
-    # Configure both exec backends: the target rollout and the agentic judge may
-    # use different exec backends, and the judge backend/model are independent of
-    # the target backend/model. (The judge worker re-pins its own CLI transport
-    # and effort per call; here we just make each backend's globals available.)
-    configure_claude_code_exec(
-        path=args.claude_code_exec_path,
-        effort=args.claude_code_exec_effort,
+    # One exec backend (OpenCode) serves both the target rollout and the agentic
+    # judge; the judge worker re-pins its own effort per call.
+    configure_opencode_exec(
+        path=args.opencode_exec_path,
+        effort=args.opencode_exec_effort,
     )
-    configure_codex_exec(use_sdk="cli")
 
 
 def _build_judge_config(args: argparse.Namespace) -> AgenticJudgeConfig:

@@ -7,7 +7,8 @@ import { api, type ObsSessionRow, type V2Range } from "../../../lib/api";
 import { fmtNumber, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import { Card, type Column, FilterSelect, LinkButton, Pager, SearchInput, Table, Tag } from "../../ui";
-import { approxCost, copyText, shortId, useReportCache } from "./common";
+import { copyText, shortId, useReportCache } from "./common";
+import { TelemetryScopeNote } from "./TelemetryScopeNote";
 
 export function CopyId({ id }: { id: string }) {
   const { t } = useTranslation();
@@ -21,7 +22,7 @@ export function CopyId({ id }: { id: string }) {
       onClick={(e) => {
         e.stopPropagation();
         copyText(id).then(
-          () => toast("success", t("v2.observability.copied")),
+          (copied) => { if (copied) toast("success", t("v2.observability.copied")); },
           () => toast("error", t("v2.observability.copyFailed")),
         );
       }}
@@ -82,17 +83,9 @@ export function SessionList({
     { key: "llm", title: t("v2.observability.col.llmCalls"), className: "num", render: (row) => row.llm_calls },
     {
       key: "tokens",
-      title: t("v2.observability.col.tokensCost"),
+      title: t("v2.observability.col.tokens"),
       className: "num nowrap",
-      render: (row) =>
-        row.tokens.total > 0 ? (
-          <>
-            {fmtNumber(row.tokens.total)}
-            <span className="sub">{approxCost(row.est_cost_usd)}</span>
-          </>
-        ) : (
-          "—"
-        ),
+      render: (row) => (row.tokens.total > 0 ? fmtNumber(row.tokens.total) : "—"),
     },
     {
       key: "time",
@@ -120,6 +113,7 @@ export function SessionList({
 
   return (
     <Card>
+      <TelemetryScopeNote />
       <div className="v2-toolbar">
         <FilterSelect
           label="Agent"

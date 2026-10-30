@@ -1,23 +1,37 @@
-"""Runs flow — adapted from agentcore_eva_opt tests/test_runs_flow.py.
+"""Runs flow on the evaluation worker (N12 E1-4).
 
-Stubbed clients drive the full pipeline: invoking → waiting → evaluating →
-completed with parsed scores.
+The run queue dispatches one job to the executor and mirrors its artefacts onto the row:
+``queued → invoking → waiting → evaluating → completed|failed|stopped``. Hermetic: the
+in-process executor runs the worker's own dispatcher (``jobs_batch.run_job``) against a
+recording invoker, a Logs double that answers every session query with the span fixture
+rewritten for that session, and a schema-driven ``FakeJudge``.
 """
 
 import json
-from unittest.mock import ANY, MagicMock
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import app.evaluation.service as svc
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation.models import EvalDataset, EvalRun
+from app.evaluation.executor import InProcessExecutor
+from app.evaluation.models import EvalDataset, EvalResult, EvalRun
 from app.models.ledger import Agent
-from app.services import aws_clients
+from app.services.strands_eval import jobs_batch
+from app.services.strands_eval.sink import MemoryStore
+from tests.evaluation.fakes import FakeJudge, FakeLogs
+
+FIXTURE = json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures" / "spans_session.json").read_text()
+)
+GROUP = "/aws/bedrock-agentcore/runtimes/rt-1-DEFAULT"
 
 
 def make_agent(db, name="eval-agent", method="zip_runtime") -> Agent:
     agent = Agent(
         workspace_id=DEFAULT_WORKSPACE_ID, name=name, method=method, status="active",
-        arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/rt-1",
+        arn="arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:runtime/rt-1",
         resource_id="rt-1", spec={"name": name},
     )
     db.add(agent)
@@ -25,42 +39,104 @@ def make_agent(db, name="eval-agent", method="zip_runtime") -> Agent:
     return agent
 
 
-def stub_environment(monkeypatch, batch_status="COMPLETED"):
-    data = MagicMock()
-    call_count = {"n": 0}
+class DynamicFakeLogs(FakeLogs):
+    """Answers every ``… = '<sid>' …`` Insights query with the fixture's records
+    rewritten for that session id (the run's ids are minted at plan time)."""
 
-    def invoke_runtime_text(
-        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
-    ):
-        call_count["n"] += 1
-        return {"text": "42", "session_id": f"sess-{call_count['n']:03d}" + "x" * 30}
+    def __init__(self, missing: set[str] | None = None) -> None:
+        super().__init__({})
+        self.missing = set(missing or ())
 
-    monkeypatch.setattr(svc.rt, "invoke_runtime_text", invoke_runtime_text)
-    monkeypatch.setattr(
-        svc.rt, "get_runtime",
-        lambda client, rid: {"agentRuntimeName": "eval_agent_abc123"},
+    def start_query(self, **kwargs):
+        self.started.append(kwargs)
+        query = kwargs.get("queryString", "")
+        qid = f"q{len(self.started)}"
+        rows: list[dict] = []
+        if "= '" in query and "parentSpanId" not in query:
+            sid = query.split("= '", 1)[1].split("'", 1)[0]
+            if sid not in self.missing:
+                rows = [{"@message": json.dumps({
+                    **r, "attributes": {**r["attributes"], "session.id": sid}})}
+                    for r in FIXTURE["records"]]
+        self._results[qid] = rows
+        return {"queryId": qid}
+
+
+class Env(SimpleNamespace):
+    """What ``stub_environment`` hands a test: the executor, its store, the recorders."""
+
+
+def stub_environment(monkeypatch, *, invoke_errors=None, judge=None, telemetry_error=None):
+    """Wire the hermetic worker behind the run service.
+
+    Returns ``(env, calls)`` — ``calls["n"]`` counts replay invocations, ``calls["prompts"]``
+    / ``calls["sessions"]`` record them; ``env.submitted`` holds every JobSpec dispatched,
+    ``env.telemetry_waits`` every readiness wait, ``env.executor`` / ``env.store`` the
+    in-process executor and its artefact store."""
+    calls: dict = {"n": 0, "prompts": [], "sessions": [], "specs": []}
+    errors = list(invoke_errors or [])
+
+    def invoke(prompt, session_id, session_spec):
+        calls["n"] += 1
+        calls["prompts"].append(prompt)
+        calls["sessions"].append(session_id)
+        calls["specs"].append(session_spec)
+        if errors:
+            raise errors.pop(0)
+        return {"text": "42", "session_id": session_id}
+
+    judge = judge or FakeJudge(overrides={"score": "Very helpful", "reasoning": "clear"})
+    logs = DynamicFakeLogs()
+    worker_env = jobs_batch.WorkerEnv(
+        logs_client=logs, data_client=None, judge_factory=lambda model_id: judge,
+        default_model_id="global.zai.glm-5.3", invoke=invoke, spans_source="runtime_logs",
+        sleep=lambda _s: None, judge_concurrency=2,
     )
+    store = MemoryStore()
+    executor = InProcessExecutor(store, runner=lambda job, sink: jobs_batch.run_job(
+        job, sink, worker_env))
+    submitted: list = []
+    real_submit = executor.submit
+
+    def submit(ws, job):
+        submitted.append(job)
+        return real_submit(ws, job)
+
+    executor.submit = submit  # type: ignore[method-assign]
+    telemetry_waits: list[dict] = []
+
+    def wait(client, **kwargs):
+        telemetry_waits.append(kwargs)
+        if telemetry_error is not None:
+            raise telemetry_error
+
+    monkeypatch.setattr(jobs_batch, "wait_for_evaluation_telemetry", wait)
+    monkeypatch.setattr(svc, "select_executor", lambda settings, job_type: executor)
+    monkeypatch.setattr(svc, "POLL_INTERVAL_S", 0.02)
+    monkeypatch.setattr(svc.rt, "get_runtime",
+                        lambda client, rid: {"agentRuntimeName": "eval_agent_abc123"})
     monkeypatch.setattr(svc, "control_client", lambda _ws=None: MagicMock())
-    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
-    telemetry_wait = MagicMock()
-    monkeypatch.setattr(svc, "_wait_for_fresh_telemetry", telemetry_wait)
-    data.start_batch_evaluation.return_value = {"batchEvaluationId": "be-123"}
-    data.get_batch_evaluation.return_value = {
-        "status": batch_status,
-        "evaluationResults": {
-            "evaluatorSummaries": [
-                {"evaluatorId": "Builtin.Correctness",
-                 "statistics": {"averageScore": 0.91}},
-                {"evaluatorId": "Builtin.Helpfulness",
-                 "statistics": {"averageScore": 0.83}},
-            ]
-        },
-        "failureAnalysisResult": {"failures": [
-            {"category": "Tool misuse", "percentage": 42,
-             "subCategories": []},
-        ]},
-    }
-    return data, call_count
+    discovered: list[dict] = []
+    monkeypatch.setattr(svc, "discover_sessions", lambda ws, **kw: discovered.append(kw) or [
+        "window-session-1" + "x" * 30, "window-session-2" + "x" * 30])
+    env = Env(executor=executor, store=store, submitted=submitted, telemetry_waits=telemetry_waits,
+              judge=judge, logs=logs, discovered=discovered, worker_env=worker_env)
+    return env, calls
+
+
+def wait_terminal(client, run_id, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed", "stopped"):
+            return run
+        time.sleep(0.05)
+    return client.get(f"/api/eval/runs/{run_id}").json()
+
+
+def result_rows(run_id):
+    with SessionLocal() as db:
+        return db.query(EvalResult).filter(EvalResult.run_id == run_id).all()
 
 
 def test_active_run_completes_with_scores(client, monkeypatch):
@@ -68,12 +144,10 @@ def test_active_run_completes_with_scores(client, monkeypatch):
     agent = make_agent(db)
     dataset = EvalDataset(
         workspace_id=DEFAULT_WORKSPACE_ID,
-        name="mini", items=[{"prompt": "2+2?"}, {"prompt": "3+3?"},
-                                              {"prompt": "4+4?"}])
+        name="mini", items=[{"prompt": "2+2?"}, {"prompt": "3+3?"}, {"prompt": "4+4?"}])
     db.add(dataset)
     db.commit()
-    data, calls = stub_environment(monkeypatch)
-    telemetry_wait = svc._wait_for_fresh_telemetry
+    env, calls = stub_environment(monkeypatch)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": dataset.id,
@@ -82,90 +156,86 @@ def test_active_run_completes_with_scores(client, monkeypatch):
     })
     assert res.status_code == 201
     run_id = res.json()["id"]
-
-    import time
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, run_id)
     assert run["status"] == "completed", run.get("error")
-    assert calls["n"] == 3  # one session per dataset item
-    assert len(run["session_ids"]) == 3
-    telemetry_wait.assert_called_once_with(
-        workspace=ANY,
-        session_id=run["session_ids"][-1],
-        content_log_group="/aws/bedrock-agentcore/runtimes/rt-1-DEFAULT",
-        start_time_ms=ANY,
-        stability_seconds=0,
-    )
-    assert run["batch_eval_id"] == "be-123"
-    assert {s["evaluatorId"]: s["score"] for s in run["scores"]} == {
-        "Builtin.Correctness": 0.91, "Builtin.Helpfulness": 0.83,
-    }
-    # batch eval scoped to exactly this run's sessions
-    kwargs = data.start_batch_evaluation.call_args.kwargs
-    assert kwargs["dataSourceConfig"]["cloudWatchLogs"]["filterConfig"]["sessionIds"] == run[
-        "session_ids"
-    ]
-    assert kwargs["dataSourceConfig"]["cloudWatchLogs"]["serviceNames"] == [
-        "eval_agent_abc123.DEFAULT"
-    ]
+    assert calls["n"] == 3 and calls["prompts"] == ["2+2?", "3+3?", "4+4?"]
+    assert len(run["session_ids"]) == 3 and all(len(s) == 64 for s in run["session_ids"])
+    assert calls["sessions"] == run["session_ids"]  # the backend minted them, the worker used them
+    (wait,) = env.telemetry_waits
+    assert wait["session_id"] == run["session_ids"][-1]
+    assert wait["content_log_group"] == GROUP and wait["stability_seconds"] == 0
+    assert run["batch_eval_id"] == run_id  # one job, named after the run
+    scores = {s["evaluatorId"]: s for s in run["scores"]}
+    assert set(scores) == {"Builtin.Correctness", "Builtin.Helpfulness"}
+    assert scores["Builtin.Helpfulness"]["score"] == 0.833
+    assert all(s["count"] == 3 for s in scores.values())
+    assert run["error"] is None and run["budget_stops"] == []
+    assert len(result_rows(run_id)) == 6  # 3 sessions × 2 evaluators
+    (job,) = env.submitted
+    assert job.job_type == "batch_eval" and job.job_id == run_id and job.attempt == 1
+    assert job.spec["target"]["runtime_arn"] == agent.arn
+    assert job.spec["wait"]["log_groups"] == ["aws/spans", GROUP]
+    assert job.spec["evaluator_defs"] == [{"id": "Builtin.Correctness"},
+                                          {"id": "Builtin.Helpfulness"}]
+    assert [s["session_id"] for s in job.spec["sessions"]] == run["session_ids"]
+    assert job.sink["bucket"] == "launchpad-artifacts-test"
+    results = client.get(f"/api/eval/runs/{run_id}/results").json()
+    assert results["available"] is True and results["count"] == 6
+    assert [s["session_id"] for s in results["sessions"]] == run["session_ids"]
     db.close()
 
 
-def test_skill_and_thirdparty_evaluator_ids_pass_through(client, monkeypatch):
-    """No run-side allowlist: skill builtins and ThirdParty ids reach
-    StartBatchEvaluation verbatim."""
+def test_skill_builtins_pass_through_and_thirdparty_ids_are_refused(client, monkeypatch):
+    """Skill builtins are catalog entries and reach the worker verbatim; third-party
+    managed evaluators do not exist in CN, so their ids are refused before any replay."""
     db = SessionLocal()
     agent = make_agent(db, name="eval-agent-3p")
     dataset = EvalDataset(
         workspace_id=DEFAULT_WORKSPACE_ID, name="mini-3p", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
-    data, _ = stub_environment(monkeypatch)
+    env, calls = stub_environment(monkeypatch)
 
-    evaluators = ["Builtin.SkillInstructionFollowing", "ThirdParty.AutoEval.Security"]
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": dataset.id,
-        "evaluators": evaluators, "wait_seconds": 0,
+        "evaluators": ["Builtin.SkillInstructionFollowing", "ThirdParty.AutoEval.Security"],
+        "wait_seconds": 0,
+    })
+    assert res.status_code == 422
+    assert res.json()["code"] == "run.evaluator_not_found"
+    assert calls["n"] == 0
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id,
+        "evaluators": ["Builtin.SkillInstructionFollowing"], "wait_seconds": 0,
     })
     assert res.status_code == 201
-    run_id = res.json()["id"]
-    import time
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, res.json()["id"])
     assert run["status"] == "completed", run.get("error")
-    kwargs = data.start_batch_evaluation.call_args.kwargs
-    assert kwargs["evaluators"] == [{"evaluatorId": e} for e in evaluators]
+    assert env.submitted[0].spec["evaluator_defs"] == [{"id": "Builtin.SkillInstructionFollowing"}]
     db.close()
 
 
 def test_run_failure_recorded(client, monkeypatch):
+    """A scenario the agent cannot be invoked for (non-transient error) fails the run with
+    the reason; the row can then be removed, a completed run never."""
     db = SessionLocal()
     agent = make_agent(db, name="eval-agent-fail")
     dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="mini2", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
-    stub_environment(monkeypatch, batch_status="FAILED")
+    stub_environment(monkeypatch, invoke_errors=[ValueError("the runtime is gone")])
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0,
     })
     run_id = res.json()["id"]
-    import time
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, run_id)
     assert run["status"] == "failed"
-    assert "FAILED" in run["error"]
-    # a failed run can be removed from the ledger; the AWS batch (if any) is left alone
-    # and named in the answer; a completed run is history and is refused
+    assert "the runtime is gone" in run["error"] and "ValueError" in run["error"]
+    assert run["batch_eval_id"] == run_id
+    # a failed run can be removed from the ledger; the field name is kept, the value is
+    # the job id (there is no AWS batch to leave in place)
     res = client.delete(f"/api/eval/runs/{run_id}")
     assert res.status_code == 200, res.text
     assert res.json()["deleted"] is True and res.json()["status"] == "failed"
@@ -181,143 +251,55 @@ def test_run_failure_recorded(client, monkeypatch):
     db.close()
 
 
-def test_telemetry_timeout_fails_without_starting_batch(client, monkeypatch):
+def test_transient_invoke_errors_are_replayed_then_the_run_completes(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="eval-agent-flaky")
+    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="flaky", items=[{"prompt": "x"}])
+    db.add(dataset)
+    db.commit()
+    env, calls = stub_environment(
+        monkeypatch, invoke_errors=[RuntimeError("internal server error: hiccup")])
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0,
+        "evaluators": ["Builtin.Helpfulness"],
+    })
+    run = wait_terminal(client, res.json()["id"])
+    assert run["status"] == "completed", run.get("error")
+    assert calls["n"] == 2 and len(set(calls["sessions"])) == 1  # same pre-assigned session
+    raw = env.store.get(f"evaluations/{run['id']}/a1/invocations.jsonl").decode()
+    assert json.loads(raw.splitlines()[0])["retries"] == 1
+    db.close()
+
+
+def test_telemetry_timeout_fails_without_evaluating(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="eval-agent-telemetry-timeout")
     dataset = EvalDataset(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        name="telemetry-timeout", items=[{"prompt": "x"}])
+        workspace_id=DEFAULT_WORKSPACE_ID, name="telemetry-timeout", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
-    data, _ = stub_environment(monkeypatch)
-    telemetry_wait = svc._wait_for_fresh_telemetry
-    telemetry_wait.side_effect = svc.telemetry.TelemetryReadinessTimeout(
-        "evaluation telemetry did not become ready"
-    )
+    from app.evaluation.telemetry import TelemetryReadinessTimeout
+
+    stub_environment(monkeypatch, telemetry_error=TelemetryReadinessTimeout(
+        "evaluation telemetry did not become ready"))
 
     res = client.post(
         "/api/eval/runs",
         json={"agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0},
     )
-    run_id = res.json()["id"]
-    import time
-
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, res.json()["id"])
     assert run["status"] == "failed"
     assert "telemetry did not become ready" in run["error"]
-    data.start_batch_evaluation.assert_not_called()
+    assert result_rows(run["id"]) == []  # nothing was judged
     db.close()
 
 
-class StubLogs:
-    """describe_log_groups stub — harness backing-runtime group discovery."""
-
-    def __init__(self, groups):
-        self.groups = groups
-        self.prefixes: list[str] = []
-
-    def describe_log_groups(self, logGroupNamePrefix):
-        self.prefixes.append(logGroupNamePrefix)
-        return {"logGroups": [g for g in self.groups
-                              if g["logGroupName"].startswith(logGroupNamePrefix)]}
-
-
-def _stub_harness_logs(monkeypatch, groups):
-    logs = StubLogs(groups)
-    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
-    return logs
-
-
-def test_harness_run_completes(client, monkeypatch):
-    """Harness agents are eval-supported since 07-13: service name derives from
-    the harnessId base, the content-log group is prefix-discovered (backing
-    runtime id ≠ harnessId), and invoking goes through InvokeHarness."""
-    db = SessionLocal()
-    agent = make_agent(db, name="harness-agent", method="harness")
-    agent.resource_id = "harness_agent-Flr7ibmASq"
-    agent.arn = "arn:aws:bedrock-agentcore:us-west-2:1:harness/harness_agent-Flr7ibmASq"
-    dataset = EvalDataset(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        name="mini3", items=[{"prompt": "x"}, {"prompt": "y"}])
-    db.add(dataset)
-    db.commit()
-    data, calls = stub_environment(monkeypatch)
-    telemetry_wait = svc._wait_for_fresh_telemetry
-    logs = _stub_harness_logs(monkeypatch, [
-        {"logGroupName": "/aws/bedrock-agentcore/runtimes/harness_harness_agent-OLD111-DEFAULT",
-         "creationTime": 1},
-        {"logGroupName": "/aws/bedrock-agentcore/runtimes/harness_harness_agent-GIRksPB4NZ-DEFAULT",
-         "creationTime": 2},
-    ])
-    harness_calls = {"n": 0}
-
-    def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default"):
-        harness_calls["n"] += 1
-        return {"text": "ok", "session_id": f"hsess-{harness_calls['n']:03d}" + "x" * 30}
-
-    monkeypatch.setattr(svc.hc, "invoke_harness_text", invoke_harness_text)
-
-    res = client.post("/api/eval/runs", json={
-        "agent_id": agent.id, "dataset_id": dataset.id,
-        "evaluators": ["Builtin.Correctness"], "wait_seconds": 0,
-    })
-    assert res.status_code == 201
-    run_id = res.json()["id"]
-    import time
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
-    assert run["status"] == "completed", run.get("error")
-    assert harness_calls["n"] == 2 and calls["n"] == 0  # InvokeHarness, not runtime
-    telemetry_wait.assert_called_once_with(
-        workspace=ANY,
-        session_id=run["session_ids"][-1],
-        content_log_group=(
-            "/aws/bedrock-agentcore/runtimes/"
-            "harness_harness_agent-GIRksPB4NZ-DEFAULT"
-        ),
-        start_time_ms=ANY,
-        stability_seconds=0,
-    )
-    assert logs.prefixes == ["/aws/bedrock-agentcore/runtimes/harness_harness_agent-"]
-    cw = data.start_batch_evaluation.call_args.kwargs["dataSourceConfig"]["cloudWatchLogs"]
-    assert cw["serviceNames"] == ["harness_harness_agent.DEFAULT"]
-    # newest backing-runtime group wins over the stale one
-    assert cw["logGroupNames"] == [
-        "aws/spans",
-        "/aws/bedrock-agentcore/runtimes/harness_harness_agent-GIRksPB4NZ-DEFAULT",
-    ]
-    db.close()
-
-
-def test_harness_without_telemetry_group_rejected(client, monkeypatch):
-    db = SessionLocal()
-    agent = make_agent(db, name="harness-cold", method="harness")
-    agent.resource_id = "harness_cold-Abc123XYZ0"
-    db.commit()
-    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="mini4", items=[{"prompt": "x"}])
-    db.add(dataset)
-    db.commit()
-    _stub_harness_logs(monkeypatch, [])
-    res = client.post("/api/eval/runs", json={
-        "agent_id": agent.id, "dataset_id": dataset.id,
-    })
-    assert res.status_code == 400
-    assert res.json()["code"] == "eval.harness_no_telemetry"
-    db.close()
-
-
-def test_existing_sessions_skip_fresh_telemetry_wait(client, monkeypatch):
+def test_existing_sessions_skip_replay_but_not_the_telemetry_wait(client, monkeypatch):
+    """N17-obs400: an explicit session is not replayed, but its telemetry is still waited
+    for (one readiness probe of the session; an old one passes at once)."""
     db = SessionLocal()
     agent = make_agent(db, name="existing-session-agent")
-    stub_environment(monkeypatch)
-    telemetry_wait = svc._wait_for_fresh_telemetry
+    env, calls = stub_environment(monkeypatch)
     session_id = "existing-session-" + "x" * 24
 
     res = client.post(
@@ -330,161 +312,73 @@ def test_existing_sessions_skip_fresh_telemetry_wait(client, monkeypatch):
         },
     )
     assert res.status_code == 201
-    run_id = res.json()["id"]
-    import time
-
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, res.json()["id"])
     assert run["status"] == "completed", run.get("error")
-    telemetry_wait.assert_not_called()
+    assert calls["n"] == 0
+    assert [w["session_id"] for w in env.telemetry_waits] == [session_id]
+    assert env.submitted[0].spec["replay"] is False
+    assert run["session_ids"] == [session_id] and len(result_rows(run["id"])) == 1
     db.close()
 
 
-def test_start_with_retry_retries_transient_codes(monkeypatch):
-    """Quota/throttle errors on StartBatchEvaluation retry instead of failing."""
-    from botocore.exceptions import ClientError
-
-    sleeps: list[float] = []
-    monkeypatch.setattr(svc, "_sleep", sleeps.append)
-    calls = {"n": 0}
-
-    def flaky():
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise ClientError(
-                {"Error": {"Code": "ThrottlingException"}}, "StartBatchEvaluation"
-            )
-        return {"batchEvaluationId": "b-1"}
-
-    assert svc._start_with_retry(flaky)["batchEvaluationId"] == "b-1"
-    assert calls["n"] == 3
-    assert sleeps == list(svc._START_RETRY_DELAYS_S[:2])
-
-
-def test_start_with_retry_raises_non_transient(monkeypatch):
-    from botocore.exceptions import ClientError
-
-    sleeps: list[float] = []
-    monkeypatch.setattr(svc, "_sleep", sleeps.append)
-
-    def broken():
-        raise ClientError(
-            {"Error": {"Code": "ValidationException"}}, "StartBatchEvaluation"
-        )
-
-    try:
-        svc._start_with_retry(broken)
-    except ClientError as exc:
-        assert exc.response["Error"]["Code"] == "ValidationException"
-    else:
-        raise AssertionError("expected ClientError")
-    assert sleeps == []  # no pointless backoff on a permanent error
-
-
-# The real per-trace reason a batch failed lives only in its results log stream.
-FAILED_BATCH = {
-    "status": "FAILED",
-    "errorDetails": ["All 30 sessions failed during batch evaluation."],
-    "outputConfig": {
-        "cloudWatchConfig": {
-            "logGroupName": "/aws/bedrock-agentcore/evaluations/results/default",
-            "logStreamName": "run-run_abc-123",
-        }
-    },
-}
-TRACE_ERROR_EVENT = {
-    "message": json.dumps({
-        "name": "gen_ai.evaluation.result",
-        "attributes": {
-            "gen_ai.evaluation.name": "reference_grounding",
-            "error.type": "ValueError",
-            "error.message": "Evaluator prompt requires: 'expected_response'",
-        },
-    })
-}
-
-
-def _failing_run(client, monkeypatch, logs):
+def test_statuses_mirror_the_workers_phases(client, monkeypatch):
+    """The row walks queued → invoking → waiting → evaluating → completed (status.json)."""
     db = SessionLocal()
-    agent = make_agent(db, name=f"eval-agent-{id(logs) % 10000}")
-    dataset = EvalDataset(
-        workspace_id=DEFAULT_WORKSPACE_ID, name=f"ds-{id(logs) % 10000}",
-        items=[{"prompt": "x"}])
+    agent = make_agent(db, name="phases-agent")
+    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="ph", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
-    data, _ = stub_environment(monkeypatch)
-    data.get_batch_evaluation.return_value = FAILED_BATCH
-    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
+    env, _ = stub_environment(monkeypatch)
+    seen: list[str] = []
+    real_update = svc._update
 
+    def spy(run_id, **fields):
+        if "status" in fields:
+            seen.append(fields["status"])
+        real_update(run_id, **fields)
+
+    monkeypatch.setattr(svc, "_update", spy)
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0,
+        "evaluators": ["Builtin.Helpfulness"],
+    })
+    run = wait_terminal(client, res.json()["id"])
+    assert run["status"] == "completed", run.get("error")
+    assert seen[0] == "invoking" and seen[-1] == "completed"
+    assert set(seen) <= {"invoking", "waiting", "evaluating", "completed"}
+    # the worker's last status is `evaluating 1/1`
+    status = json.loads(env.store.get(f"evaluations/{run['id']}/a1/status.json"))
+    assert status["phase"] == "evaluating" and status["progress"]["message"] == "evaluating 1/1"
+    db.close()
+
+
+def test_a_missing_worker_is_503_before_any_row(client, monkeypatch):
+    from app.core.errors import AppError
+
+    db = SessionLocal()
+    agent = make_agent(db, name="no-worker-agent")
+    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="nw", items=[{"prompt": "x"}])
+    db.add(dataset)
+    db.commit()
+
+    def missing(settings, job_type):
+        raise AppError("evaluation.worker_missing", "no worker", status_code=503)
+
+    monkeypatch.setattr(svc, "select_executor", missing)
+    monkeypatch.setattr(svc.rt, "get_runtime",
+                        lambda client, rid: {"agentRuntimeName": "eval_agent_abc123"})
+    monkeypatch.setattr(svc, "control_client", lambda _ws=None: MagicMock())
+    before = db.query(EvalRun).count()
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0,
     })
-    run_id = res.json()["id"]
-    import time
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    assert res.status_code == 503 and res.json()["code"] == "evaluation.worker_missing"
+    assert db.query(EvalRun).count() == before
     db.close()
-    return run
-
-
-def test_failed_batch_surfaces_error_details_and_trace_reason(client, monkeypatch):
-    logs = MagicMock()
-    logs.get_log_events.return_value = {"events": [TRACE_ERROR_EVENT]}
-
-    run = _failing_run(client, monkeypatch, logs)
-
-    assert run["status"] == "failed"
-    assert "All 30 sessions failed" in run["error"]
-    assert "reference_grounding: ValueError: Evaluator prompt requires" in run["error"]
-
-
-def test_failed_batch_degrades_when_results_log_unreadable(client, monkeypatch):
-    logs = MagicMock()
-    logs.get_log_events.side_effect = RuntimeError("ResourceNotFoundException")
-
-    run = _failing_run(client, monkeypatch, logs)
-
-    assert run["status"] == "failed"
-    assert "batch evaluation ended FAILED" in run["error"]
-    assert "All 30 sessions failed" in run["error"]
 
 
 # ── per-session results (scores + judge explanations) ───────────────────────
-# The row keeps only per-evaluator averages; the explanation of every judgement
-# lives in the batch's results log stream (same record family as SCORE NOW's
-# online results). Live shape verified 2026-09-07 on run_5cc20fb8-a5356bdac8.
-def _result_event(session_id, evaluator, score, label, explanation, level="Trace"):
-    return {"message": json.dumps({
-        "name": "gen_ai.evaluation.result",
-        "attributes": {
-            "gen_ai.evaluation.name": evaluator,
-            "session.id": session_id,
-            "gen_ai.evaluation.score.value": score,
-            "gen_ai.evaluation.score.label": label,
-            "gen_ai.evaluation.explanation": explanation,
-            "aws.bedrock_agentcore.evaluation_level": level,
-        },
-    })}
-
-
-COMPLETED_BATCH_WITH_STREAM = {
-    "status": "COMPLETED",
-    "outputConfig": {"cloudWatchConfig": {
-        "logGroupName": "/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default",
-        "logStreamName": "run-be-123",
-    }},
-}
-
-
 def _seed_run(**overrides):
-    from app.evaluation.models import EvalRun
-
     fields = dict(
         workspace_id=DEFAULT_WORKSPACE_ID, agent_id="a1", agent_name="eval-agent",
         mode="evaluators", evaluators=["Builtin.Helpfulness"], status="completed",
@@ -501,23 +395,27 @@ def _seed_run(**overrides):
     return run_id
 
 
+def _seed_results(run_id, rows):
+    from app.evaluation import results_store
+
+    with SessionLocal() as db:
+        results_store.persist(db, DEFAULT_WORKSPACE_ID, source="run", owner_id=run_id,
+                              records=rows)
+
+
 def test_run_results_groups_judge_records_per_session(client, monkeypatch):
     sid_a, sid_b = "s-a" + "x" * 30, "s-b" + "x" * 30
-    data, _ = stub_environment(monkeypatch)
-    data.get_batch_evaluation.return_value = COMPLETED_BATCH_WITH_STREAM
-    logs = MagicMock()
-    logs.get_log_events.return_value = {"events": [
-        # stream order differs from the run's session order — the run's wins
-        _result_event(sid_b, "Builtin.Helpfulness", 0.33, "Somewhat Unhelpful",
-                      "The agent used the wrong tool."),
-        _result_event(sid_a, "Builtin.Helpfulness", 1.0, "Very Helpful", "Answered fully."),
-        _result_event(sid_a, "Builtin.ToolParameterAccuracy", 0.0, "No",
-                      "employee_id was invented.", level="Span"),
-        {"message": "not json"},
-    ], "nextForwardToken": None}
-    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
     run_id = _seed_run()
-
+    _seed_results(run_id, [
+        # store order differs from the run's session order — the run's wins
+        {"session_id": sid_b, "evaluator_id": "Builtin.Helpfulness", "level": "TRACE",
+         "score": 0.33, "label": "Somewhat Unhelpful",
+         "explanation": "The agent used the wrong tool."},
+        {"session_id": sid_a, "evaluator_id": "Builtin.Helpfulness", "level": "TRACE",
+         "score": 1.0, "label": "Very Helpful", "explanation": "Answered fully."},
+        {"session_id": sid_a, "evaluator_id": "Builtin.ToolParameterAccuracy", "level": "TOOL_CALL",
+         "score": 0.0, "label": "No", "explanation": "employee_id was invented."},
+    ])
     res = client.get(f"/api/eval/runs/{run_id}/results")
     assert res.status_code == 200
     body = res.json()
@@ -525,44 +423,106 @@ def test_run_results_groups_judge_records_per_session(client, monkeypatch):
     assert [s["session_id"] for s in body["sessions"]] == [sid_a, sid_b]
     rows = body["sessions"][0]["results"]
     assert rows[0] == {
-        "evaluator_id": "Builtin.Helpfulness", "level": "Trace", "score": 1.0,
+        "evaluator_id": "Builtin.Helpfulness", "level": "TRACE", "score": 1.0,
         "label": "Very Helpful", "explanation": "Answered fully.",
         "error_type": None, "error_message": None,
+        "arm": None,  # N12-obs62: additive; a plain run's sessions have no arm
+        "judge": None,  # P3.1 / P3.2: additive; rows seeded without a judge stamp
+        # N17-obs317: additive — rows seeded without a turn / call / reconciliation stamp
+        "trace_id": None, "span_id": None, "tool_name": None, "extraction_status": None,
+        "judge_model_id": None, "judge_inference": None,
+        # N17-obs391: additive — the run has no scenario map (no dataset replayed)
+        "scenario_id": None, "scenario_label": None,
+        "failure_class": None,  # R3-f: additive — a judged row
+        "token_usage": None,  # P8.3: additive — rows seeded without tokens
     }
-    assert rows[1]["level"] == "Span" and rows[1]["score"] == 0.0
+    assert rows[1]["level"] == "TOOL_CALL" and rows[1]["score"] == 0.0
     assert body["sessions"][1]["results"][0]["explanation"] == "The agent used the wrong tool."
-    data.get_batch_evaluation.assert_called_once_with(batchEvaluationId="be-123")
-    assert logs.get_log_events.call_args.kwargs["logStreamName"] == "run-be-123"
 
 
 def test_run_results_degrades_instead_of_failing(client, monkeypatch):
-    data, _ = stub_environment(monkeypatch)
-
     # an insights run has no per-evaluator judgements at all
     res = client.get(f"/api/eval/runs/{_seed_run(mode='insights')}/results").json()
     assert res == {**res, "available": False, "reason": "insights_run", "sessions": []}
-    # a window-scoped run that never started a batch
+    # a run that never dispatched a job
     res = client.get(f"/api/eval/runs/{_seed_run(batch_eval_id=None)}/results").json()
     assert res["available"] is False and res["reason"] == "no_batch"
-    # still judging — the stream is being written, don't read half of it
+    # still judging — results.jsonl is being written, don't read half of it
     res = client.get(f"/api/eval/runs/{_seed_run(status='evaluating')}/results").json()
     assert res["available"] is False and res["reason"] == "run_active"
-    assert not data.get_batch_evaluation.called
-
-    # batch known, but the service reported no output location
-    data.get_batch_evaluation.return_value = {"status": "COMPLETED"}
+    # job known, but no record was ever ingested
     res = client.get(f"/api/eval/runs/{_seed_run()}/results").json()
     assert res["available"] is False and res["reason"] == "stream_missing"
+    assert {"run_id", "batch_eval_id", "available", "sessions", "count", "truncated"} <= set(res)
 
-    # stream unreadable (expired retention / permission): reason + detail, not a 5xx
-    data.get_batch_evaluation.return_value = COMPLETED_BATCH_WITH_STREAM
-    logs = MagicMock()
-    logs.get_log_events.side_effect = RuntimeError("ResourceNotFoundException")
-    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
-    res = client.get(f"/api/eval/runs/{_seed_run()}/results")
-    assert res.status_code == 200
-    assert res.json()["reason"] == "unreadable"
-    assert "ResourceNotFoundException" in res.json()["detail"]
 
-    assert client.get("/api/eval/runs/nope/results").status_code == 404
+def _fixture_answers() -> list[str]:
+    from app.services.strands_eval import extraction_check
+    from app.services.strands_eval.spans_provider import LaunchpadSpansProvider
 
+    provider = LaunchpadSpansProvider(DynamicFakeLogs(), [GROUP], spans_source="runtime_logs")
+    return extraction_check.extracted_turns(
+        provider.get_evaluation_data(FIXTURE["session_id"]))
+
+
+def test_run_reconciles_every_session_and_flags_a_mismatch(client, monkeypatch):
+    # eval accuracy item 1: the worker compares each replayed turn's collected answer with
+    # what the spans extraction hands the judges; the run payload carries the summary, the
+    # per-session results each session's check
+    (answer,) = _fixture_answers()
+    db = SessionLocal()
+    agent = make_agent(db, name="eval-agent-check")
+    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="mini-check",
+                          items=[{"prompt": "2+2?"}, {"prompt": "3+3?"}])
+    db.add(dataset)
+    db.commit()
+    env, calls = stub_environment(monkeypatch)
+    replies = [answer, "我先查一下。"]  # session 2's replay answered something else
+    env.worker_env.invoke = lambda prompt, sid, spec: {"text": replies.pop(0),
+                                                       "session_id": sid}
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id,
+        "evaluators": ["Builtin.Helpfulness"], "wait_seconds": 0})
+    run = wait_terminal(client, res.json()["id"])
+    assert run["status"] == "completed", run.get("error")
+    check = run["extraction_check"]
+    assert check["status"] == "mismatch"
+    assert (check["sessions"], check["ok"], check["mismatch"]) == (2, 1, 1)
+    assert check["mismatched_sessions"] == [run["session_ids"][1]]
+    assert check["anomalies"]["turns"] == 2 and check["anomalies"]["empty_rate"] == 0.0
+    results = client.get(f"/api/eval/runs/{run['id']}/results").json()
+    assert results["extraction_check"] == check
+    first, second = results["sessions"]
+    assert first["extraction_check"]["status"] == "ok"
+    assert second["extraction_check"]["status"] == "mismatch"
+    assert second["extraction_check"]["mismatches"][0]["expected_head"] == "我先查一下。"
+    db.close()
+
+
+def test_run_and_its_results_name_each_sessions_dataset_scenario(client, monkeypatch):
+    # N17-obs391: scenario_map lived only in the ledger — a client could not attribute a
+    # session's results to its dataset scenario
+    sid_a, sid_b = "s-a" + "x" * 30, "s-b" + "x" * 30
+    run_id = _seed_run(scenario_map={
+        sid_a: {"scenario_id": "refund-1", "input": "How do I get a refund?"},
+        sid_b: {"scenario_id": "leave-2", "input": "How many leave days do I have?"}})
+    _seed_results(run_id, [
+        {"session_id": sid_b, "evaluator_id": "Builtin.Helpfulness", "level": "TRACE",
+         "score": 0.5, "label": "Neutral/Mixed", "explanation": "ok"}])
+    run = client.get(f"/api/eval/runs/{run_id}").json()
+    assert run["session_scenarios"] == [
+        # split (D3-d) and the turn counts (D3-c) — null on a row whose map predates them
+        {"session_id": sid_a, "scenario_id": "refund-1",
+         "scenario_label": "How do I get a refund?", "split": None,
+         "turns_defined": None, "turns_replayed": None},
+        {"session_id": sid_b, "scenario_id": "leave-2",
+         "scenario_label": "How many leave days do I have?", "split": None,
+         "turns_defined": None, "turns_replayed": None}]
+    body = client.get(f"/api/eval/runs/{run_id}/results").json()
+    (session,) = body["sessions"]
+    assert (session["scenario_id"], session["scenario_label"]) == (
+        "leave-2", "How many leave days do I have?")
+    assert session["results"][0]["scenario_id"] == "leave-2"
+    assert session["results"][0]["scenario_label"] == "How many leave days do I have?"
+    plain = client.get(f"/api/eval/runs/{_seed_run()}").json()
+    assert plain["session_scenarios"] == []

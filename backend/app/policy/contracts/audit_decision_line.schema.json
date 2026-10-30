@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/audit_decision_line/v1",
+  "title": "I7 interceptor decision line (CloudWatch JSON; the hub ingester writes one policy_decisions row per line)",
+  "description": "Never carries a token, header or argument value; input_keys lists argument NAMES only.",
+  "type": "object",
+  "properties": {
+    "launchpad.policy.decision": {
+      "type": "object",
+      "properties": {
+        "decision_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "source": {"const": "gateway"},
+        "stage": {"enum": ["a", "bt", "final"]},
+        "ws": {"type": "string", "minLength": 1},
+        "gateway_id": {"type": ["string", "null"], "description": "Global model: the deciding gateway"},
+        "engine_id": {"type": ["string", "null"], "description": "Global model: the attached policy engine (= the Dogwood set key)"},
+        "agent_id": {"type": ["string", "null"]},
+        "principal": {
+          "type": "object",
+          "properties": {
+            "kind": {"enum": ["user", "api_key", "system", "agent", "unknown"]},
+            "id": {"type": "string"}
+          },
+          "required": ["kind", "id"],
+          "additionalProperties": false
+        },
+        "action": {"type": "string"},
+        "decision": {"enum": ["allow", "deny", "would_deny", "error"]},
+        "mode": {"enum": ["log_only", "enforce", "LOG_ONLY", "ENFORCE"]},
+        "policy_ids": {"type": "array", "items": {"type": "string"}},
+        "determining": {"type": "array", "items": {"type": "string"}},
+        "stage_a": {"enum": ["allow", "deny", null]},
+        "stage_bt": {"enum": ["allow", "deny", null]},
+        "session_psid": {"type": ["string", "null"]},
+        "event_seq": {"type": ["integer", "null"]},
+        "store_epoch": {"type": ["string", "null"]},
+        "input_keys": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": ["string", "null"], "maxLength": 2000},
+        "latency_ms": {"type": "number", "minimum": 0},
+        "ts": {"type": "string"}
+      },
+      "required": ["decision_id", "source", "stage", "ws", "agent_id", "principal", "action", "decision", "mode", "policy_ids", "determining", "stage_a", "stage_bt", "session_psid", "event_seq", "store_epoch", "input_keys", "reason", "latency_ms", "ts"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["launchpad.policy.decision"],
+  "additionalProperties": false
+}

@@ -1,0 +1,260 @@
+# Lifecycle graph — Evaluation run (E11). Round 16, channel A, r16-o.
+graph: eval_run
+module: E11
+entity: Evaluation run row (`eval_runs`) and its results (`eval_results`)
+initial: absent
+
+contracts:
+  API_RUNS:
+    doc: docs/api.md
+    section: "Console Evaluation Runs API"
+    quote: >-
+      Run status: `queued → invoking → waiting → evaluating → completed | failed | stopped`. … `POST`
+      | `/api/eval/runs` | Start a run (exactly one scope: `dataset_id` | `cloud_dataset_id` |
+      `session_ids` | `lookback_hours`) → 201.
+  API_RUNS_STOP:
+    doc: docs/api.md
+    section: "Console Evaluation Runs API › POST …/stop"
+    quote: >-
+      **Stop an active run** → 202 with the run. … A run still `queued` is cancelled locally (the
+      worker skips it, AWS is never called) and returns `stopped` at once. … Terminal runs
+      (`completed` / `failed` / `stopped`) → 409 `run.not_active`; unknown → 404 `run.not_found`.
+  API_RUNS_DELETE:
+    doc: docs/api.md
+    section: "Console Evaluation Runs API › DELETE …/{run_id}"
+    quote: >-
+      **Remove a run that produced no result** (`failed` / `stopped`) from the ledger → `{deleted,
+      run_id, status, aws_batch_left_in_place}`. … `completed` runs are the evaluation history and
+      active runs must be stopped first → 409 `run.not_deletable`; unknown → 404 `run.not_found`.
+  API_RUNS_RECHECK:
+    doc: docs/api.md
+    section: "Console Evaluation Runs API › POST …/recheck"
+    quote: >-
+      **Re-read a failed run's batch from AWS** → 202 with the run. For a `failed` run that started a
+      batch (`batch_eval_id` set) … Other runs → 409 `run.not_recheckable`; unknown → 404
+      `run.not_found`.
+  API_RUNS_RERUN:
+    doc: docs/api.md
+    section: "Console Evaluation Runs API › POST …/rerun"
+    quote: >-
+      **Evaluate the run's target again** on the same scope → 201 with the new run, started exactly as
+      `POST /api/eval/runs` would start it: the same validation and visibility refusals (incl. 422
+      `run.no_evaluators` for a source whose stored evaluator list is empty); the caller is the new
+      run's creator … Body `{name?}` (1–64; default `<source name> · 再评`). … The same target (agent or
+      `log_source`), evaluators and description, and the same dataset
+  API_RUNS_COMPARE:
+    doc: docs/api.md
+    section: "Console Evaluation Runs API › GET /runs/compare"
+    quote: >-
+      **Two runs side by side** → `{runs: {a, b}, alignment, alignment_reason, cases, results,
+      config}`. Both must be terminal evaluator runs (else 422 `run.compare_unsupported`); a run that
+      is missing, of another workspace or hidden → 404 `run.not_found`.
+  EE_23:
+    doc: docs/cn/interfaces/evaluation-engine.md
+    section: "23. Scorecards, compare, rerun"
+    quote: >-
+      Chosen-session, log-stream and insights sources → 422 `run.rerun_unsupported`. It goes through
+      the **same** `_start_run` as `POST /api/eval/runs`, so the r13-h rulings hold (`evaluators: []`
+      → 422 `run.no_evaluators` … the same gate as `POST /api/eval/runs` (a hidden agent → 400
+      `agent.not_active`, a hidden dataset → 404). … `agent_snapshot_seq` — the newest *deployed*
+      `SpecSnapshot.seq` at submit time
+  EE_22:
+    doc: docs/cn/interfaces/evaluation-engine.md
+    section: "22. Referential delete guards"
+    quote: >-
+      `evaluation/references.py` now answers **409 `dataset.in_use` / `evaluator.in_use`** with the
+      referencing rows … local dataset | an **ACTIVE** run replaying it … finished runs (completed /
+      failed / stopped): a run keeps a **snapshot** — `dataset_name` for display, its own copy of the
+      items on the worker, the evaluator ids inside `scores` — and never reads the dataset row again
+      (**the completed-run rule**)
+
+nodes:
+  - id: absent
+  - id: queued
+  - id: completed
+    terminal: true
+  # N17-obs10 (r17-b random walks): the contract's answer at `completed` differs by history —
+  # once the replayed dataset is deleted, `rerun` is the dataset kind's 404 (EE_23 "the same
+  # gate as POST /api/eval/runs … a hidden dataset → 404") while compare still works from the
+  # run's snapshot (EE_22). The node splits (r16-o lesson) instead of the edge method branching.
+  - id: completed_dataset_gone
+    terminal: true
+  - id: failed
+  - id: stopped
+  - id: deleted
+    terminal: true
+
+edges:
+  - id: create
+    from: absent
+    to: queued
+    via: POST /api/eval/runs {agent_id, dataset_id, evaluators} (queue stubbed — nothing runs yet)
+    expect: {status: 201, run_status: queued}
+    cites: [API_RUNS]
+    ui: {page: /v2/eval/tasks, view: new, controls: [v2-task-target-agent, v2-task-agent, v2-task-dataset, 'v2-task-eval-{id}', v2-task-next, v2-task-submit]}
+  - id: create_inactive_agent
+    from: absent
+    to: absent
+    kind: refusal
+    via: POST /api/eval/runs for a `deploying` agent
+    expect: {status: 400, code: agent.not_active}
+    cites: [EE_23]
+    ui: {page: /v2/eval/tasks, view: new, controls: [v2-task-submit]}
+  - id: create_no_evaluators
+    from: absent
+    to: absent
+    kind: refusal
+    via: "POST /api/eval/runs with `evaluators: []`"
+    expect: {status: 422, code: run.no_evaluators}
+    cites: [API_RUNS_RERUN, EE_23]
+    ui: {page: /v2/eval/tasks, view: new, controls: [v2-task-submit]}
+  - id: dataset_delete_while_queued
+    from: queued
+    to: queued
+    kind: refusal
+    via: DELETE /api/eval/datasets/{id} of the replayed dataset
+    expect: {status: 409, code: dataset.in_use}
+    cites: [EE_22]
+    ui: {page: /v2/eval/data, view: null, controls: [v2-confirm-ok]}
+  - id: stop_queued
+    from: queued
+    to: stopped
+    via: POST /api/eval/runs/{id}/stop while queued
+    expect: {status: 202, run_status: stopped}
+    cites: [API_RUNS_STOP]
+    ui: {page: /v2/eval/tasks, view: detail, controls: []}
+  - id: dispatch_completes
+    from: queued
+    to: completed
+    via: the hermetic worker runs the job (recording invoker, FakeJudge) to completion
+    expect: {run_status: completed, results_rows: "sessions × evaluators"}
+    cites: [API_RUNS]
+    ui: null
+  - id: dispatch_fails
+    from: queued
+    to: failed
+    via: the hermetic worker's invoker raises a non-transient error on every scenario
+    expect: {run_status: failed}
+    cites: [API_RUNS]
+    ui: null
+  - id: stop_completed
+    from: completed
+    to: completed
+    kind: refusal
+    via: POST …/stop on a completed run
+    expect: {status: 409, code: run.not_active}
+    cites: [API_RUNS_STOP]
+    ui: {page: /v2/eval/tasks, view: detail, controls: []}
+  - id: delete_completed
+    from: completed
+    to: completed
+    kind: refusal
+    via: DELETE /api/eval/runs/{id} on a completed run
+    expect: {status: 409, code: run.not_deletable}
+    cites: [API_RUNS_DELETE]
+    ui: {page: /v2/eval/tasks, view: null, controls: [v2-confirm-ok]}
+  - id: recheck_completed
+    from: completed
+    to: completed
+    kind: refusal
+    via: POST …/recheck on a completed run
+    expect: {status: 409, code: run.not_recheckable}
+    cites: [API_RUNS_RECHECK]
+    ui: {page: /v2/eval/tasks, view: detail, controls: [v2-task-recheck]}
+  - id: dataset_delete_after_completed
+    from: completed
+    to: completed_dataset_gone
+    via: DELETE /api/eval/datasets/{id} of the replayed dataset once the run finished
+    expect: {status: 200, run_keeps_snapshot: true}
+    cites: [EE_22]
+    ui: {page: /v2/eval/data, view: null, controls: [v2-confirm-ok]}
+  - id: rerun_dataset_gone
+    from: completed_dataset_gone
+    to: completed_dataset_gone
+    kind: refusal
+    via: POST /api/eval/runs/{id}/rerun once the replayed dataset is deleted (N17-obs10)
+    expect: {status: 404, code: dataset.not_found}
+    cites: [EE_23, API_RUNS_RERUN]
+    ui: {page: /v2/eval/tasks, view: agent, controls: [v2-scorecard-rerun-open, v2-scorecard-rerun-confirm]}
+  - id: compare_dataset_gone
+    from: completed_dataset_gone
+    to: completed_dataset_gone
+    via: GET /api/eval/runs/compare?a=&b= with two completed runs whose dataset is deleted (the snapshot serves)
+    expect: {status: 200, alignment: scenario, dataset_name_from_snapshot: true}
+    cites: [API_RUNS_COMPARE, EE_22]
+    ui: {page: /v2/eval/tasks, view: agent, controls: ['v2-scorecard-pick-{id}', v2-scorecard-pick-compare]}
+  - id: rerun_completed
+    from: completed
+    to: queued
+    via: POST /api/eval/runs/{id}/rerun
+    expect: {status: 201, differential: "equals POST /api/eval/runs with the source's target, evaluators, dataset and description; creator = caller; name = '<source> · 再评'"}
+    cites: [API_RUNS_RERUN, EE_23]
+    ui: {page: /v2/eval/tasks, view: agent, controls: [v2-scorecard-rerun-open, v2-scorecard-rerun-confirm]}
+  - id: rerun_stopped
+    from: stopped
+    to: queued
+    via: POST /api/eval/runs/{id}/rerun on a stopped run
+    expect: {status: 201}
+    cites: [API_RUNS_RERUN]
+    ui: {page: /v2/eval/tasks, view: null, controls: ['v2-scorecard-rerun-{key}']}
+  - id: rerun_sessions_scope
+    from: completed
+    to: completed
+    kind: refusal
+    via: POST …/rerun on a chosen-session run (seeded)
+    expect: {status: 422, code: run.rerun_unsupported}
+    cites: [API_RUNS_RERUN]
+    ui: null
+  - id: compare_completed_pair
+    from: completed
+    to: completed
+    via: GET /api/eval/runs/compare?a=&b= with two completed runs of the dataset
+    expect: {status: 200, alignment: scenario}
+    cites: [API_RUNS_COMPARE]
+    ui: {page: /v2/eval/tasks, view: agent, controls: ['v2-scorecard-pick-{id}', v2-scorecard-pick-compare]}
+  - id: compare_with_queued
+    from: queued
+    to: queued
+    kind: refusal
+    via: GET /api/eval/runs/compare?a=<completed>&b=<queued>
+    expect: {status: 422, code: run.compare_unsupported}
+    cites: [API_RUNS_COMPARE]
+    ui: null
+  - id: delete_failed
+    from: failed
+    to: deleted
+    via: DELETE /api/eval/runs/{id}
+    expect: {status: 200, deleted: true}
+    cites: [API_RUNS_DELETE]
+    ui: {page: /v2/eval/tasks, view: null, controls: [v2-confirm-ok]}
+  - id: delete_stopped
+    from: stopped
+    to: deleted
+    via: DELETE /api/eval/runs/{id}
+    expect: {status: 200, deleted: true}
+    cites: [API_RUNS_DELETE]
+    ui: {page: /v2/eval/tasks, view: null, controls: [v2-confirm-ok]}
+  - id: stop_failed
+    from: failed
+    to: failed
+    kind: refusal
+    via: POST …/stop on a failed run
+    expect: {status: 409, code: run.not_active}
+    cites: [API_RUNS_STOP]
+    ui: null
+  - id: delete_deleted
+    from: deleted
+    to: deleted
+    kind: refusal
+    via: DELETE /api/eval/runs/{id} again
+    expect: {status: 404, code: run.not_found}
+    cites: [API_RUNS_DELETE]
+    ui: null
+  - id: rerun_deleted
+    from: deleted
+    to: deleted
+    kind: refusal
+    via: POST …/rerun on a deleted run
+    expect: {status: 404, code: run.not_found}
+    cites: [API_RUNS_RERUN]
+    ui: null

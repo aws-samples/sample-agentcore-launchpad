@@ -1,30 +1,12 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { validateGraphStructure } from './graph-validator';
 import {
+  catalogModelLabel,
   DEFAULT_MODEL_ID,
   gptBedrockModelConfig,
+  isAnthropicModel,
   isBedrockOpenAiGpt,
-  MANTLE_PROVIDER,
-  mantleModelArgs,
 } from './models';
-
-// Shared by both canvas generators. Keep the SDK override limited to inline files.
-export const MANTLE_ATTACHMENT_ADAPTER = `
-class LaunchpadOpenAIResponsesModel(OpenAIResponsesModel):
-    @classmethod
-    def _format_request_message_content(cls, content, *, role="user"):
-        value = super()._format_request_message_content(content, role=role)
-        file_url = value.get("file_url")
-        if "document" in content and isinstance(file_url, str) and file_url.startswith("data:"):
-            value = dict(value)
-            value["file_data"] = value.pop("file_url")
-            document = content["document"]
-            name = document.get("name") or "attachment"
-            extension = "." + document["format"]
-            value["filename"] = name if name.endswith(extension) else name + extension
-        return value
-
-`;
 
 interface CodeGenerationResult {
   code: string;
@@ -69,30 +51,12 @@ function generateModelConfig(
   reasoningEffort?: string,
   cacheMessages?: boolean,
   cacheTools?: boolean,
-  cacheSystem?: boolean, // launchpad extension: system-prompt caching
-  apiKey?: string,
-  region?: string
+  cacheSystem?: boolean // launchpad extension: system-prompt caching
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
 
-  if (modelProvider === MANTLE_PROVIDER) {
-    // Amazon Bedrock (Mantle): OpenAI-compatible endpoint via the Responses API
-    const clientArgsStr = mantleModelArgs(
-      { apiKey, region, modelId: modelIdentifier },
-      '    ',
-    );
-    const params = [`"max_output_tokens": ${maxTokens}`];
-    if (thinkingEnabled && reasoningEffort) {
-      params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
-    }
-    return `${varName}_model = LaunchpadOpenAIResponsesModel(${clientArgsStr}
-    model_id="${modelIdentifier}",
-    params={
-        ${params.join(',\n        ')},
-    }
-)`;
-  } else if (modelProvider === 'OpenAI') {
+  if (modelProvider === 'OpenAI') {
     const clientArgs = [];
     clientArgs.push(`"api_key": os.environ.get("OPENAI_API_KEY")`);
     if (baseUrl) {
@@ -112,20 +76,22 @@ function generateModelConfig(
     }
 )`;
   } else {
-    // Default to Bedrock — Claude 4.6+ adaptive thinking (see code-generator.ts)
-    // launchpad extension: clamp max_tokens to per-model caps (Nova Pro 10000, Nova Premier 32000)
-    let effectiveMaxTokens = maxTokens;
-    if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
-    else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+    // Default to Bedrock — Anthropic adaptive thinking (see code-generator.ts)
+    // launchpad-cn: GLM 5.3 reasons before it answers; a ceiling under ~200 tokens
+    // returns an empty text block, so never below 256 (spec C3).
+    const effectiveMaxTokens = Math.max(maxTokens, 256);
     if (isBedrockOpenAiGpt(modelIdentifier)) {
       return gptBedrockModelConfig(varName, modelIdentifier, effectiveMaxTokens, thinkingEnabled, reasoningEffort, '');
     }
 
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",
+    # region-boundary: global-bedrock
+    region_name=os.environ.get("LAUNCHPAD_MODEL_REGION", "us-west-2"),
     max_tokens=${effectiveMaxTokens}`;
 
-    if (thinkingEnabled) {
+    // launchpad-cn (R17): Anthropic-only request shape — GLM 5.3 / Kimi K3 reject it, so the block is skipped for them.
+    if (thinkingEnabled && isAnthropicModel(modelIdentifier)) {
       // launchpad extension: emit output_config.effort alongside adaptive thinking (probe-verified
       // shape); clamp xhigh->high for models that reject it (only Sonnet 5 / Opus 4.8 accept xhigh)
       let effortTier = reasoningEffort;
@@ -146,7 +112,7 @@ function generateModelConfig(
     }`;
     }
 
-    // Bedrock prompt caching (Claude): auto message caching / tool caching
+    // Bedrock prompt caching (Anthropic): auto message caching / tool caching
     if (cacheMessages) {
       bedrockCode += `,
     cache_config=CacheConfig(strategy="auto")`;
@@ -400,12 +366,6 @@ export function generateGraphCode(
     if (hasOpenAIProvider) {
       imports.add('from strands.models.openai import OpenAIModel');
     }
-    const hasMantleProvider = agentNodes.some(node => node.data?.modelProvider === MANTLE_PROVIDER);
-    if (hasMantleProvider) {
-      imports.add('from strands.models.openai_responses import OpenAIResponsesModel');
-      code += MANTLE_ATTACHMENT_ADAPTER;
-    }
-
     // Check if MCP tools are used
     if (mcpNodes.length > 0) {
       imports.add('from strands.tools.mcp import MCPClient');
@@ -451,13 +411,10 @@ export function generateGraphCode(
       const label = data.label || `Agent${index + 1}`;
       const modelProvider = data.modelProvider || 'AWS Bedrock';
       const modelId = data.modelId || DEFAULT_MODEL_ID;
-      const modelName = data.modelName || 'Claude 3.7 Sonnet';
+      const modelName = data.modelName || catalogModelLabel(modelId as string);
       const systemPrompt = data.systemPrompt || 'You are a helpful AI assistant.';
       const maxTokens = data.maxTokens || 32000; // launchpad extension: default max output tokens 32000
       const baseUrl = data.baseUrl || '';
-      // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-      const apiKey = data.apiKey || '';
-      const region = data.region || '';
       const thinkingEnabled = data.thinkingEnabled || false;
       const reasoningEffort = data.reasoningEffort || 'medium';
       const cacheMessages = (data.cacheMessages as boolean) || false;
@@ -477,7 +434,7 @@ export function generateGraphCode(
       const skillsCode = buildSkillsPluginArg(findConnectedSkills(agentNode, nodes, edges), '    ');
 
       // Generate model config
-      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem, apiKey as string, region as string);
+      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem);
 
       code += `# ${label} Configuration\n`;
       code += modelConfig + '\n\n';

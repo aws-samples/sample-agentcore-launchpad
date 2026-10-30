@@ -1,0 +1,85 @@
+// Launchpad action-schema template for the Dogwood MCP schema generator.
+//
+// The generator layers one action per Gateway tool (input / output records from the
+// tool's JSON schema) on top of this stub. Exactly one namespace is allowed, so the
+// whole tool-call vocabulary lives in `AgentCore` (Global's names for actions,
+// Gateway and IamEntity; Launchpad's own principal types beside them).
+
+namespace AgentCore {
+
+entity Role;
+entity Workspace;
+entity Agent in [Workspace] {
+    name?: String,
+    method: String,
+    system: Bool,
+};
+
+// The calling agent's execution role (Stage A), named by its role ARN like Global.
+@mcp_principal("IamEntity")
+entity IamEntity in [Agent] {
+    agent_id: String,
+};
+
+// Launchpad accounts (Stage B). D1 revised: ApiKey is its own type, no parent.
+@mcp_principal("User")
+entity User in [Role] {
+    username: String,
+    role: String,
+    user_id?: String,
+};
+
+@mcp_principal("ApiKey")
+entity ApiKey {
+    name: String,
+};
+
+@mcp_principal("System")
+entity System;
+
+@mcp_resource("Gateway")
+entity Gateway;
+
+// Global writes `context.system.now: datetime`; dogwood-language 1.1 has no request
+// value for `datetime` (api.rs "no Value variant yet"), so time is carried as Longs:
+// epoch seconds plus the hour / weekday in Settings.display_timezone (§7.2 fallback).
+@mcp_context("system")
+type SystemContext = {
+    now_epoch_s: Long,
+    local_hour: Long,
+    local_weekday: Long,
+};
+
+// Launchpad's per-call context, injected into every tool action's context as
+// `context.launchpad`; `sessionId` is the pinned policy session id (event schema).
+@mcp_context("launchpad")
+type LaunchpadContext = {
+    agent_id: String,
+    channel: String,
+    sessionId: String,
+};
+
+action Mcp appliesTo {
+    principal: [IamEntity, User, ApiKey, System],
+    resource: [Gateway],
+    context: {
+        system: SystemContext,
+        launchpad: LaunchpadContext,
+        isOutput: Bool,
+        output?: {},
+    }
+};
+
+@mcp_action("CallTools")
+action CallTool in [Mcp] appliesTo {
+    principal: [IamEntity, User, ApiKey, System],
+    resource: [Gateway],
+    context: {
+        system: SystemContext,
+        launchpad: LaunchpadContext,
+        isOutput: Bool,
+        output?: {},
+    }
+};
+
+}

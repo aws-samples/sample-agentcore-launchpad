@@ -13,7 +13,6 @@
 /.darwin/
 /data/
 /design/
-/samples/
 /docs/issues/
 .playwright-cli/
 # --- python ---
@@ -28,16 +27,26 @@ htmlcov/
 /issues/
 design/ 
 # --- node ---
-node_modules/
+node_modules
 dist/
 *.tsbuildinfo
 .npm/
 prompt.md
+# --- mutation testing (make mutation / make mutation-frontend; never part of make verify) ---
+/backend/mutants/
+# --- local evaluation workbench cache: raw CloudWatch records + reports (make eval-local) ---
+/backend/.eval-cache/
+/frontend/.stryker-tmp/
+/frontend/reports/
 # --- local data & generated config ---
 data/*.db
+data/session_secret
 data/*.db-journal
 data/*.png
 data/exec-venv/
+data/.uv-cache/
+data/.npm-cache/
+data/build-info.json
 config/launchpad.yaml
 
 # --- misc ---
@@ -70,3 +79,17 @@ docs/.threatmodel/
 docs/threat-model-summary.md
 # Scanner exports (Bandit/SAST) name every finding with file:line.
 docs/*_findings.json
+.worktrees/
+.superpowers/
+
+# e2e scenario: bulk evidence screenshots stay local; the curated ~20 key shots in docs/cn/evidence/scenario/ are committed (lead ruling Q6)
+docs/cn/evidence/scenario/all/
+
+# CI gate artifacts (.github/workflows/cn-verify.yml): junit reports pytest / vitest write
+# only under GitHub Actions, uploaded on failure; never committed.
+pytest-junit.xml
+frontend/vitest-junit.xml
+verify.log
+
+# Hypothesis example database (tests/property, round 16)
+.hypothesis/

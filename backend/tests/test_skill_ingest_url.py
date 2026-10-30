@@ -8,7 +8,6 @@ import zipfile
 import httpx
 import pytest
 
-import app.routers.registry as registry_router
 from app.services import skill_ingest as si
 
 
@@ -151,23 +150,3 @@ def test_guarding_transport_delegates_for_public_host():
     )
     resp = guard.handle_request(httpx.Request("GET", "https://8.8.8.8/x"))
     assert resp.status_code == 200
-
-
-# ---------- router: inspect JSON url branch ----------
-
-def test_inspect_url_source_json_branch(client, monkeypatch):
-    def fake_bundle_from_url(url):
-        b = si.bundle_from_inline(_md("url-alpha", description="A"))
-        b.source = si.SkillSource(kind="url", url=url)
-        return b
-
-    monkeypatch.setattr(registry_router.si, "bundle_from_url", fake_bundle_from_url)
-    res = client.post(
-        "/api/registry/skills/inspect",
-        json={"source": {"kind": "url", "url": "https://example.com/SKILL.md"}},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["staging_id"]
-    assert body["skills"][0]["name"] == "url-alpha"
-    assert body["skills"][0]["source"]["kind"] == "url"
