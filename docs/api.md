@@ -2788,7 +2788,7 @@ refused in prod unless explicitly enabled; that guard is the real boundary.
 | `DELETE` | `/api/announcements/{announcement_id}?expected_revision=` | admin | hub | `{deleted: true}` |
 | `GET` | `/api/videos` | member | hub | `{schemaVersion, categories, collections, videos}`: the published tutorial catalogue |
 | `GET` | `/api/videos/manage` | admin | hub | `{taxonomy, videos[…]}` with drafts |
-| `POST` | `/api/videos/manage` | admin | hub | Body `{category_id, section_id, console_version, title, description, cdn_url, webm_url?, poster_url?, caption_url?, duration_seconds, chapters[], sort_order}` → `201` video (same revisioned shape as an announcement) |
+| `POST` | `/api/videos/manage` | admin | hub | Body `{category_id, section_id, console_version, title, description, cdn_url, webm_url?, poster_url?, caption_url?, duration_seconds, chapters[], sort_order}` (`console_version`: `v3` / `v2` / `classic`) → `201` video (same revisioned shape as an announcement) |
 | `GET` | `/api/videos/manage/{video_id}` | admin | hub | One video |
 | `PUT` | `/api/videos/manage/{video_id}` | admin | hub | The create body + `expected_revision` → video |
 | `POST` | `/api/videos/manage/{video_id}/publish` / `…/unpublish` | admin | hub | Body `{expected_revision}` → video |

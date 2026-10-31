@@ -94,8 +94,11 @@ describe("hideableGroups", () => {
 });
 
 describe("presets", () => {
-  it("Normal is exactly the gate, criteria and the two Command center sections", () => {
-    expect([...NORMAL_HIDDEN]).toEqual(["/v2/environments", "/v2/eval/standards", "/v3/gate", "/v3?section=launch", "/v3?section=turn"]);
+  it("Normal is exactly the gate, criteria, environments, issues, releases and the two Command center sections", () => {
+    expect([...NORMAL_HIDDEN]).toEqual([
+      "/v2/environments", "/v2/eval/standards", "/v2/issues", "/v2/promotions",
+      "/v3/gate", "/v3?section=launch", "/v3?section=turn",
+    ]);
     expect(FULL_HIDDEN).toEqual([]);
     // Normal keeps the Command center itself
     expect(NORMAL_HIDDEN).not.toContain("/v3");

@@ -22,7 +22,7 @@ _TAXONOMY_PATH = _DATA_DIR / "video_sections.json"
 _LEGACY_PATH = _DATA_DIR / "videos.initial.json"
 _V2_MEDIA_REVISION = re.compile(r"/media/[^/]+/[0-9]{8}-v2(?:-[^/]*)?/")
 
-ConsoleVersion = Literal["v2", "classic"]
+ConsoleVersion = Literal["v3", "v2", "classic"]
 
 # One-time migration of the bundled directory into its matching V2 navigation section.
 _LEGACY_SECTIONS = {
@@ -101,7 +101,7 @@ def _console_version(content: dict[str, Any]) -> ConsoleVersion:
     writes persist an explicit value; reads never rewrite old snapshots.
     """
     explicit = content.get("console_version")
-    if explicit in ("v2", "classic"):
+    if explicit in ("v3", "v2", "classic"):
         return explicit
     media_path = urlsplit(str(content.get("cdn_url") or "")).path
     return "v2" if _V2_MEDIA_REVISION.search(media_path) else "classic"

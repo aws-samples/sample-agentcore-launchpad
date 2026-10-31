@@ -2081,7 +2081,7 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `DELETE` | `/api/announcements/{announcement_id}?expected_revision=` | admin | hub | `{deleted: true}` |
 | `GET` | `/api/videos` | member | hub | `{schemaVersion, categories, collections, videos}`：已发布的教程视频目录 |
 | `GET` | `/api/videos/manage` | admin | hub | 含草稿的 `{taxonomy, videos[…]}` |
-| `POST` | `/api/videos/manage` | admin | hub | 请求体 `{category_id, section_id, console_version, title, description, cdn_url, webm_url?, poster_url?, caption_url?, duration_seconds, chapters[], sort_order}` → `201` 视频（与公告相同的带版本形状） |
+| `POST` | `/api/videos/manage` | admin | hub | 请求体 `{category_id, section_id, console_version, title, description, cdn_url, webm_url?, poster_url?, caption_url?, duration_seconds, chapters[], sort_order}`（`console_version`：`v3` / `v2` / `classic`）→ `201` 视频（与公告相同的带版本形状） |
 | `GET` | `/api/videos/manage/{video_id}` | admin | hub | 单个视频 |
 | `PUT` | `/api/videos/manage/{video_id}` | admin | hub | 创建时的请求体 + `expected_revision` → 视频 |
 | `POST` | `/api/videos/manage/{video_id}/publish` / `…/unpublish` | admin | hub | 请求体 `{expected_revision}` → 视频 |

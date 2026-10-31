@@ -73,7 +73,7 @@ function VideoList({
       key: "version", title: t("videoManage.consoleVersion"),
       render: (row) => {
         const version = row.published_content?.console_version ?? row.content.console_version;
-        return <Tag tone={version === "v2" ? "blue" : "gray"}>{t(`videos.version.${version}`)}</Tag>;
+        return <Tag tone={version === "v3" ? "green" : version === "v2" ? "blue" : "gray"}>{t(`videos.version.${version}`)}</Tag>;
       },
     },
     {
@@ -303,6 +303,7 @@ function VideoEditor({
             <Field label={t("videoManage.consoleVersion")} required>
               <Select value={draft.console_version}
                 options={[
+                  { value: "v3", label: t("videos.version.v3") },
                   { value: "v2", label: t("videos.version.v2") },
                   { value: "classic", label: t("videos.version.classic") },
                 ]}

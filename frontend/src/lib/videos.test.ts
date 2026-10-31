@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { activeNavItem } from "../v2/nav";
-import { type LibraryVideo, moduleVideoCollection, type VideoCatalog } from "./videos";
+import {
+  type LibraryVideo, moduleVideoCollection, parseVersionFilter, type VideoCatalog, videoCollectionsByVersion,
+} from "./videos";
 
 const text = (value: string) => ({ en: value, "zh-CN": value });
 
@@ -41,6 +43,24 @@ describe("moduleVideoCollection", () => {
   it("returns null for a module with only classic recordings or none at all", () => {
     expect(moduleVideoCollection(catalog, "/v2/eval/data")).toBeNull();
     expect(moduleVideoCollection(catalog, "/v2/chat")).toBeNull();
+  });
+});
+
+describe("console versions", () => {
+  it("parses every recorded console, all, and falls back otherwise", () => {
+    for (const raw of ["v3", "v2", "classic", "all"]) expect(parseVersionFilter(raw, "v2")).toBe(raw);
+    expect(parseVersionFilter(null, "v2")).toBe("v2");
+    expect(parseVersionFilter("v9", "classic")).toBe("classic");
+  });
+
+  it("splits a module into one playlist per version, V3 first", () => {
+    const agents = {
+      id: "agents", categoryId: "build", path: "/v2/agents", title: text("Agents"),
+      description: text(""), videos: [video("a-v2", "v2"), video("a-v3", "v3"), video("a-old", "classic")],
+    };
+    const lists = videoCollectionsByVersion([agents], "all");
+    expect(lists.map((c) => c.videos.map((v) => v.id))).toEqual([["a-v3"], ["a-v2"], ["a-old"]]);
+    expect(videoCollectionsByVersion([agents], "v3")[0].videos.map((v) => v.id)).toEqual(["a-v3"]);
   });
 });
 
