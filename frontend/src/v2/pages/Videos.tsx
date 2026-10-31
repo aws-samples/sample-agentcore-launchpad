@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useVideoCatalog } from "../../lib/useVideoCatalog";
-import { videoCollections, videoCollectionsByVersion, type VideoLocale, type VideoVersionFilter } from "../../lib/videos";
+import { parseVersionFilter, videoCollections, videoCollectionsByVersion, type VideoLocale, type VideoVersionFilter } from "../../lib/videos";
 import { Alert, Button, PageHeader, Spin } from "../ui";
 import { VideoLibrary } from "./videos/Library";
 import { VideoPlayer } from "./videos/Player";
@@ -23,7 +23,7 @@ export function V2Videos() {
   const collections = catalog ? videoCollections(catalog) : [];
   const selected = catalog?.videos.find((video) => video.id === requestedId);
   const rawVersion = params.get("version");
-  const version: VideoVersionFilter = rawVersion === "classic" || rawVersion === "all" ? rawVersion : "v2";
+  const version: VideoVersionFilter = parseVersionFilter(rawVersion, "v2");
   const visibleCollections = videoCollectionsByVersion(collections, version);
   const collection = selected && videoCollectionsByVersion(collections, selected.consoleVersion)
     .find((item) => item.videos.some((video) => video.id === selected.id));

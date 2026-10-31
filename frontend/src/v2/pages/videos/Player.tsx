@@ -39,7 +39,7 @@ export function VideoPlayer({
         title={collection.title[locale]}
         end={
           <div className="v2-row">
-            <Tag tone={video.consoleVersion === "v2" ? "blue" : "gray"}>
+            <Tag tone={video.consoleVersion === "v3" ? "green" : video.consoleVersion === "v2" ? "blue" : "gray"}>
               {t(`videos.version.${video.consoleVersion}`)}
             </Tag>
             {hasSeries && <Tag tone="blue">{t("videos.episodePosition", { index: index + 1, count: collection.videos.length })}</Tag>}

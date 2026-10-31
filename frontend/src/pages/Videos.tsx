@@ -7,7 +7,7 @@ import { Panel } from "../components/Panel";
 import { ViewHead } from "../components/ViewHead";
 import { useVideoCatalog } from "../lib/useVideoCatalog";
 import {
-  videoCollections as buildCollections, videoCollectionsByVersion, videoTimestamp,
+  parseVersionFilter, videoCollections as buildCollections, videoCollectionsByVersion, videoTimestamp,
   type ConsoleVersion, type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, type VideoVersionFilter,
 } from "../lib/videos";
 import "./videos.css";
@@ -304,7 +304,7 @@ export function Videos() {
   const locale: VideoLocale = i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en";
   const videos = videoCatalog.videos;
   const rawVersion = params.get("version");
-  const version: VideoVersionFilter = rawVersion === "v2" || rawVersion === "all" ? rawVersion : "classic";
+  const version: VideoVersionFilter = parseVersionFilter(rawVersion, "classic");
   const collectionsByVersion = useMemo(
     () => videoCollectionsByVersion(allCollections, version), [allCollections, version],
   );
@@ -416,7 +416,7 @@ export function Videos() {
             />
           </div>
           <div className="videos-versions" role="group" aria-label={t("videos.versionLabel")} data-testid="video-version-filter">
-            {(["classic", "v2", "all"] as const).map((item) => (
+            {(["classic", "v2", "v3", "all"] as const).map((item) => (
               <button key={item} type="button" aria-pressed={version === item}
                 onClick={() => filter("version", item)}>
                 {t(item === "all" ? "videos.versionAll" : `videos.version.${item}`)}

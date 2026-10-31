@@ -199,6 +199,7 @@
     "versionLabel": "录制界面版本",
     "versionAll": "全部版本",
     "version": {
+      "v3": "V3 版",
       "v2": "V2 版",
       "classic": "经典版"
     },

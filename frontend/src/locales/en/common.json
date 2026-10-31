@@ -199,6 +199,7 @@
     "versionLabel": "Recorded console version",
     "versionAll": "All versions",
     "version": {
+      "v3": "V3",
       "v2": "V2",
       "classic": "Classic"
     },

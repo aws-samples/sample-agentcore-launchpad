@@ -8,6 +8,7 @@ import { useSearchParams } from "react-router-dom";
 import { useVideoCatalog } from "../../lib/useVideoCatalog";
 import {
   type LibraryVideo,
+  parseVersionFilter,
   type VideoCatalog,
   type VideoCollection,
   videoCollections,
@@ -82,6 +83,7 @@ function Library({
           value={version}
           onChange={(v) => onFilter("version", v)}
           options={[
+            { value: "v3", label: t("videos.version.v3"), count: versionCount("v3") },
             { value: "v2", label: t("videos.version.v2"), count: versionCount("v2") },
             { value: "classic", label: t("videos.version.classic"), count: versionCount("classic") },
             { value: "all", label: t("videos.versionAll"), count: versionCount("all") },
@@ -141,7 +143,7 @@ function Library({
                     <b>{item.title}</b>
                     <small>{item.description}</small>
                     <span className="tags">
-                      <Chip s={first.consoleVersion === "v2" ? "info" : undefined}>{t(`videos.version.${first.consoleVersion}`)}</Chip>
+                      <Chip s={first.consoleVersion === "v3" ? "ok" : first.consoleVersion === "v2" ? "info" : undefined}>{t(`videos.version.${first.consoleVersion}`)}</Chip>
                       {item.videos.length > 1 && <Chip>{t("videos.episodeCount", { count: item.videos.length })}</Chip>}
                     </span>
                   </span>
@@ -230,7 +232,7 @@ function Player({
         title={video.title[locale]}
         sub={
           <span className="v3-vid-meta">
-            <Chip s={video.consoleVersion === "v2" ? "info" : undefined}>{t(`videos.version.${video.consoleVersion}`)}</Chip>
+            <Chip s={video.consoleVersion === "v3" ? "ok" : video.consoleVersion === "v2" ? "info" : undefined}>{t(`videos.version.${video.consoleVersion}`)}</Chip>
             {hasSeries && <Chip>{t("videos.episodePosition", { index: index + 1, count: collection.videos.length })}</Chip>}
             <span>{t("videos.duration", { duration: videoTimestamp(video.durationSeconds) })}</span>
             <span>{t("videos.published", { date: video.publishedAt.slice(0, 10) })}</span>
@@ -370,7 +372,7 @@ export function V3Videos() {
   const collections = catalog ? videoCollections(catalog) : [];
   const selected = catalog?.videos.find((video) => video.id === requestedId);
   const rawVersion = params.get("version");
-  const version: VideoVersionFilter = rawVersion === "classic" || rawVersion === "all" ? rawVersion : "v2";
+  const version: VideoVersionFilter = parseVersionFilter(rawVersion, "v2");
   const visible = videoCollectionsByVersion(collections, version);
   const collection =
     selected && videoCollectionsByVersion(collections, selected.consoleVersion).find((item) => item.videos.some((v) => v.id === selected.id));

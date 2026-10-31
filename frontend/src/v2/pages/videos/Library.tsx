@@ -86,6 +86,7 @@ export function VideoLibrary({
             onChange={(value) => onFilter("version", value)}
             ariaLabel={t("videos.versionLabel")}
             options={[
+              { value: "v3", label: `${t("videos.version.v3")} · ${versionCount("v3")}` },
               { value: "v2", label: `${t("videos.version.v2")} · ${versionCount("v2")}` },
               { value: "classic", label: `${t("videos.version.classic")} · ${versionCount("classic")}` },
               { value: "all", label: `${t("videos.versionAll")} · ${versionCount("all")}` },
@@ -143,7 +144,7 @@ export function VideoLibrary({
                       <strong>{item.title}</strong>
                       <span className="desc">{item.description}</span>
                       <span className="tags">
-                        <Tag tone={first.consoleVersion === "v2" ? "blue" : "gray"}>
+                        <Tag tone={first.consoleVersion === "v3" ? "green" : first.consoleVersion === "v2" ? "blue" : "gray"}>
                           {t(`videos.version.${first.consoleVersion}`)}
                         </Tag>
                         {item.videos.length > 1 && (

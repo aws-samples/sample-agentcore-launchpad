@@ -104,6 +104,13 @@ def test_draft_publish_edit_withdraw_and_delete(client):
     assert client.get(f"/api/videos/manage/{row['id']}").status_code == 404
 
 
+def test_a_v3_recording_round_trips(client):
+    row = action(client, create(client, console_version="v3"), "publish")
+    assert row["content"]["console_version"] == "v3"
+    public = next(v for v in client.get("/api/videos").json()["videos"] if v["id"] == row["id"])
+    assert public["consoleVersion"] == "v3"
+
+
 def test_old_ledger_snapshots_are_classified_on_read_without_rewriting(client):
     row = create(client, cdn_url="https://cdn.example.com/media/demo/20260926-v2/demo.mp4")
     row = action(client, row, "publish")
@@ -186,7 +193,7 @@ def test_competing_db_sessions_use_a_revision_predicate(client):
     {"cdn_url": "https://cdn.example.com/a.mp4?token=temporary"},
     {"cdn_url": "https://cdn.example.com/a.txt"},
     {"cdn_url": "https://localhost/a.mp4"},
-    {"console_version": "v3"},
+    {"console_version": "v9"},
     {"webm_url": "https://cdn.example.com/other.mp4"},
     {"duration_seconds": 0, "chapters": [{"startSeconds": 0, "title": {"zh-CN": "开始"}}]},
     {"published_content": CONTENT},

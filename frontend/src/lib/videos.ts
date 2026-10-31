@@ -1,6 +1,8 @@
 export type VideoLocale = "en" | "zh-CN";
 export type VideoText = Record<VideoLocale, string>;
-export type ConsoleVersion = "v2" | "classic";
+export type ConsoleVersion = "v3" | "v2" | "classic";
+/** Every recorded console UI, newest first: the order filters and playlists list them in. */
+export const CONSOLE_VERSIONS: readonly ConsoleVersion[] = ["v3", "v2", "classic"];
 export type VideoVersionFilter = ConsoleVersion | "all";
 
 export interface LibraryVideo {
@@ -100,12 +102,17 @@ export function videoCollections(catalog: VideoCatalog): VideoCollection[] {
   }));
 }
 
+/** A `?version=` value as a filter; anything unknown (or missing) is `fallback`. */
+export function parseVersionFilter(raw: string | null, fallback: VideoVersionFilter): VideoVersionFilter {
+  return raw === "all" || CONSOLE_VERSIONS.includes(raw as ConsoleVersion) ? (raw as VideoVersionFilter) : fallback;
+}
+
 /** Keep recordings from different console UIs in separate module playlists. */
 export function videoCollectionsByVersion(
   collections: VideoCollection[],
   version: VideoVersionFilter,
 ): VideoCollection[] {
-  const versions: ConsoleVersion[] = version === "all" ? ["v2", "classic"] : [version];
+  const versions: readonly ConsoleVersion[] = version === "all" ? CONSOLE_VERSIONS : [version];
   return collections.flatMap((collection) => versions.flatMap((edition) => {
     const videos = collection.videos.filter((video) => video.consoleVersion === edition);
     return videos.length

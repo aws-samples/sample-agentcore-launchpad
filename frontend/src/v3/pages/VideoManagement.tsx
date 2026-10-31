@@ -127,7 +127,7 @@ function List({
                     <td style={{ width: 30 }}><Lamp s={rowSignal(row)} /></td>
                     <td><div className="v3-name"><div><b>{row.content.title[locale]}</b><small>{row.id}</small></div></div></td>
                     <td style={{ color: "var(--v3-text-2)" }}>{directoryLabel(catalog.taxonomy, row.content, locale) || "—"}</td>
-                    <td><Chip s={version === "v2" ? "info" : undefined}>{t(`videos.version.${version}`)}</Chip></td>
+                    <td><Chip s={version === "v3" ? "ok" : version === "v2" ? "info" : undefined}>{t(`videos.version.${version}`)}</Chip></td>
                     <td><StatusChips row={row} /></td>
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(row.updated_at)}</td>
                   </tr>
@@ -328,6 +328,7 @@ function Editor({
             <label className="v3-field">
               <span>{t("videoManage.consoleVersion")} *</span>
               <Select className="v3-select" value={draft.console_version} onChange={(e) => update("console_version", e.target.value as ConsoleVersion)}>
+                <option value="v3">{t("videos.version.v3")}</option>
                 <option value="v2">{t("videos.version.v2")}</option>
                 <option value="classic">{t("videos.version.classic")}</option>
               </Select>
