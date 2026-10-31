@@ -2,21 +2,24 @@ import "./v2.css";
 import "./v2-classic.css";
 import "./glossary.css";
 
-import { ChevronDown, LogOut, Repeat, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronDown, LogOut, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
-import { getUiVersion, setUiVersion } from "../lib/ui-version";
+import { navSettingsApi } from "../lib/api/navSettings";
+import { setUiVersion } from "../lib/ui-version";
 import { useNavMode } from "../lib/nav-mode";
+import { effectiveHidden } from "../v3/nav";
 import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
 import { scopeKey, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import { CommandPalette, PALETTE_SHORTCUT } from "./CommandPalette";
 import { GlossaryDialog } from "./GlossaryDialog";
 import { HelpMenu } from "./HelpMenu";
+import { useLoad } from "./hooks";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
 import { isNavItemActive, navGroupsFor } from "./nav";
@@ -72,7 +75,7 @@ function WorkspaceSelect() {
 
 /**
  * Chrome of the V2 console: top bar (brand, workspace, language, user, switch
- * back to the classic console) and a grouped, collapsible sidebar. It wraps
+ * to V3) and a grouped, collapsible sidebar. It wraps
  * both the native V2 pages under /v2 and — with `classic` — the classic
  * modules' pages, which render on the V2 light theme (v2-classic.css) until
  * they are rebuilt natively.
@@ -80,7 +83,6 @@ function WorkspaceSelect() {
 export function V2Shell({ classic = false }: { classic?: boolean }) {
   const { t, i18n } = useTranslation();
   const location = useLocation();
-  const navigate = useNavigate();
   const { isAdmin, authRequired, username, logout } = useAuth();
   const { current } = useWorkspace();
   const { current: project } = useProject();
@@ -88,15 +90,13 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
   // T11: members land on the pared-down sidebar, admins on the full one; either
   // can switch. A filter only — every route stays reachable by URL.
   const [navMode, setNavMode] = useNavMode(isAdmin);
-  const navGroups = navGroupsFor(navMode, isAdmin);
-
-  // Opening a /v2 page (a bookmark, a shared link) is choosing V2 over the classic
-  // console: its modules reached from the sidebar then stay inside this shell. It
-  // does NOT undo a V3 choice — V3 links to pages it has not rebuilt yet, and
-  // following one must not silently switch the operator's console back.
-  useEffect(() => {
-    if (!classic && getUiVersion() === "v1") setUiVersion("v2");
-  }, [classic]);
+  // the entries Menu settings hid (services/nav_settings) — the same hub-global list
+  // and Normal default the V3 rail applies, for every account, administrators
+  // included. A failed read hides nothing: the sidebar must never vanish because one
+  // setting did not load.
+  const hiddenLoad = useLoad(() => navSettingsApi.hiddenModules(), "v2-shell-hidden");
+  const hidden = useMemo(() => new Set(effectiveHidden(hiddenLoad.data)), [hiddenLoad.data]);
+  const navGroups = navGroupsFor(navMode, isAdmin, hidden);
 
   // The classic console styles <body> for its dark theme; V2 overrides it
   // only while mounted.
@@ -134,13 +134,6 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
       }
       return next;
     });
-  };
-
-  // A classic module stays on its page (the classic shell takes over the same
-  // route); a native V2 page has no classic twin, so it lands on the overview.
-  const switchToClassic = () => {
-    setUiVersion("v1");
-    if (!classic) navigate("/");
   };
 
   const displayName = authRequired ? (username ?? "—") : "operator";
@@ -186,10 +179,6 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                 {t("v3.switch.try")}
               </button>
               <HelpMenu />
-              <button type="button" className="v2-btn sm" onClick={switchToClassic} data-testid="v2-switch-classic">
-                <Repeat size={13} aria-hidden="true" />
-                {t("v2.switchClassic")}
-              </button>
               <div className="v2-user">
                 <span className="v2-avatar">{displayName.slice(0, 1).toUpperCase()}</span>
                 <span>{displayName}</span>
@@ -276,7 +265,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
           </div>
           {/* opened by a Term click, the palette or the help menu */}
           <GlossaryDialog />
-          <CommandPalette />
+          <CommandPalette hidden={hidden} />
           {/* first Home visit, or replayed from the help menu / palette */}
           <TourHost />
         </ModuleDemoProvider>

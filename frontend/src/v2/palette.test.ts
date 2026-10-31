@@ -131,6 +131,15 @@ describe("buildEntries", () => {
       expect(palettePages(isAdmin).map((p) => p.to)).toEqual(expect.arrayContaining(business));
     }
   });
+  it("leaves out the entries Menu settings hid, an alias with the page it opens", () => {
+    const pages = palettePages(false, new Set(["/v2/environments", "/v2/eval/tasks"])).map((p) => p.to);
+    expect(pages).not.toContain("/v2/environments");
+    expect(pages).not.toContain("/v2/eval/tasks");
+    expect(pages).not.toContain("/v2/eval/tasks?tab=online");
+    expect(pages).toContain("/v2/issues");
+    // an administrator-only page stays
+    expect(palettePages(true, new Set(["/v2/users"])).map((p) => p.to)).toContain("/v2/users");
+  });
   it("finds 持续评估 by its former name 在线评估 (zh) and by online (en)", () => {
     const tab = "/v2/eval/tasks?tab=online";
     // the only page that answers, listed next to the glossary's "what is online evaluation"

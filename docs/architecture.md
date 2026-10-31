@@ -3100,20 +3100,20 @@ classic `<Shell />`, with its own shell (`v2/V2Shell.tsx`) — both share the au
 gate, the workspace provider and `lib/api.ts`, so every V2 read and write goes
 through the same backend routes and permission checks as the classic pages.
 
-- **Switching.** The classic topbar has a "Try V2" chip; V2's top bar has
-  "Classic console". The choice is a per-browser convenience in `localStorage`
+- **Switching.** The choice is a per-browser convenience in `localStorage`
   (`lib/ui-version.ts`, key `launchpad_ui_version`, exposed reactively through
-  `useUiVersion()`). **V3 is the default** (see [Console V3](#console-v3-preview)):
-  only a stored `v2` (an explicit "Back to V2") keeps a browser on V2 and a stored
-  `v1` (an explicit "Classic console" click) on the classic console; otherwise the
-  index route `/` redirects to `/v3`. Opening a `/v2` page from the classic console
-  selects V2. Storage that is blocked or empty means V3 (the switch still applies
-  to the open tab).
+  `useUiVersion()`). **V2 is the default**: only a stored `v3` (an explicit "Try
+  V3", or opening any `/v3` page — see [Console V3](#console-v3-preview)) keeps a
+  browser on V3; otherwise the index route `/` redirects to `/v2`. Storage that is
+  blocked or empty means V2 (the switch still applies to the open tab). **The classic
+  console (v1) is hidden**: V2's top bar no longer offers "Classic console", and a
+  stored `v1` from an earlier click reads as V2, so the classic routes always render
+  inside the V2 (or V3) shell. Its code stays in place, unreachable from the UI.
 - **Pre-shell pages.** Sign-in / register (`auth/AuthGate.tsx`), the
   session/workspace spinners and the "no workspace granted" notice
   (`workspace/WorkspaceProvider.tsx`) wear the chosen console's chrome: V3
-  (`v3/AuthFrame.tsx` + `v3/auth.css`, dark command-center ground) by default, V2
-  (`v2/AuthFrame.tsx` + `v2/auth.css`) once V2 or classic is chosen. The sign-in and
+  (`v3/AuthFrame.tsx` + `v3/auth.css`, dark command-center ground) once V3 is chosen,
+  V2 (`v2/AuthFrame.tsx` + `v2/auth.css`) by default and for classic. The sign-in and
   register forms are shared; their class names carry the console prefix. The "no
   workspace granted" notice has a native V3 page (`v3/NoWorkspace.tsx`: the
   waiting state, sign-out and the public announcements feed on V3 panels); V2 and
@@ -3489,13 +3489,13 @@ fallback so a failing model is not retried on every poll.
 
 ## Console V3 (preview)
 
-The default, dark "command center" console under `/v3/*` (`frontend/src/v3/`), built
+The dark "command center" console under `/v3/*` (`frontend/src/v3/`), built
 beside V2 rather than replacing it. It reads and writes through the same `api` /
 `dlcApi` clients, backend routes and permission checks as V2 — there is no V3-only
 backend surface.
 
 - **Switching.** V2's top bar has **Try V3** (`data-testid="v2-switch-v3"`); V3's has
-  **Back to V2**. A browser with no stored choice lands on `/v3`; **Back to V2**
+  **Back to V2**. A browser with no stored choice lands on `/v2`; **Back to V2**
   stores `v2` in `launchpad_ui_version` (`lib/ui-version.ts`) and **Try V3** stores
   `v3`. Opening any `/v3` page counts as choosing V3.
 - **Native pages.** Command center (`/v3`: a ranked "needs you" queue built from
@@ -3589,15 +3589,18 @@ backend surface.
   filtered, so an administrator always keeps Menu settings to undo a choice. Hiding
   指挥中心 removes only its rail / ⌘K entry: `/v3` and the brand link still open it.
   The page's 快速设置 has two exact presets that fill the draft (Save applies):
-  **Normal** = `NORMAL_HIDDEN` (`/v2/environments`, `/v2/eval/standards`, `/v3/gate`,
-  both sections) and **Full** = nothing hidden; `menuMode()` shows Normal / Full /
+  **Normal** = `NORMAL_HIDDEN` (`/v2/environments`, `/v2/issues`, `/v2/promotions`,
+  `/v2/eval/standards`, `/v3/gate`, both sections) and **Full** = nothing hidden; `menuMode()` shows Normal / Full /
   Custom, judged only on the keys the page offers. **Normal is the default**: while the
   row was never saved (`updated_at` null) the console applies `NORMAL_HIDDEN`
   (`effectiveHidden()`); once saved, the stored list is exact (an empty one is Full).
   With 放行门 hidden the Command center runs **without the release gate**: it reads no
   release states and drops the gate wording, the release-coverage notice, gate items
   from the queue and the release column. Like the nav mode it is a view filter, not
-  authorization: no route closes, and a failed read hides nothing.
+  authorization: no route closes, and a failed read hides nothing. The V2 shell applies
+  the same list (and the same Normal default) to its sidebar and ⌘K
+  (`navGroupsFor` / `palettePages` with `isHiddenEntry`, keyed by the entry's `/v2`
+  path), so switching back to V2 does not bring a hidden entry back.
 - **Storyline (`v3/story/`, storyline-ux).** The console follows the workshop's
   storyline (define → build → evaluate → release → observe → feedback). The steps are
   code constants (`AGENT_STORY` in `stories.ts`); each one names its page action from

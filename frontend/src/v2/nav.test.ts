@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { NORMAL_HIDDEN } from "../v3/nav";
 import { activeNavItem, navGroupsFor, V2_NAV, V2_PALETTE_ALIASES } from "./nav";
 
 // V3's business sidebar (roadmap T11): the build → run essentials, the release and
@@ -123,5 +124,35 @@ describe("评估任务 took over 在线评估", () => {
     for (const alias of V2_PALETTE_ALIASES) expect(items).not.toContain(alias);
     // the alias's location belongs to the 评估任务 entry
     expect(activeNavItem("/v2/eval/tasks", "?tab=online")).toBe(tasks);
+  });
+});
+
+describe("navGroupsFor — Menu settings' hidden list", () => {
+  it("drops a hidden entry in both modes, as the V3 rail does", () => {
+    const hidden = new Set(["/v2/environments", "/v2/promotions"]);
+    for (const mode of ["expert", "business"] as const) {
+      for (const isAdmin of [true, false]) {
+        const shown = paths(navGroupsFor(mode, isAdmin, hidden));
+        expect(shown).not.toContain("/v2/environments");
+        expect(shown).not.toContain("/v2/promotions");
+      }
+    }
+    expect(paths(navGroupsFor("expert", false, hidden))).toContain("/v2/issues");
+  });
+
+  it("applies the Normal default: environments, releases and the issue box leave V2 too", () => {
+    const shown = paths(navGroupsFor("expert", true, new Set(NORMAL_HIDDEN)));
+    for (const key of ["/v2/environments", "/v2/promotions", "/v2/issues", "/v2/eval/standards"]) {
+      expect(shown).not.toContain(key);
+    }
+    expect(shown).toContain("/v2/agents");
+  });
+
+  it("never hides an administrator-only entry", () => {
+    expect(paths(navGroupsFor("expert", true, new Set(["/v2/users"])))).toContain("/v2/users");
+  });
+
+  it("hides nothing without a list", () => {
+    expect(navGroupsFor("expert", true)).toEqual(navGroupsFor("expert", true, new Set()));
   });
 });

@@ -189,15 +189,32 @@ export const V2_PALETTE_ALIASES: V2NavItem[] = [
 ];
 
 /**
+ * Whether Menu settings hid an entry (`/api/nav/hidden-modules`, keyed by the V2 path
+ * the V3 rail lists it by). An administrator-only entry is never hidden, as in V3; an
+ * alias (`?tab=`) follows the page it opens.
+ */
+export function isHiddenEntry(item: V2NavItem, hidden: ReadonlySet<string>): boolean {
+  return item.admin !== true && (hidden.has(item.to) || hidden.has(item.to.split("?")[0]));
+}
+
+/**
  * The entries a sidebar mode shows (roadmap T11). `business` keeps the
  * build → run essentials plus Learn; `expert` is the full table. Administrator-only
- * entries are filtered separately, by role, in either mode.
+ * entries are filtered separately, by role, in either mode; the entries Menu settings
+ * hid (`hidden`) leave both modes.
  */
-export function navGroupsFor(mode: "business" | "expert", isAdmin: boolean): V2NavGroup[] {
+export function navGroupsFor(
+  mode: "business" | "expert",
+  isAdmin: boolean,
+  hidden: ReadonlySet<string> = new Set(),
+): V2NavGroup[] {
   const groups = V2_NAV.map((group) => ({
     ...group,
     items: group.items.filter(
-      (item) => (!item.admin || isAdmin) && (mode === "expert" || item.business === true),
+      (item) =>
+        (!item.admin || isAdmin)
+        && (mode === "expert" || item.business === true)
+        && !isHiddenEntry(item, hidden),
     ),
   }));
   return groups.filter((group) => group.items.length > 0);

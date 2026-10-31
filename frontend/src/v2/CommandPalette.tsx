@@ -44,14 +44,17 @@ export const PALETTE_SHORTCUT = shortcutLabel(
 );
 
 /** Mounted once by the shell; opened through `openPalette` / `togglePalette`. */
-export function CommandPalette() {
+/** `hidden`: the entries Menu settings hid, which the V2 shell already read. */
+export function CommandPalette({ hidden }: { hidden?: ReadonlySet<string> }) {
   const open = usePaletteOpen();
   // Mount the body only while open: its agents load then, and its unmount hands
   // focus back before anything opened from it (the glossary) takes it.
-  return open ? <PaletteBody /> : null;
+  return open ? <PaletteBody hidden={hidden ?? NONE_HIDDEN} /> : null;
 }
 
-function PaletteBody() {
+const NONE_HIDDEN: ReadonlySet<string> = new Set();
+
+function PaletteBody({ hidden }: { hidden: ReadonlySet<string> }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
@@ -79,7 +82,7 @@ function PaletteBody() {
     };
   }, []);
 
-  const pages = useMemo(() => palettePages(isAdmin), [isAdmin]);
+  const pages = useMemo(() => palettePages(isAdmin, hidden), [isAdmin, hidden]);
   const icons = useMemo(() => new Map(pages.map((item) => [`page:${item.to}`, item.icon])), [pages]);
 
   const entries = useMemo(

@@ -163,6 +163,8 @@ export const HOME_SECTIONS = {
  *  what a console that never saved Menu settings shows (`effectiveHidden`). */
 export const NORMAL_HIDDEN: readonly string[] = [
   "/v2/environments",
+  "/v2/issues",
+  "/v2/promotions",
   "/v2/eval/standards",
   "/v3/gate",
   HOME_SECTIONS.launch,

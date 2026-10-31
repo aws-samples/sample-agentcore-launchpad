@@ -4,7 +4,7 @@
 // palette wiring of v3/Shell.tsx), on V2's routes.
 import { useSyncExternalStore } from "react";
 
-import { V2_NAV, V2_PALETTE_ALIASES, type V2NavItem } from "./nav";
+import { isHiddenEntry, V2_NAV, V2_PALETTE_ALIASES, type V2NavItem } from "./nav";
 
 export type PaletteGroup = "page" | "agent" | "glossary" | "help";
 
@@ -61,11 +61,12 @@ export function score(query: string, text: string): number {
 /**
  * Every V2 page the viewer's role allows, in sidebar order — whatever the nav
  * mode: the palette is how a page hidden by the essentials sidebar is reached.
+ * The entries Menu settings hid (`hidden`) leave it too, as in V3's ⌘K.
  * The aliases (a page under a former name) follow the sidebar's pages.
  */
-export function palettePages(isAdmin: boolean): V2NavItem[] {
+export function palettePages(isAdmin: boolean, hidden: ReadonlySet<string> = new Set()): V2NavItem[] {
   return [...V2_NAV.flatMap((group) => group.items), ...V2_PALETTE_ALIASES].filter(
-    (item) => !item.admin || isAdmin,
+    (item) => (!item.admin || isAdmin) && !isHiddenEntry(item, hidden),
   );
 }
 

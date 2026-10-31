@@ -15987,7 +15987,7 @@
       "saved": "Menu settings saved. Your menu updates now; everyone else sees the change the next time they load the console.",
       "updated": "Last changed by {{who}} at {{when}}",
       "quick": "Quick setup",
-      "quickSub": "Normal (the default) hides the release gate, criteria, environment comparison, the launch sequence and Your turn; Full shows everything. A preset only fills the checkboxes below: nothing changes until you save. The choice applies to everyone, administrators included.",
+      "quickSub": "Normal (the default) hides the release gate, criteria, environment comparison, releases, the issue box, the launch sequence and Your turn; Full shows everything. A preset only fills the checkboxes below: nothing changes until you save. The choice applies to everyone, administrators included.",
       "defaultNote": "Menu settings has never been saved, so the console runs the default Normal mode. Save to keep it, or choose Full.",
       "currentMode": "Current mode: {{mode}}",
       "mode": {
