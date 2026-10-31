@@ -159,7 +159,12 @@ export function KnowledgeField({
               </span>
             </Alert>
           )}
-          <Button kind="primary" disabled={kb.busy} onClick={submit} testId="v2-agent-inline-kb-create">
+          {kb.needsProject && (
+            <span className="v2-muted" data-testid="v2-agent-inline-kb-needs-project">
+              {t("v2.agents.wizard.inlineKb.needsProject")}
+            </span>
+          )}
+          <Button kind="primary" disabled={kb.busy || kb.needsProject} onClick={submit} testId="v2-agent-inline-kb-create">
             {kb.busy ? t("v2.agents.wizard.inlineKb.creating") : t("v2.agents.wizard.inlineKb.create")}
           </Button>
         </div>

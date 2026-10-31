@@ -75,6 +75,8 @@ export interface InlineKbApi {
   create: (name: string, files: File[]) => Promise<void>;
   retryUpload: () => Promise<void>;
   discard: () => void;
+  /** a new agent with no project picked yet: the KB would land in the wrong project */
+  needsProject: boolean;
 }
 
 /**
@@ -83,8 +85,12 @@ export interface InlineKbApi {
  * available (the same auto-sync the KB detail page performs). The KB id is mounted
  * into the form only after both calls succeeded, so a failure never leaves a
  * half-mounted spec.
+ *
+ * `projectId` is the project the KB is created, filled and synced in — the create
+ * wizard's picked one; null (an edit) is the console's, the agent's own. `ready`
+ * false (a new agent without a project yet) refuses `create`.
  */
-export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
+export function useInlineKb(set: SectionProps["set"], projectId: string | null = null, ready = true): InlineKbApi {
   const [inline, setInline] = useState<InlineKb | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +106,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
   const upload = useCallback(
     async (rec: InlineKb) => {
       try {
-        await v2KnowledgeApi.uploadFiles(rec.kb_id, rec.files);
+        await v2KnowledgeApi.uploadFiles(rec.kb_id, rec.files, projectId);
       } catch (err) {
         if (alive.current) setInline({ ...rec, uploadError: errorMessage(err) });
         return;
@@ -111,17 +117,18 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
         selectedKbs: prev.selectedKbs.includes(rec.kb_id) ? prev.selectedKbs : [...prev.selectedKbs, rec.kb_id],
       }));
     },
-    [set],
+    [set, projectId],
   );
 
   const create = useCallback(
     async (name: string, files: File[]) => {
+      if (!ready) return;
       setBusy(true);
       setError(null);
       try {
         let detail: KnowledgeBaseDetail;
         try {
-          detail = await v2KnowledgeApi.create({ name, description: "", source: { mode: "upload" } });
+          detail = await v2KnowledgeApi.create({ name, description: "", source: { mode: "upload" } }, projectId);
         } catch (err) {
           if (alive.current) setError(errorMessage(err));
           return;
@@ -134,7 +141,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
         if (alive.current) setBusy(false);
       }
     },
-    [upload],
+    [upload, ready, projectId],
   );
 
   const retryUpload = useCallback(async () => {
@@ -163,7 +170,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
     const tick = async () => {
       let detail: KnowledgeBaseDetail | null = null;
       try {
-        detail = await v2KnowledgeApi.get(followId);
+        detail = await v2KnowledgeApi.get(followId, projectId);
       } catch {
         /* transient read failure — keep the last state and retry */
       }
@@ -177,7 +184,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
         if (phase === "starting" && source && !synced.current.has(source.ds_id)) {
           synced.current.add(source.ds_id);
           try {
-            await v2KnowledgeApi.sync(followId, source.ds_id);
+            await v2KnowledgeApi.sync(followId, source.ds_id, projectId);
           } catch {
             /* the KB page's manual "sync now" remains */
           }
@@ -191,7 +198,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [followId]);
+  }, [followId, projectId]);
 
-  return { inline, busy, error, create, retryUpload, discard };
+  return { inline, busy, error, create, retryUpload, discard, needsProject: !ready };
 }

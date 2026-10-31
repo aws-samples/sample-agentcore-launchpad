@@ -22,6 +22,8 @@ import {
   slugFromDisplayName,
 } from "../../lib/agent-spec";
 import { formFromTemplate } from "../../v2/pages/agents/templateForms";
+import { projectSwitchFor, wizardDoneTarget } from "../../v2/pages/agents/wizardReturn";
+import { useProject } from "../../workspace/project-context";
 import { useProdLock } from "../../workspace/useProdLock";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad, useToast } from "../hooks";
@@ -84,12 +86,27 @@ export function V3Create() {
   const { current } = useWorkspace();
   const canDeploy = can("agents.deploy") && !prodLock.locked;
   const templates = useLoad(() => api.agentTemplates(), "v3-templates");
-  const kbs = useLoad(() => api.listAttachableKnowledgeBases(), `v3-create-kbs:${current?.id ?? ""}`);
   // the business project the agent is filed under: server-filtered to the ones the
   // caller may create in (active, not `default`, with a department)
   const project = useAgentProjectPick("agents.deploy");
+  const { current: consoleProject } = useProject();
+  // the KBs offered are the picked project's — what the agent may mount — and each
+  // answer carries the project it was read in, so a switch never prunes on stale data
+  const kbScope = project.projectId || null;
+  const kbs = useLoad(
+    () => api.listAttachableKnowledgeBases(null, kbScope).then((d) => ({ ...d, scope: kbScope })),
+    `v3-create-kbs:${current?.id ?? ""}:${kbScope ?? ""}`,
+  );
   const [pick, setPick] = useState<string>(BLANK);
   const [form, setForm] = useState<AgentForm>(() => emptyAgentForm("harness"));
+  // another project's KB is not the agent's to mount: keep the picks the list offers
+  useEffect(() => {
+    if (!kbs.data || kbs.data.scope !== kbScope) return;
+    const ids = new Set(kbs.data.items.map((kb) => kb.kb_id));
+    setForm((prev) =>
+      prev.selectedKbs.every((id) => ids.has(id)) ? prev : { ...prev, selectedKbs: prev.selectedKbs.filter((id) => ids.has(id)) },
+    );
+  }, [kbs.data, kbScope]);
   // the model the form was seeded with, and whether the member picked one since: the
   // configured default replaces only an untouched seed once it loads (as the full form)
   const modelSeed = useRef(form.modelId);
@@ -193,7 +210,8 @@ export function V3Create() {
     try {
       const res = await api.createAgent({ ...buildAgentSpec(form, catalogs), project_id: projectId });
       toast("ok", t("v2.agents.wizard.started", { name: res.agent.display_name || res.agent.name }));
-      navigate(`/v3/agents?id=${encodeURIComponent(res.agent.id)}`);
+      // filed under another project than the console's: land there (`?project=`)
+      navigate(wizardDoneTarget("v3", res.agent.id, projectSwitchFor(projectId, consoleProject?.id)) ?? "/v3/agents");
     } catch (err) {
       setError(err);
       setBusy(false);

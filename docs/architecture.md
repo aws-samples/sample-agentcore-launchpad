@@ -5355,10 +5355,16 @@ the project, **before** the permission check (the keys depend on the project):
 
 Old clients, curl and the workshop seed scripts send no header and land in the
 default project. `/api/auth/status` and `GET /api/me/access` feed the frontend: the
-V3 top bar shows a project switcher next to the workspace switcher only when the
-caller has more than one project there, and a read-only chip only when the workspace
-is bound to more than one; the command palette gains "switch project" entries in the
-same case.
+V3 and V2 top bars show a project switcher next to the workspace switcher only when
+the caller has more than one project there, and a read-only chip only when the
+workspace is bound to more than one (V2: `ProjectSelect` in `v2/V2Shell.tsx`, same
+grouping and `workspace/useProjectLabel.ts` labels); the V3 command palette gains
+"switch project" entries in the same case. The create flows (the V2/V3 wizard and V3's
+quick create) read the catalogs a new agent may mount — KBs, registry Skills, memory
+resources, and the wizard's inline KB — in the **picked** project (an explicit
+`X-Project` per request), prune picks another project owns when the pick changes,
+refuse an inline KB until a project is picked, and land on the new agent with
+`?project=<id>` when it was filed outside the console's current project.
 
 ### Caching: the access epoch
 

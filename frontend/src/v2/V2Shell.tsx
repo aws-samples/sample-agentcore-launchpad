@@ -14,7 +14,8 @@ import { setUiVersion } from "../lib/ui-version";
 import { useNavMode } from "../lib/nav-mode";
 import { effectiveHidden } from "../v3/nav";
 import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
-import { scopeKey, useProject } from "../workspace/project-context";
+import { groupByDepartment, scopeKey, showsProjectChip, splitByAccess, useProject } from "../workspace/project-context";
+import { useProjectLabel } from "../workspace/useProjectLabel";
 import { useWorkspace } from "../workspace/workspace-context";
 import { CommandPalette, PALETTE_SHORTCUT } from "./CommandPalette";
 import { GlossaryDialog } from "./GlossaryDialog";
@@ -27,7 +28,7 @@ import { TourHost } from "./onboarding/Tour";
 import { closePalette, isPaletteToggle, isSlashOpen, openPalette, togglePalette } from "./palette";
 import { ModuleDemoProvider } from "./pages/videos/ModuleDemo";
 import { TierTag } from "./pages/workspaces/tags";
-import { FilterSelect, V2ToastProvider } from "./ui";
+import { FilterSelect, Tag, V2ToastProvider } from "./ui";
 
 const COLLAPSE_KEY = "launchpad_v2_nav_collapsed";
 
@@ -70,6 +71,49 @@ function WorkspaceSelect() {
         </span>
       )}
     </>
+  );
+}
+
+/**
+ * Right of the workspace switch, as in V3 (projects §2.7): the project every scoped
+ * page reads and writes in. Absent while there is no choice to make; a workspace that
+ * binds several projects the caller cannot switch between shows the current one.
+ */
+function ProjectSelect() {
+  const { t } = useTranslation();
+  const { projects, current, switchable, boundProjects, select } = useProject();
+  const label = useProjectLabel();
+  if (!current) return null;
+  if (!switchable) {
+    if (!showsProjectChip(switchable, boundProjects, current)) return null;
+    return (
+      <span title={t("v3.project.label")} data-testid="v2-project-chip">
+        <Tag tone="outline">{`${t("v3.project.label")} · ${label(current)}`}</Tag>
+      </span>
+    );
+  }
+  const { member, adminAccess } = splitByAccess(projects);
+  // grouped by department once any project has one, members' projects first inside
+  // each group — the order V3's switcher uses
+  const departments = groupByDepartment([...member, ...adminAccess]);
+  const options = departments.some((g) => g.id !== null)
+    ? departments.flatMap((g) =>
+        g.projects.map((p) => ({ value: p.id, label: label(p), group: g.label ?? t("v3.project.noDepartment") })))
+    : [
+        ...member.map((p) => ({
+          value: p.id, label: label(p), group: adminAccess.length ? t("v3.project.memberGroup") : undefined,
+        })),
+        ...adminAccess.map((p) => ({ value: p.id, label: label(p), group: t("v3.project.adminGroup") })),
+      ];
+  return (
+    <FilterSelect
+      label={t("v3.project.label")}
+      title={t("v3.project.label")}
+      value={current.id}
+      options={options}
+      onChange={select}
+      testId="v2-project-select"
+    />
   );
 }
 
@@ -167,6 +211,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                 <kbd aria-hidden="true">{PALETTE_SHORTCUT}</kbd>
               </button>
               <WorkspaceSelect />
+              <ProjectSelect />
               <V2Lang />
               <button
                 type="button"
