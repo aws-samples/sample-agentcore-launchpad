@@ -6736,6 +6736,7 @@
           "create": "Create and mount",
           "creating": "Creating knowledge base…",
           "createFailed": "Could not create the knowledge base: {{msg}}",
+          "needsProject": "Pick the agent's project first: the new knowledge base is created in it.",
           "uploadFailed": "The knowledge base {{name}} was created but its files could not be uploaded: {{msg}}",
           "retryUpload": "Retry upload",
           "discard": "Remove from this agent",

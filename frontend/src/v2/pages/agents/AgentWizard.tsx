@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
+import { useProject } from "../../../workspace/project-context";
 import { useProdLock } from "../../../workspace/useProdLock";
 import {
   A2A_MODEL_SOURCE,
@@ -46,7 +47,7 @@ import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../..
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
 import "./agents.css";
-import { wizardBackTarget, wizardDoneTarget } from "./wizardReturn";
+import { projectSwitchFor, pruneToCatalogs, wizardBackTarget, wizardDoneTarget } from "./wizardReturn";
 import { KnowledgeField } from "./InlineKb";
 import { inlineKbBlock, useInlineKb } from "./useInlineKb";
 import {
@@ -311,7 +312,17 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const set: SectionProps["set"] = (patch) =>
     setForm((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
   const method = form.method;
-  const kb = useInlineKb(set);
+  // a NEW agent is filed under a business project the caller may create in, named
+  // explicitly (body + X-Project) so a `default` global project never reaches the
+  // create call; a re-publish keeps the agent's own project and loads nothing
+  const project = useAgentProjectPick("agents.deploy", !edit);
+  const projectId = project.projectId;
+  const { current: consoleProject } = useProject();
+  // the project the catalogs and the inline KB are read in: the picked one for a new
+  // agent (what it may mount is that project's), the console's — the agent's own — for
+  // an edit
+  const scope = edit ? null : projectId || null;
+  const kb = useInlineKb(set, scope, Boolean(edit) || Boolean(projectId));
   const [openGroups, setOpenGroups] = useState(() => initialGroups(initial.form, Boolean(edit)));
   const toggleGroup = (group: StrandsGroupKey) =>
     setOpenGroups((prev) => {
@@ -323,9 +334,32 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const quick = canQuick && method === "harness" && !fullForm;
 
   // Catalogs: a failed read leaves that section empty and never blocks the form.
-  const attachables = useLoad(() => api.registryAttachables(), "attachables");
-  const kbs = useLoad(() => api.listAttachableKnowledgeBases(), "kbs");
-  const memories = useLoad(() => api.memoryResources(), "memories");
+  // each answer carries the project it was read in: on the render a switch happens the
+  // loads still hold the previous project's lists
+  const attachables = useLoad(
+    () => api.registryAttachables(scope).then((d) => ({ ...d, scope })), `attachables:${scope ?? ""}`,
+  );
+  const kbs = useLoad(
+    () => api.listAttachableKnowledgeBases(null, scope).then((d) => ({ ...d, scope })), `kbs:${scope ?? ""}`,
+  );
+  const memories = useLoad(() => api.memoryResources(scope), `memories:${scope ?? ""}`);
+  // a project switch on a new agent: once the new project's catalogs answer, drop the
+  // KBs and Skills it does not list (another project's — the agent could not mount
+  // them) and an inline KB made in the previous project
+  const prunedFor = useRef(scope);
+  useEffect(() => {
+    if (edit || prunedFor.current === scope) return;
+    if (kbs.data?.scope !== scope || attachables.data?.scope !== scope) return;
+    prunedFor.current = scope;
+    if (kb.inline) kb.discard();
+    setForm((prev) => ({ ...prev, ...pruneToCatalogs(prev, {
+      kbIds: (kbs.data?.items ?? []).map((k) => k.kb_id),
+      skillPaths: [
+        ...(attachables.data?.skills ?? []).map((sk) => sk.path),
+        ...customSkills.map((sk) => sk.path),
+      ],
+    }) }));
+  }, [edit, scope, kbs.data, attachables.data, kb, customSkills]);
   // Unlike the catalogs above, a failed Connection read DOES block a spec whose
   // Identity rows name a Connection: nothing could verify it (authToolIssues).
   const connectionsLoad = useLoad(() => api.listConnections(), "connections");
@@ -335,11 +369,6 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   // the workspace's COA context layer + the member's own authorization; a failed
   // read hides the section unless the stored spec already attaches a namespace
   const contextStatus = useLoad(() => api.getContextLayer(), "context-layer");
-  // a NEW agent is filed under a business project the caller may create in, named
-  // explicitly (body + X-Project) so a `default` global project never reaches the
-  // create call; a re-publish keeps the agent's own project and loads nothing
-  const project = useAgentProjectPick("agents.deploy", !edit);
-  const projectId = project.projectId;
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
@@ -509,9 +538,12 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       toast("success", t(edit ? "v2.agents.wizard.redeployStarted" : "v2.agents.wizard.started", { name: res.agent.display_name || res.agent.name }));
       // in V3 the agent's V3 detail page, replacing the wizard so "back" from
       // there returns to the page that started it (§4)
-      const done = wizardDoneTarget(uiVersion, res.agent.id);
+      // filed under another project than the console's: land there, or the detail
+      // page reads the new agent in the current project and finds nothing
+      const switchTo = edit ? null : projectSwitchFor(projectId, consoleProject?.id);
+      const done = wizardDoneTarget(uiVersion, res.agent.id, switchTo);
       if (done) navigate(done, { replace: true });
-      else setParams({ view: "detail", id: res.agent.id });
+      else setParams({ view: "detail", id: res.agent.id, ...(switchTo ? { project: switchTo } : {}) });
     } catch (e) {
       if (!alive.current) return;
       setError({ text: errorMessage(e), rows: e instanceof ApiError ? apiErrorRows(e.detail) : [] });

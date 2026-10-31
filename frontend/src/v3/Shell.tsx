@@ -40,7 +40,8 @@ import { setUiVersion } from "../lib/ui-version";
 import { GLOSSARY_TERMS } from "../v2/Glossary";
 import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
-import { groupByDepartment, projectRole, scopeKey, showsProjectChip, splitByAccess, useProject } from "../workspace/project-context";
+import { groupByDepartment, scopeKey, showsProjectChip, splitByAccess, useProject } from "../workspace/project-context";
+import { useProjectLabel } from "../workspace/useProjectLabel";
 import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
 import { StewardEmptyState } from "../workspace/StewardEmptyState";
 import { showsStewardEmptyState } from "../workspace/steward-paths";
@@ -135,19 +136,6 @@ function WorkspaceSwitch() {
         ))}
       </Select>
     </label>
-  );
-}
-
-/** "name · role" of a project option; an administrator outside it reads "admin access". */
-function useProjectLabel() {
-  const { t } = useTranslation();
-  return useCallback(
-    (project: AccessProject) => {
-      const role = projectRole(project);
-      const roleName = role ? t(`v3.project.roles.${role}`, { defaultValue: role }) : t("v3.project.adminAccess");
-      return `${project.name} · ${roleName}`;
-    },
-    [t],
   );
 }
 

@@ -1367,10 +1367,10 @@ async function request<T>(path: string, init?: RequestInitJson): Promise<T> {
 
 /** multipart POST — the browser sets the boundary Content-Type itself. */
 async function requestForm<T>(
-  path: string, form: FormData, workspaceId?: string | null,
+  path: string, form: FormData, workspaceId?: string | null, projectId?: string | null,
 ): Promise<T> {
   const res = await fetch(path, {
-    method: "POST", body: form, headers: pinnedWorkspace(workspaceId),
+    method: "POST", body: form, headers: { ...pinnedWorkspace(workspaceId), ...pinnedProject(projectId) },
   });
   return parseResponse<T>(path, res);
 }
@@ -6270,10 +6270,13 @@ export const api = {
   /** The managed KB catalog of ONE workspace (`GET /api/knowledge-bases`), typed and
    * pinned like the preset calls: a failure is an `ApiError` (401 raises the global
    * unauthorized event), never an empty list. */
-  registryAttachables: () => request<RegistryAttachables>("/api/registry/attachables"),
-  listAttachableKnowledgeBases: (workspaceId?: string | null) =>
+  /** `projectId`: read in that project rather than the console's (the create wizard's
+   *  picked project — a project's own Skills and KBs are what its agents may mount). */
+  registryAttachables: (projectId?: string | null) =>
+    request<RegistryAttachables>("/api/registry/attachables", { headers: pinnedProject(projectId) }),
+  listAttachableKnowledgeBases: (workspaceId?: string | null, projectId?: string | null) =>
     request<{ items: AttachableKnowledgeBase[] }>("/api/knowledge-bases", {
-      headers: pinnedWorkspace(workspaceId),
+      headers: { ...pinnedWorkspace(workspaceId), ...pinnedProject(projectId) },
     }),
   createKnowledgeBase: (
     input: { name: string; description: string; source: KBSourceBody }, workspaceId: string,
@@ -7081,7 +7084,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  memoryResources: () => request<MemoryResourceList>("/api/memory/resources"),
+  memoryResources: (projectId?: string | null) =>
+    request<MemoryResourceList>("/api/memory/resources", { headers: pinnedProject(projectId) }),
   memoryResourceCreate: (input: MemoryResourceCreateInput) =>
     request<MemoryResourceDetail>("/api/memory/resources", {
       method: "POST",
@@ -7868,12 +7872,19 @@ function kbPath(id: string, rest = ""): string {
 export const v2KnowledgeApi = {
   list: () =>
     request<{ items: import("./knowledgeBases").KnowledgeBaseSummary[] }>("/api/knowledge-bases"),
-  get: (id: string) => request<import("./knowledgeBases").KnowledgeBaseDetail>(kbPath(id)),
+  /** `projectId` on get / create / uploadFiles / sync: work in that project rather than
+   *  the console's (the create wizard's inline KB, filed with the agent's project). */
+  get: (id: string, projectId?: string | null) =>
+    request<import("./knowledgeBases").KnowledgeBaseDetail>(kbPath(id), { headers: pinnedProject(projectId) }),
   /** 202 — the KB comes back while still CREATING; the backend finishes the data source. */
-  create: (body: { name: string; description: string; source: import("./knowledgeBases").KBSourceBody }) =>
+  create: (
+    body: { name: string; description: string; source: import("./knowledgeBases").KBSourceBody },
+    projectId?: string | null,
+  ) =>
     request<import("./knowledgeBases").KnowledgeBaseDetail>("/api/knowledge-bases", {
       method: "POST",
       body: JSON.stringify(body),
+      headers: pinnedProject(projectId),
     }),
   updateDescription: (id: string, description: string) =>
     request<Record<string, unknown>>(kbPath(id), {
@@ -7882,10 +7893,10 @@ export const v2KnowledgeApi = {
     }),
   remove: (id: string, force: boolean) =>
     request<Record<string, unknown>>(`${kbPath(id)}?force=${force}`, { method: "DELETE" }),
-  uploadFiles: (id: string, files: File[]) => {
+  uploadFiles: (id: string, files: File[], projectId?: string | null) => {
     const form = new FormData();
     for (const f of files) form.append("files", f);
-    return requestForm<{ keys: string[] }>(kbPath(id, "/files"), form);
+    return requestForm<{ keys: string[] }>(kbPath(id, "/files"), form, null, projectId);
   },
   /** Idempotent server-side for `upload` mode (repairs a KB left without its source). */
   addSource: (id: string, source: import("./knowledgeBases").KBSourceBody) =>
@@ -7897,9 +7908,10 @@ export const v2KnowledgeApi = {
     request<Record<string, unknown>>(kbPath(id, `/data-sources/${encodeURIComponent(dsId)}`), {
       method: "DELETE",
     }),
-  sync: (id: string, dsId: string) =>
+  sync: (id: string, dsId: string, projectId?: string | null) =>
     request<Record<string, unknown>>(kbPath(id, `/data-sources/${encodeURIComponent(dsId)}/sync`), {
       method: "POST",
+      headers: pinnedProject(projectId),
     }),
   /** One token page of `ListKnowledgeBaseDocuments` (page_size 1–100). */
   documents: (id: string, dsId: string, pageSize: number, token: string | null) => {

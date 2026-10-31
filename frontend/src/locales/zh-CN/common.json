@@ -6736,6 +6736,7 @@
           "create": "创建并挂载",
           "creating": "正在创建知识库…",
           "createFailed": "无法创建知识库：{{msg}}",
+          "needsProject": "请先选择所属项目：新知识库会建在这个项目里。",
           "uploadFailed": "知识库 {{name}} 已创建，但文件上传失败：{{msg}}",
           "retryUpload": "重试上传",
           "discard": "从此智能体中移除",
