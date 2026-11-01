@@ -3,8 +3,9 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../i18n";
-import type { ExternalMcpTarget, LambdaToolTarget } from "../../lib/api/mcpReviews";
-import { targetAttentionOf, V3Governance } from "./Governance";
+import type { ExternalMcpTarget, LambdaToolTarget, McpGate } from "../../lib/api/mcpReviews";
+import { V3Governance } from "./Governance";
+import { targetAttentionOf } from "./governance-attention";
 import { GatewayToolTargets } from "./tools/GatewayToolTargets";
 
 beforeAll(async () => {
@@ -15,16 +16,16 @@ beforeAll(async () => {
 const at = (search: string) =>
   renderToStaticMarkup(<MemoryRouter initialEntries={[`/v3/governance${search}`]}><V3Governance /></MemoryRouter>);
 
-const gate = (state: "none" | "reviewing" | "approved" | "rejected") =>
-  ({ state, open_review_id: null, approved_review_id: null });
+const gate = (state: McpGate["state"]): McpGate =>
+  ({ state, open_review_id: null, approved_review_id: null, approved_hash: null });
 
-const lambda = (name: string, status: LambdaToolTarget["status"], review: ReturnType<typeof gate>): LambdaToolTarget => ({
+const lambda = (name: string, status: LambdaToolTarget["status"], review: McpGate): LambdaToolTarget => ({
   id: name, kind: "lambda", gateway_id: "gw", target_id: null, target_name: name,
   lambda_arn: `arn:aws:lambda:us-west-2:111122223333:function:${name}`, description: "",
   tool_names: [], status, error: null, created_by: "u", created_at: null, review,
 });
 
-const external = (name: string, review: ReturnType<typeof gate> | null): ExternalMcpTarget => ({
+const external = (name: string, review: McpGate | null): ExternalMcpTarget => ({
   target_id: name, target_name: name, endpoint: "https://mcp.example.com", status: "READY",
   hosting: "external", tool_id: review ? `t-${name}` : null, adopted_elsewhere: false, review, health: null,
 });
