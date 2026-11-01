@@ -740,8 +740,11 @@ workspace Gateway (through Connections) that no hosted server owns are listed by
 (`external_mcp_targets` table) records what it lists today as the approved baseline, so
 agents already calling it are not cut off; the hourly `mcp.health` task then compares
 later lists with it. A drift opens a review, but the target is the customer's and is
-never withheld or re-pointed. The V3 page `/v3/tools/gateway` (rail: *Gateway tools*)
-lists both kinds, creates Lambda targets and adopts external ones. Routes:
+never withheld or re-pointed. The *Tool targets* tab of V3 Gateway governance
+(`/v3/governance?tab=targets`; the former `/v3/tools/gateway` page redirects there)
+lists both kinds, creates Lambda targets and adopts external ones; the gateways tab's
+*Needs attention* raises failed Lambda publishes and targets waiting for a schema
+review. Routes:
 [api.md](api.md#console-gateway-tool-targets-api).
 
 **stdio bridge (§15.5).** A stdio-only server ships as a code zip with
@@ -3533,9 +3536,9 @@ backend surface.
   sessions and traces, and native session and trace views — the waterfall with the
   span inspector — at V2's `?view=session|trace&id=`), `/v3/memory` (overview,
   short-term actor → session → events, long-term records and retrieval, resources;
-  a resource's editor stays hosted), `/v3/governance` (gateways with their targets,
-  Policy Engine mode and recent denials, and the tool catalog; the Cedar and
-  rate-limit editors stay hosted), `/v3/connections` (the member's as_user grants and
+  a resource's editor stays hosted), `/v3/governance` (*Gateway governance*: gateways
+  with their targets, Policy Engine mode and recent denials, the tool catalog, and the
+  tool targets at `?tab=targets`; the Cedar and rate-limit editors stay hosted), `/v3/connections` (the member's as_user grants and
   revoke), `/v3/costs` (spend by agent and by person, month to date, and alert rules
   at `?view=alerts`) and `/v3/issues` (the issue box, answer rules and reviewers, at
   V2's `?view=` tabs). Each mirrors its V2 page's calls and guards; `v3TwinOf` routes

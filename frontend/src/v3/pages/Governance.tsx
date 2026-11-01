@@ -1,6 +1,6 @@
 import "./governance.css";
 
-import { ArrowRight, Play, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { ArrowRight, Play, Plus, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -11,14 +11,17 @@ import {
   type GovernanceGatewaySummary,
   type GovernanceToolInfo,
 } from "../../lib/api";
+import { type ExternalMcpTarget, type LambdaToolTarget, listExternalTargets, listLambdaTargets } from "../../lib/api/mcpReviews";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { governanceError, governanceStatusLevel } from "../../lib/governance";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad } from "../hooks";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
+import { GatewayToolTargets } from "./tools/GatewayToolTargets";
 
-type Tab = "gateways" | "tools";
+type Tab = "gateways" | "tools" | "targets";
+const TABS: readonly Tab[] = ["gateways", "tools", "targets"];
 type EngineFilter = "all" | "attached" | "enforce" | "logOnly" | "none";
 
 const CODE_DEMO = "import math\nprint('sqrt(1764) =', math.isqrt(1764))";
@@ -40,7 +43,7 @@ function engineState(g: GovernanceGatewaySummary): Exclude<EngineFilter, "all" |
 const gatewayUrl = (id: string, section?: string) =>
   `/v2/governance?view=gateway&gateway=${encodeURIComponent(id)}${section ? `&section=${section}` : ""}`;
 
-interface Attention {
+export interface Attention {
   key: string;
   s: Signal;
   title: string;
@@ -49,9 +52,43 @@ interface Attention {
   act: string;
 }
 
-/** What on the gateway inventory needs someone, most urgent first. */
-function attentionOf(gateways: GovernanceGatewaySummary[], t: (k: string, o?: Record<string, unknown>) => string): Attention[] {
+const TARGETS_URL = "/v3/governance?tab=targets";
+
+/** The tool targets (Lambda and adopted external) whose schema waits for a reviewer,
+ *  and the Lambda targets whose publish failed. */
+export function targetAttentionOf(
+  lambdas: LambdaToolTarget[],
+  external: ExternalMcpTarget[],
+  t: (k: string, o?: Record<string, unknown>) => string,
+): Attention[] {
   const out: Attention[] = [];
+  const failed = lambdas.filter((x) => x.status === "failed");
+  if (failed.length) {
+    out.push({
+      key: "targets:failed", s: "act", title: t("v3.governance.att.targetsFailed", { count: failed.length }),
+      detail: failed.map((x) => x.target_name).join("  ·  "), to: TARGETS_URL, act: t("v3.governance.att.inspect"),
+    });
+  }
+  const pending = [
+    ...lambdas.filter((x) => x.review.state === "reviewing").map((x) => x.target_name),
+    ...external.filter((x) => x.review?.state === "reviewing").map((x) => x.target_name),
+  ];
+  if (pending.length) {
+    out.push({
+      key: "targets:review", s: "wait", title: t("v3.governance.att.targetsReview", { count: pending.length }),
+      detail: pending.join("  ·  "), to: TARGETS_URL, act: t("v3.governance.att.review"),
+    });
+  }
+  return out;
+}
+
+/** What on the gateway inventory needs someone, most urgent first. */
+function attentionOf(
+  gateways: GovernanceGatewaySummary[],
+  t: (k: string, o?: Record<string, unknown>) => string,
+  extra: Attention[] = [],
+): Attention[] {
+  const out: Attention[] = [...extra];
   for (const g of gateways) {
     const s = govSignal(g.status);
     if (s === "act" || s === "wait") {
@@ -132,11 +169,13 @@ function DecisionRow({ gateway }: { gateway: GovernanceGatewaySummary }) {
   );
 }
 
-function GatewaysTab({ data, loading, error }: {
+function GatewaysTab({ data, loading, error, targetAttention }: {
   data: { gateways: GovernanceGatewaySummary[]; account_id?: string | null; region?: string } | null;
   loading: boolean;
   /** The failure (an ApiError or its text); null ⇒ the load did not fail. */
   error: unknown;
+  /** The tool-target items of 需要处理 (`targetAttentionOf`). */
+  targetAttention: Attention[];
 }) {
   const { t } = useTranslation();
   const [managed, setManaged] = useState<"all" | "managed" | "unmanaged">("all");
@@ -153,7 +192,7 @@ function GatewaysTab({ data, loading, error }: {
     });
   }, [gateways, managed, engine, q]);
   const count = (fn: (g: GovernanceGatewaySummary) => boolean) => gateways.filter(fn).length;
-  const attention = useMemo(() => attentionOf(gateways, t), [gateways, t]);
+  const attention = useMemo(() => attentionOf(gateways, t, targetAttention), [gateways, t, targetAttention]);
   const withEngine = gateways.filter((g) => g.policy_engine && !g.policy_engine.missing);
   const notReady = count((g) => govSignal(g.status) !== "ok");
   const source = [data?.account_id, data?.region].filter(Boolean).join(" / ");
@@ -457,22 +496,42 @@ function ToolsTab() {
 }
 
 /**
- * Governance — who may call what through the MCP Gateways: the gateway inventory
- * (status, targets, Policy Engine mode, Registry publication) led by what needs
- * attention and the last day's denials, and the tool catalog with the built-in
- * tool demos. A gateway's own pages — policies (Cedar editor and test), rate
- * limits, decisions, audit — open hosted from V2 (`?view=gateway…`).
+ * Gateway governance — who may call what through the MCP Gateways: the gateway
+ * inventory (status, targets, Policy Engine mode, Registry publication) led by what
+ * needs attention and the last day's denials; the tool catalog with the built-in
+ * tool demos; and the tool targets (`?tab=targets`: Lambda targets and externally
+ * hosted MCP servers, with their schema reviews — formerly `/v3/tools/gateway`).
+ * A gateway's own pages — policies (Cedar editor and test), rate limits, decisions,
+ * audit — open hosted from V2 (`?view=gateway…`).
  */
 export function V3Governance() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const { current } = useWorkspace();
-  const tab: Tab = params.get("tab") === "tools" ? "tools" : "gateways";
+  const asked = params.get("tab") as Tab | null;
+  const tab: Tab = asked && TABS.includes(asked) ? asked : "gateways";
   const [force, setForce] = useState(0);
+  const [formRequest, setFormRequest] = useState(0);
   // the first load may come from the backend cache; refresh bypasses it
   const gateways = useLoad(
     () => api.listGovernanceGateways(force > 0),
     `v3-gov-gateways:${current?.id ?? ""}:${force}`,
+  );
+  // the targets 需要处理 counts — read on the gateways tab only, afresh on each return
+  // to it (a review decided on the targets tab clears its item). A member without
+  // the targets' read permission simply gets no item.
+  const targets = useLoad(
+    () => tab !== "gateways"
+      ? Promise.resolve(null)
+      : Promise.all([
+        listLambdaTargets().then((r) => r.targets).catch(() => []),
+        listExternalTargets().then((r) => r.targets).catch(() => []),
+      ]),
+    `v3-gov-targets:${current?.id ?? ""}:${tab}:${force}`,
+  );
+  const targetAttention = useMemo(
+    () => (targets.data ? targetAttentionOf(targets.data[0], targets.data[1], t) : []),
+    [targets.data, t],
   );
 
   return (
@@ -489,8 +548,12 @@ export function V3Governance() {
               options={[
                 { value: "gateways", label: t("v3.governance.tab.gateways") },
                 { value: "tools", label: t("v3.governance.tab.tools") },
+                { value: "targets", label: t("v3.governance.tab.targets") },
               ]}
             />
+            {tab === "targets" && (
+              <Btn kind="primary" onClick={() => setFormRequest((n) => n + 1)}><Plus size={14} /> {t("lambdaTool.page.new")}</Btn>
+            )}
             {tab === "gateways" && (
               <Btn kind="ghost" title={t("v3.governance.refresh")} disabled={gateways.loading} onClick={() => setForce((n) => n + 1)}>
                 <RefreshCw size={14} />
@@ -499,7 +562,9 @@ export function V3Governance() {
           </>
         }
       />
-      {tab === "gateways" ? <GatewaysTab data={gateways.data} loading={gateways.loading} error={gateways.error ? gateways.failure : null} /> : <ToolsTab />}
+      {tab === "gateways" ? (
+        <GatewaysTab data={gateways.data} loading={gateways.loading} error={gateways.error ? gateways.failure : null} targetAttention={targetAttention} />
+      ) : tab === "tools" ? <ToolsTab /> : <GatewayToolTargets formRequest={formRequest} />}
     </div>
   );
 }

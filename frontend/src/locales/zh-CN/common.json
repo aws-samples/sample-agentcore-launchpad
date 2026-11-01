@@ -154,7 +154,7 @@
     "observability": "可观测",
     "evaluation": "评估",
     "skillLab": "技能实验室",
-    "governance": "治理",
+    "governance": "网关治理",
     "payments": "支付",
     "settings": "设置",
     "memory": "记忆",
@@ -364,7 +364,7 @@
       "notCreated": "尚未创建",
       "creates": {
         "runtime": "部署首个 Agent 后点亮",
-        "policy": "在治理中挂载策略引擎后点亮",
+        "policy": "在网关治理中挂载策略引擎后点亮",
         "evaluation": "运行首次评估后点亮"
       },
       "activeCount": "运行中 · {{count}} 个 Agent",
@@ -1278,8 +1278,8 @@
   },
   "governance": {
     "kicker": "// 控制平面",
-    "title": "治理",
-    "navLabel": "治理视图",
+    "title": "网关治理",
+    "navLabel": "网关治理视图",
     "gatewayRequired": "请先选择一个 Gateway。",
     "views": {
       "gateways": "GATEWAY 列表",
@@ -6419,7 +6419,7 @@
         "activeCount": "{{count}} 个 Agent 运行中",
         "creates": {
           "runtime": "首次部署后点亮",
-          "policy": "在治理中挂载策略引擎",
+          "policy": "在网关治理中挂载策略引擎",
           "evaluation": "首次评估后点亮"
         }
       },
@@ -9221,7 +9221,7 @@
         "policy": "策略",
         "identity": "身份",
         "openPolicies": "查看 Gateway 策略",
-        "openGovernance": "打开治理"
+        "openGovernance": "打开网关治理"
       },
       "asUser": "以用户身份调用",
       "asUserHint": "开启：Runtime 收到你本人的登录 JWT。关闭：使用工作区 M2M 令牌。未手动切换时，若你通过工作区用户池登录则使用你的登录 JWT，否则使用 M2M 令牌。两种方式下记忆都按你隔离。",
@@ -9578,7 +9578,7 @@
       "registering": "注册中…",
       "registerTitle": "注册记录",
       "importGateway": "导入 Gateway",
-      "importGatewayHint": "在治理模块中导入 Gateway 的 MCP 工具",
+      "importGatewayHint": "在网关治理模块中导入 Gateway 的 MCP 工具",
       "a2aDemo": "A2A 路由演示",
       "search": "按名称、ID 或描述筛选",
       "semantic": "语义搜索",
@@ -11029,7 +11029,7 @@
         "knowledge": "知识库",
         "tools": "工具与沙箱",
         "studio": "Studio",
-        "governance": "治理",
+        "governance": "网关治理",
         "models_probe": "模型探测",
         "coding": "Agent IDE"
       },
@@ -12633,7 +12633,6 @@
       "gate": "放行门",
       "more": "功能模块",
       "create": "新建智能体",
-      "gatewayTools": "Gateway 工具",
       "projectSettings": "项目设置"
     },
     "cmdk": {
@@ -13681,14 +13680,16 @@
     },
     "governance": {
       "eyebrow": "治理",
-      "title": "治理",
+      "title": "网关治理",
       "sub": {
         "gateways": "谁能通过 MCP Gateway 调用什么：每个 Gateway 的状态、它的目标、负责判定的 Policy Engine，以及最近一天的拒绝记录。",
-        "tools": "智能体能用到的每个工具——Gateway 目标以及内置的 Code Interpreter 与 Browser——每个内置工具都可以直接试运行。"
+        "tools": "智能体能用到的每个工具——Gateway 目标以及内置的 Code Interpreter 与 Browser——每个内置工具都可以直接试运行。",
+        "targets": "工作区 Gateway 上的 Lambda 函数与外部托管的 MCP 服务器。目标的工具 schema 经审阅后，智能体才能调用这些工具。"
       },
       "tab": {
         "gateways": "Gateway",
-        "tools": "工具"
+        "tools": "工具",
+        "targets": "工具目标"
       },
       "refresh": "从 AWS 刷新",
       "kpi": {
@@ -13713,7 +13714,11 @@
         "targets_other": "{{name}}：{{count}} 个目标不健康",
         "inspect": "查看",
         "fix": "修复",
-        "review": "审阅"
+        "review": "审阅",
+        "targetsFailed_one": "{{count}} 个 Lambda 工具目标发布失败",
+        "targetsFailed_other": "{{count}} 个 Lambda 工具目标发布失败",
+        "targetsReview_one": "{{count}} 个工具目标等待 schema 审阅",
+        "targetsReview_other": "{{count}} 个工具目标等待 schema 审阅"
       },
       "dec": {
         "title": "策略判定",
@@ -14976,7 +14981,7 @@
       "toolDesc": "说明",
       "noTools": "服务器没有列出任何工具",
       "howToUse": "智能体以网关工具的方式挂载这些工具（{{target}}___*）。网关级的注册中心记录不会自动更新；需要在目录里列出它们时，请到治理页刷新。",
-      "openGovernance": "打开治理页",
+      "openGovernance": "打开网关治理页",
       "kind": "类型",
       "kindValue": "MCP 服务器"
     },
@@ -17173,9 +17178,6 @@
   },
   "lambdaTool": {
     "page": {
-      "eyebrow": "工具",
-      "title": "Gateway 工具目标",
-      "sub": "工作区 Gateway 上的 Lambda 函数与外部托管的 MCP 服务器。目标的工具 schema 经审阅后，智能体才能调用这些工具。",
       "new": "新建 Lambda 工具目标"
     },
     "status": {
@@ -17568,7 +17570,7 @@
     "waiver.open": "查看豁免",
     "gate.open": "打开放行门",
     "apikey.create": "去签发 API Key",
-    "cedar.open": "去治理页",
+    "cedar.open": "去网关治理页",
     "traces.open": "查看 Trace",
     "alerts.open": "去配置告警",
     "issues.open": "去处理 Issue",
