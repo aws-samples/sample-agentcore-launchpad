@@ -55,8 +55,14 @@ describe("hostedGroups", () => {
     expect(tos).not.toContain("/v3/models");
   });
 
-  it("lists the Gateway tools page for every member", () => {
-    expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).toContain("/v3/tools/gateway");
+  it("folds Gateway tools into Gateway governance, which every member sees", () => {
+    const tos = hostedGroups(false).flatMap((g) => g.items.map((i) => i.to));
+    expect(tos).toContain("/v3/governance");
+    expect(tos).not.toContain("/v3/tools/gateway");
+  });
+
+  it("carries the targets tab from a V2 governance URL", () => {
+    expect(v3TwinOf("/v2/governance", "?tab=targets")).toBe("/v3/governance?tab=targets");
   });
 
   it("hides administrator pages from members", () => {

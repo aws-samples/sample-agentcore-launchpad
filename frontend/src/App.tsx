@@ -134,10 +134,6 @@ const V3Admins = lazy(() => import("./v3/pages/admins/Admins").then((m) => ({ de
 const V3Departments = lazy(() =>
   import("./v3/pages/departments/Departments").then((m) => ({ default: m.V3Departments })),
 );
-// Gateway tool targets: Lambda tools and externally hosted MCP servers
-const V3GatewayTools = lazy(() =>
-  import("./v3/pages/tools/GatewayToolTargets").then((m) => ({ default: m.GatewayToolTargets })),
-);
 // Configure → Network profiles (projects §12.12)
 const V3NetworkProfiles = lazy(() =>
   import("./v3/pages/network/NetworkProfiles").then((m) => ({ default: m.V3NetworkProfiles })),
@@ -426,7 +422,8 @@ export default function App() {
                 <Route path="memory" element={<V3Memory />} />
                 <Route path="governance" element={<V3Governance />} />
                 <Route path="connections" element={<V3Connections />} />
-                <Route path="tools/gateway" element={<V3GatewayTools />} />
+                {/* the former Gateway tools page is the 工具目标 tab of Gateway governance */}
+                <Route path="tools/gateway" element={<Navigate to="/v3/governance?tab=targets" replace />} />
                 <Route path="costs" element={<V3Costs />} />
                 <Route path="*" element={<Navigate to="/v3" replace />} />
               </Route>

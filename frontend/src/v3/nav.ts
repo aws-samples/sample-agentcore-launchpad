@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, EyeOff, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, EyeOff, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Tags, UserCog, Waypoints } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import { onlineToTasksUrl } from "../v2/pages/tasks/urls";
@@ -78,9 +78,6 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
     // console single sign-on (sso §2.7): identity providers, administrator-only
     { to: "/v3/sso", labelKey: "v3.sso.nav", icon: KeySquare, admin: true },
   ],
-  // Gateway tool targets (Lambda tools, externally hosted MCP servers) sit with
-  // the agent's connections and governance
-  "/v2/my-connections": [{ to: "/v3/tools/gateway", labelKey: "v3.nav.gatewayTools", icon: Wrench }],
   // the workspace's VPC network profiles (projects §12.12), administrator-only
   // and their storage catalog (storage-mounts §10), administrator-only
   "/v2/workspaces": [

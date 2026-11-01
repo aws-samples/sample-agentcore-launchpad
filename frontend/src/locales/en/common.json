@@ -154,7 +154,7 @@
     "observability": "Observability",
     "evaluation": "Evaluation",
     "skillLab": "Skill Lab",
-    "governance": "Governance",
+    "governance": "Gateway governance",
     "payments": "Payments",
     "settings": "Settings",
     "memory": "Memory",
@@ -364,7 +364,7 @@
       "notCreated": "NONE YET",
       "creates": {
         "runtime": "DEPLOY YOUR FIRST AGENT",
-        "policy": "ATTACH AN ENGINE IN GOVERNANCE",
+        "policy": "ATTACH AN ENGINE IN GATEWAY GOVERNANCE",
         "evaluation": "RUN YOUR FIRST EVALUATION"
       },
       "activeCount": "ACTIVE · {{count}} agent(s)",
@@ -1278,8 +1278,8 @@
   },
   "governance": {
     "kicker": "// CONTROL PLANE",
-    "title": "Governance",
-    "navLabel": "Governance views",
+    "title": "Gateway governance",
+    "navLabel": "Gateway governance views",
     "gatewayRequired": "Select a Gateway to open this view.",
     "views": {
       "gateways": "GATEWAYS",
@@ -6419,7 +6419,7 @@
         "activeCount": "{{count}} active agent(s)",
         "creates": {
           "runtime": "Lights up after the first deploy",
-          "policy": "Attach an engine in Governance",
+          "policy": "Attach an engine in Gateway governance",
           "evaluation": "Lights up after the first evaluation"
         }
       },
@@ -9221,7 +9221,7 @@
         "policy": "Policy",
         "identity": "Identity",
         "openPolicies": "View gateway policies",
-        "openGovernance": "Open Governance"
+        "openGovernance": "Open Gateway governance"
       },
       "asUser": "Invoke as me",
       "asUserHint": "On: the Runtime receives your own sign-in JWT. Off: the workspace M2M token. Until you change it, your sign-in JWT is used when you are signed in through the workspace user pool, else the M2M token. Memory stays scoped to you either way.",
@@ -9578,7 +9578,7 @@
       "registering": "Registering…",
       "registerTitle": "Register record",
       "importGateway": "Import gateway",
-      "importGatewayHint": "Import a gateway's MCP tools from Governance",
+      "importGatewayHint": "Import a gateway's MCP tools from Gateway governance",
       "a2aDemo": "A2A routing demo",
       "search": "Filter by name, ID or description",
       "semantic": "Semantic search",
@@ -9719,11 +9719,13 @@
     "governance": {
       "tab": {
         "gateways": "Gateways",
-        "tools": "Tools"
+        "tools": "Tools",
+        "targets": "Tool targets"
       },
       "tabDesc": {
         "gateways": "MCP Gateways of the live AWS account: management, Registry publication, Policy Engine and Cedar policies, rate limits, decisions and audit",
-        "tools": "Tool catalog of the Launchpad Gateway, plus the built-in Code Interpreter and Browser"
+        "tools": "Tool catalog of the Launchpad Gateway, plus the built-in Code Interpreter and Browser",
+        "targets": "Lambda functions and externally hosted MCP servers on the workspace Gateway; agents can call a target's tools only after its schema is reviewed"
       },
       "kpi": {
         "gateways": "Gateways",
@@ -9975,7 +9977,17 @@
         "targets_other": "{{name}}: {{count}} targets not healthy",
         "inspect": "Inspect",
         "fix": "Fix",
-        "review": "Review"
+        "review": "Review",
+        "targetsFailed_one": "{{count}} Lambda tool target failed to publish",
+        "targetsFailed_other": "{{count}} Lambda tool targets failed to publish",
+        "targetsReview_one": "{{count}} tool target waits for a schema review",
+        "targetsReview_other": "{{count}} tool targets wait for a schema review"
+      },
+      "toolTargets": {
+        "colTarget": "Target",
+        "colTools": "Tools",
+        "colReview": "Review",
+        "colHealth": "Health"
       }
     },
     "assistant": {
@@ -11029,7 +11041,7 @@
         "knowledge": "Knowledge bases",
         "tools": "Tools and sandboxes",
         "studio": "Studio",
-        "governance": "Governance",
+        "governance": "Gateway governance",
         "models_probe": "Model probes",
         "coding": "Agent IDE"
       },
@@ -12633,7 +12645,6 @@
       "gate": "Release gate",
       "more": "Modules",
       "create": "New agent",
-      "gatewayTools": "Gateway tools",
       "projectSettings": "Project settings"
     },
     "cmdk": {
@@ -13681,14 +13692,16 @@
     },
     "governance": {
       "eyebrow": "Governance",
-      "title": "Governance",
+      "title": "Gateway governance",
       "sub": {
         "gateways": "Who may call what through the MCP Gateways: each gateway's state, its targets, the Policy Engine that decides, and the last day's denials.",
-        "tools": "Every tool an agent can reach — Gateway targets and the built-in Code Interpreter and Browser — with a live run of each built-in."
+        "tools": "Every tool an agent can reach — Gateway targets and the built-in Code Interpreter and Browser — with a live run of each built-in.",
+        "targets": "Lambda functions and externally hosted MCP servers on the workspace Gateway. Agents can call a target's tools only after its schema is reviewed."
       },
       "tab": {
         "gateways": "Gateways",
-        "tools": "Tools"
+        "tools": "Tools",
+        "targets": "Tool targets"
       },
       "refresh": "Refresh from AWS",
       "kpi": {
@@ -13713,7 +13726,11 @@
         "targets_other": "{{name}}: {{count}} targets not healthy",
         "inspect": "Inspect",
         "fix": "Fix",
-        "review": "Review"
+        "review": "Review",
+        "targetsFailed_one": "{{count}} Lambda tool target failed to publish",
+        "targetsFailed_other": "{{count}} Lambda tool targets failed to publish",
+        "targetsReview_one": "{{count}} tool target waits for a schema review",
+        "targetsReview_other": "{{count}} tool targets wait for a schema review"
       },
       "dec": {
         "title": "Policy decisions",
@@ -14976,7 +14993,7 @@
       "toolDesc": "Description",
       "noTools": "The server lists no tools",
       "howToUse": "Agents attach these tools as Gateway tools ({{target}}___*). The Gateway-level Registry record is not updated automatically; refresh it from Governance when the catalog should list them.",
-      "openGovernance": "Open Governance",
+      "openGovernance": "Open Gateway governance",
       "kind": "Type",
       "kindValue": "MCP server"
     },
@@ -17173,9 +17190,6 @@
   },
   "lambdaTool": {
     "page": {
-      "eyebrow": "Tools",
-      "title": "Gateway tool targets",
-      "sub": "Lambda functions and externally hosted MCP servers on the workspace Gateway. Agents can call a target's tools only after its schema is reviewed.",
       "new": "New Lambda tool target"
     },
     "status": {
@@ -17568,7 +17582,7 @@
     "waiver.open": "Open waivers",
     "gate.open": "Open the release gate",
     "apikey.create": "Issue an API key",
-    "cedar.open": "Open governance",
+    "cedar.open": "Open Gateway governance",
     "traces.open": "Open traces",
     "alerts.open": "Open alerts",
     "issues.open": "Open issues",

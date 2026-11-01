@@ -1,5 +1,4 @@
-import { Plus } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
@@ -18,7 +17,7 @@ import { sharedFromOf } from "../../../lib/api/sharedFrom";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { SharedFromTag } from "../../shares/SharedFromTag";
-import { Btn, Chip, Confirm, Empty, Notice, PageHead, Panel, type Signal, Skeleton } from "../../ui";
+import { Btn, Chip, Confirm, Empty, Notice, Panel, type Signal, Skeleton } from "../../ui";
 import { McpReviewSection } from "../agent/McpReviewSection";
 import { LambdaTargetForm } from "./LambdaTargetForm";
 
@@ -39,8 +38,11 @@ function ToolReview({ toolId, onChanged }: { toolId: string; onChanged: () => vo
  * The Gateway's tool targets besides hosted MCP servers (projects §15.12, §15.15):
  * console-created Lambda targets (with the form and each one's schema review) and
  * hand-made MCP-server targets, listed as externally hosted and adoptable under review.
+ * The 工具目标 tab of Gateway governance (`/v3/governance?tab=targets`); the page head
+ * there carries the "new" button, and each press bumps `formRequest` to bring the
+ * create form into view.
  */
-export function GatewayToolTargets() {
+export function GatewayToolTargets({ formRequest = 0 }: { formRequest?: number }) {
   const { t } = useTranslation();
   const toast = useToast();
   const failed = useFailure();
@@ -52,10 +54,11 @@ export function GatewayToolTargets() {
   const external = useLoad(() => listExternalTargets(), `v3-external-tools:${nonce}`);
   const reload = () => setNonce((n) => n + 1);
   const formRef = useRef<HTMLDivElement>(null);
-  const toForm = () => {
+  useEffect(() => {
+    if (formRequest === 0) return;
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     formRef.current?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
-  };
+  }, [formRequest]);
 
   const adopt = async (target: ExternalMcpTarget) => {
     setBusy(true);
@@ -88,13 +91,7 @@ export function GatewayToolTargets() {
   };
 
   return (
-    <div className="v3-reveal" style={{ display: "grid", gap: 16 }} data-testid="v3-gateway-tools">
-      <PageHead
-        eyebrow={t("lambdaTool.page.eyebrow")}
-        title={t("lambdaTool.page.title")}
-        sub={t("lambdaTool.page.sub")}
-        end={<Btn kind="primary" onClick={toForm}><Plus size={14} /> {t("lambdaTool.page.new")}</Btn>}
-      />
+    <div style={{ display: "grid", gap: 16 }} data-testid="v3-gateway-tools">
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-gateway-tools-error" />
       <Panel title={t("lambdaTool.list.title")}>
         {lambdas.error ? (
