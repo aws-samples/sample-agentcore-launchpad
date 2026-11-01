@@ -355,3 +355,21 @@ export function validateLambdaForm(arn: string, name: string, schema: string): L
   if ("error" in parsed) errors.schema = parsed.error === "json" ? "lambdaTool.form.badJson" : "lambdaTool.form.badShape";
   return errors;
 }
+
+/**
+ * The tool targets Gateway governance raises in 需要处理 (both consoles): Lambda
+ * targets whose publish failed, and targets — Lambda or adopted external — whose
+ * schema waits for a reviewer. Names only; each console owns the copy.
+ */
+export function targetsNeedingAttention(
+  lambdas: LambdaToolTarget[],
+  external: ExternalMcpTarget[],
+): { failed: string[]; review: string[] } {
+  return {
+    failed: lambdas.filter((x) => x.status === "failed").map((x) => x.target_name),
+    review: [
+      ...lambdas.filter((x) => x.review.state === "reviewing").map((x) => x.target_name),
+      ...external.filter((x) => x.review?.state === "reviewing").map((x) => x.target_name),
+    ],
+  };
+}

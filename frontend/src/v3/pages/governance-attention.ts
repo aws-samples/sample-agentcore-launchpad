@@ -1,4 +1,4 @@
-import type { ExternalMcpTarget, LambdaToolTarget } from "../../lib/api/mcpReviews";
+import { type ExternalMcpTarget, type LambdaToolTarget, targetsNeedingAttention } from "../../lib/api/mcpReviews";
 import type { Signal } from "../ui";
 
 /** One row of Gateway governance's 需要处理 panel. */
@@ -21,21 +21,17 @@ export function targetAttentionOf(
   t: (k: string, o?: Record<string, unknown>) => string,
 ): Attention[] {
   const out: Attention[] = [];
-  const failed = lambdas.filter((x) => x.status === "failed");
+  const { failed, review } = targetsNeedingAttention(lambdas, external);
   if (failed.length) {
     out.push({
       key: "targets:failed", s: "act", title: t("v3.governance.att.targetsFailed", { count: failed.length }),
-      detail: failed.map((x) => x.target_name).join("  ·  "), to: TARGETS_URL, act: t("v3.governance.att.inspect"),
+      detail: failed.join("  ·  "), to: TARGETS_URL, act: t("v3.governance.att.inspect"),
     });
   }
-  const pending = [
-    ...lambdas.filter((x) => x.review.state === "reviewing").map((x) => x.target_name),
-    ...external.filter((x) => x.review?.state === "reviewing").map((x) => x.target_name),
-  ];
-  if (pending.length) {
+  if (review.length) {
     out.push({
-      key: "targets:review", s: "wait", title: t("v3.governance.att.targetsReview", { count: pending.length }),
-      detail: pending.join("  ·  "), to: TARGETS_URL, act: t("v3.governance.att.review"),
+      key: "targets:review", s: "wait", title: t("v3.governance.att.targetsReview", { count: review.length }),
+      detail: review.join("  ·  "), to: TARGETS_URL, act: t("v3.governance.att.review"),
     });
   }
   return out;

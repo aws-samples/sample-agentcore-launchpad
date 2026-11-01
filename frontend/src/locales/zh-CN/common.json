@@ -9719,11 +9719,13 @@
     "governance": {
       "tab": {
         "gateways": "Gateway",
-        "tools": "工具"
+        "tools": "工具",
+        "targets": "工具目标"
       },
       "tabDesc": {
         "gateways": "当前 AWS 账户下的 MCP Gateway：纳管、Registry 发布、策略引擎与 Cedar 策略、限流、决策与审计",
-        "tools": "Launchpad Gateway 的工具目录，以及内置代码解释器与浏览器"
+        "tools": "Launchpad Gateway 的工具目录，以及内置代码解释器与浏览器",
+        "targets": "工作区 Gateway 上的 Lambda 函数与外部托管的 MCP 服务器；目标的工具 schema 经审阅后，智能体才能调用"
       },
       "kpi": {
         "gateways": "Gateway 总数",
@@ -9975,7 +9977,17 @@
         "targets_other": "{{name}}：{{count}} 个目标不健康",
         "inspect": "查看",
         "fix": "修复",
-        "review": "审阅"
+        "review": "审阅",
+        "targetsFailed_one": "{{count}} 个 Lambda 工具目标发布失败",
+        "targetsFailed_other": "{{count}} 个 Lambda 工具目标发布失败",
+        "targetsReview_one": "{{count}} 个工具目标等待 schema 审阅",
+        "targetsReview_other": "{{count}} 个工具目标等待 schema 审阅"
+      },
+      "toolTargets": {
+        "colTarget": "目标",
+        "colTools": "工具",
+        "colReview": "审阅",
+        "colHealth": "健康"
       }
     },
     "assistant": {

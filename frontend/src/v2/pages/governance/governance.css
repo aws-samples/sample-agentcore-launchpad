@@ -82,3 +82,8 @@
   .v2 .v2-governance-readout .ok { text-align: left; }
 }
 .v2 .v2-governance-note { font-size: 12.5px; margin: -8px 0 12px; }
+
+/* tool targets (?tab=targets): the review drawer and the create form */
+.v2 .v2-tool-review { display: grid; gap: 10px; }
+.v2 .v2-tool-review-decide { display: grid; gap: 8px; }
+.v2 .v2-tool-targets-intro { margin: 0 0 12px; font-size: 12.5px; color: var(--v2-ink-3); }

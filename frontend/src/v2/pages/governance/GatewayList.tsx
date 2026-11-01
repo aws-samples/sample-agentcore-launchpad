@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, type GovernanceGatewaySummary } from "../../../lib/api";
+import { listExternalTargets, listLambdaTargets, targetsNeedingAttention } from "../../../lib/api/mcpReviews";
 import { governanceError } from "../../../lib/governance";
 import { useLoad, usePaged } from "../../hooks";
 import {
@@ -20,6 +21,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { rankBySignal } from "../../signals";
 import { type GatewayAttentionKind, gatewayAttention } from "./attention";
 import { StatusTag } from "./widgets";
 
@@ -48,6 +50,14 @@ export function GatewayList() {
   const { data, loading, error, reload } = useLoad(
     () => api.listGovernanceGateways(force > 0).catch((err: unknown) => Promise.reject(new Error(governanceError(err)))),
     `gov-gateways:${force}`,
+  );
+  // the tool targets 需要处理 raises; a member without their read permission gets none
+  const targets = useLoad(
+    () => Promise.all([
+      listLambdaTargets().then((r) => r.targets).catch(() => []),
+      listExternalTargets().then((r) => r.targets).catch(() => []),
+    ]).then(([lambdas, external]) => targetsNeedingAttention(lambdas, external)),
+    `gov-targets:${force}`,
   );
   const [managed, setManaged] = useState("");
   const [engine, setEngine] = useState<EngineFilter>("");
@@ -158,7 +168,32 @@ export function GatewayList() {
 
   const source = [data?.account_id, data?.region].filter(Boolean).join(" / ");
 
-  const attention: AttentionItem[] = gatewayAttention(gateways).map((entry) => {
+  const toTargets = () => setParams({ tab: "targets" });
+  const targetItems: AttentionItem[] = [];
+  if (targets.data?.failed.length) {
+    targetItems.push({
+      key: "targets:failed",
+      signal: "act",
+      title: t("v2.governance.attention.targetsFailed", { count: targets.data.failed.length }),
+      hint: targets.data.failed.join("  ·  "),
+      onOpen: toTargets,
+      openLabel: t("v2.governance.attention.inspect"),
+      testId: "v2-governance-att-targetsFailed",
+    });
+  }
+  if (targets.data?.review.length) {
+    targetItems.push({
+      key: "targets:review",
+      signal: "wait",
+      title: t("v2.governance.attention.targetsReview", { count: targets.data.review.length }),
+      hint: targets.data.review.join("  ·  "),
+      onOpen: toTargets,
+      openLabel: t("v2.governance.attention.review"),
+      testId: "v2-governance-att-targetsReview",
+    });
+  }
+
+  const gatewayItems: AttentionItem[] = gatewayAttention(gateways).map((entry) => {
     const v = entry.values;
     const hint =
       entry.kind === "notReady"
@@ -183,6 +218,7 @@ export function GatewayList() {
       testId: `v2-governance-att-${entry.kind}-${entry.gatewayId}`,
     };
   });
+  const attention = rankBySignal([...targetItems, ...gatewayItems]);
 
   return (
     <>

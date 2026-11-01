@@ -24,6 +24,17 @@ export function fmtTime(value: string | null | undefined): string {
   )}:${pad(d.getSeconds())}`;
 }
 
+/** How long ago, compact ("45s", "12m", "3h", "2d"); "—" for a missing value. */
+export function fmtAgo(value: string | null | undefined, now = Date.now()): string {
+  const at = parseTimestamp(value);
+  if (!at) return "—";
+  const s = Math.max(0, Math.round((now - at.getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
 /** Who created a resource — the username recorded at creation; "—" when unknown
  *  (legacy rows, system-created and out-of-console resources). */
 export function creatorLabel(

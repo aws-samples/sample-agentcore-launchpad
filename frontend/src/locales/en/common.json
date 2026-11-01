@@ -9719,11 +9719,13 @@
     "governance": {
       "tab": {
         "gateways": "Gateways",
-        "tools": "Tools"
+        "tools": "Tools",
+        "targets": "Tool targets"
       },
       "tabDesc": {
         "gateways": "MCP Gateways of the live AWS account: management, Registry publication, Policy Engine and Cedar policies, rate limits, decisions and audit",
-        "tools": "Tool catalog of the Launchpad Gateway, plus the built-in Code Interpreter and Browser"
+        "tools": "Tool catalog of the Launchpad Gateway, plus the built-in Code Interpreter and Browser",
+        "targets": "Lambda functions and externally hosted MCP servers on the workspace Gateway; agents can call a target's tools only after its schema is reviewed"
       },
       "kpi": {
         "gateways": "Gateways",
@@ -9975,7 +9977,17 @@
         "targets_other": "{{name}}: {{count}} targets not healthy",
         "inspect": "Inspect",
         "fix": "Fix",
-        "review": "Review"
+        "review": "Review",
+        "targetsFailed_one": "{{count}} Lambda tool target failed to publish",
+        "targetsFailed_other": "{{count}} Lambda tool targets failed to publish",
+        "targetsReview_one": "{{count}} tool target waits for a schema review",
+        "targetsReview_other": "{{count}} tool targets wait for a schema review"
+      },
+      "toolTargets": {
+        "colTarget": "Target",
+        "colTools": "Tools",
+        "colReview": "Review",
+        "colHealth": "Health"
       }
     },
     "assistant": {

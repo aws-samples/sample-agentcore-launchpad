@@ -740,11 +740,12 @@ workspace Gateway (through Connections) that no hosted server owns are listed by
 (`external_mcp_targets` table) records what it lists today as the approved baseline, so
 agents already calling it are not cut off; the hourly `mcp.health` task then compares
 later lists with it. A drift opens a review, but the target is the customer's and is
-never withheld or re-pointed. The *Tool targets* tab of V3 Gateway governance
+never withheld or re-pointed. The *Tool targets* tab of Gateway governance — in V3
 (`/v3/governance?tab=targets`; the former `/v3/tools/gateway` page redirects there)
+and natively in V2 (`/v2/governance?tab=targets`, each target's review in a drawer) —
 lists both kinds, creates Lambda targets and adopts external ones; the gateways tab's
 *Needs attention* raises failed Lambda publishes and targets waiting for a schema
-review. Routes:
+review (`targetsNeedingAttention`, shared by both consoles). Routes:
 [api.md](api.md#console-gateway-tool-targets-api).
 
 **stdio bridge (§15.5).** A stdio-only server ships as a code zip with

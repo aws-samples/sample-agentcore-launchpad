@@ -2,6 +2,7 @@ import type { TFunction } from "i18next";
 import { useCallback, useEffect, useState } from "react";
 
 import { api, type GovernanceGatewayTarget, type GovernanceOperation } from "../../../lib/api";
+import type { McpGateState, McpReviewStatus } from "../../../lib/api/mcpReviews";
 import {
   GOVERNANCE_OPERATION_POLL_MS,
   governanceError,
@@ -83,3 +84,12 @@ export function useCopy(t: TFunction) {
     [t, toast],
   );
 }
+
+/** A tool review's (or a target's review gate's) state as a tag tone. */
+export const GATE_TONE: Record<McpGateState | McpReviewStatus, TagTone> = {
+  none: "gray",
+  reviewing: "orange",
+  approved: "green",
+  rejected: "red",
+  superseded: "gray",
+};
