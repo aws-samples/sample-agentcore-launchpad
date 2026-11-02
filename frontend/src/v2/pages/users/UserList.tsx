@@ -1,9 +1,11 @@
-import { RefreshCw } from "lucide-react";
-import { useMemo } from "react";
+import { RefreshCw, UserPlus } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
+import { useAuth } from "../../../auth/auth-context";
 import { api, type ConsoleUser, type UserStats } from "../../../lib/api";
+import { canCreateUsers } from "../../../lib/userCreate";
 import { fmtTime } from "../../format";
 import { useLoad } from "../../hooks";
 import {
@@ -21,6 +23,7 @@ import {
 } from "../../ui";
 import { useUserActions } from "./actions";
 import { isStatusFilter, PAGE_SIZE, USER_STATES } from "./common";
+import { CreateUserDialog } from "./CreateUser";
 import { RoleTag, StateTag, ValidityCell } from "./tags";
 
 function RegistrationTrend({ stats }: { stats: UserStats | null }) {
@@ -76,6 +79,9 @@ export function UserList() {
     stats.reload();
   };
   const actions = useUserActions(reload);
+  const { isAdmin, role } = useAuth();
+  const canCreate = canCreateUsers(isAdmin, role);
+  const [creating, setCreating] = useState(false);
 
   const setParam = (key: string, value: string | null) =>
     setParams(
@@ -189,7 +195,18 @@ export function UserList() {
 
   return (
     <>
-      <PageHeader title={t("nav.users")} desc={t("usersPage.meta", { days: s?.valid_days ?? 7 })} />
+      <PageHeader
+        title={t("nav.users")}
+        desc={t("usersPage.meta", { days: s?.valid_days ?? 7 })}
+        end={
+          canCreate && (
+            <Button kind="primary" onClick={() => setCreating(true)} testId="v2-users-create-open">
+              <UserPlus size={14} aria-hidden="true" />
+              {t("v3.users.create.open")}
+            </Button>
+          )
+        }
+      />
 
       <div className="v2-kpis" data-testid="v2-users-kpis">
         <Kpi label={t("v2.users.stat.pending")} value={s?.pending ?? "—"} sub={t("v2.users.stat.pendingSub")} />
@@ -255,6 +272,15 @@ export function UserList() {
       </Card>
 
       {actions.renderDialogs()}
+      {canCreate && (
+        <CreateUserDialog
+          open={creating}
+          onClose={() => setCreating(false)}
+          onCreated={reload}
+          validDays={s?.valid_days ?? 7}
+          reservedName={list.data?.builtin?.username ?? null}
+        />
+      )}
     </>
   );
 }

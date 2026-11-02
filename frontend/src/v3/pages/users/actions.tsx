@@ -6,6 +6,7 @@ import { api, type ConsoleRole, type ConsoleUser, errorMessage, type UserPatchBo
 import { useAuth } from "../../../auth/auth-context";
 import { adminsApi } from "../../../lib/api/projects";
 import { type ProjectUser, type UserMembershipPatch, usersApi } from "../../../lib/api/users";
+import { createAccount, createRolesFor } from "../../../lib/userCreate";
 import { clampDays, MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useFailure } from "../../failure";
@@ -14,7 +15,6 @@ import { Btn, Confirm, Dialog, Notice } from "../../ui";
 import {
   type ApproveForm,
   approveBody,
-  createBody,
   type CreateErrors,
   type CreateForm,
   directProjectRows,
@@ -53,7 +53,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
   const { workspaces } = useWorkspace();
   const { isAdmin } = useAuth();
   // only an administrator creates the platform roles (§11.4); a steward creates accounts
-  const createRoles: ConsoleRole[] = isAdmin ? ["member", "operator", "admin", "steward"] : ["member", "operator"];
+  const createRoles = createRolesFor(isAdmin);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ kind: ConfirmKind; user: ConsoleUser } | null>(null);
   const [extendTarget, setExtendTarget] = useState<ConsoleUser | null>(null);
@@ -195,12 +195,10 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
     setBusyId("create");
     setCreateError(null);
     try {
-      const body = createBody(creating);
-      // the base call unless memberships ride along: the same request as before projects
-      const created = body.projects ? await usersApi.create(body) : await api.createUser(body);
+      const { user: created, oneTime } = await createAccount(creating);
       setCreating(null);
       toast("ok", t("v3.users.create.created", { username: created.username }));
-      setReset(oneTimePassword(created, "created"));
+      setReset(oneTime);
       onChanged();
     } catch (err) {
       // the dialog stays open with what was typed, so a taken name is a quick fix
