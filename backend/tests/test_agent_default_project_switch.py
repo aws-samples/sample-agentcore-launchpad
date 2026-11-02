@@ -316,3 +316,32 @@ def test_env_alone_turns_it_on_for_every_path(monkeypatch):
         assert agent_project_settings.view(db)["source"] == "env"
     finally:
         db.close()
+
+
+def test_a_console_value_survives_a_runtime_cache_clear(gated):
+    """model_prices.refresh / a bootstrap call get_settings.cache_clear(): the rebuilt
+    Settings keeps the console value (core/config overlay), source stays console."""
+    admin = _admin_client(gated)
+    assert admin.put("/api/settings/agent-projects",
+                     json={"allow_default_project": True}).status_code == 200
+    get_settings.cache_clear()
+    assert agent_project_settings.allowed() is True
+    assert admin.get("/api/settings/agent-projects").json()["source"] == "console"
+    admin.put("/api/settings/agent-projects", json={"allow_default_project": None})
+    get_settings.cache_clear()
+    assert agent_project_settings.allowed() is False
+
+
+def test_the_overlay_does_not_leak_between_tests_part_one():
+    from app.core.config import set_console_override
+
+    set_console_override("agent_allow_default_project", True)
+    assert agent_project_settings.allowed() is True
+
+
+def test_the_overlay_does_not_leak_between_tests_part_two():
+    # conftest's clean_tables reset the overlay after part one
+    from app.core.config import console_overrides
+
+    assert console_overrides() == {}
+    assert agent_project_settings.allowed() is False

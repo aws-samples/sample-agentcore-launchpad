@@ -435,3 +435,20 @@ def test_deepseek_and_kimi_prices(model_id, priced):
     if model_id == "global.moonshotai.kimi-k3":
         assert match_price(model_id, defaults)["input"] == 3.00
         assert match_price("us.moonshotai.kimi-k3", defaults)["input"] == 3.30
+
+
+def test_a_console_override_survives_a_runtime_cache_clear(client, restore_settings):
+    """The price refresher and a bootstrap call get_settings.cache_clear() at runtime;
+    the rebuilt Settings must still carry the console value (core/config overlay)."""
+    from app.evaluation import agentcore_eval as ac
+
+    assert client.put("/api/models/settings/judge_model_id",
+                      json={"model_id": GLM}).status_code == 200
+    get_settings.cache_clear()  # what model_prices.refresh / workspace bootstrap do
+    assert get_settings().judge_model_id == GLM
+    assert ac.judge_default_model_id() == GLM
+    row = _role(client.get("/api/models/settings").json(), "judge_model_id")
+    assert row["source"] == "console" and row["value"] == GLM
+    client.delete("/api/models/settings/judge_model_id")
+    get_settings.cache_clear()
+    assert get_settings().judge_model_id == "global.openai.gpt-6-sol"

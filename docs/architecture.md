@@ -5338,8 +5338,11 @@ One administrator switch loosens the rule: `agent_allow_default_project` (env
 through `GET`/`PUT /api/settings/agent-projects` (hub-global, `ADMIN`, `ADMIN_DATA` in the
 steward split, so a steward neither reads nor flips it). The override is one
 `platform_settings` row, precedence console > env > `launchpad.yaml` > default like the
-model settings; it is applied onto the cached `Settings` at startup and on every write, so
-every reader is an attribute read with no query. `PUT {"allow_default_project": null}` clears
+model settings. Both kinds of console override live in one process-wide overlay in
+`core/config.py`, loaded from the ledger at startup and updated on every write. Every
+`Settings` object `get_settings()` builds carries the overlay, so a runtime
+`get_settings.cache_clear()` (the price refresher, a bootstrap writing `launchpad.yaml`)
+never drops a console value, and every reader is an attribute read with no query. `PUT {"allow_default_project": null}` clears
 the override, and every flip is journaled (`platform.agent_default_project`). With the
 switch on:
 

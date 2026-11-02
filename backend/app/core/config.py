@@ -8,6 +8,7 @@ runnable locally.
 
 import ipaddress
 import shutil
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -585,6 +586,65 @@ def resolve_container_cli(value: str = "auto") -> str:
     return shutil.which("docker") or shutil.which("finch") or "docker"
 
 
+# ── console overrides ─────────────────────────────────────────────────────────
+# Fields an administrator overrode on the console (`platform_settings` rows: the model
+# roles of services/model_settings, the agent-project switch of
+# services/agent_project_settings). Precedence is console > env > launchpad.yaml >
+# default, so every Settings object `get_settings` builds gets this overlay applied —
+# a runtime `get_settings.cache_clear()` (the price refresher, a bootstrap writing
+# launchpad.yaml) rebuilds from env / yaml and must not drop a console value. Loaded
+# from the ledger at startup and updated by each console write; reading it is a dict
+# copy under the lock, never a query.
+_CONSOLE_OVERLAY: dict[str, Any] = {}
+_OVERLAY_LOCK = threading.Lock()
+
+
+def console_overrides() -> dict[str, Any]:
+    """A copy of the console overlay (field → value)."""
+    with _OVERLAY_LOCK:
+        return dict(_CONSOLE_OVERLAY)
+
+
+def set_console_override(field: str, value: Any) -> None:
+    """Record a console value and apply it to the cached Settings now."""
+    if field not in Settings.model_fields:
+        raise KeyError(field)
+    with _OVERLAY_LOCK:
+        _CONSOLE_OVERLAY[field] = value
+    setattr(get_settings(), field, value)
+
+
+def clear_console_override(field: str) -> None:
+    """Drop a console value; the cached Settings goes back to env / yaml / default."""
+    with _OVERLAY_LOCK:
+        _CONSOLE_OVERLAY.pop(field, None)
+    setattr(get_settings(), field, getattr(Settings(), field))
+
+
+def replace_console_overrides(fields: set[str] | frozenset[str], values: dict[str, Any]) -> None:
+    """Make ``values`` the overlay for ``fields`` (one owner's whole set, e.g. every
+    model role at startup): a field of ``fields`` absent from ``values`` is cleared."""
+    for field in values:
+        if field not in fields:
+            raise KeyError(field)
+    for field in fields:
+        if field in values:
+            set_console_override(field, values[field])
+        elif field in console_overrides():
+            clear_console_override(field)
+
+
+def reset_console_overrides_for_tests() -> bool:
+    """Empty the overlay (the suite's per-test isolation); True if it held anything."""
+    with _OVERLAY_LOCK:
+        held = bool(_CONSOLE_OVERLAY)
+        _CONSOLE_OVERLAY.clear()
+    return held
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    for field, value in console_overrides().items():
+        setattr(settings, field, value)
+    return settings

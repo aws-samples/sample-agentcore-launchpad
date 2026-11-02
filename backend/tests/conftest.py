@@ -170,6 +170,12 @@ def clean_tables():
     # cached by the previous test would otherwise look current.
     _seed_default_projects(engine)
     _seed_test_business_project(engine)
+    # the console overlay (core/config) is process-wide: a console write in one test
+    # must not leak into the next one's Settings
+    from app.core.config import get_settings, reset_console_overrides_for_tests
+
+    if reset_console_overrides_for_tests():
+        get_settings.cache_clear()
     from app.services import access, project_quotas
 
     access.reset_cache_for_tests()

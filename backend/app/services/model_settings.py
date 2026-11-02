@@ -6,7 +6,10 @@ page; the override is a ``platform_settings`` ledger row and is applied to the
 process's cached ``Settings`` object, so every consumer — which reads
 ``get_settings().<field>`` per call — follows it without a restart. Precedence:
 console > env > launchpad.yaml > built-in default. The backend runs as one uvicorn
-process; overrides are (re)applied at startup and on every write.
+process; overrides are loaded into the console overlay (``core/config``) at startup
+and updated on every write, and every Settings object ``get_settings`` builds carries
+the overlay — so a runtime ``get_settings.cache_clear()`` (the price refresher, a
+bootstrap) never drops a console value.
 """
 
 from __future__ import annotations
@@ -22,7 +25,15 @@ from typing import Any, Literal
 from botocore.config import Config
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings, load_yaml_config
+from app.core.config import (
+    Settings,
+    clear_console_override,
+    console_overrides,
+    get_settings,
+    load_yaml_config,
+    replace_console_overrides,
+    set_console_override,
+)
 from app.core.errors import AppError
 from app.models.platform_settings import PlatformSetting
 from app.services.workspace import WorkspaceContext
@@ -125,21 +136,18 @@ def _rows(db: Session) -> dict[str, PlatformSetting]:
     }
 
 
-def _baseline() -> Settings:
-    """Settings as env / launchpad.yaml / defaults resolve them — no console layer."""
-    return Settings()
-
-
 def apply_overrides(db: Session) -> None:
-    """Put the ledger's console overrides onto the process's cached Settings. Roles
-    without a row are left alone (env / launchpad.yaml / default already hold)."""
-    settings = get_settings()
-    for key, row in _rows(db).items():
-        setattr(settings, key, row.value)
+    """Load the ledger's console overrides into the console overlay (and so onto the
+    cached Settings). A role without a row has no overlay entry: env /
+    launchpad.yaml / the default hold for it."""
+    replace_console_overrides(
+        frozenset(r.field for r in ROLES),
+        {key: row.value for key, row in _rows(db).items()},
+    )
 
 
-def _source(r: Role, rows: dict[str, PlatformSetting]) -> str:
-    if r.field in rows:
+def _source(r: Role, overlay: dict[str, Any]) -> str:
+    if r.field in overlay:
         return "console"
     if r.env in {k.upper() for k in os.environ}:
         return "env"
@@ -162,7 +170,7 @@ def _env_value(r: Role) -> str | None:
 
 
 def role_rows(db: Session) -> list[dict[str, Any]]:
-    settings, rows = get_settings(), _rows(db)
+    settings, rows, overlay = get_settings(), _rows(db), console_overrides()
     out = []
     for r in ROLES:
         row = rows.get(r.field)
@@ -173,7 +181,7 @@ def role_rows(db: Session) -> list[dict[str, Any]]:
             "default": str(Settings.model_fields[r.field].default or ""),
             "env_value": _env_value(r),
             "console_value": row.value if row is not None else None,
-            "source": _source(r, rows),
+            "source": _source(r, overlay),
             "probe": r.probe,
             "families": list(r.families) if r.families else None,
             "allow_empty": r.allow_empty,
@@ -197,7 +205,7 @@ def set_override(db: Session, field: str, model_id: str, actor: str) -> dict[str
         db.add(row)
     row.value, row.updated_by, row.updated_at = value, actor[:64], datetime.now(UTC)
     db.commit()
-    apply_overrides(db)
+    set_console_override(r.field, value)
     return role_row(db, r.field)
 
 
@@ -208,7 +216,7 @@ def clear_override(db: Session, field: str) -> dict[str, Any]:
         db.delete(row)
         db.commit()
     # back to what env / launchpad.yaml / the default say for this one field
-    setattr(get_settings(), r.field, getattr(_baseline(), r.field))
+    clear_console_override(r.field)
     return role_row(db, r.field)
 
 

@@ -8,10 +8,12 @@ eligible too — without a department — for whoever holds the creation key the
 Hub-global and administrator-only. An administrator overrides it on the console: one
 ``platform_settings`` row (``agent_allow_default_project`` = ``true`` / ``false``);
 precedence is console > env > launchpad.yaml > default, like the model settings
-(``services/model_settings``). The row is applied onto the process's cached
-``Settings`` at startup and on every write, so ``allowed()`` — read by the rule, the
-eligible-project list and the ORM stamp guard (``core/project_scope``) — is an
-attribute read, never a query. The backend runs as one uvicorn process.
+(``services/model_settings``). The row is loaded into the console overlay
+(``core/config``) at startup and updated on every write; every Settings object
+``get_settings`` builds carries the overlay, so a runtime ``cache_clear()`` keeps the
+console value, and ``allowed()`` — read by the rule, the eligible-project list and the
+ORM stamp guard (``core/project_scope``) — is an attribute read, never a query. The
+backend runs as one uvicorn process.
 """
 
 from __future__ import annotations
@@ -22,7 +24,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings, load_yaml_config
+from app.core.config import (
+    Settings,
+    clear_console_override,
+    console_overrides,
+    get_settings,
+    load_yaml_config,
+    set_console_override,
+)
 from app.core.db import DEFAULT_WORKSPACE_ID
 from app.models.platform_settings import PlatformSetting
 from app.services.audit import record_audit_event
@@ -53,11 +62,13 @@ def _baseline() -> bool:
 
 
 def apply_override(db: Session) -> None:
-    """Put the console row (if any) onto the cached Settings; called at startup."""
+    """Load the console row (if any) into the console overlay; called at startup."""
     row = db.get(PlatformSetting, SETTING)
     value = _parse(row.value if row is not None else None)
     if value is not None:
-        setattr(get_settings(), FIELD, value)
+        set_console_override(FIELD, value)
+    elif FIELD in console_overrides():
+        clear_console_override(FIELD)
 
 
 def _env_value() -> str | None:
@@ -67,8 +78,8 @@ def _env_value() -> str | None:
     return None
 
 
-def _source(row: PlatformSetting | None) -> str:
-    if row is not None and _parse(row.value) is not None:
+def _source() -> str:
+    if FIELD in console_overrides():
         return "console"
     if _env_value() is not None:
         return "env"
@@ -84,7 +95,7 @@ def view(db: Session) -> dict[str, Any]:
     console = _parse(row.value) if row is not None else None
     return {
         "allow_default_project": allowed(),
-        "source": _source(row),
+        "source": _source(),
         "console_value": console,
         "env": ENV,
         "env_value": _env_value(),
@@ -124,5 +135,8 @@ def set_allowed(db: Session, value: bool | None, actor: Any) -> dict[str, Any]:
             db=db, actor_user_id=getattr(actor, "user_id", None), project_id=None,
         )
     db.commit()
-    setattr(get_settings(), FIELD, effective)
+    if value is None:
+        clear_console_override(FIELD)
+    else:
+        set_console_override(FIELD, value)
     return view(db)
