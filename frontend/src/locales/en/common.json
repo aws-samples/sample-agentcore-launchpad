@@ -1109,7 +1109,8 @@
       "govNote": "Governance loop: REJECT a specialist's record in the Registry and it vanishes from DISCOVER on the next question; re-APPROVE to restore it. (REJECTED is recoverable — never use DISABLE, DEPRECATED is terminal.)"
     },
     "deletedFilesKept": "Deleted “{{name}}”. Its skill files were kept: still mounted by {{agents}}.",
-    "deletedFilesFailed": "Deleted “{{name}}”, but its skill files at {{prefix}} could not be removed."
+    "deletedFilesFailed": "Deleted “{{name}}”, but its skill files at {{prefix}} could not be removed.",
+    "deletedFilesUnverified": "Deleted “{{name}}”. Its skill files were kept: it could not be confirmed that no Harness on this AWS account still mounts them ({{reason}})."
   },
   "knowledge": {
     "kicker": "// GROUNDING LAYER",

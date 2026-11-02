@@ -95,10 +95,53 @@ class FakeS3:
         self.deleted.append(Key)
 
 
+class FakeHarnesses:
+    """bedrock-agentcore-control's Harness reads, for the account-wide scan.
+    ``harnesses`` = {id: {name, status, version, skills, endpoints, versions}}."""
+
+    def __init__(self, harnesses=None, *, fail=None, vanish=()):
+        self.harnesses = harnesses or {}
+        self.fail = fail  # (operation, ClientError) raised by that operation
+        self.vanish = set(vanish)  # listed, then gone by the GetHarness
+        self.gets: list[tuple[str, str | None]] = []
+
+    def _maybe_fail(self, op):
+        if self.fail and self.fail[0] == op:
+            raise self.fail[1]
+
+    def list_harnesses(self, **kw):
+        self._maybe_fail("list")
+        return {"harnesses": [
+            {"harnessId": hid, "harnessName": h["name"], "status": h.get("status", "READY")}
+            for hid, h in self.harnesses.items()]}
+
+    def get_harness(self, harnessId, harnessVersion=None):  # noqa: N803
+        self._maybe_fail("get")
+        self.gets.append((harnessId, harnessVersion))
+        if harnessId in self.vanish:
+            raise client_error("ResourceNotFoundException")
+        h = self.harnesses[harnessId]
+        version = harnessVersion or h.get("version", "3")
+        skills = (h.get("versions") or {}).get(version, h.get("skills", []))
+        return {"harness": {"harnessId": harnessId, "harnessVersion": version, "skills": skills}}
+
+    def list_harness_endpoints(self, harnessId, **kw):  # noqa: N803
+        return {"endpoints": self.harnesses[harnessId].get("endpoints", [])}
+
+
+def _s3_skill(uri):
+    return {"s3": {"uri": uri}}
+
+
+PREFIX_URI = "s3://bkt/skills/probe-skill/"
+
+
 @pytest.fixture
 def cloud(monkeypatch):
-    def install(registry, s3=None):
+    def install(registry, s3=None, harnesses=None):
+        control = harnesses if harnesses is not None else FakeHarnesses()
         monkeypatch.setattr(console_mod, "registry_control_client", lambda _ws: registry)
+        monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: control)
         monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
         monkeypatch.setattr(aws_clients, "client", lambda *a, **k: s3)
         return registry, s3
@@ -268,3 +311,93 @@ def test_a_file_cleanup_failure_never_fails_the_delete(cloud):
     out = console_mod.console_delete(WS, RID)
     assert registry.deleted == [RID]
     assert out["files"]["status"] == "failed"
+
+
+# ── R7 across hubs: any Harness of the account keeps the files ───────────────
+
+
+def test_a_harness_of_another_hub_on_the_account_keeps_the_files(cloud):
+    """prod and its clone share the account, region and bucket: the other hub's
+    Harness is in no ledger here, but it reads skills/<name>/ at session start."""
+    s3 = FakeS3(["skills/probe-skill/SKILL.md"])
+    harnesses = FakeHarnesses({
+        "h-prod2": {"name": "prod2_hr_assistant", "skills": [_s3_skill(PREFIX_URI)]},
+        "h-other": {"name": "unrelated", "skills": [_s3_skill("s3://bkt/skills/other/")]},
+    })
+    cloud(FakeRegistry(_skill()), s3, harnesses)
+    out = console_mod.console_delete(WS, RID)
+    assert out["files"]["status"] == "kept_in_use"
+    assert out["files"]["harnesses"] == ["prod2_hr_assistant"]
+    assert s3.deleted == []
+
+
+def test_an_older_version_a_named_endpoint_serves_counts(cloud):
+    """A gated agent's `live` endpoint can serve an earlier version than the latest."""
+    s3 = FakeS3(["skills/probe-skill/SKILL.md"])
+    harnesses = FakeHarnesses({"h1": {
+        "name": "gated", "version": "5", "skills": [],
+        "versions": {"5": [], "2": [_s3_skill(PREFIX_URI + "SKILL.md")]},
+        "endpoints": [{"endpointName": "live", "liveVersion": "2", "targetVersion": "2"},
+                      {"endpointName": "DEFAULT", "liveVersion": "5"}],
+    }})
+    cloud(FakeRegistry(_skill()), s3, harnesses)
+    out = console_mod.console_delete(WS, RID)
+    assert out["files"]["status"] == "kept_in_use" and out["files"]["harnesses"] == ["gated"]
+    assert ("h1", "2") in harnesses.gets
+    assert s3.deleted == []
+
+
+@pytest.mark.parametrize("operation, code", [
+    ("list", "AccessDeniedException"), ("get", "ThrottlingException"),
+])
+def test_an_unanswered_harness_scan_keeps_the_files_and_says_why(cloud, operation, code):
+    s3 = FakeS3(["skills/probe-skill/SKILL.md"])
+    harnesses = FakeHarnesses({"h1": {"name": "x", "skills": []}},
+                              fail=(operation, client_error(code, "nope")))
+    registry, _ = cloud(FakeRegistry(_skill()), s3, harnesses)
+    out = console_mod.console_delete(WS, RID)
+    assert registry.deleted == [RID]  # the record goes; only its files stay
+    assert out["files"]["status"] == "kept_unverified"
+    assert code in out["files"]["reason"]
+    assert s3.deleted == []
+
+
+def test_no_harness_reference_deletes_the_files(cloud):
+    s3 = FakeS3(["skills/probe-skill/SKILL.md"])
+    harnesses = FakeHarnesses({
+        "h-other": {"name": "unrelated", "skills": [
+            _s3_skill("s3://bkt/skills/probe-skill-2/"), {"path": "/opt/skills/probe-skill"},
+            {"git": {"url": "https://github.com/x/y"}}]},
+        # one being deleted never runs again; one gone since the list never ran
+        "h-deleting": {"name": "dying", "status": "DELETING", "skills": [_s3_skill(PREFIX_URI)]},
+        "h-gone": {"name": "gone", "skills": [_s3_skill(PREFIX_URI)]},
+    }, vanish={"h-gone"})
+    cloud(FakeRegistry(_skill()), s3, harnesses)
+    out = console_mod.console_delete(WS, RID)
+    assert out["files"]["status"] == "deleted"
+    assert s3.deleted == ["skills/probe-skill/SKILL.md"]
+    assert "h-deleting" not in {hid for hid, _ in harnesses.gets}
+
+
+def test_the_harness_scan_runs_on_a_bounded_pool():
+    import threading
+    import time
+
+    from app.services.agentcore import harness as harness_api
+
+    lock, live, peak = threading.Lock(), [0], [0]
+
+    class Slow(FakeHarnesses):
+        def get_harness(self, harnessId, harnessVersion=None):  # noqa: N803
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.02)
+            with lock:
+                live[0] -= 1
+            return super().get_harness(harnessId, harnessVersion)
+
+    fake = Slow({f"h{i}": {"name": f"n{i}", "skills": []} for i in range(30)})
+    assert harness_api.harnesses_mounting_prefix(fake, PREFIX_URI, workers=4) == []
+    assert 1 < peak[0] <= 4
+    assert len(fake.gets) == 30

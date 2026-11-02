@@ -29,6 +29,21 @@ describe("deletedMessage (R7)", () => {
     expect(msg).toContain("kept");
   });
 
+  it("names a Harness of another hub on the account that kept them", () => {
+    const msg = deletedMessage(t, "probe", {
+      deleted: true, record_id: "r", files: { status: "kept_in_use", agents: [], harnesses: ["prod2_hr"] },
+    });
+    expect(msg).toContain("prod2_hr");
+  });
+
+  it("says honestly why the files stayed when the Harness scan failed", () => {
+    const msg = deletedMessage(t, "probe", {
+      deleted: true, record_id: "r", files: { status: "kept_unverified", reason: "ThrottlingException: slow down" },
+    });
+    expect(msg).toContain("ThrottlingException: slow down");
+    expect(msg).toContain("kept");
+  });
+
   it("says when the files could not be removed", () => {
     const msg = deletedMessage(t, "probe", {
       deleted: true, record_id: "r", files: { status: "failed", prefix: "s3://bkt/skills/probe/" },

@@ -7,6 +7,7 @@ kwargs. Payload shapes follow bedrock-agentcore-control 1.43.x.
 import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from typing import Any
 
@@ -189,6 +190,76 @@ def list_harness_endpoints(client: Any, harness_id: str) -> list[dict[str, Any]]
         if not token:
             return endpoints
         kwargs["nextToken"] = token
+
+
+def skill_s3_uris(harness: Mapping[str, Any]) -> list[str]:
+    """The ``{"s3": {"uri": …}}`` sources of a GetHarness ``skills`` list (path, git
+    and AWS-skills members are not S3 objects)."""
+    out: list[str] = []
+    for skill in harness.get("skills") or []:
+        uri = ((skill or {}).get("s3") or {}).get("uri") if isinstance(skill, Mapping) else None
+        if uri:
+            out.append(str(uri))
+    return out
+
+
+def _within(uri: str, prefix: str) -> bool:
+    """``uri`` names the prefix itself or something inside it (a legacy spec may
+    carry the ``…/SKILL.md`` file path)."""
+    base = prefix.rstrip("/") + "/"
+    return uri.rstrip("/") + "/" == base or uri.startswith(base)
+
+
+SKILL_SCAN_WORKERS = 8
+
+
+def _harness_mounts(client: Any, summary: Mapping[str, Any], prefix: str) -> bool:
+    """Whether one Harness reads ``prefix``: its latest config, or an older version a
+    named endpoint (a gated agent's ``live``, a canary) still serves. A Harness that
+    vanished since the list does not count; any other failure propagates."""
+    harness_id = str(summary.get("harnessId") or "")
+    try:
+        latest = get_harness(client, harness_id)
+        if any(_within(uri, prefix) for uri in skill_s3_uris(latest)):
+            return True
+        served = {
+            str(v) for e in list_harness_endpoints(client, harness_id)
+            for v in (e.get("liveVersion"), e.get("targetVersion")) if v
+        } - {str(latest.get("harnessVersion") or "")}
+        for version in sorted(served):
+            if any(_within(uri, prefix) for uri in skill_s3_uris(
+                get_harness(client, harness_id, version)
+            )):
+                return True
+    except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+        code = str(((getattr(exc, "response", None) or {}).get("Error") or {}).get("Code") or "")
+        if code == "ResourceNotFoundException" or type(exc).__name__ == "ResourceNotFoundException":
+            return False
+        raise
+    return False
+
+
+def harnesses_mounting_prefix(
+    client: Any, prefix: str, *, workers: int = SKILL_SCAN_WORKERS,
+) -> list[str]:
+    """Names of every Harness in the client's account and region whose skills read
+    the S3 ``prefix`` — not only this hub's: hubs sharing an account and region (prod
+    and its clone) share the artifacts bucket, and a Harness loads its Skills from S3
+    at session start. A Harness being deleted is skipped. GetHarness runs on a
+    bounded pool (``workers``); any failure (AccessDenied, throttling past the SDK's
+    retries) raises, so the caller keeps the files rather than guess."""
+    summaries = [
+        h for h in list_harnesses(client)
+        if h.get("harnessId") and h.get("status") != "DELETING"
+    ]
+    if not summaries:
+        return []
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(summaries)))) as pool:
+        mounts = list(pool.map(lambda h: _harness_mounts(client, h, prefix), summaries))
+    return sorted(
+        str(h.get("harnessName") or h.get("harnessId"))
+        for h, hit in zip(summaries, mounts, strict=True) if hit
+    )
 
 
 def delete_harness(client: Any, harness_id: str) -> None:

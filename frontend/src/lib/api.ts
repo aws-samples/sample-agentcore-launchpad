@@ -5062,12 +5062,17 @@ export interface RegistryCreateBody {
 export type RegistryAction = "submit" | "approve" | "publish" | "reject" | "disable" | "republish";
 
 /** What a Skill record's delete did with the `skills/<name>/` files the platform wrote:
- *  kept while a live agent mounts them (`agents`) or another same-name record shares
- *  the prefix; `not_platform` = the bundle is not one the platform wrote. */
+ *  kept while a live agent of this hub (`agents`) or any Harness of the account and
+ *  region (`harnesses` — another hub on the same account shares the bucket) mounts
+ *  them, or another same-name record shares the prefix; `kept_unverified` = the
+ *  Harness scan could not be completed (`reason`), so nothing was deleted;
+ *  `not_platform` = the bundle is not one the platform wrote. */
 export interface RegistrySkillFilesOutcome {
-  status: "deleted" | "kept_in_use" | "kept_shared" | "not_platform" | "failed";
+  status: "deleted" | "kept_in_use" | "kept_shared" | "kept_unverified" | "not_platform" | "failed";
   prefix?: string;
   agents?: string[];
+  harnesses?: string[];
+  reason?: string;
 }
 
 export interface RegistryDeleteResult {

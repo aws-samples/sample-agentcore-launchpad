@@ -1109,7 +1109,8 @@
       "govNote": "治理闭环：在注册中心 REJECT 某个专家的记录，下一个问题的发现阶段就不再出现它；重新 APPROVE 即恢复。（REJECTED 可恢复——不要用 DISABLE，DEPRECATED 是终态。）"
     },
     "deletedFilesKept": "已删除“{{name}}”。技能文件仍被 {{agents}} 挂载，已保留。",
-    "deletedFilesFailed": "已删除“{{name}}”，但未能删除 {{prefix}} 下的技能文件。"
+    "deletedFilesFailed": "已删除“{{name}}”，但未能删除 {{prefix}} 下的技能文件。",
+    "deletedFilesUnverified": "已删除“{{name}}”。未能确认本 AWS 账号中没有 Harness 仍在挂载其技能文件（{{reason}}），文件已保留。"
   },
   "knowledge": {
     "kicker": "// 知识接地层",

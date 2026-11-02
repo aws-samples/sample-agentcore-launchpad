@@ -163,7 +163,11 @@ export function deletedMessage(
 ): string {
   const files = result?.files;
   if (files?.status === "kept_in_use") {
-    return t("registry.deletedFilesKept", { name, agents: (files.agents ?? []).join(", ") });
+    const users = [...new Set([...(files.agents ?? []), ...(files.harnesses ?? [])])];
+    return t("registry.deletedFilesKept", { name, agents: users.join(", ") });
+  }
+  if (files?.status === "kept_unverified") {
+    return t("registry.deletedFilesUnverified", { name, reason: files.reason ?? "—" });
   }
   if (files?.status === "failed") return t("registry.deletedFilesFailed", { name, prefix: files.prefix ?? "" });
   return t("registry.deleted", { name });

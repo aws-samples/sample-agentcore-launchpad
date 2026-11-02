@@ -21,6 +21,7 @@ from app.core.errors import AppError, cleanup_error, is_not_found
 from app.core.project_scope import current_project
 from app.models.ledger import Agent
 from app.services import mcp_client, project_gateway, user_gateways
+from app.services.agentcore import harness as harness_api
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
@@ -455,9 +456,12 @@ def _drop_skill_files(
     workspace: WorkspaceContext, client: Any, registry_id: str, record: dict[str, Any],
 ) -> dict[str, Any]:
     """After a Skill record's delete, remove the ``skills/<name>/`` objects the
-    platform uploaded for it — unless something still reads them: a live agent that
-    mounts the bundle, or another record of the same name (a name re-registered after
-    its old record was deprecated shares the prefix). Best-effort: a failure is
+    platform uploaded for it — unless something still reads them: a live agent of
+    this hub that mounts the bundle, any Harness of the account and region that does
+    (another hub on the same account shares the bucket — `kept_in_use`), or another
+    record of the same name (a name re-registered after its old record was deprecated
+    shares the prefix — `kept_shared`). When the Harness question cannot be answered
+    the files stay (`kept_unverified`, with the reason). Best-effort: a failure is
     reported, never raised — the record is already gone."""
     prefix = _skill_files_prefix(workspace, record)
     if prefix is None:
@@ -468,6 +472,20 @@ def _drop_skill_files(
     if agents:
         return {**out, "status": "kept_in_use", "agents": agents}
     name = record.get("name")
+    # The ledger only knows this hub. Hubs sharing the account and region (prod and
+    # its clone) share the bucket too, so every Harness of the account is asked; an
+    # unanswered question keeps the files.
+    try:
+        harnesses = harness_api.harnesses_mounting_prefix(control_client(workspace), out["prefix"])
+    except Exception as exc:  # noqa: BLE001 — unverifiable ⇒ keep, never fail the delete
+        reason = cleanup_error(exc)
+        logger.warning("skill %s: Harness usage of %s not verified, files kept: %s",
+                       name, out["prefix"], reason)
+        return {**out, "status": "kept_unverified", "reason": reason}
+    if harnesses:
+        logger.info("skill %s: %s still mounted by Harness %s, files kept",
+                    name, out["prefix"], ", ".join(harnesses))
+        return {**out, "status": "kept_in_use", "agents": [], "harnesses": harnesses}
     try:
         siblings = [
             r for r in reg.find_records(client, registry_id, name, "AGENT_SKILLS")
