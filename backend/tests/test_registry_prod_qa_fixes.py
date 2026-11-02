@@ -144,6 +144,7 @@ def cloud(monkeypatch):
         monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: control)
         monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
         monkeypatch.setattr(aws_clients, "client", lambda *a, **k: s3)
+        monkeypatch.setattr(console_mod.harness_api, "SCAN_RETRY_DELAYS_S", (0.0, 0.0))
         return registry, s3
 
     return install
@@ -401,3 +402,27 @@ def test_the_harness_scan_runs_on_a_bounded_pool():
     assert harness_api.harnesses_mounting_prefix(fake, PREFIX_URI, workers=4) == []
     assert 1 < peak[0] <= 4
     assert len(fake.gets) == 30
+
+
+def test_a_first_version_harness_skips_the_endpoint_lookup_and_throttling_is_retried(
+    monkeypatch,
+):
+    from app.services.agentcore import harness as harness_api
+
+    monkeypatch.setattr(harness_api, "SCAN_RETRY_DELAYS_S", (0.0, 0.0))
+
+    class Flaky(FakeHarnesses):
+        throttled = 0
+
+        def get_harness(self, harnessId, harnessVersion=None):  # noqa: N803
+            if Flaky.throttled < 1:
+                Flaky.throttled += 1
+                raise client_error("ThrottlingException", "Rate exceeded")
+            return super().get_harness(harnessId, harnessVersion)
+
+        def list_harness_endpoints(self, harnessId, **kw):  # noqa: N803
+            raise AssertionError("a version-1 Harness has nothing older to serve")
+
+    fake = Flaky({"h1": {"name": "fresh", "version": "1", "skills": [_s3_skill(PREFIX_URI)]},
+                  "h2": {"name": "other", "version": "1", "skills": []}})
+    assert harness_api.harnesses_mounting_prefix(fake, PREFIX_URI, workers=1) == ["fresh"]

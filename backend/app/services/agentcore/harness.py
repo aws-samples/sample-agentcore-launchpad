@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from typing import Any
 
-from app.core.errors import AppError
+from app.core.errors import AppError, is_not_found
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED"}
 BUILTIN_TOOL_TYPES = {
@@ -210,31 +210,58 @@ def _within(uri: str, prefix: str) -> bool:
     return uri.rstrip("/") + "/" == base or uri.startswith(base)
 
 
-SKILL_SCAN_WORKERS = 8
+# The account-wide reference scan before a Skill bundle is deleted, in the style of
+# agent_artifacts._referenced_by_other_runtimes (bounded fan-out, fail closed, skip what
+# is being deleted). The Harness read APIs have low per-account rates
+# (ListHarnessEndpoints throttled a 19-Harness scan on dev, 2026-11-02), so the pool is
+# smaller and a throttled call backs off briefly beyond the SDK's own retries.
+SKILL_SCAN_WORKERS = 4
+SCAN_RETRY_DELAYS_S: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+_THROTTLED = frozenset({"ThrottlingException", "TooManyRequestsException"})
+
+
+def _error_code(exc: BaseException) -> str:
+    code = ((getattr(exc, "response", None) or {}).get("Error") or {}).get("Code")
+    return str(code or type(exc).__name__)
+
+
+def _patient(call: Callable[[], Any]) -> Any:
+    for delay in (*SCAN_RETRY_DELAYS_S, None):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+            if _error_code(exc) not in _THROTTLED or delay is None:
+                raise
+            time.sleep(delay)  # nosemgrep: arbitrary-sleep
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _harness_mounts(client: Any, summary: Mapping[str, Any], prefix: str) -> bool:
     """Whether one Harness reads ``prefix``: its latest config, or an older version a
-    named endpoint (a gated agent's ``live``, a canary) still serves. A Harness that
-    vanished since the list does not count; any other failure propagates."""
+    named endpoint (a gated agent's ``live``, a canary) still serves — looked up only
+    when an older version exists. A Harness that vanished since the list does not
+    count; any other failure propagates."""
     harness_id = str(summary.get("harnessId") or "")
     try:
-        latest = get_harness(client, harness_id)
+        latest = _patient(lambda: get_harness(client, harness_id))
+        if latest.get("status") == "DELETING":
+            return False  # being deleted since the listing: it never starts a session again
         if any(_within(uri, prefix) for uri in skill_s3_uris(latest)):
             return True
+        latest_version = str(latest.get("harnessVersion") or "")
+        if latest_version == "1":
+            return False  # nothing older for an endpoint to serve
         served = {
-            str(v) for e in list_harness_endpoints(client, harness_id)
+            str(v) for e in _patient(lambda: list_harness_endpoints(client, harness_id))
             for v in (e.get("liveVersion"), e.get("targetVersion")) if v
-        } - {str(latest.get("harnessVersion") or "")}
+        } - {latest_version}
         for version in sorted(served):
-            if any(_within(uri, prefix) for uri in skill_s3_uris(
-                get_harness(client, harness_id, version)
-            )):
+            older = _patient(lambda v=version: get_harness(client, harness_id, v))
+            if any(_within(uri, prefix) for uri in skill_s3_uris(older)):
                 return True
     except Exception as exc:  # noqa: BLE001 - narrowed immediately below
-        code = str(((getattr(exc, "response", None) or {}).get("Error") or {}).get("Code") or "")
-        if code == "ResourceNotFoundException" or type(exc).__name__ == "ResourceNotFoundException":
-            return False
+        if is_not_found(exc):
+            return False  # deleted since the listing
         raise
     return False
 
@@ -249,7 +276,7 @@ def harnesses_mounting_prefix(
     bounded pool (``workers``); any failure (AccessDenied, throttling past the SDK's
     retries) raises, so the caller keeps the files rather than guess."""
     summaries = [
-        h for h in list_harnesses(client)
+        h for h in _patient(lambda: list_harnesses(client))
         if h.get("harnessId") and h.get("status") != "DELETING"
     ]
     if not summaries:
