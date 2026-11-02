@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classicOnlineToTasksUrl,
+  evaluateAgentPath,
   newStrategy,
   newTaskParams,
   onlineToTasksUrl,
@@ -82,5 +83,16 @@ describe("retired 在线评估 URLs", () => {
     expect(classicOnlineToTasksUrl("?view=online&oe=cfg-1")).toBe("/v2/eval/tasks?view=detail&kind=online&id=cfg-1");
     const odd = classicOnlineToTasksUrl(`?view=online&oe=${encodeURIComponent("a&b=c")}`);
     expect(new URLSearchParams(odd.split("?")[1]).get("id")).toBe("a&b=c");
+  });
+});
+
+describe("evaluateAgentPath", () => {
+  it("opens the one-off create form with the agent preselected", () => {
+    const url = evaluateAgentPath("a1b2");
+    expect(url.startsWith("/v2/eval/tasks?")).toBe(true);
+    const params = q(url.split("?")[1]);
+    expect(params.get("view")).toBe("new");
+    expect(params.get("agent")).toBe("a1b2");
+    expect(newStrategy(params)).toBe("history");
   });
 });

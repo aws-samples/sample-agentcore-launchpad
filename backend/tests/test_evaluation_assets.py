@@ -3494,6 +3494,10 @@ def test_conversation_purge_removes_assets_datasets_agents_then_rows(app_ready, 
         assert [o["id"] for o in fp["operations"]] == [op_id]
         assert fp["operations"][0]["status"] == "succeeded"
         assert fp["operations"][0]["cloud_resources"] >= 6  # evaluators + Lambda chain
+        kinds = fp["operations"][0]["cloud_kinds"]
+        assert sum(kinds.values()) == fp["operations"][0]["cloud_resources"]
+        assert kinds.get("evaluator", 0) >= 1 and kinds.get("lambda_function") == 1
+        assert "dataset" not in kinds and "existing" not in kinds
         assert [d["id"] for d in fp["datasets"]] == [dataset_id]
         assert fp["blockers"] == []
         assert fp["required_permissions"] == ["agents.deploy", "agents.delete"]
@@ -3699,3 +3703,30 @@ def test_builtin_the_region_lacks_refuses_the_run_before_any_effect(gated, monke
     assert resp.json()["detail"] == {"evaluator": "Builtin.ContextRelevance"}
     assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
                        "state": None}, effects
+
+
+def test_footprint_counts_only_what_a_clear_deletes():
+    """CLEAR's confirm names the cloud resources per kind; a read-only ``existing``
+    evaluator reference (a built-in judge) and the local Dataset are never counted, nor
+    is a resource that never became ready (prod QA 2026-11-02: three built-in references
+    + one custom evaluator read as "4 cloud resources — evaluators, the Lambda with its
+    role, log group and policies")."""
+    from types import SimpleNamespace
+
+    from app.assistant import purge
+
+    op = SimpleNamespace(id="op1", status="succeeded", plan_revision=2, dataset_id="ds1",
+                         resources=[
+                             {"kind": "dataset", "status": "ready"},
+                             {"kind": "existing", "status": "ready"},
+                             {"kind": "existing", "status": "ready"},
+                             {"kind": "existing", "status": "ready"},
+                             {"kind": "evaluator", "status": "ready"},
+                             {"kind": "evaluator", "status": "deleted"},
+                             {"kind": "role_grant", "status": "ready"},
+                         ])
+    out = purge._operation_out(op)
+    assert out["cloud_resources"] == 2
+    assert out["cloud_kinds"] == {"evaluator": 1, "role_grant": 1}
+    assert {k: out[k] for k in ("id", "status", "plan_revision", "dataset_id")} == {
+        "id": "op1", "status": "succeeded", "plan_revision": 2, "dataset_id": "ds1"}

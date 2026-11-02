@@ -1040,3 +1040,11 @@ footer .sep{color:var(--line-2)}
 /* method cards: equal height, spec list pinned to the bottom so the four align */
 .method{display:flex;flex-direction:column}
 .method .m-specs{margin-top:auto}
+
+/* A long-term memory record (components/MemoryRecordText): summarization topics as
+   titled sections of rendered markdown, compact enough for an inspector rail. */
+.memory-record-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; white-space: normal; }
+.memory-record-topic { font-weight: 600; font-size: 12.5px; }
+.memory-record-text .md > :first-child { margin-top: 0; }
+.memory-record-text .md > :last-child { margin-bottom: 0; }
+.memory-record-text .md table { display: block; max-width: 100%; overflow-x: auto; font-size: 12px; }

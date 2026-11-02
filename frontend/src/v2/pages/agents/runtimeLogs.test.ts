@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeLogEvent } from "../../../lib/api";
-import { appendEvents, logTime, runtimeLogsQuery, streamLabel, unavailableKey, validSessionId } from "./runtimeLogs";
+import {
+  appendEvents,
+  logTime,
+  runtimeLogsGate,
+  runtimeLogsQuery,
+  streamLabel,
+  unavailableKey,
+  validSessionId,
+} from "./runtimeLogs";
 
 const ev = (message: string, extra: Partial<RuntimeLogEvent> = {}): RuntimeLogEvent => ({
   timestamp: "2026-10-19T08:00:00.123+00:00",
@@ -68,5 +76,22 @@ describe("line helpers", () => {
   it("appends a page without repeating lines", () => {
     const merged = appendEvents([ev("a"), ev("b")], [ev("b"), ev("c")]);
     expect(merged.map((e) => e.message)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("runtimeLogsGate", () => {
+  it("shows the toolbar once the agent has a Runtime", () => {
+    expect(runtimeLogsGate(true, "active")).toBeNull();
+    // a redeploy keeps the live Runtime and its logs readable
+    expect(runtimeLogsGate(true, "deploying")).toBeNull();
+    expect(runtimeLogsGate(true, "failed")).toBeNull();
+  });
+
+  it("tells a first deploy apart from an agent that has no Runtime", () => {
+    expect(runtimeLogsGate(false, "deploying")).toBe("deploying");
+    expect(runtimeLogsGate(false, "failed")).toBe("notDeployed");
+    expect(runtimeLogsGate(false, "draft")).toBe("notDeployed");
+    expect(runtimeLogsGate(false, "deleted")).toBe("deleted");
+    expect(runtimeLogsGate(true, "deleted")).toBe("deleted");
   });
 });

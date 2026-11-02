@@ -205,6 +205,16 @@ def no_background_retag(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_agent_artifact_cleanup(monkeypatch):
+    # Every agent delete lists + deletes the agent's own S3 artifacts through the
+    # workspace's real S3 client. A hermetic delete test never reaches S3; the cleanup's
+    # own tests (test_agent_artifacts.py) restore the real function with a stub client.
+    from app.services import agent_artifacts
+
+    monkeypatch.setattr(agent_artifacts, "delete_agent_artifacts", lambda *a, **k: [])
+
+
+@pytest.fixture(autouse=True)
 def no_traffic_history(monkeypatch):
     # Pricing a passive run or an online config (eval-cost §1.1) sizes it from the
     # agent's last 7 days — a Logs Insights scan. Hermetic tests see no traffic;

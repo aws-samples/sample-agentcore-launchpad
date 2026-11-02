@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { chatApi, type ChatMemorySummary, type ChatTraceInfo, errorMessage } from "../../../lib/api";
+import { MemoryRecordText } from "../../../components/MemoryRecordText";
 import type { AgentMemoryState } from "../../../lib/chat";
 import { Btn, Filters, Notice, Skeleton } from "../../ui";
 import { type InspectTab, spanBars } from "./inspect";
@@ -179,7 +180,7 @@ function MemoryBody({ read, memoryState }: { read: Read<ChatMemorySummary>; memo
       {memory.records.map((r, i) => (
         <div key={i} className="v3-chat-record">
           <span className="ns mono">{r.namespace}</span>
-          <span>{r.text}</span>
+          <MemoryRecordText text={r.text} />
         </div>
       ))}
     </div>

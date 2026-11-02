@@ -9,6 +9,7 @@ import {
   logTime,
   RUNTIME_LOG_PAGE,
   RUNTIME_LOG_RANGES,
+  runtimeLogsGate,
   runtimeLogsQuery,
   streamLabel,
   unavailableKey,
@@ -24,7 +25,16 @@ interface Filters {
 
 /** Agent detail · Runtime logs: the container's stdout/stderr, read on demand (one
  *  FilterLogEvents page per click) from the log group the backend derives. */
-export function RuntimeLogsCard({ agentId, hosted }: { agentId: string; hosted: boolean }) {
+export function RuntimeLogsCard({
+  agentId,
+  hosted,
+  status,
+}: {
+  agentId: string;
+  hosted: boolean;
+  /** the agent row's status: a first deploy has no Runtime yet, which is not "not hosted" */
+  status: string;
+}) {
   const { t } = useTranslation();
   const [filters, setFilters] = useState<Filters>({ range: "1h", session: "", keyword: "", otel: false });
   const [page, setPage] = useState<RuntimeLogsPage | null>(null);
@@ -67,6 +77,7 @@ export function RuntimeLogsCard({ agentId, hosted }: { agentId: string; hosted: 
   };
 
   const reason = unavailableKey(page?.unavailable_reason ?? null);
+  const gate = runtimeLogsGate(hosted, status);
   const listId = `v2-rtlogs-sessions-${agentId}`;
 
   return (
@@ -82,8 +93,8 @@ export function RuntimeLogsCard({ agentId, hosted }: { agentId: string; hosted: 
       }
       testId="v2-agent-runtime-logs"
     >
-      {!hosted ? (
-        <Alert>{t("v2.agents.runtimeLogs.noRuntime")}</Alert>
+      {gate ? (
+        <Alert>{t(`v2.agents.runtimeLogs.gate.${gate}`)}</Alert>
       ) : (
         <>
           <div className="v2-toolbar">

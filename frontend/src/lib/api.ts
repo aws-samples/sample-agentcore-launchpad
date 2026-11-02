@@ -1774,7 +1774,10 @@ export interface AssistantConversationFootprint {
     status: string;
     plan_revision: number;
     dataset_id: string | null;
+    /** cloud resources the clear deletes (built-in evaluator references excluded) */
     cloud_resources: number;
+    /** the same, per resource kind (`evaluator`, `lambda_function`, `role_grant`, …) */
+    cloud_kinds?: Record<string, number>;
   }[];
   datasets: { id: string; name: string; item_count: number; cloud: boolean }[];
   /** canaries on the conversation's Agents — stopped and removed before the Agent */

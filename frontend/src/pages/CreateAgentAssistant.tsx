@@ -42,9 +42,12 @@ import {
 import {
   ASSISTANT_JOB_POLL_MS,
   type AssistantLiveMessage,
+  clearAgentList,
   clearCanaryList,
   clearExperimentList,
   clearInProgress,
+  clearOperationsText,
+  shortConversationTitle,
   clearStepText,
   runConversationClear,
   isAssistantUnauthorized,
@@ -60,6 +63,7 @@ import {
   toLiveMessages,
 } from "../lib/assistant";
 import { useModelCatalog } from "../lib/model-catalog";
+import { methodLabel } from "../components/methodChipMeta";
 import { modelOptionsFor, type ModelSource } from "../lib/models";
 import { useAgentProjectPick } from "../lib/useAgentProjectPick";
 import { useWorkspace } from "../workspace/workspace-context";
@@ -523,9 +527,7 @@ export function CreateAgentAssistant() {
     ];
     if (fp.agents.length) {
       lines.push(
-        t("assistantPage.clear.agents", {
-          list: fp.agents.map((a) => `${a.name} (${a.status})`).join(", "),
-        }),
+        t("assistantPage.clear.agents", { list: clearAgentList(fp, methodLabel) }),
       );
     }
     if (fp.canaries.length) {
@@ -538,12 +540,7 @@ export function CreateAgentAssistant() {
     }
     const cloud = fp.operations.filter((o) => o.status !== "cleaned");
     if (cloud.length) {
-      lines.push(
-        t("assistantPage.clear.operations", {
-          n: cloud.length,
-          resources: cloud.reduce((acc, o) => acc + o.cloud_resources, 0),
-        }),
-      );
+      lines.push(clearOperationsText(t, cloud));
     }
     if (fp.datasets.length) {
       lines.push(
@@ -1418,7 +1415,9 @@ export function CreateAgentAssistant() {
       />
       <ConfirmDialog
         open={clearing !== null && clearing.footprint !== null}
-        title={t("assistantPage.clear.title", { title: clearing?.title ?? "" })}
+        title={t("assistantPage.clear.title", {
+          title: shortConversationTitle(clearing?.title, clearing?.id.slice(0, 8) ?? ""),
+        })}
         body={clearing?.footprint ? clearBody(clearing.footprint) : ""}
         confirmLabel={
           clearing?.deleting

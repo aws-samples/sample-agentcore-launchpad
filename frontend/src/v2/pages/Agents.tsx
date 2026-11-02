@@ -32,6 +32,7 @@ import { AgentIdentity } from "./agents/AgentIdentity";
 import { AgentSource } from "./agents/AgentSource";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { RuntimeLogsCard } from "./agents/RuntimeLogsCard";
+import { evaluateAgentPath } from "./tasks/urls";
 import { AgentWizard } from "./agents/AgentWizard";
 import { ProjectField } from "./agents/ProjectCard";
 import { IntegrationCard } from "./agents/IntegrationCard";
@@ -537,6 +538,7 @@ function AgentDetail({ id }: { id: string }) {
   const navigate = useNavigate();
   const [, setParams] = useSearchParams();
   const perms = useAgentPermissions();
+  const { can } = useAuth();
   const { agent, job, error, deploying, reload } = useAgentDetail(id);
   const actions = useAgentActions((action, target) => {
     if (action === "deleted") setParams((prev) => listOnly(prev));
@@ -560,6 +562,8 @@ function AgentDetail({ id }: { id: string }) {
   const notes = (spec.conversion_notes as Record<string, string> | undefined) ?? {};
   const byoc = agent.method === "byoc" ? ((spec.byoc as ByocSummary | undefined) ?? null) : null;
   const hasResource = !!agent.arn && agent.method !== "discovered_runtime";
+  // 评估 entry: a running agent opens the one-off create form with itself preselected
+  const evalEntry = can("eval.run") && agent.status === "active";
 
   return (
     <>
@@ -585,6 +589,15 @@ function AgentDetail({ id }: { id: string }) {
               <Button onClick={() => navigate(`/v2/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
             )}
             <Button onClick={() => navigate("/v2/observability")}>{t("v2.agents.observability")}</Button>
+            {evalEntry && (
+              <Button
+                onClick={() => navigate(evaluateAgentPath(agent.id))}
+                title={t("v2.agents.evaluateHint")}
+                testId="v2-agent-evaluate"
+              >
+                {t("v2.agents.evaluate")}
+              </Button>
+            )}
             {agent.method !== "discovered_runtime" && (
               <Button onClick={() => setParams((prev) => withView(prev, "identity", agent.id))} testId="v2-agent-identity-open">
                 {t("v2.agents.identity.open")}
@@ -681,7 +694,7 @@ function AgentDetail({ id }: { id: string }) {
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
-      <RuntimeLogsCard agentId={agent.id} hosted={!!agent.arn && agent.status !== "deleted"} />
+      <RuntimeLogsCard agentId={agent.id} hosted={!!agent.arn} status={agent.status} />
       {agent.method !== "discovered_runtime" && (
         <SnapshotsCard
           agentId={agent.id}

@@ -564,6 +564,18 @@ reconciles the per-agent role again before calling Runtime; losing process-local
 scratch state never selects the shared role. The shared role is used only when
 the operator explicitly disables `per_agent_execution_roles`.
 
+Deleting an agent also removes the S3 artifacts the deploy wrote under the agent's
+own keys (`services/agent_artifacts.py`): every object listed under `agents/<name>/`
+(the zip_runtime/studio `deployment_package.zip`, the BYOC `byoc_package.zip`,
+Runtime Canary mints under `canary/`) and the exact `builds/<name>/source.zip`
+CodeBuild context, each also under `projects/<pid>/` for an isolated project. It is
+best-effort (logged, never blocks the delete), runs after the runtime delete is
+accepted (for a deferred teardown, when the sweep finishes it), skips every key when
+another live agent of the workspace holds the name again, and never touches the
+platform's own build sources (`builds/coding-runtime/`, `builds/skill-lab-worker/`,
+the CodeBuild placeholder) or shared prefixes (`skills/`, `system-skills/`, `kb/`).
+A harness writes nothing per agent; BYOC staged uploads go with the BYOC teardown.
+
 **What is validated / what is not.** The upload gate enforces archive safety
 (zip-slip, absolute paths, symlinks, ≤250 MiB zip / ≤750 MiB uncompressed /
 ≤20k entries — the AgentCore direct-code caps) and *reports* detection
@@ -5741,8 +5753,8 @@ which only appear once an agent actually has named endpoints:
   permission problem. The deferred row is stamped `teardown_pending_at`, and the sweep
   retries every stamped row whatever its `endpoint_mode` — a default-mode harness held
   by Runtime Canary endpoints is retried too: it re-issues the delete of any named
-  endpoint not yet DELETING, then deletes the resource, its execution role and its A2A
-  record. Its done-marker is `teardown_pending_at` cleared and `endpoint_mode` back to
+  endpoint not yet DELETING, then deletes the resource, its execution role, its A2A
+  record and its S3 artifacts. Its done-marker is `teardown_pending_at` cleared and `endpoint_mode` back to
   `default` (rows deferred before the column are still found by `live`), which keeps
   `resource_id` as the historical pointer every deleted row retains. Waivers need a reason, a named risk owner, an expiry
 ≤ 30 days and a second person (`waiver.approve`); the gate report counts how often a

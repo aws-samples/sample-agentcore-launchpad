@@ -107,9 +107,11 @@ export function DiscussionCard({
   return (
     <section id={SECTION_IDS.discussion} className="v2-card" data-testid="v2-assistant-discussion">
       <div className="v2-card-body">
-        <h2 className="v2-sec-title">
-          {t("v2.assistant.discussion")}
-          <span className="sub">{conversation.title || conversation.id.slice(0, 8)}</span>
+        <h2 className="v2-sec-title v2-assistant-disc-title">
+          <span className="v2-assistant-disc-label">{t("v2.assistant.discussion")}</span>
+          <span className="sub v2-assistant-disc-sub" title={conversation.title || undefined}>
+            {conversation.title || conversation.id.slice(0, 8)}
+          </span>
         </h2>
         <div
           className="v2-assistant-thread"

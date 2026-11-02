@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { AuthContext } from "../../../auth/auth-context";
 import i18n from "../../../i18n";
 import { pickedAgentProjectId } from "../../../lib/agent-project";
 import type { EligibleAgentProject } from "../../../lib/api";
@@ -24,11 +25,19 @@ const loaded = (over: Partial<AgentProjectPick> & { data?: { projects: EligibleA
   const { data, ...rest } = over;
   return { rows: data?.projects ?? [], error: null, loading: false, reload: () => undefined, projectId: "", pick: () => undefined, label: null, ...rest };
 };
-const render = (pick: AgentProjectPick, projectId = "", error?: string) =>
+const render = (pick: AgentProjectPick, projectId = "", error?: string, isAdmin = true) =>
   renderToStaticMarkup(
-    <MemoryRouter>
-      <ProjectCard pick={{ ...pick, projectId }} error={error} />
-    </MemoryRouter>,
+    <AuthContext.Provider
+      value={{
+        authRequired: true, username: "u", role: isAdmin ? "admin" : "member", email: null,
+        accountExpiresAt: null, builtin: false, accountSource: "local", isAdmin,
+        can: () => true, logout: async () => undefined,
+      }}
+    >
+      <MemoryRouter>
+        <ProjectCard pick={{ ...pick, projectId }} error={error} />
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
 
 describe("ProjectCard (#351)", () => {
@@ -39,6 +48,17 @@ describe("ProjectCard (#351)", () => {
     expect(html).toContain('data-testid="v2-agent-project"');
     expect(html).toContain("Choose the project this agent belongs to.");
     expect(html).toContain('href="/v3/projects"');
+    // V2 has no projects page: the link says it opens the V3 console
+    expect(html).toContain("Manage projects in the V3 console");
+  });
+
+  it("gives a member no projects link: the page is administrators' (prod QA 2026-11-02)", () => {
+    const picker = render(loaded({ data: { projects: [risk] } }), "", undefined, false);
+    expect(picker).toContain('data-testid="v2-agent-project"');
+    expect(picker).not.toContain("/v3/projects");
+    const empty = render(loaded({ data: { projects: [] } }), "", undefined, false);
+    expect(empty).toContain("You have no business project here you can create agents in.");
+    expect(empty).not.toContain("/v3/projects");
   });
 
   it("shows the picked project as `Department · Project`", () => {
@@ -66,6 +86,10 @@ describe("ProjectCard (#351)", () => {
     const listed = render(loaded({ data: { projects: [def, risk] }, defaultAllowed: true }), "default");
     expect(listed).toContain("Default · default project, no department");
     expect(listed).toContain("An administrator also allowed the workspace default project");
+    // the default project is a valid pick: the placeholder no longer asks for a business project
+    const unpicked = render(loaded({ data: { projects: [def] }, defaultAllowed: true }), "");
+    expect(unpicked).toContain("Choose a project");
+    expect(unpicked).not.toContain("Choose a business project");
     const empty = render(loaded({ data: { projects: [] }, defaultAllowed: true }));
     expect(empty).toContain("the workspace default project included");
     expect(empty).not.toContain("You have no business project here");

@@ -42,6 +42,7 @@ from app.schemas.agent import (
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.services import (
     agent_access,
+    agent_artifacts,
     agent_iam,
     agent_identity,
     agent_names,
@@ -185,6 +186,8 @@ def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
     # raises and logs the role name for a later sweep.
     delete_agent_role(agent, workspace)
     delete_agent_registry_record(agent, workspace)
+    # the packages / build contexts the deploy wrote under the agent's own keys
+    agent_artifacts.delete_agent_artifacts(agent, workspace)
     return True
 
 
