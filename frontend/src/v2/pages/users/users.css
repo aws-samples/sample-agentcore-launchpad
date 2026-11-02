@@ -36,6 +36,8 @@
 .v2 .v2-users-chip:disabled { cursor: not-allowed; opacity: .6; }
 
 /* dialogs */
+.v2 .v2-users-rows { display: grid; gap: 8px; }
+.v2 .v2-users-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .v2 .v2-users-dialog-body { margin: 0 0 14px; color: var(--v2-ink-2); line-height: 1.6; }
 .v2 .v2-users-password {
   display: block; margin-top: 12px; padding: 12px 14px; border-radius: 6px; background: var(--v2-fill);
