@@ -744,7 +744,10 @@ export function EvalAssetsCard({
         confirmLabel={t("assistantEval.confirmCreate")}
         body={
           <div className="v2-stack">
-            {state?.disclosure && <pre className="v2-pre" style={{ maxHeight: 260 }}>{state.disclosure}</pre>}
+            {/* the console's own copy of the server's `disclosure`: localized, same facts */}
+            <p style={{ margin: 0 }} data-testid="v2-eval-assets-disclosure">
+              {t("assistantEval.disclosure")}
+            </p>
             <Alert tone="warn">
               {t("assistantEval.confirmBody", {
                 hash: confirmPlan?.content_hash.slice(0, 16) ?? "",

@@ -244,11 +244,14 @@ def _delete_endpoint(control: Any, agent: Any, name: str) -> None:
 
 def _finish_deferred_cleanup(agent: Any, workspace: Any) -> None:
     """What the deferred delete skipped after the resource: the agent's own execution
-    role and its A2A registry record. Both helpers are best-effort and never raise."""
+    role, its A2A registry record and its S3 artifacts. All three helpers are
+    best-effort and never raise."""
     from app.routers import agents as agents_router
+    from app.services import agent_artifacts
 
     agents_router.delete_agent_role(agent, workspace)
     agents_router.delete_agent_registry_record(agent, workspace)
+    agent_artifacts.delete_agent_artifacts(agent, workspace)
 
 
 def sweep_deleted_resources(db: Session) -> dict[str, Any]:

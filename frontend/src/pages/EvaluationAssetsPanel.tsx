@@ -1019,7 +1019,7 @@ export function EvaluationAssetsPanel({
         open={confirmPlan !== null}
         title={t("assistantEval.confirmTitle", { n: confirmPlan?.revision ?? 0 })}
         body={
-          (state?.disclosure ?? "") +
+          t("assistantEval.disclosure") +
           "\n\n" +
           t("assistantEval.confirmBody", {
             hash: confirmPlan?.content_hash.slice(0, 16) ?? "",

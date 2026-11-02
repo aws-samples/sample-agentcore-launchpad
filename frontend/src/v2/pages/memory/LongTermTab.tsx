@@ -10,6 +10,8 @@ import {
   type MemoryRecord,
   type MemoryStrategy,
 } from "../../../lib/api";
+import { MemoryRecordText } from "../../../components/MemoryRecordText";
+import { memoryRecordPlainText } from "../../../lib/memory-record";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, type Column, Descriptions, Drawer, FilterSelect, LinkButton, Table } from "../../ui";
@@ -55,7 +57,9 @@ function RecordDrawer({
           />
           <div>
             <div className="v2-memory-label">{t("v2.memory.colContent")}</div>
-            <p className="v2-memory-body">{record.text}</p>
+            <div className="v2-memory-body">
+              <MemoryRecordText text={record.text} />
+            </div>
           </div>
           {/* Strategies that store a structured payload get their fields broken
               out; the raw payload stays available underneath. */}
@@ -179,8 +183,8 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
       title: t("v2.memory.colContent"),
       render: (r) => (
         <LinkButton onClick={() => setDetail(r)}>
-          <span className="v2-memory-clamp" title={r.text}>
-            {r.text}
+          <span className="v2-memory-clamp" title={memoryRecordPlainText(r.text)}>
+            {memoryRecordPlainText(r.text)}
           </span>
         </LinkButton>
       ),

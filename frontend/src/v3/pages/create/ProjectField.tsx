@@ -59,7 +59,7 @@ export function ProjectField({
             data-testid={idBase}
           >
             <option value="" disabled>
-              {t("v3.create.project.placeholder")}
+              {t(copy.placeholder)}
             </option>
             {pick.rows.map((p) => (
               <option key={p.id} value={p.id}>

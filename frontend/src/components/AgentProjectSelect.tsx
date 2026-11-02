@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { agentProjectCopyKeys, agentProjectOptionLabel } from "../lib/agent-project";
+import { useAuth } from "../auth/auth-context";
+import { agentProjectCopyKeys, agentProjectManageLink, agentProjectOptionLabel } from "../lib/agent-project";
 import { errorMessage } from "../lib/api";
 import type { AgentProjectPick } from "../lib/useAgentProjectPick";
 import { Btn } from "./Btn";
@@ -24,12 +25,14 @@ export function AgentProjectSelect({
   touched?: boolean;
 }) {
   const { t } = useTranslation();
+  const { isAdmin } = useAuth();
   const copy = agentProjectCopyKeys(pick.defaultAllowed);
-  const open = (
-    <Link to="/v3/projects" style={{ textDecoration: "underline" }}>
-      {t("v3.create.project.open")}
+  const manage = agentProjectManageLink(isAdmin);
+  const open = manage ? (
+    <Link to={manage.to} style={{ textDecoration: "underline" }}>
+      {t(manage.labelKey)}
     </Link>
-  );
+  ) : null;
   const note = (tone: "crit" | "amber", text: string, extra?: ReactNode) => (
     <div className="note" style={{ borderColor: `var(--${tone})` }} role={tone === "crit" ? "alert" : undefined}>
       <span className="i" style={{ color: `var(--${tone})` }}>
@@ -64,7 +67,7 @@ export function AgentProjectSelect({
             data-testid={id}
           >
             <option value="" disabled>
-              {t("v3.create.project.placeholder")}
+              {t(copy.placeholder)}
             </option>
             {pick.rows.map((p) => (
               <option key={p.id} value={p.id}>

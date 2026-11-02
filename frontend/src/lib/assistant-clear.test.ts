@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, type AssistantConversationFootprint, type JobInfo } from "./api";
-import { clearCanaryList, clearInProgress, runConversationClear } from "./assistant";
+import {
+  clearCanaryList,
+  clearCloudKinds,
+  clearElapsed,
+  clearStepPhase,
+  clearInProgress,
+  runConversationClear,
+  shortConversationTitle,
+} from "./assistant";
 
 const noSleep = () => Promise.resolve();
 
@@ -89,5 +97,80 @@ describe("clear footprint helpers", () => {
     expect(clearInProgress(fp)).toBe(true);
     expect(clearInProgress({ ...fp, purge: { ...fp.purge!, status: "failed" } })).toBe(false);
     expect(clearInProgress({ ...fp, purge: null })).toBe(false);
+  });
+});
+
+describe("clearCloudKinds", () => {
+  const op = (cloud_kinds: Record<string, number> | undefined, cloud_resources = 0) => ({
+    id: "o", status: "succeeded", plan_revision: 1, dataset_id: null, cloud_resources, cloud_kinds,
+  });
+
+  it("names only the kinds the plan created, in dialog order", () => {
+    // prod QA 2026-11-02: one custom evaluator, no Lambda, a grant on the shared role
+    expect(clearCloudKinds([op({ role_grant: 1, evaluator: 1 }, 2)])).toEqual([
+      { kind: "evaluator", count: 1 },
+      { kind: "role_grant", count: 1 },
+    ]);
+  });
+
+  it("sums kinds across operations and keeps unknown kinds visible", () => {
+    expect(
+      clearCloudKinds([op({ evaluator: 2, lambda_function: 1 }, 3), op({ evaluator: 1, gizmo: 2 }, 3)]),
+    ).toEqual([
+      { kind: "evaluator", count: 3 },
+      { kind: "lambda_function", count: 1 },
+      { kind: "other", count: 2 },
+    ]);
+  });
+
+  it("falls back to the bare total from a server without per-kind counts", () => {
+    expect(clearCloudKinds([op(undefined, 4)])).toEqual([{ kind: "unknown", count: 4 }]);
+    expect(clearCloudKinds([op({}, 0)])).toEqual([]);
+  });
+});
+
+describe("shortConversationTitle", () => {
+  it("keeps a short title and falls back on a blank one", () => {
+    expect(shortConversationTitle("HR 助手", "c1")).toBe("HR 助手");
+    expect(shortConversationTitle("  ", "c1")).toBe("c1");
+    expect(shortConversationTitle(null, "c1")).toBe("c1");
+  });
+
+  it("cuts a paragraph-long title to one line with an ellipsis", () => {
+    const long = "公司差旅报销政策问答助手，不需要外部系统。面向全体员工，在内部聊天里回答差旅标准、报销流程";
+    const short = shortConversationTitle(long, "c1");
+    expect(Array.from(short)).toHaveLength(40);
+    expect(short.endsWith("…")).toBe(true);
+    expect(long.startsWith(short.slice(0, -1))).toBe(true);
+  });
+
+  it("counts code points, so an emoji is never split", () => {
+    const short = shortConversationTitle("😀".repeat(50), "c1", 10);
+    expect(Array.from(short)).toEqual([...Array(9).fill("😀"), "…"]);
+  });
+});
+
+describe("clearStepPhase", () => {
+  it("names the phase of a per-resource step key", () => {
+    expect(clearStepPhase({ key: "agent:a1", state: "deleting", detail: "deleting harness h1" })).toEqual({
+      phase: "agents", done: false,
+    });
+    expect(clearStepPhase({ key: "operation:o1", state: "done", detail: "" })).toEqual({ phase: "operations", done: true });
+    expect(clearStepPhase({ key: "canary:c1", state: "cleaning", detail: "" })?.phase).toBe("canaries");
+    expect(clearStepPhase({ key: "ledger", state: "done", detail: "" })?.phase).toBe("ledger");
+    expect(clearStepPhase({ key: "canary_artifacts", state: "done", detail: "" })?.phase).toBe("canary_artifacts");
+  });
+
+  it("leaves an unknown or missing step to the raw text", () => {
+    expect(clearStepPhase({ key: "gizmo:1", state: "x", detail: "" })).toBeNull();
+    expect(clearStepPhase(null)).toBeNull();
+  });
+});
+
+describe("clearElapsed", () => {
+  it("splits the elapsed time into minutes and seconds", () => {
+    expect(clearElapsed(1_000, 1_000)).toEqual({ minutes: 0, seconds: 0 });
+    expect(clearElapsed(0, 245_900)).toEqual({ minutes: 4, seconds: 5 });
+    expect(clearElapsed(10_000, 0)).toEqual({ minutes: 0, seconds: 0 });
   });
 });

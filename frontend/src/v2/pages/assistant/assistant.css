@@ -152,3 +152,12 @@
 .v2 .v2-assistant-digest { width: 100%; max-width: 720px; text-align: left; border: 1px dashed var(--v2-line); border-radius: 6px; padding: 6px 10px; }
 .v2 .v2-assistant-digest > summary { cursor: pointer; color: var(--v2-ink-3); font-weight: 600; text-align: center; }
 .v2 .v2-assistant-digest[open] { display: grid; gap: 6px; }
+
+/* detail header + discussion card: a long conversation title stays on one line
+   (full text in the tooltip) instead of stretching the heading and its tags */
+.v2 .v2-flow-head h1:has(.v2-assistant-head-row) { min-width: 0; flex: 1 1 320px; }
+.v2 .v2-assistant-head-row { min-width: 0; flex-wrap: wrap; row-gap: 4px; }
+.v2 .v2-assistant-head-title { max-width: min(560px, 100%); }
+.v2 .v2-assistant-disc-title { min-width: 0; white-space: nowrap; }
+.v2 .v2-assistant-disc-label { flex: none; }
+.v2 .v2-assistant-disc-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

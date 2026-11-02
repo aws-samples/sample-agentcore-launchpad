@@ -9,6 +9,7 @@ import {
   type ChatTraceInfo,
   errorMessage,
 } from "../../../lib/api";
+import { MemoryRecordText } from "../../../components/MemoryRecordText";
 import type { AgentMemoryState } from "../../../lib/chat";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Kpi, LinkButton, SubTabs, Tag } from "../../ui";
@@ -207,7 +208,7 @@ function MemoryPanel({
           {memory.records.map((r, i) => (
             <div key={i} className="v2-chat-record">
               <span className="v2-chat-record-ns mono">{r.namespace}</span>
-              <span>{r.text}</span>
+              <MemoryRecordText text={r.text} />
             </div>
           ))}
         </div>

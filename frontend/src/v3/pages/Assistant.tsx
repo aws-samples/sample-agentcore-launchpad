@@ -12,7 +12,8 @@ import {
   type AssistantConversationFootprint,
   type AssistantConversationSummary,
 } from "../../lib/api";
-import { isContextTrimmed } from "../../lib/assistant";
+import { methodLabel } from "../../components/methodChipMeta";
+import { clearAgentList, clearOperationsText, isContextTrimmed, shortConversationTitle } from "../../lib/assistant";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
 import { ago } from "../format";
@@ -66,7 +67,7 @@ function useClear(onCleared: () => void) {
   };
   const dialog = target ? (
     <Confirm
-      title={t("assistantPage.clear.title", { title: target.title })}
+      title={t("assistantPage.clear.title", { title: shortConversationTitle(target.title, target.id.slice(0, 8)) })}
       confirmLabel={busy ? t("assistantPage.clear.working") : t("assistantPage.clear.confirm")}
       cancelLabel={t("v3.common.cancel")}
       danger
@@ -79,9 +80,9 @@ function useClear(onCleared: () => void) {
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
           <div>{t("assistantPage.clear.intro", { turns: fp.turns, proposals: fp.proposals })}</div>
-          {fp.agents.length > 0 && <div>{t("assistantPage.clear.agents", { list: fp.agents.map((a) => `${a.name} (${a.status})`).join(", ") })}</div>}
+          {fp.agents.length > 0 && <div>{t("assistantPage.clear.agents", { list: clearAgentList(fp, methodLabel) })}</div>}
           {cloud.length > 0 && (
-            <div>{t("assistantPage.clear.operations", { n: cloud.length, resources: cloud.reduce((n, o) => n + o.cloud_resources, 0) })}</div>
+            <div>{clearOperationsText(t, cloud)}</div>
           )}
           {fp.datasets.length > 0 && (
             <div>{t("assistantPage.clear.datasets", { list: fp.datasets.map((d) => `${d.name} (${t("assistantEval.items", { n: d.item_count })})`).join(", ") })}</div>

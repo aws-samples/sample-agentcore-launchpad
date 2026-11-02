@@ -40,6 +40,20 @@ export function unavailableKey(reason: RuntimeLogsPage["unavailable_reason"]): s
 }
 
 /** `HH:MM:SS.mmm` in local time — the line prefix; the full stamp goes in a tooltip. */
+/**
+ * Why the card shows a notice instead of the log toolbar, from the agent row alone
+ * (no ARN yet = no Runtime to read). A first deploy has no ARN until AWS accepted the
+ * resource, so "deploying" must not read as "not hosted on AgentCore Runtime" — every
+ * method that deploys (a Harness too, through its backing runtime) has logs once ready.
+ */
+export type RuntimeLogsGate = "deploying" | "deleted" | "notDeployed";
+
+export function runtimeLogsGate(hosted: boolean, status: string): RuntimeLogsGate | null {
+  if (status === "deleted") return "deleted";
+  if (hosted) return null;
+  return status === "deploying" ? "deploying" : "notDeployed";
+}
+
 export function logTime(value: string | null): string {
   if (!value) return "—";
   const d = new Date(value);

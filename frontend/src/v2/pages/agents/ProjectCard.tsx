@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { agentProjectCopyKeys, agentProjectOptionLabel } from "../../../lib/agent-project";
+import { useAuth } from "../../../auth/auth-context";
+import { agentProjectCopyKeys, agentProjectManageLink, agentProjectOptionLabel } from "../../../lib/agent-project";
 import { errorMessage } from "../../../lib/api";
 import type { AgentProjectPick } from "../../../lib/useAgentProjectPick";
 import { Alert, Button, Card, Field, Select } from "../../ui";
@@ -17,12 +18,14 @@ import { Alert, Button, Card, Field, Select } from "../../ui";
  */
 export function ProjectField({ pick, error }: { pick: AgentProjectPick; error?: string }) {
   const { t } = useTranslation();
+  const { isAdmin } = useAuth();
   const copy = agentProjectCopyKeys(pick.defaultAllowed);
-  const open = (
-    <Link to="/v3/projects" className="v2-link">
-      {t("v3.create.project.open")}
+  const manage = agentProjectManageLink(isAdmin);
+  const open = manage ? (
+    <Link to={manage.to} className="v2-link" data-testid="v2-agent-project-manage">
+      {t(manage.labelKey)}
     </Link>
-  );
+  ) : null;
   let body: ReactNode;
   if (pick.error != null) {
     body = (
@@ -51,7 +54,7 @@ export function ProjectField({ pick, error }: { pick: AgentProjectPick; error?: 
         <Field label={t("v3.create.project.label")} required error={error} hint={t(copy.hint)}>
           <Select
             value={pick.projectId}
-            placeholder={t("v3.create.project.placeholder")}
+            placeholder={t(copy.placeholder)}
             options={pick.rows.map((p) => ({
               value: p.id,
               label: agentProjectOptionLabel(p, t("v3.create.project.defaultTag")),

@@ -2446,7 +2446,7 @@ def run_turn(
                 text=f"retried in turn {turn}",
             ))
         if not conversation.title:
-            conversation.title = prompt.strip().splitlines()[0][:120] if prompt.strip() else ""
+            conversation.title = conversation_title(prompt)
         conversation.preset_agent_id = agent.id
         db.commit()
         yield {"event": "meta", "data": {"conversation_id": conversation_id, "turn": turn,
@@ -3179,3 +3179,25 @@ def assert_job_bindings_pinned(
                 and res.get("oauth_provider_arn") == kb.get("oauth_provider_arn")):
             raise RuntimeError("assistant job: the knowledge-base gateway this approval was "
                                "reviewed against is not the workspace's gateway anymore")
+
+
+# A conversation is titled after its first message. The whole first line made a
+# paragraph-long title that stretched the console's headings and dialogs (prod QA
+# 2026-11-02), so it stops at the first sentence when that is short enough, and is
+# otherwise cut at TITLE_MAX characters with an ellipsis.
+TITLE_MAX = 40
+_SENTENCE_END = re.compile(r"[。！？!?；;]|\.(?=\s|$)")
+
+
+def conversation_title(prompt: str) -> str:
+    """The title a conversation gets from its first message (pure)."""
+    lines = [ln.strip() for ln in (prompt or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    first = " ".join(lines[0].split())
+    end = _SENTENCE_END.search(first)
+    if end is not None and 4 <= end.start() <= TITLE_MAX:
+        return first[: end.start()]
+    if len(first) <= TITLE_MAX:
+        return first
+    return first[: TITLE_MAX - 1].rstrip() + "…"

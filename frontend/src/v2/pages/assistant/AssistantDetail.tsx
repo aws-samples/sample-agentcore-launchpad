@@ -510,7 +510,7 @@ export function AssistantDetail({
     );
   }
 
-  const title = conversation.title || conversation.id.slice(0, 8);
+  const fullTitle = conversation.title || conversation.id.slice(0, 8);
   // An administrator reading another member's unshared conversation: every panel
   // shows its state, none offers a write; sharing it turns it into a collaboration.
   const readOnly = conversation.read_only;
@@ -525,8 +525,10 @@ export function AssistantDetail({
     <div data-testid="v2-assistant-detail" data-conversation={conversation.id}>
       <FlowHeader
         title={
-          <span className="v2-row">
-            {title}
+          <span className="v2-row v2-assistant-head-row">
+            <span className="v2-assistant-title v2-assistant-head-title" title={fullTitle} data-testid="v2-assistant-title">
+              {fullTitle}
+            </span>
             {latest && (
               <>
                 <Tag tone={PROPOSAL_TONE[latest.status]} dot>{t(`assistantPage.status.${latest.status}`)}</Tag>

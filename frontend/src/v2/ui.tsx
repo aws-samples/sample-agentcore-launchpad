@@ -1240,7 +1240,8 @@ function ModalFrame({
     <div className={tall ? "v2-mask tall" : "v2-mask"} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={modalClass} role="dialog" aria-modal="true" data-testid={testId}>
         <div className="v2-modal-head">
-          {title}
+          {/* its own box: a long title wraps beside the close button instead of under it */}
+          <div className="v2-modal-title">{title}</div>
           <button type="button" onClick={onClose} aria-label={t("v2.common.close")}>
             <X size={16} />
           </button>
@@ -1299,7 +1300,8 @@ function DrawerFrame({
     <div className="v2-mask drawer" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={wide ? "v2-drawer wide" : "v2-drawer"} role="dialog" aria-modal="true" data-testid={testId}>
         <div className="v2-modal-head">
-          {title}
+          {/* its own box: a long title wraps beside the close button instead of under it */}
+          <div className="v2-modal-title">{title}</div>
           <button type="button" onClick={onClose} aria-label={t("v2.common.close")}>
             <X size={16} />
           </button>

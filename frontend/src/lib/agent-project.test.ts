@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentProjectCopyKeys,
   agentProjectLabel,
+  agentProjectManageLink,
   agentProjectOptionLabel,
   defaultAgentProjectId,
   pickedAgentProjectId,
@@ -64,11 +65,23 @@ describe("the agent-project switch (default project listed)", () => {
   });
 
   it("switches the hint and empty-list copy with the switch", () => {
-    expect(agentProjectCopyKeys(false)).toEqual({ hint: "v3.create.project.hint", none: "v3.create.project.none" });
+    expect(agentProjectCopyKeys(false)).toEqual({
+      hint: "v3.create.project.hint",
+      none: "v3.create.project.none",
+      placeholder: "v3.create.project.placeholder",
+    });
     expect(agentProjectCopyKeys(undefined).none).toBe("v3.create.project.none");
     expect(agentProjectCopyKeys(true)).toEqual({
       hint: "v3.create.project.hintDefault",
       none: "v3.create.project.noneDefault",
+      placeholder: "v3.create.project.placeholderDefault",
     });
+  });
+});
+
+describe("agentProjectManageLink", () => {
+  it("links only administrators, and says the page is in the V3 console", () => {
+    expect(agentProjectManageLink(false)).toBeNull();
+    expect(agentProjectManageLink(true)).toEqual({ to: "/v3/projects", labelKey: "v3.create.project.openInV3" });
   });
 });

@@ -41,6 +41,12 @@ export function newTaskParams(strategy: NewStrategy, agentId?: string | null): R
   };
 }
 
+/** The 评估任务 create form for one agent: the one-off form with the agent preselected
+ *  (the agent detail page's 评估 entry). */
+export function evaluateAgentPath(agentId: string): string {
+  return `/v2/eval/tasks?${new URLSearchParams(newTaskParams("history", agentId)).toString()}`;
+}
+
 /** An old `/v2/eval/online` query → its 评估任务 URL: the list, new, detail or edit. */
 export function onlineToTasksUrl(search: string): string {
   const params = new URLSearchParams(search);

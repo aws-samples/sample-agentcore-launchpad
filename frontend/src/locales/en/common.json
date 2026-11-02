@@ -528,7 +528,7 @@
       "systemPromptPlaceholder": "You are a helpful assistant for…",
       "tools": "TOOLS — BUILTIN",
       "gatewayToolsSoon": "+ gateway tools · harness or Strands ZIP (HTTP) only",
-      "gatewayWholeNote": "A gateway entry attaches the WHOLE AgentCore Gateway and every tool it exposes — Registry approval is catalog visibility, not a per-tool boundary. Use Governance Cedar policies to authorize individual tool actions. Entries marked \"—\" are catalog-only because their outbound auth is not resolved.",
+      "gatewayWholeNote": "A gateway entry attaches the WHOLE AgentCore Gateway and every tool it exposes — Registry approval is catalog visibility, not a per-tool boundary. Use Gateway governance Cedar policies to authorize individual tool actions. Entries marked \"—\" are catalog-only because their outbound auth is not resolved.",
       "memory": "MEMORY",
       "memoryShort": "short-term · session",
       "memoryLong": "long-term · user preferences",
@@ -5474,8 +5474,8 @@
       "action": "Clear this conversation and everything it created",
       "title": "Clear “{{title}}” and its assets?",
       "intro": "The transcript ({{turns}} turn(s)) and {{proposals}} proposal revision(s) are deleted.",
-      "agents": "Deployed Agent(s) deleted from AWS (Harness + execution role): {{list}}.",
-      "operations": "{{n}} evaluation-assets operation(s) cleaned: {{resources}} cloud resource(s) — AgentCore evaluators, the Lambda with its role, log group and policies — are deleted after their identity is re-checked.",
+      "agents": "Deployed Agent(s) and their execution roles are deleted from AWS: {{list}}.",
+      "operations": "{{n}} evaluation-assets operation(s) cleaned — deleted after their identity is verified: {{list}}.",
       "datasets": "Local Dataset(s) deleted: {{list}}.",
       "datasetCloud": "A copy of a Dataset was synced to AWS by hand; that AWS Dataset stays (delete it in Evaluation → Datasets if unwanted).",
       "onlyTranscript": "No Agent, cloud asset or Dataset was created from it.",
@@ -5495,7 +5495,34 @@
       "progress": "Clearing — {{step}}",
       "starting": "starting",
       "failedToast": "Clear stopped — the conversation was kept: {{reason}}",
-      "background": "The clear continues in the background — open CLEAR again to check on it."
+      "background": "The clear continues in the background — open CLEAR again to check on it.",
+      "operationsNone": "{{n}} evaluation-assets operation(s) cleaned: no cloud resource to delete (referenced built-in evaluators are kept).",
+      "listSep": ", ",
+      "kinds": {
+        "evaluator": "{{count}} custom AgentCore evaluator(s)",
+        "lambda_function": "{{count}} Lambda function(s)",
+        "lambda_role": "{{count}} Lambda execution role(s)",
+        "log_group": "{{count}} log group(s)",
+        "lambda_permission": "{{count}} Lambda invoke permission(s)",
+        "role_grant": "{{count}} inline policy grant(s) on an execution role (the role itself is kept)",
+        "other": "{{count}} other cloud resource(s)",
+        "unknown": "{{count}} cloud resource(s)"
+      },
+      "phase": {
+        "canaries": "stopping and removing canaries",
+        "experiments": "cleaning up A/B experiments",
+        "operations": "deleting evaluation assets (evaluators, Lambda, …)",
+        "datasets": "deleting Datasets",
+        "agents": "deleting the Agent(s) and execution roles, waiting for AWS to confirm they are gone",
+        "canary_artifacts": "removing canary artifacts",
+        "ledger": "deleting the conversation records"
+      },
+      "phaseRunning": "{{phase}}",
+      "phaseDone": "done: {{phase}}",
+      "elapsed": "{{minutes}} min {{seconds}} s elapsed",
+      "duration": "Usually 3–5 minutes: each resource is read back from AWS after it is deleted. Closing this dialog does not stop the clear; it continues in the background.",
+      "doneTitle": "Cleared",
+      "doneClose": "Done"
     },
     "noConversation": "Start a conversation, then paste your Workshop output below.",
     "emptyThread": "PASTE YOUR WORKSHOP OUTPUT — THE ASSISTANT CONFIRMS THE BASELINE AND ASKS ONLY WHAT IS MISSING",
@@ -5770,7 +5797,8 @@
     "recovered": "recovered",
     "reserved": "reserved concurrency {{n}}",
     "rawTitle": "RAW PLAN CONTENT (invalid — repair via EDIT AS JSON)",
-    "forEvaluator": "Evaluator: {{name}}"
+    "forEvaluator": "Evaluator: {{name}}",
+    "disclosure": "Creating assets publishes the selected golden-test inputs, expected responses, assertions and evaluator rubrics of this plan to the workspace Evaluation console (Datasets / Evaluators), where every member of the project can read them. The conversation transcript itself stays private. Nothing is deployed, run, synced to AWS Datasets or invoked; created assets are registered — they have not passed."
   },
   "assistantNext": {
     "title": "NEXT STEPS",
@@ -6518,7 +6546,12 @@
         "accessDenied": "Launchpad is not allowed to read this log group (AccessDenied). Check the workspace role's CloudWatch Logs permissions.",
         "hiddenUnattributed": "{{count}} lines without a session were hidden: their output cannot be tied to a session you may read.",
         "hiddenUnattributedFiltered": "Lines without a session are hidden on this agent, since they could belong to someone else's private session. How many is not shown while a keyword is applied.",
-        "contentMatch": "This runtime's log streams are not split by session (Harness), so the lines shown are the ones that mention the session ID."
+        "contentMatch": "This runtime's log streams are not split by session (Harness), so the lines shown are the ones that mention the session ID.",
+        "gate": {
+          "deploying": "Deploying: the runtime logs show here once the Runtime is ready.",
+          "notDeployed": "This agent has no successfully deployed Runtime yet, so there are no runtime logs.",
+          "deleted": "This agent was deleted; there are no runtime logs."
+        }
       },
       "versionsTitle": "Versions and endpoints",
       "versionsSub": "latest on AWS {{latest}} · last deployed {{ledger}}",
@@ -6995,7 +7028,9 @@
           "inboundAuth": "Inbound auth switched",
           "recommendation": "Recommendation accepted"
         }
-      }
+      },
+      "evaluate": "Evaluate",
+      "evaluateHint": "Create an evaluation task for this agent"
     },
     "data": {
       "title": "Data center",
@@ -13307,7 +13342,9 @@
           "clear": "Use the environment setting",
           "saved": "Saved. New agents follow the change immediately.",
           "confirmOn": "Allow new agents in the default project? They will belong to no department, so department budgets and department administrators will not see them."
-        }
+        },
+        "placeholderDefault": "Choose a project",
+        "openInV3": "Manage projects in the V3 console"
       },
       "carries": "Deploys with",
       "longTerm": "long-term memory",

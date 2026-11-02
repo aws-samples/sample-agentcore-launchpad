@@ -1,16 +1,22 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { methodLabel } from "../../../components/methodChipMeta";
 import {
+  clearAgentList,
   clearCanaryList,
+  clearElapsed,
   clearExperimentList,
   clearInProgress,
+  clearOperationsText,
+  clearStepPhase,
   clearStepText,
   runConversationClear,
+  shortConversationTitle,
 } from "../../../lib/assistant";
-import { api, type AssistantConversationFootprint } from "../../../lib/api";
+import { api, type AssistantConversationFootprint, type AssistantPurgeJobState } from "../../../lib/api";
 import { useV2Toast } from "../../hooks";
-import { Alert, Confirm } from "../../ui";
+import { Alert, Button, Confirm, Modal } from "../../ui";
 import { useApiMessage } from "./common";
 
 /**
@@ -29,11 +35,23 @@ export function useClearConversation(onCleared: (id: string) => void) {
     footprint: AssistantConversationFootprint | null;
     deleting: boolean;
     progress: string;
+    /** the job's raw step, named as a phase in the dialog */
+    step?: AssistantPurgeJobState["step"] | null;
+    startedAt?: number;
   } | null>(null);
+  // a finished clear keeps the dialog open on its outcome until the user closes it
+  const [done, setDone] = useState<{ id: string; text: string } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const detached = useRef(false);
+  const ticking = !!clearing?.deleting;
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [ticking]);
 
   const ask = async (c: { id: string; title: string }) => {
-    const title = c.title || c.id.slice(0, 8);
+    const title = shortConversationTitle(c.title, c.id.slice(0, 8));
     setClearing({ id: c.id, title, footprint: null, deleting: false, progress: "" });
     try {
       const footprint = await api.assistantConversationFootprint(c.id);
@@ -58,25 +76,27 @@ export function useClearConversation(onCleared: (id: string) => void) {
     }
     const { id, title } = clearing;
     detached.current = false;
-    setClearing({ ...clearing, deleting: true, progress: t("assistantPage.clear.starting") });
+    const startedAt = Date.now();
+    setNow(startedAt);
+    setClearing({ ...clearing, deleting: true, progress: t("assistantPage.clear.starting"), step: null, startedAt });
     try {
       const outcome = await runConversationClear(id, {
         detached: () => detached.current,
-        onProgress: (text) =>
-          setClearing((cur) => (cur?.id === id ? { ...cur, progress: text } : cur)),
+        onProgress: (text, step) =>
+          setClearing((cur) => (cur?.id === id ? { ...cur, progress: text, step: step ?? null } : cur)),
       });
       if (outcome.kind === "done") {
         const res = outcome.result;
-        toast(
-          "success",
-          t("assistantPage.clear.doneToast", {
-            title,
-            agents: res.agents.length,
-            operations: res.operations_cleaned.length,
-            datasets: res.datasets.length,
-          }),
-        );
-        onCleared(id);
+        const text = t("assistantPage.clear.doneToast", {
+          title,
+          agents: res.agents.length,
+          operations: res.operations_cleaned.length,
+          datasets: res.datasets.length,
+        });
+        toast("success", text);
+        // a closed dialog (the user stopped following) only gets the toast
+        if (!detached.current) setDone({ id, text });
+        else onCleared(id);
       } else if (outcome.kind === "failed") {
         toast("error", t("assistantPage.clear.failedToast", { reason: outcome.reason }));
       }
@@ -103,7 +123,35 @@ export function useClearConversation(onCleared: (id: string) => void) {
             : { tone: "info" as const, text: t("assistantPage.clear.irreversibleLocal") }
     : null;
 
-  const dialog = (
+  const phase = clearStepPhase(clearing?.step);
+  const progressStep = phase
+    ? t(phase.done ? "assistantPage.clear.phaseDone" : "assistantPage.clear.phaseRunning", {
+        phase: t(`assistantPage.clear.phase.${phase.phase}`),
+      })
+    : clearing?.progress ?? "";
+  const elapsed = clearElapsed(clearing?.startedAt ?? now, now);
+
+  const finish = () => {
+    const cleared = done?.id;
+    setDone(null);
+    if (cleared) onCleared(cleared);
+  };
+
+  const dialog = done ? (
+    <Modal
+      open
+      title={t("assistantPage.clear.doneTitle")}
+      onClose={finish}
+      testId="v2-assistant-clear-done"
+      footer={
+        <Button kind="primary" onClick={finish} testId="v2-assistant-clear-done-ok">
+          {t("assistantPage.clear.doneClose")}
+        </Button>
+      }
+    >
+      <Alert tone="success">{done.text}</Alert>
+    </Modal>
+  ) : (
     <Confirm
       open={fp !== null}
       title={t("assistantPage.clear.title", { title: clearing?.title ?? "" })}
@@ -125,9 +173,7 @@ export function useClearConversation(onCleared: (id: string) => void) {
             <div>{t("assistantPage.clear.intro", { turns: fp.turns, proposals: fp.proposals })}</div>
             {fp.agents.length > 0 && (
               <div>
-                {t("assistantPage.clear.agents", {
-                  list: fp.agents.map((a) => `${a.name} (${a.status})`).join(", "),
-                })}
+                {t("assistantPage.clear.agents", { list: clearAgentList(fp, methodLabel) })}
               </div>
             )}
             {fp.canaries.length > 0 && (
@@ -140,12 +186,7 @@ export function useClearConversation(onCleared: (id: string) => void) {
               <div className="v2-muted">{t("assistantPage.clear.historyKept")}</div>
             )}
             {cloud.length > 0 && (
-              <div>
-                {t("assistantPage.clear.operations", {
-                  n: cloud.length,
-                  resources: cloud.reduce((acc, o) => acc + o.cloud_resources, 0),
-                })}
-              </div>
+              <div data-testid="v2-assistant-clear-operations">{clearOperationsText(t, cloud)}</div>
             )}
             {fp.datasets.length > 0 && (
               <div>
@@ -165,9 +206,14 @@ export function useClearConversation(onCleared: (id: string) => void) {
             )}
             {clearing?.deleting ? (
               <Alert tone="info">
-                <span data-testid="v2-assistant-clear-progress">
-                  {t("assistantPage.clear.progress", { step: clearing.progress })}
-                </span>
+                <div className="v2-stack" style={{ gap: 4 }}>
+                  <span data-testid="v2-assistant-clear-progress">
+                    {t("assistantPage.clear.progress", { step: progressStep })}
+                  </span>
+                  <span className="v2-muted" data-testid="v2-assistant-clear-elapsed">
+                    {t("assistantPage.clear.elapsed", elapsed)} · {t("assistantPage.clear.duration")}
+                  </span>
+                </div>
               </Alert>
             ) : (
               closing && <Alert tone={closing.tone}>{closing.text}</Alert>
@@ -178,5 +224,5 @@ export function useClearConversation(onCleared: (id: string) => void) {
     />
   );
 
-  return { ask, dialog, busy: clearing !== null };
+  return { ask, dialog, busy: clearing !== null || done !== null };
 }

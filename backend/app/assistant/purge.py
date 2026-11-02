@@ -82,6 +82,7 @@ from app.models.assistant import (
 )
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization.models import Experiment, RuntimeCanary
+from app.services import agent_artifacts
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 logger = logging.getLogger(__name__)
@@ -308,12 +309,7 @@ def footprint(db: Session, row: AssistantConversation) -> dict[str, Any]:
         "experiments": [{"id": e.id, "name": e.name, "agent_id": e.agent_id,
                          "status": e.status, "pending": _experiment_pending(e)}
                         for e in experiments],
-        "operations": [{"id": op.id, "status": op.status, "plan_revision": op.plan_revision,
-                        "dataset_id": op.dataset_id,
-                        "cloud_resources": sum(
-                            1 for r in (op.resources or [])
-                            if r.get("kind") != "dataset" and r.get("status") == "ready")}
-                       for op in operations],
+        "operations": [_operation_out(op) for op in operations],
         "datasets": [{"id": d.id, "name": d.name, "item_count": len(d.items or []),
                       "cloud": bool(d.cloud)} for d in datasets],
         "blockers": blockers,
@@ -324,6 +320,28 @@ def footprint(db: Session, row: AssistantConversation) -> dict[str, Any]:
         ),
         "purge": _job_out(last_job),
     }
+
+
+# Resource kinds an operation records that a clear never deletes: the local Dataset is
+# removed as a ledger row (listed on its own), and an ``existing`` evaluator is a
+# read-only reference to a built-in / pre-existing evaluator the operation never owned.
+_NOT_CLEANED_KINDS = frozenset({"dataset", "existing"})
+
+
+def _operation_out(op: EvaluationAssetOperation) -> dict[str, Any]:
+    """One evaluation-assets operation as the CLEAR confirm names it: the cloud
+    resources it created and a clear deletes, counted per kind so the dialog can say
+    exactly what goes (an evaluator, a Lambda chain, a grant on a role) instead of a
+    fixed list."""
+    kinds: dict[str, int] = {}
+    for r in op.resources or []:
+        kind = r.get("kind")
+        if kind in _NOT_CLEANED_KINDS or r.get("status") != "ready":
+            continue
+        kinds[kind] = kinds.get(kind, 0) + 1
+    return {"id": op.id, "status": op.status, "plan_revision": op.plan_revision,
+            "dataset_id": op.dataset_id, "cloud_resources": sum(kinds.values()),
+            "cloud_kinds": kinds}
 
 
 def _canary_out(row: RuntimeCanary) -> dict[str, Any]:
@@ -896,12 +914,15 @@ def _step_agents(run: _Run) -> None:
                           f"the execution role of agent {agent.name} could not be deleted — "
                           "retry the clear", {"agent_id": agent_id})
         record = _clean_registry_record(run, key, agent)
+        # best-effort, never raises: an orphaned package must not hold the clear
+        artifacts = agent_artifacts.delete_agent_artifacts(agent, run.workspace)
         run.db.expire_all()
         agent = run.db.get(Agent, agent_id)
         if agent.status != "deleted":
             agents_router.mark_agent_deleted(run.db, agent)
         run.mark(key, "done", "resource read back gone, role deleted, "
-                 f"registry record {record}, ledger marked deleted")
+                 f"registry record {record}, {len(artifacts)} S3 artifact(s) removed, "
+                 "ledger marked deleted")
         run.record("agents", {"id": agent.id, "name": agent.name, "aws_resource_deleted": True,
                               "registry_record": record})
 

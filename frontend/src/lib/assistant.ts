@@ -592,6 +592,73 @@ export function clearCanaryList(fp: AssistantConversationFootprint): string {
     .join("; ");
 }
 
+/** A conversation title for a heading or a dialog title: older conversations were
+ *  titled with their whole first message, so a display cut keeps them to one line's
+ *  worth (code points, not UTF-16 units); the full title stays in a `title` tooltip. */
+export function shortConversationTitle(title: string | null | undefined, fallback: string, max = 40): string {
+  const text = (title ?? "").replace(/\s+/g, " ").trim() || fallback;
+  const chars = Array.from(text);
+  return chars.length <= max ? text : `${chars.slice(0, max - 1).join("").trimEnd()}…`;
+}
+
+/** The kinds a CLEAR names for evaluation-assets cloud resources, in dialog order. */
+export const CLEAR_CLOUD_KINDS = [
+  "evaluator",
+  "lambda_function",
+  "lambda_role",
+  "log_group",
+  "lambda_permission",
+  "role_grant",
+] as const;
+
+export type ClearCloudKind = (typeof CLEAR_CLOUD_KINDS)[number] | "other" | "unknown";
+
+/**
+ * What the clear deletes across the conversation's evaluation-assets operations,
+ * per kind (`cloud_kinds` from the footprint), so the confirm lists exactly those —
+ * no Lambda line when the plan made no Lambda. A kind this console does not know
+ * counts as `other`; an operation from a server without `cloud_kinds` contributes
+ * its bare total as `unknown`.
+ */
+export function clearCloudKinds(
+  operations: AssistantConversationFootprint["operations"],
+): { kind: ClearCloudKind; count: number }[] {
+  const totals = new Map<ClearCloudKind, number>();
+  const add = (kind: ClearCloudKind, n: number) => {
+    if (n > 0) totals.set(kind, (totals.get(kind) ?? 0) + n);
+  };
+  for (const op of operations) {
+    if (!op.cloud_kinds) {
+      add("unknown", op.cloud_resources);
+      continue;
+    }
+    for (const [kind, n] of Object.entries(op.cloud_kinds)) {
+      add((CLEAR_CLOUD_KINDS as readonly string[]).includes(kind) ? (kind as ClearCloudKind) : "other", n);
+    }
+  }
+  const order: ClearCloudKind[] = [...CLEAR_CLOUD_KINDS, "other", "unknown"];
+  return order.filter((k) => totals.has(k)).map((kind) => ({ kind, count: totals.get(kind)! }));
+}
+
+type ClearT = (key: string, options?: Record<string, unknown>) => string;
+
+/** The confirm's evaluation-assets line: the operations and, per kind, exactly the
+ *  cloud resources the clear deletes (or that it deletes none). */
+export function clearOperationsText(t: ClearT, operations: AssistantConversationFootprint["operations"]): string {
+  const kinds = clearCloudKinds(operations);
+  if (!kinds.length) return t("assistantPage.clear.operationsNone", { n: operations.length });
+  const list = kinds
+    .map((k) => t(`assistantPage.clear.kinds.${k.kind}`, { count: k.count }))
+    .join(t("assistantPage.clear.listSep"));
+  return t("assistantPage.clear.operations", { n: operations.length, list });
+}
+
+/** The confirm's Agents line: each Agent with its creation method and status (a
+ *  conversation may deploy a Harness or a Runtime). */
+export function clearAgentList(fp: AssistantConversationFootprint, label: (method: string) => string): string {
+  return fp.agents.map((a) => `${a.name} (${label(a.method)} · ${a.status})`).join(", ");
+}
+
 export function clearExperimentList(fp: AssistantConversationFootprint): string {
   return fp.experiments
     .filter((e) => e.pending)
@@ -605,6 +672,40 @@ export function clearInProgress(fp: AssistantConversationFootprint): boolean {
 }
 
 /** Human text for a clear job's current step (`canary:<id> · waiting · endpoint:x (DELETING)`). */
+/** The phases of a CLEAR job, in the order the worker runs them (`purge._STEPS`, then
+ *  the ledger rows), as the dialog names them. */
+export const CLEAR_PHASES = [
+  "canaries",
+  "experiments",
+  "operations",
+  "datasets",
+  "agents",
+  "canary_artifacts",
+  "ledger",
+] as const;
+export type ClearPhase = (typeof CLEAR_PHASES)[number];
+
+/** A job step (`{key: "agent:<id>", state: "deleting", …}`) → the phase the dialog
+ *  shows in words, and whether it finished; null for a step this console does not know
+ *  (the raw `clearStepText` is shown instead). */
+export function clearStepPhase(
+  step: AssistantPurgeJobState["step"] | undefined | null,
+): { phase: ClearPhase; done: boolean } | null {
+  if (!step?.key) return null;
+  const head = step.key.split(":", 1)[0];
+  const phase = (
+    { canary: "canaries", experiment: "experiments", operation: "operations", dataset: "datasets",
+      agent: "agents", canary_artifacts: "canary_artifacts", ledger: "ledger" } as Record<string, ClearPhase>
+  )[head] ?? ((CLEAR_PHASES as readonly string[]).includes(head) ? (head as ClearPhase) : null);
+  return phase ? { phase, done: step.state === "done" } : null;
+}
+
+/** Whole minutes and seconds since `startedAt`, for the clear's progress line. */
+export function clearElapsed(startedAt: number, now: number): { minutes: number; seconds: number } {
+  const total = Math.max(0, Math.floor((now - startedAt) / 1000));
+  return { minutes: Math.floor(total / 60), seconds: total % 60 };
+}
+
 export function clearStepText(step: AssistantPurgeJobState["step"] | undefined | null): string {
   if (!step) return "";
   return [step.key, step.state, step.detail].filter(Boolean).join(" · ");
@@ -623,7 +724,7 @@ export type ClearOutcome =
 export async function runConversationClear(
   id: string,
   opts: {
-    onProgress?: (text: string) => void;
+    onProgress?: (text: string, step?: AssistantPurgeJobState["step"] | null) => void;
     detached?: () => boolean;
     pollMs?: number;
     sleep?: (ms: number) => Promise<void>;
@@ -659,7 +760,7 @@ export async function runConversationClear(
     if (job.status === "failed") {
       return { kind: "failed", reason: payload.blocker?.message || job.error || job.status };
     }
-    opts.onProgress?.(clearStepText(payload.step) || job.status);
+    opts.onProgress?.(clearStepText(payload.step) || job.status, payload.step ?? null);
     await sleep(opts.pollMs ?? ASSISTANT_JOB_POLL_MS);
   }
 }

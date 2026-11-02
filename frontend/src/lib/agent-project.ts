@@ -38,9 +38,35 @@ export function agentProjectOptionLabel(
   return p.is_default ? `${p.name} · ${defaultTag}` : agentProjectLabel(p);
 }
 
-/** The i18n keys of the picker's hint and empty-list copy, by the agent-project switch. */
-export function agentProjectCopyKeys(defaultAllowed: boolean | undefined): { hint: string; none: string } {
+/** The i18n keys of the picker's hint, placeholder and empty-list copy, by the
+ *  agent-project switch: while it is on the workspace default project (no department)
+ *  is a valid pick, so the placeholder no longer asks for a *business* project. */
+export function agentProjectCopyKeys(defaultAllowed: boolean | undefined): {
+  hint: string;
+  none: string;
+  placeholder: string;
+} {
   return defaultAllowed
-    ? { hint: "v3.create.project.hintDefault", none: "v3.create.project.noneDefault" }
-    : { hint: "v3.create.project.hint", none: "v3.create.project.none" };
+    ? {
+        hint: "v3.create.project.hintDefault",
+        none: "v3.create.project.noneDefault",
+        placeholder: "v3.create.project.placeholderDefault",
+      }
+    : {
+        hint: "v3.create.project.hint",
+        none: "v3.create.project.none",
+        placeholder: "v3.create.project.placeholder",
+      };
+}
+
+/**
+ * The "manage projects" link of the V2 and classic pickers. Neither console has a
+ * projects page — projects are created and staffed only on V3's admin-only
+ * `/v3/projects` — so a member gets no link (the copy already says to ask an
+ * administrator: the page would refuse them), and an administrator gets one that
+ * says it opens the V3 console rather than a bare "Open projects" that leaves V2
+ * unannounced.
+ */
+export function agentProjectManageLink(isAdmin: boolean): { to: string; labelKey: string } | null {
+  return isAdmin ? { to: "/v3/projects", labelKey: "v3.create.project.openInV3" } : null;
 }

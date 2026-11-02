@@ -528,7 +528,7 @@
       "systemPromptPlaceholder": "你是一名乐于助人的助手……",
       "tools": "工具 — 内置",
       "gatewayToolsSoon": "+ gateway 工具 · 仅 harness 与 Strands ZIP（HTTP）支持",
-      "gatewayWholeNote": "选择 gateway 条目会挂载整个 AgentCore Gateway 及其暴露的所有工具 —— Registry 审批只决定目录可见性，不是按工具的授权边界。请在 Governance 中用 Cedar 策略授权单个工具动作。标记为“—”的条目因出站鉴权未解析，仅存在于目录中、无法挂载。",
+      "gatewayWholeNote": "选择 gateway 条目会挂载整个 AgentCore Gateway 及其暴露的所有工具 —— Registry 审批只决定目录可见性，不是按工具的授权边界。请在「网关治理」中用 Cedar 策略授权单个工具动作。标记为“—”的条目因出站鉴权未解析，仅存在于目录中、无法挂载。",
       "memory": "记忆",
       "memoryShort": "短期 · 会话",
       "memoryLong": "长期 · 用户偏好",
@@ -5474,8 +5474,8 @@
       "action": "清除该会话及其创建的全部资产",
       "title": "清除“{{title}}”及其资产？",
       "intro": "将删除对话记录（{{turns}} 轮）和 {{proposals}} 个提案修订。",
-      "agents": "已部署的 Agent 将从 AWS 删除（Harness + 执行角色）：{{list}}。",
-      "operations": "{{n}} 次评估资产创建将被清理：{{resources}} 个云端资源（AgentCore 评估器、Lambda 及其角色、日志组与策略）在逐一核对身份后删除。",
+      "agents": "已部署的 Agent 及其执行角色将从 AWS 删除：{{list}}。",
+      "operations": "{{n}} 次评估资产创建将被清理，逐一核对身份后删除：{{list}}。",
       "datasets": "将删除本地 Dataset：{{list}}。",
       "datasetCloud": "其中有 Dataset 曾被手动同步到 AWS；该 AWS Dataset 会保留（如不需要，请在 评估 → Datasets 中删除）。",
       "onlyTranscript": "该会话没有创建 Agent、云端资产或 Dataset。",
@@ -5495,7 +5495,34 @@
       "progress": "清除中 — {{step}}",
       "starting": "正在开始",
       "failedToast": "清除已停止，会话已保留：{{reason}}",
-      "background": "清除会在后台继续 — 再次打开“清除”即可查看进度。"
+      "background": "清除会在后台继续 — 再次打开“清除”即可查看进度。",
+      "operationsNone": "{{n}} 次评估资产创建将被清理：没有需要删除的云端资源（引用的内置评估器不会删除）。",
+      "listSep": "、",
+      "kinds": {
+        "evaluator": "{{count}} 个自定义 AgentCore 评估器",
+        "lambda_function": "{{count}} 个 Lambda 函数",
+        "lambda_role": "{{count}} 个 Lambda 执行角色",
+        "log_group": "{{count}} 个日志组",
+        "lambda_permission": "{{count}} 条 Lambda 调用授权",
+        "role_grant": "执行角色上的 {{count}} 条内联授权策略（角色本身不删除）",
+        "other": "{{count}} 个其他云端资源",
+        "unknown": "{{count}} 个云端资源"
+      },
+      "phase": {
+        "canaries": "停止并删除金丝雀发布",
+        "experiments": "清理 A/B 实验",
+        "operations": "删除评估资产（评估器、Lambda 等）",
+        "datasets": "删除数据集",
+        "agents": "删除 Agent 及其执行角色，并等待 AWS 确认已删除",
+        "canary_artifacts": "清理金丝雀的制品",
+        "ledger": "删除会话记录"
+      },
+      "phaseRunning": "正在{{phase}}",
+      "phaseDone": "已完成：{{phase}}",
+      "elapsed": "已用时 {{minutes}} 分 {{seconds}} 秒",
+      "duration": "通常需要 3–5 分钟：每个资源删除后都要从 AWS 回读确认。关闭对话框不会中断清除，它会在后台继续。",
+      "doneTitle": "已清除",
+      "doneClose": "完成"
     },
     "noConversation": "先新建一个会话，再把 Workshop 产出粘贴到下方。",
     "emptyThread": "粘贴 Workshop 产出 — 助手会确认需求基线，只追问缺失且影响架构的问题",
@@ -5694,7 +5721,7 @@
     "fixErrors": "请先修正校验错误。",
     "unresolvedHint": "有 {{n}} 条建议未解决——它们会如实显示为未解决，不会被实现。",
     "confirmTitle": "创建计划版本 {{n}} 的资产？",
-    "confirmBody": "Workspace {{workspace}} · 精确计划哈希 {{hash}}… · {{cloud}} 个 AgentCore 评估器 · {{lambdas}} 个 Lambda 函数 · {{roles}} 项 IAM 变更。此操作只创建并注册资源——不部署、不运行评估、不调用模型。之后重试会返回同一批资源。",
+    "confirmBody": "工作空间 {{workspace}} · 精确计划哈希 {{hash}}… · {{cloud}} 个 AgentCore 评估器 · {{lambdas}} 个 Lambda 函数 · {{roles}} 项 IAM 变更。此操作只创建并注册资源——不部署、不运行评估、不调用模型。之后重试会返回同一批资源。",
     "confirmCreate": "创建",
     "dialogStale": "确认框打开期间计划已变化，未创建任何内容。",
     "operation": "创建结果",
@@ -5770,7 +5797,8 @@
     "recovered": "已恢复",
     "reserved": "预留并发 {{n}}",
     "rawTitle": "原始计划内容（无效——请通过“以 JSON 编辑”修复）",
-    "forEvaluator": "所属评估器：{{name}}"
+    "forEvaluator": "所属评估器：{{name}}",
+    "disclosure": "创建资产会把本计划中选中的黄金测试输入、期望回答、断言和评估器评分标准发布到工作空间的评估控制台（数据集／评估器），项目内的每位成员都能查看。对话记录本身仍然只有你能看到。此操作不部署、不运行评估、不同步到 AWS 数据集，也不调用 Agent；创建出的资产只是登记在册，并不代表已经通过。"
   },
   "assistantNext": {
     "title": "下一步",
@@ -6518,7 +6546,12 @@
         "accessDenied": "Launchpad 无权读取该日志组（AccessDenied）。请检查工作空间角色的 CloudWatch Logs 权限。",
         "hiddenUnattributed": "已隐藏 {{count}} 行不含会话的日志：无法确认其属于你可查看的会话。",
         "hiddenUnattributedFiltered": "此 Agent 上不含会话的日志行会被隐藏，因为它们可能属于他人的私有会话；按关键词筛选时不显示隐藏的行数。",
-        "contentMatch": "该 Runtime 的日志流不按会话划分（Harness），因此仅显示提及该会话 ID 的日志行。"
+        "contentMatch": "该 Runtime 的日志流不按会话划分（Harness），因此仅显示提及该会话 ID 的日志行。",
+        "gate": {
+          "deploying": "正在部署：Runtime 就绪后，这里会显示它的运行日志。",
+          "notDeployed": "该 Agent 还没有部署成功的 Runtime 资源，因此还没有运行日志。",
+          "deleted": "该 Agent 已删除，没有运行日志。"
+        }
       },
       "versionsTitle": "版本与端点",
       "versionsSub": "AWS 最新版本 {{latest}} · 最近部署 {{ledger}}",
@@ -6995,7 +7028,9 @@
           "inboundAuth": "切换了入站认证",
           "recommendation": "采纳了推荐"
         }
-      }
+      },
+      "evaluate": "评估",
+      "evaluateHint": "为该 Agent 新建一次评估任务"
     },
     "data": {
       "title": "数据中心",
@@ -13307,7 +13342,9 @@
           "clear": "改用环境配置",
           "saved": "已保存，新建智能体立即按新设置执行。",
           "confirmOn": "确定允许在默认项目中创建新智能体吗？这些智能体不属于任何部门，部门预算和部门管理员都看不到它们。"
-        }
+        },
+        "placeholderDefault": "选择项目",
+        "openInV3": "在 V3 控制台管理项目"
       },
       "carries": "部署时带上",
       "longTerm": "长期记忆",

@@ -2,6 +2,7 @@ import { lazy, type ReactNode, useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { ToastProvider } from "./components";
+import { AUTH_PATHS, loginRedirectTarget } from "./lib/login-redirect";
 import { useUiVersion } from "./lib/ui-version";
 import { RouteChunk } from "./layout/RouteChunk";
 import { Shell } from "./layout/Shell";
@@ -211,6 +212,16 @@ function V2OrClassic({ classic, toV2 }: { classic: ReactNode; toV2: (search: str
   return <>{classic}</>;
 }
 
+/**
+ * `/login` and `/register` only exist as addresses: `AuthGate` draws the form over
+ * any URL, so once signed in the caller moves on to `?next=` (a same-origin path)
+ * or the index route instead of the console's "page not found" card.
+ */
+function AuthPathRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={loginRedirectTarget(search)} replace />;
+}
+
 /** The index route honours the operator's remembered console choice. */
 function IndexRoute() {
   const version = useUiVersion();
@@ -362,6 +373,9 @@ export default function App() {
         <WorkspaceProvider>
           <ProjectProvider>
             <Routes>
+              {AUTH_PATHS.map((path) => (
+                <Route key={path} path={path.slice(1)} element={<AuthPathRedirect />} />
+              ))}
               <Route
                 path="auth/return"
                 element={
