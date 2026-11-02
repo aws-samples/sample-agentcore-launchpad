@@ -420,3 +420,25 @@ def test_gpt_6_1_sol_and_gpt_6_sol_keep_their_own_rates():
     assert defaults["gpt-6.1-sol"]["cache_read"] == pytest.approx(0.10)
     assert defaults["gpt-6-sol"]["cache_read"] == pytest.approx(0.20)
     assert match_price("global.zai.glm-5.3", defaults) == defaults["glm-5.3"]
+
+
+def test_gpt_6_1_terra_is_priced_from_its_model_card():
+    """GPT-6.1 Terra (model card, Standard tier, short context, read 2026-11-02): the
+    global profile and the bare Mantle id at OpenAI rates, the US profile with the
+    10% premium; no other family's key captures it, nor it theirs."""
+    from app.services.observability import estimate_cost, match_price
+
+    defaults = Settings.model_fields["model_prices"].default
+    terra, us_terra = defaults["gpt-6.1-terra"], defaults["us.openai.gpt-6.1-terra"]
+    assert terra == {"input": 1.00, "output": 5.00, "cache_read": 0.05, "cache_write": 1.25}
+    assert us_terra == {"input": 1.10, "output": 5.50, "cache_read": 0.055, "cache_write": 1.375}
+    assert match_price("global.openai.gpt-6.1-terra", defaults) == terra
+    assert match_price("openai.gpt-6.1-terra", defaults) == terra
+    assert match_price("us.openai.gpt-6.1-terra", defaults) == us_terra
+    # neighbours keep their own rates
+    assert match_price("global.openai.gpt-6.1-sol", defaults) == defaults["gpt-6.1-sol"]
+    assert match_price("openai.gpt-5.6-terra", defaults) != terra
+    # 1M in + 1M out on the global profile = $1.00 + $5.00
+    assert estimate_cost("global.openai.gpt-6.1-terra", 1e6, 1e6, prices=defaults) == (
+        pytest.approx(6.00)
+    )

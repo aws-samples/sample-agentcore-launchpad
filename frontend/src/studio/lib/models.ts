@@ -60,6 +60,10 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
     model_name: 'GPT-6 Sol (global)',
   },
   {
+    model_id: 'global.openai.gpt-6.1-terra',
+    model_name: 'GPT-6.1 Terra (global)',
+  },
+  {
     model_id: 'global.openai.gpt-6-astra',
     model_name: 'GPT-6 Astra (global)',
   },

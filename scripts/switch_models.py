@@ -74,6 +74,10 @@ HAIKU55, SONNET46 = "global.anthropic.claude-haiku-5-5", "global.anthropic.claud
 HAIKU45 = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 GPT6_SOL, GPT6_ASTRA = "global.openai.gpt-6-sol", "global.openai.gpt-6-astra"
 GPT6_LUNA, GPT61_SOL = "global.openai.gpt-6-luna", "global.openai.gpt-6.1-sol"
+# GPT-6.1 Terra: Converse + tools (auto and forced any) + reasoning.effort live-probed
+# 2026-11-02 (global + us profiles, us-east-1 / us-west-2); not yet probed as an
+# AgentCore judge, so it is only offered to roles that do not judge.
+GPT61_TERRA = "global.openai.gpt-6.1-terra"
 GLM = ["global.zai.glm-5.3", "us.zai.glm-5.3"]
 KIMI = ["global.moonshotai.kimi-k3", "us.moonshotai.kimi-k3"]
 NOVA_PRO = "us.amazon.nova-pro-v1:0"  # (nova-premier: end of life, 2026-10)
@@ -120,7 +124,7 @@ ROLES = [
          [SONNET5, SONNET55, HAIKU55, GPT6_SOL, GPT6_LUNA, *GLM, *DS_KIMI, NOVA_PRO, NOVA_LITE,
           QWEN, R1], note="intent clustering + suggested questions"),
     Role("agent_default", "agent_default_model_id", GLM[0], "tools",
-         [*GLM, *DS_KIMI, NOVA_PRO, QWEN, SONNET5, GPT6_SOL],
+         [*GLM, *DS_KIMI, NOVA_PRO, QWEN, SONNET5, GPT6_SOL, GPT61_TERRA],
          note="default model of new agents"),
     Role("judge", "judge_model_id", GPT6_SOL, "judge", _JUDGES,
          note="LLM-as-judge of custom/derived evaluators"),

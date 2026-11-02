@@ -477,6 +477,19 @@ class Settings(BaseSettings):
         "us.openai.gpt-6.1-sol": {
             "input": 2.20, "output": 11.00, "cache_read": 0.11, "cache_write": 2.75,
         },
+        # GPT-6.1 Terra: Bedrock model card, Standard tier, short context (<= 272K
+        # input), read 2026-11-02 —
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html
+        # (the Price List API has no GPT-6.x rows yet). Global CRIS = OpenAI rates; US
+        # Geo CRIS and Mantle In-Region carry the 10% premium. The bare Mantle id
+        # `openai.gpt-6.1-terra` matches the global key, 10% low until the refresher
+        # writes the exact id (same trade-off as GPT-6 Sol above).
+        "gpt-6.1-terra": {
+            "input": 1.00, "output": 5.00, "cache_read": 0.05, "cache_write": 1.25,
+        },
+        "us.openai.gpt-6.1-terra": {
+            "input": 1.10, "output": 5.50, "cache_read": 0.055, "cache_write": 1.375,
+        },
         # DeepSeek / Moonshot Kimi on Bedrock (Standard tier, on-demand, US East),
         # read 2026-10-12 from https://aws.amazon.com/bedrock/pricing/ and the AWS
         # Price List API (service AmazonBedrock, us-east-1); litellm agrees
