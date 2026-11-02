@@ -291,3 +291,28 @@ def test_clearing_the_override_falls_back_to_env(monkeypatch):
     finally:
         db.close()
     assert back["allow_default_project"] is True and back["source"] == "env"
+
+
+def test_env_alone_turns_it_on_for_every_path(monkeypatch):
+    """The prod rollout path: LAUNCHPAD_AGENT_ALLOW_DEFAULT_PROJECT=true, no console row."""
+    monkeypatch.setenv(ENV, "true")
+    get_settings.cache_clear()
+    app = create_app()  # startup finds no console row and leaves the env value alone
+    monkeypatch.setattr(agents_router, "start_deploy_async", lambda jid: None)
+    _project("default")
+    assert agent_project_settings.allowed() is True
+    assert _check("default") == "default"
+    assert "default" in _eligible(_Admin())
+    assert _stamp_agent("default") == "default"
+    client = TestClient(app)
+    listed = client.get("/api/agents/eligible-projects").json()
+    assert listed["default_project_allowed"] is True
+    assert "default" in [p["id"] for p in listed["projects"]]
+    res = client.post("/api/agents", json={"name": "env-home", "method": "harness",
+                                           "system_prompt": "Hi.", "project_id": "default"})
+    assert res.status_code == 202, res.text
+    db = SessionLocal()
+    try:
+        assert agent_project_settings.view(db)["source"] == "env"
+    finally:
+        db.close()
