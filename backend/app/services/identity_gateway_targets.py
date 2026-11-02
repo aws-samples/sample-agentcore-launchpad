@@ -98,6 +98,12 @@ def _binding(detail: dict[str, Any]) -> dict[str, Any]:
     return {"auth": "none", "connection": None, "mode": None, "scopes": []}
 
 
+def target_binding(detail: dict[str, Any]) -> dict[str, Any]:
+    """The Connection a GetGatewayTarget response is bound to (``connection`` None:
+    none) — the gateway-tools listing tells Connection-managed targets apart by it."""
+    return _binding(detail)
+
+
 def _source_type(detail: dict[str, Any]) -> str:
     mcp = (detail.get("targetConfiguration") or {}).get("mcp") or {}
     if "openApiSchema" in mcp:

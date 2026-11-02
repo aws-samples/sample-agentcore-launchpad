@@ -5,13 +5,17 @@ import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   adoptExternalTarget,
+  adoptUnmanagedTarget,
   deleteLambdaTarget,
   type ExternalMcpTarget,
   type LambdaToolStatus,
   type LambdaToolTarget,
   listExternalTargets,
   listLambdaTargets,
+  listUnmanagedTargets,
+  targetKindLabel,
   toolReviewApi,
+  type UnmanagedTarget,
 } from "../../../lib/api/mcpReviews";
 import { sharedFromOf } from "../../../lib/api/sharedFrom";
 import { useFailure } from "../../failure";
@@ -52,6 +56,8 @@ export function GatewayToolTargets({ formRequest = 0 }: { formRequest?: number }
   const [busy, setBusy] = useState(false);
   const lambdas = useLoad(() => listLambdaTargets(), `v3-lambda-tools:${nonce}`);
   const external = useLoad(() => listExternalTargets(), `v3-external-tools:${nonce}`);
+  const unmanaged = useLoad(() => listUnmanagedTargets(), `v3-unmanaged-tools:${nonce}`);
+  const [adopting, setAdopting] = useState<UnmanagedTarget | null>(null);
   const reload = () => setNonce((n) => n + 1);
   const formRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -69,6 +75,22 @@ export function GatewayToolTargets({ formRequest = 0 }: { formRequest?: number }
       reload();
     } catch (err) {
       failed.fail(err, t("lambdaTool.external.adoptFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const adoptUnmanaged = async () => {
+    if (!adopting) return;
+    setBusy(true);
+    try {
+      failed.clear();
+      await adoptUnmanagedTarget(adopting.target_id);
+      toast("ok", t("lambdaTool.unmanaged.adopted", { name: adopting.target_name }));
+      setAdopting(null);
+      reload();
+    } catch (err) {
+      failed.fail(err, t("lambdaTool.unmanaged.adoptFailed"));
     } finally {
       setBusy(false);
     }
@@ -171,6 +193,50 @@ export function GatewayToolTargets({ formRequest = 0 }: { formRequest?: number }
           </div>
         )}
       </Panel>
+      <Panel title={t("lambdaTool.unmanaged.title")}>
+        <div className="v3-hint" style={{ marginBottom: 8 }}>{t("lambdaTool.unmanaged.intro")}</div>
+        {unmanaged.error ? (
+          <Notice s="act"><ApiErrorDetail error={unmanaged.failure ?? unmanaged.error} /></Notice>
+        ) : !unmanaged.data ? (
+          <Skeleton rows={2} />
+        ) : unmanaged.data.targets.length === 0 ? (
+          <Empty title={t("lambdaTool.unmanaged.empty")} />
+        ) : (
+          <div style={{ display: "grid", gap: 12 }} data-testid="v3-unmanaged-targets">
+            {unmanaged.data.targets.map((target) => (
+              <div key={target.target_id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <span className="mono">{target.target_name}</span>
+                <Chip>{targetKindLabel(target.kind)}</Chip>
+                {target.system && <Chip>{t("lambdaTool.unmanaged.system")}</Chip>}
+                {target.kind === "lambda" && <span className="v3-hint">{t("lambdaTool.list.tools", { count: target.tool_names.length })}</span>}
+                <span className="v3-hint mono" style={{ wordBreak: "break-all" }}>{target.lambda_arn ?? target.description}</span>
+                <span style={{ flex: 1 }} />
+                {target.reason === null ? (
+                  <Btn size="sm" busy={busy} onClick={() => setAdopting(target)} title={t("lambdaTool.unmanaged.adoptHint")}>
+                    {t("lambdaTool.unmanaged.adopt")}
+                  </Btn>
+                ) : (
+                  <span className="v3-hint">
+                    {t(`lambdaTool.unmanaged.reason.${target.reason}`, { connection: target.connection ?? "", kind: targetKindLabel(target.kind) })}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+      {adopting && (
+        <Confirm
+          title={t("lambdaTool.unmanaged.adoptTitle", { name: adopting.target_name })}
+          confirmLabel={t("lambdaTool.unmanaged.adopt")}
+          cancelLabel={t("mcpReview.ops.cancel")}
+          busy={busy}
+          onCancel={() => setAdopting(null)}
+          onConfirm={adoptUnmanaged}
+        >
+          {t("lambdaTool.unmanaged.adoptBody", { count: adopting.tool_names.length })}
+        </Confirm>
+      )}
       {deleting && (
         <Confirm
           title={t("lambdaTool.list.deleteTitle", { name: deleting.target_name })}

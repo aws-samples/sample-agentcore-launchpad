@@ -9,7 +9,7 @@ import { useAuth } from "../../auth/auth-context";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, errorMessage, type RegistryRecordOut } from "../../lib/api";
-import { descriptorExcerpt, parseAgentCard, parseMcpUrl, parseSkillDefinition, skillPath, statusReasonText } from "../../lib/registry";
+import { deletedMessage, descriptorExcerpt, parseAgentCard, parseMcpUrl, parseSkillDefinition, skillPath, statusReasonText } from "../../lib/registry";
 import { isRegistryUnavailable } from "../../v2/pages/registry/common";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
@@ -149,7 +149,7 @@ function RecordList({ tab }: { tab: RegistryTab }) {
           <>
             <Link to="/v2/registry?view=discoverable" className="v3-btn ghost">{t("v3.registry.consumer")}</Link>
             <Link to="/v2/registry?view=a2a-demo" className="v3-btn ghost">{t("v3.registry.a2aDemo")}</Link>
-            <Link to="/v2/governance" className="v3-btn" title={t("v2.registry.importGatewayHint")}>{t("v3.registry.importGateway")}</Link>
+            <Link to="/v2/registry?import=gateway&full=1" className="v3-btn" title={t("v2.registry.importGatewayHint")} data-testid="v3-registry-import-gateway">{t("v3.registry.importGateway")}</Link>
             <Link to="/v2/registry?view=register" className="v3-btn primary"><Plus size={14} /> {t("v3.registry.register")}</Link>
           </>
         }
@@ -347,8 +347,8 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
     setBusy(true);
     try {
       failed.clear();
-      await api.registryDelete(r.record_id);
-      toast("ok", t("registry.deleted", { name: r.name }));
+      const result = await api.registryDelete(r.record_id);
+      toast("ok", deletedMessage(t, r.name, result));
       navigate(back);
     } catch (err) {
       failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));

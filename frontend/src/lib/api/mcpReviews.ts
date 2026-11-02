@@ -281,6 +281,49 @@ export const adoptExternalTarget = (targetId: string) =>
     "POST",
   );
 
+/** Why an unmanaged target cannot be adopted here: a bootstrap target, one bound to a
+ *  Connection (managed under Connections), not a Lambda target, a schema kept in S3 or
+ *  not a valid tool list, a function outside this workspace's account/region, or one
+ *  another project already manages. `null` = adoptable. */
+export type UnmanagedTargetReason = "system" | "connection" | "kind" | "schema" | "environment" | "elsewhere";
+
+/** A target on the workspace Gateway neither the Lambda nor the externally hosted list
+ *  covers — typically a Lambda target made by hand, or a bootstrap / OpenAPI one. */
+export interface UnmanagedTarget {
+  target_id: string;
+  target_name: string;
+  /** the `mcp` union member: lambda, openApiSchema, smithyModel, apiGateway, … */
+  kind: string;
+  status: string | null;
+  description: string;
+  lambda_arn: string | null;
+  tool_names: string[];
+  system: boolean;
+  connection: string | null;
+  adopted_elsewhere: boolean;
+  reason: UnmanagedTargetReason | null;
+}
+
+/** `lambda` → "Lambda", `openApiSchema` → "OpenAPI", … (the target's `mcp` union member). */
+export function targetKindLabel(kind: string): string {
+  const labels: Record<string, string> = { lambda: "Lambda", openApiSchema: "OpenAPI", smithyModel: "Smithy", apiGateway: "API Gateway" };
+  return labels[kind] ?? kind;
+}
+
+export const listUnmanagedTargets = () => getJson<{ targets: UnmanagedTarget[] }>("/api/gateway-tools/unmanaged");
+
+/** Manage a hand-made Lambda target: its inline schema becomes the approved baseline. */
+export const adoptUnmanagedTarget = (targetId: string) =>
+  sendJson<LambdaToolTarget>(`/api/gateway-tools/unmanaged/${enc(targetId)}/adopt`, "POST");
+
+/** The Lambda-ARN placeholder for the current workspace — the function must live in its
+ *  account and region (the backend refuses any other), so the example names them. */
+export function lambdaArnPlaceholder(ws: { account_id?: string | null; region?: string | null } | null): string {
+  const region = ws?.region || "<region>";
+  const partition = region.startsWith("cn-") ? "aws-cn" : region.startsWith("us-gov-") ? "aws-us-gov" : "aws";
+  return `arn:${partition}:lambda:${region}:${ws?.account_id || "<account-id>"}:function:crm-tools`;
+}
+
 /** The review calls of one subject: a hosted server, or a Lambda / adopted target. */
 export interface ReviewApi {
   list: () => Promise<McpReviewList>;

@@ -511,7 +511,8 @@ def test_delete_kb_warns_only_for_data_sources_not_already_gone(monkeypatch, cap
 
     out = knowledge.delete_kb(ws_ctx({}, id="default"), "KB1")
 
-    assert out == {"deleted": True, "kb_id": "KB1"}
+    # no artifacts bucket in this workspace: nothing to purge
+    assert out == {"deleted": True, "kb_id": "KB1", "files_removed": 0}
     client.delete_knowledge_base.assert_called_once_with(knowledgeBaseId="KB1")
     (record,) = caplog.records
     text = record.getMessage()

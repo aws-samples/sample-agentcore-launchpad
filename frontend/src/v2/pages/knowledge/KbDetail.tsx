@@ -35,6 +35,7 @@ import { KbRetrieve } from "./KbRetrieve";
 import { emptySource, sourceBody, type SourceDraft } from "./source";
 import { SourceFields } from "./SourceFields";
 import { useKbDelete } from "./useKbDelete";
+import { kbDeleteBlockedReason } from "./status";
 
 const POLL_MS = 5000;
 /** ~3.5 min at the 5 s poll: how long an ACTIVE KB without a source waits for the
@@ -349,6 +350,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
   if (!kb) return <Spin />;
 
   const provisioning = kb.status === "CREATING";
+  const deleteBlocked = kbDeleteBlockedReason(kb.status);
   const missingSource = !provisioning && kb.status === "ACTIVE" && sources.length === 0;
 
   const sourceColumns: Column<DataSource>[] = [
@@ -428,7 +430,13 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         end={
           <>
             <Button onClick={refresh}>{t("v2.common.refresh")}</Button>
-            <Button kind="danger" disabled={kb.status === "DELETING"} onClick={() => del.ask(kb)} testId="v2-kb-delete">
+            <Button
+              kind="danger"
+              disabled={deleteBlocked !== null}
+              title={deleteBlocked ? t(deleteBlocked) : undefined}
+              onClick={() => del.ask(kb)}
+              testId="v2-kb-delete"
+            >
               {t("v2.common.delete")}
             </Button>
             <Button kind="primary" onClick={() => setShowAdd(true)} testId="v2-kb-add">

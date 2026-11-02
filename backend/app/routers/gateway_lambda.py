@@ -6,6 +6,9 @@
   ``infra+perm:agents.deploy`` (the project's ``agents.deploy`` while the workspace holds
   one project, administrators only once it holds several). A new target's tool schema
   waits for review; the target is created on approval.
+* ``/api/gateway-tools/unmanaged`` — the Gateway's other targets (hand-made Lambda,
+  bootstrap, OpenAPI); a hand-made inline-schema Lambda one can be adopted as a
+  console Lambda target (approved baseline, ``mcp.approve``, like the external adopt).
 * ``/api/gateway-tools/external`` — hand-made MCP-server targets, listed as externally
   hosted; adopting one under review (approved baseline) is ``mcp.approve`` and, with
   several projects in the workspace, an administrator's (``require_infra``).
@@ -120,6 +123,37 @@ def adopt_external_target(
     db.commit()
     return {"tool_id": row.id, "target_id": row.target_id, "target_name": row.target_name,
             "review": mcp_reviews.state(db, row.id)}
+
+
+@router.get("/unmanaged")
+def list_unmanaged_targets(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The workspace Gateway's other targets — hand-made Lambda, bootstrap, OpenAPI —
+    each with whether it can be brought under management here (``reason`` if not)."""
+    return {"targets": gateway_tools.list_unmanaged(db, ws.context)}
+
+
+@router.post("/unmanaged/{target_id}/adopt", status_code=201)
+def adopt_unmanaged_target(
+    target_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Manage a hand-made Lambda target: its inline schema today is the approved
+    baseline; from here it is listed, reviewed and deleted like a console-created one."""
+    from app.core.route_policy import require_infra
+
+    # the target is the workspace's, not a project's: with several projects, admins only
+    require_infra(request, "infra+perm:mcp.approve")
+    actor = require_identity(request).username
+    row = gateway_tools.adopt_lambda(db, ws.context, target_id, actor=actor,
+                                     actor_user_id=user_id_for(actor))
+    db.commit()
+    gateway_tools.record_ownership(row)
+    return gateway_tools.lambda_out(db, row, full=True)
 
 
 # ── reviews of either kind ─────────────────────────────────────────────────────

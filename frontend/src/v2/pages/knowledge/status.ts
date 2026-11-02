@@ -14,3 +14,13 @@ export function kbStatusLabel(t: (key: string) => string, status: string): strin
   return meta ? t(meta.labelKey) : status;
 }
 
+
+/** Why a KB cannot be deleted right now (a locale key), or null when it can: AWS refuses
+ *  to delete a KB that is still CREATING (409 `kb.delete_conflict`), and a DELETING one
+ *  is already on its way out. */
+export function kbDeleteBlockedReason(status: string | null | undefined): string | null {
+  const s = String(status ?? "").toUpperCase();
+  if (s === "CREATING") return "v2.knowledge.deleteWhileCreating";
+  if (s === "DELETING") return "story.reason.deleting";
+  return null;
+}

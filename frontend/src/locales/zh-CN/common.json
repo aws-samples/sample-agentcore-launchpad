@@ -1107,7 +1107,9 @@
       "request": "请求",
       "response": "响应",
       "govNote": "治理闭环：在注册中心 REJECT 某个专家的记录，下一个问题的发现阶段就不再出现它；重新 APPROVE 即恢复。（REJECTED 可恢复——不要用 DISABLE，DEPRECATED 是终态。）"
-    }
+    },
+    "deletedFilesKept": "已删除“{{name}}”。技能文件仍被 {{agents}} 挂载，已保留。",
+    "deletedFilesFailed": "已删除“{{name}}”，但未能删除 {{prefix}} 下的技能文件。"
   },
   "knowledge": {
     "kicker": "// 知识接地层",
@@ -3428,7 +3430,10 @@
     "steward.pending_group_retired": "此变更是为项目组提交的，而项目组已下线，请拒绝它，并直接修改各项目的成员。",
     "auth.too_many_attempts": "尝试次数过多，请稍后再试。",
     "auth.login_locked": "登录失败次数过多，请稍后再试。",
-    "auth.registration_queue_full": "待审批的账号过多，注册暂时关闭。"
+    "auth.registration_queue_full": "待审批的账号过多，注册暂时关闭。",
+    "registry.record_not_found": "未找到该注册记录。",
+    "registry.not_republishable": "只有“草稿”或“待审批”的记录可以重新发布。",
+    "gateway_tool.not_adoptable": "只有本工作区账号与区域内、使用内联工具 schema 的手工 Lambda 目标可以纳管。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -9307,7 +9312,11 @@
       "attachCta": "去创建 Agent",
       "attachHint": "挂载在创建 Agent 向导中完成：ACTIVE 状态的知识库可挂载到 Harness Agent。",
       "attachedHidden": "另有 {{n}} 个你无权查看的 Agent",
-      "comingSoonLabel": "即将支持："
+      "comingSoonLabel": "即将支持：",
+      "docsNotReady": "数据源尚未就绪（当前状态：{{status}}），变为 AVAILABLE 后才能列出文档。新建的知识库会自动就绪，本页会自动刷新。",
+      "deleteWhileCreating": "知识库仍在创建中，变为“可用”后才能删除。",
+      "scoreHint": "托管检索按结果之间的相对关系排序，分数不是绝对的相关度。",
+      "scoreUninformative": "所有结果的分数都是 1.000。这通常说明知识库只有 1 个已索引的片段：此时托管检索无论查询什么都给唯一候选打 1.0，分数不反映相关度，因此这里不显示。添加更多文档后排序才有意义。"
     },
     "memory": {
       "desc": "AgentCore Memory 的短期事件、长期记录与记忆资源",
@@ -9756,6 +9765,27 @@
       "attention": {
         "title": "等待审批",
         "empty": "没有等待审批的记录。"
+      },
+      "searchNoHits": "没有与“{{q}}”匹配的记录——语义搜索只覆盖已发布（可被发现）的记录。",
+      "filterNoHits": "没有符合当前筛选条件的记录。",
+      "importPicker": {
+        "title": "把 Gateway 导入注册中心",
+        "intro": "Gateway 的 MCP 记录在它的网关治理页中预览并导入：那里的“注册中心”卡片会显示将要写入的记录和名称冲突。选择一个 Gateway，直接打开这张卡片。",
+        "colGateway": "Gateway",
+        "colRecord": "注册记录",
+        "notImported": "未导入",
+        "go": "去导入",
+        "open": "查看",
+        "empty": "当前工作区没有 Gateway。"
+      },
+      "editResets": {
+        "banner": "此记录当前为“{{status}}”。按 AWS Agent Registry 的生命周期规则，保存编辑后记录会回到“草稿”：在重新提交并获批之前，这次修改不会发布，Agent 和使用方看到的仍是上一次批准的版本（如有）。保存后可在记录页一键重新发布。",
+        "confirmTitle": "保存并回到草稿？",
+        "confirmBody": "“{{name}}”当前为“{{status}}”。保存后 AWS Agent Registry 会把它退回“草稿”：在重新提交并获批之前，这次修改不会发布，Agent 和使用方看到的仍是上一次批准的版本（如有）。",
+        "confirm": "保存",
+        "afterSave": "已保存。这次编辑把记录从“{{status}}”退回了“草稿”：重新获批之前修改不会发布，使用方看到的仍是上一次批准的版本（如有）。",
+        "republish": "一键重新发布",
+        "resubmit": "重新提交审批"
       }
     },
     "governance": {
@@ -17282,7 +17312,7 @@
     },
     "list": {
       "title": "Lambda 工具目标",
-      "empty": "尚无 Lambda 工具目标",
+      "empty": "这里还没有受管的 Lambda 工具目标。网关上手工创建的目标列在下方“其他网关目标”中，Lambda 目标可以在那里纳管。",
       "tools": "{{count}} 个工具",
       "showReview": "审阅",
       "hideReview": "收起审阅",
@@ -17302,6 +17332,26 @@
       "adopted": "{{name}} 已纳入工具审阅",
       "adoptFailed": "未能将目标纳入审阅",
       "elsewhere": "已在其他项目中审阅"
+    },
+    "unmanaged": {
+      "title": "其他网关目标",
+      "intro": "工作区网关上不由上面两张列表管理的目标：手工创建的 Lambda 目标、平台引导创建的目标，以及绑定了 Connection 的目标。内联工具 schema 的手工 Lambda 目标可以纳管：当前的工具列表记为已批准基线（不会中断任何调用），之后像控制台创建的目标一样列出、审阅和删除。",
+      "empty": "此网关上没有其他目标。",
+      "system": "平台引导创建",
+      "adopt": "纳管",
+      "adoptHint": "把当前工具列表记为已批准基线，像控制台创建的 Lambda 目标一样管理它",
+      "adoptTitle": "纳管 {{name}}？",
+      "adoptBody": "它当前的 {{count}} 个工具会记为已批准，正在调用它们的 Agent 不受影响。该函数会加入控制台为网关角色维护的调用授权。此后目标由这里管理：在控制台删除它会同时删除网关目标。",
+      "adopted": "已纳管 {{name}}",
+      "adoptFailed": "未能纳管该目标",
+      "reason": {
+        "system": "由平台引导维护",
+        "connection": "绑定 Connection“{{connection}}”，在 Connections 中管理",
+        "kind": "暂不支持在此纳管 {{kind}} 目标",
+        "schema": "工具 schema 不是可记录的内联列表",
+        "environment": "函数不在本工作区的账号与区域内",
+        "elsewhere": "已由其他项目纳管"
+      }
     }
   },
   "storage": {

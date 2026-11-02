@@ -21,7 +21,7 @@ import {
   Table,
 } from "../../ui";
 import { KbStatusTag } from "./common";
-import { KB_STATUSES, kbStatusLabel } from "./status";
+import { KB_STATUSES, kbDeleteBlockedReason, kbStatusLabel } from "./status";
 import { useKbDelete } from "./useKbDelete";
 
 const TRANSIENT = new Set(["CREATING", "DELETING"]);
@@ -31,6 +31,10 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
   const [, setParams] = useSearchParams();
   const { data, loading, error, reload } = useLoad(() => v2KnowledgeApi.list(), "kbs");
   const del = useKbDelete(() => reload());
+  const deleteTitle = (status: string) => {
+    const reason = kbDeleteBlockedReason(status);
+    return reason ? t(reason) : undefined;
+  };
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
 
@@ -117,7 +121,8 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
           </LinkButton>
           <LinkButton
             danger
-            disabled={kb.status === "DELETING"}
+            disabled={kbDeleteBlockedReason(kb.status) !== null}
+            title={deleteTitle(kb.status)}
             onClick={() => del.ask(kb)}
             testId={`v2-kb-delete-${kb.name}`}
           >

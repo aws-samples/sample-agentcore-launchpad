@@ -4,17 +4,23 @@ import { useTranslation } from "react-i18next";
 import { errorMessage } from "../../../lib/api";
 import {
   adoptExternalTarget,
+  adoptUnmanagedTarget,
   createLambdaTarget,
   deleteLambdaTarget,
   type ExternalMcpTarget,
+  lambdaArnPlaceholder,
   type LambdaToolStatus,
   type LambdaToolTarget,
   listExternalTargets,
   listLambdaTargets,
+  listUnmanagedTargets,
   parseToolSchema,
+  targetKindLabel,
+  type UnmanagedTarget,
   validateLambdaForm,
 } from "../../../lib/api/mcpReviews";
 import { sharedFromOf } from "../../../lib/api/sharedFrom";
+import { useWorkspace } from "../../../workspace/workspace-context";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, type Column, Confirm, Drawer, Field, LinkButton, Table, Tag, type TagTone } from "../../ui";
 import { GATE_TONE } from "./common";
@@ -60,6 +66,8 @@ function LambdaForm({ onCreated }: { onCreated: (target: LambdaToolTarget) => vo
   const errors = validateLambdaForm(arn, name, schema);
   const invalid = Object.keys(errors).length > 0;
   const shown = (key?: string) => (touched && key ? t(key) : null);
+  // the function must be in this workspace's account and region — the example says so
+  const { current: workspace } = useWorkspace();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -95,7 +103,7 @@ function LambdaForm({ onCreated }: { onCreated: (target: LambdaToolTarget) => vo
           <input
             id="v2-lambda-arn"
             className="v2-input mono"
-            placeholder="arn:aws:lambda:us-west-2:111122223333:function:crm-tools"
+            placeholder={lambdaArnPlaceholder(workspace)}
             value={arn}
             onChange={(e) => setArn(e.target.value)}
           />
@@ -121,6 +129,96 @@ function LambdaForm({ onCreated }: { onCreated: (target: LambdaToolTarget) => vo
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * The Gateway's other targets: made by hand (a Lambda function put on the Gateway
+ * outside the console), by bootstrap, or bound to a Connection. A hand-made Lambda
+ * target with an inline schema can be adopted — its tool list today becomes the
+ * approved baseline and it then sits in the Lambda list above; the others say who
+ * manages them.
+ */
+function UnmanagedTargets({ nonce, onAdopted }: { nonce: number; onAdopted: () => void }) {
+  const { t } = useTranslation();
+  const toast = useV2Toast();
+  const list = useLoad(() => listUnmanagedTargets(), `v2-unmanaged-tools:${nonce}`);
+  const [adopting, setAdopting] = useState<UnmanagedTarget | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const adopt = async () => {
+    if (!adopting) return;
+    setBusy(true);
+    try {
+      await adoptUnmanagedTarget(adopting.target_id);
+      toast("success", t("lambdaTool.unmanaged.adopted", { name: adopting.target_name }));
+      setAdopting(null);
+      onAdopted();
+    } catch (err) {
+      toast("error", `${t("lambdaTool.unmanaged.adoptFailed")}: ${errorMessage(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const columns: Column<UnmanagedTarget>[] = [
+    {
+      key: "name",
+      title: t("v2.governance.toolTargets.colTarget"),
+      render: (row) => (
+        <>
+          <span className="v2-row">
+            <span className="mono">{row.target_name}</span>
+            <Tag tone="outline">{targetKindLabel(row.kind)}</Tag>
+            {row.system && <Tag tone="gray">{t("lambdaTool.unmanaged.system")}</Tag>}
+          </span>
+          {row.lambda_arn && <span className="sub mono v2-governance-break">{row.lambda_arn}</span>}
+          {!row.lambda_arn && row.description && <span className="sub">{row.description}</span>}
+        </>
+      ),
+    },
+    { key: "status", title: t("v2.common.status"), render: (row) => row.status ?? "—" },
+    { key: "tools", title: t("v2.governance.toolTargets.colTools"), className: "num", render: (row) => (row.kind === "lambda" ? row.tool_names.length : "—") },
+    {
+      key: "ops",
+      title: t("v2.common.actions"),
+      className: "right",
+      render: (row) =>
+        row.reason === null ? (
+          <LinkButton disabled={busy} title={t("lambdaTool.unmanaged.adoptHint")} onClick={() => setAdopting(row)} testId={`v2-unmanaged-adopt-${row.target_id}`}>
+            {t("lambdaTool.unmanaged.adopt")}
+          </LinkButton>
+        ) : (
+          <span className="v2-muted" data-testid={`v2-unmanaged-reason-${row.target_id}`}>
+            {t(`lambdaTool.unmanaged.reason.${row.reason}`, { connection: row.connection ?? "", kind: targetKindLabel(row.kind) })}
+          </span>
+        ),
+    },
+  ];
+
+  return (
+    <Card title={t("lambdaTool.unmanaged.title")}>
+      <p className="v2-tool-targets-intro">{t("lambdaTool.unmanaged.intro")}</p>
+      <Table
+        columns={columns}
+        rows={list.data?.targets ?? []}
+        rowKey={(row) => row.target_id}
+        loading={list.loading && !list.data}
+        error={list.error}
+        onRetry={list.reload}
+        empty={t("lambdaTool.unmanaged.empty")}
+        testId="v2-unmanaged-targets"
+      />
+      <Confirm
+        open={adopting !== null}
+        title={t("lambdaTool.unmanaged.adoptTitle", { name: adopting?.target_name ?? "" })}
+        body={t("lambdaTool.unmanaged.adoptBody", { count: adopting?.tool_names.length ?? 0 })}
+        confirmLabel={t("lambdaTool.unmanaged.adopt")}
+        busy={busy}
+        onConfirm={() => void adopt()}
+        onClose={() => setAdopting(null)}
+      />
+    </Card>
   );
 }
 
@@ -303,6 +401,7 @@ export function ToolTargets({ formRequest = 0 }: { formRequest?: number }) {
           testId="v2-external-targets"
         />
       </Card>
+      <UnmanagedTargets nonce={nonce} onAdopted={reload} />
       <Drawer open={reviewing !== null} title={reviewing?.name ?? ""} onClose={() => setReviewing(null)} testId="v2-tool-review-drawer">
         {reviewing && <ToolReview key={reviewing.id} toolId={reviewing.id} onChanged={reload} />}
       </Drawer>

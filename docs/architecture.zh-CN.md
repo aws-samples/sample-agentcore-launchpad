@@ -465,6 +465,8 @@ V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`
 
 **外部托管目标（§15.15）。** 在 Workspace 网关上手动创建（经「连接」页）、且不属于任何托管服务器的 MCP 服务器目标，由 `GET /api/gateway-tools/external` 以 `hosting: external` 列出。纳管一个目标（`external_mcp_targets` 表）会把它当前列出的清单记为已批准基线，已在调用它的 Agent 不会被切断；之后每小时的 `mcp.health` 任务用它比较新的清单。漂移会打开审批，但目标属于客户，永远不会被扣下或改指。「网关治理」的「工具目标」tab——V3 为 `/v3/governance?tab=targets`（原 `/v3/tools/gateway` 页面会重定向到这里），V2 为原生的 `/v2/governance?tab=targets`（每个目标的审阅在抽屉中打开）——列出两类目标，可创建 Lambda 目标并纳管外部目标；Gateway tab 的「需要处理」会列出发布失败的 Lambda 目标和等待 schema 审阅的目标（两个控制台共用 `targetsNeedingAttention`）。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台网关工具目标 API」。
 
+**其他网关目标。** 工作区网关上的其余目标——在控制台之外手工创建的 Lambda 目标、平台引导创建的目标（`hr-database`、`office-facts`）、绑定了 Connection 的目标——由 `GET /api/gateway-tools/unmanaged` 列在该 tab 的「其他网关目标」中，并说明为什么不能纳管。本工作区账号与区域内、使用内联 schema 的手工 Lambda 目标可以纳管（`POST /api/gateway-tools/unmanaged/{target_id}/adopt`）：它成为一条 `live` 的 `lambda_tool_targets` 记录，schema 记为已批准基线，函数加入 `launchpad-lambda-tools`，此后像控制台创建的目标一样列出、审阅和删除。Lambda 表单中的 ARN 示例使用当前工作区的账号与区域（`lambdaArnPlaceholder`）。
+
 **stdio 桥接（§15.5）。** 只支持 stdio 的服务器以代码 zip 发布，并带 `mcp.stdio_wrapper = {command, args, base}`（仅限 code_zip——Dockerfile 上下文或镜像需自行内置桥接）。部署器加入 [`samples/mcp_stdio_bridge/`](../samples/mcp_stdio_bridge/README.md)，由它在 `0.0.0.0:8000/mcp` 提供服务，并把命令作为子进程启动（不经 shell，从包根目录运行；argv 放在环境变量 `MCP_STDIO_COMMAND` 中）：`python` 底座留在托管 Python 运行时上，以桥接为入口；`node` 底座在桥接的 Node 基础镜像上构建镜像（CodeBuild，arm64），部署为容器运行时。每个容器只有一个子进程，因此保存会话状态的服务器会把所有调用方视为同一个会话；响应是普通 JSON（服务器的通知被丢弃，它反向发出的请求一律答复为不支持）。V2 向导的 MCP 服务器卡片提供该开关，开启时隐藏入口文件选择。
 
 ### 推荐的 trace 来源

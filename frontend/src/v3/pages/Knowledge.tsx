@@ -20,6 +20,8 @@ import {
   type KnowledgeBaseSummary,
   mergeFiles,
   type QueryResultItem,
+  scoresUninformative,
+  sourceReady,
 } from "../../lib/knowledgeBases";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
@@ -47,6 +49,7 @@ import {
 } from "../ui";
 import { Term } from "../onboarding/Glossary";
 import { Select } from "../select";
+import { kbDeleteBlockedReason } from "../../v2/pages/knowledge/status";
 
 /* Same cadence and guards as V2's detail page, whose create-flow automation this
    page now carries (a KB created in the hosted V2 form lands here). */
@@ -220,12 +223,21 @@ function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
   const [next, setNext] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [notReady, setNotReady] = useState<string | null>(null);
+  const ready = sourceReady(ds.status);
   const load = useCallback(
     async (token: string | null) => {
       setLoading(true);
       setError(null);
       try {
         const page = await v2KnowledgeApi.documents(kbId, ds.ds_id, DOC_PAGE, token);
+        if (page.ready === false) {
+          setNotReady(page.data_source_status ?? ds.status);
+          setDocs([]);
+          setNext(null);
+          return;
+        }
+        setNotReady(null);
         setDocs((prev) => (token ? [...(prev ?? []), ...page.documents] : page.documents));
         setNext(page.next_token ?? null);
       } catch (err) {
@@ -234,15 +246,20 @@ function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
         setLoading(false);
       }
     },
-    [kbId, ds.ds_id],
+    [kbId, ds.ds_id, ds.status],
   );
   useEffect(() => {
-    void load(null);
-  }, [load]);
+    // a data source that is not AVAILABLE yet has no document list to ask for
+    if (ready) void load(null);
+  }, [load, ready]);
 
   return (
     <Panel title={t("v3.kb.documentsOf", { name: ds.name })} flush end={docs ? <span className="mono">{docs.length}{next ? "+" : ""}</span> : undefined}>
-      {error != null ? (
+      {!ready || notReady ? (
+        <div style={{ padding: 20 }} data-testid="v3-kb-docs-not-ready">
+          <Notice s="wait">{t("v2.knowledge.docsNotReady", { status: notReady ?? ds.status ?? "—" })}</Notice>
+        </div>
+      ) : error != null ? (
         <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={error} /></Notice></div>
       ) : !docs ? (
         <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
@@ -304,6 +321,8 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
     }
   };
   const top = Math.max(...(hits ?? []).map((h) => h.score ?? 0), 0) || 1;
+  // every result scored exactly 1.0 = a lone indexed chunk, not a relevance verdict
+  const showScores = !(hits && scoresUninformative(hits));
   return (
     <Panel title={t("v3.kb.retrieve")} end={hits ? <span className="mono">{t("v3.kb.hits", { count: hits.length })}</span> : undefined}>
       <p style={{ margin: "0 0 12px", color: "var(--v3-text-3)", fontSize: 13 }}>{t("v3.kb.retrieveSub")}</p>
@@ -326,6 +345,9 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
       </form>
       {!ready && <div style={{ marginTop: 12 }}><Notice s="wait">{t("v3.kb.retrieveNotReady")}</Notice></div>}
       {error != null && <div style={{ marginTop: 12 }}><Notice s="act"><ApiErrorDetail error={error} /></Notice></div>}
+      {hits && scoresUninformative(hits) && (
+        <div style={{ marginTop: 12 }} data-testid="v3-kb-score-uninformative"><Notice s="wait">{t("v2.knowledge.scoreUninformative")}</Notice></div>
+      )}
       {hits && (
         <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
           {hits.length === 0 ? (
@@ -336,9 +358,9 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
                 <div className="head">
                   <span>#{i + 1}</span>
                   <span className="uri" title={h.location_uri ?? undefined}>{h.location_uri ?? "—"}</span>
-                  {typeof h.score === "number" && <span style={{ color: "var(--v3-info)" }}>{h.score.toFixed(3)}</span>}
+                  {showScores && typeof h.score === "number" && <span style={{ color: "var(--v3-info)" }} title={t("v2.knowledge.scoreHint")}>{h.score.toFixed(3)}</span>}
                 </div>
-                {typeof h.score === "number" && <div className="bar"><i style={{ width: `${(h.score / top) * 100}%` }} /></div>}
+                {showScores && typeof h.score === "number" && <div className="bar"><i style={{ width: `${(h.score / top) * 100}%` }} /></div>}
                 <div className="text">{h.text}</div>
               </div>
             ))
@@ -671,7 +693,7 @@ function KbDetail({ id }: { id: string }) {
         end={
           <>
             <Btn kind="ghost" onClick={refresh}><RefreshCw size={14} /></Btn>
-            <Btn kind="danger" disabled={String(kb.status).toUpperCase() === "DELETING"} disabledReason={t("story.reason.deleting")} onClick={() => del.ask(kb)}><Trash2 size={14} /> {t("v3.kb.delete")}</Btn>
+            <Btn kind="danger" disabled={kbDeleteBlockedReason(kb.status) !== null} disabledReason={t(kbDeleteBlockedReason(kb.status) ?? "story.reason.deleting")} onClick={() => del.ask(kb)}><Trash2 size={14} /> {t("v3.kb.delete")}</Btn>
             <Btn kind="primary" onClick={() => setDialog("add")}><Upload size={14} /> {t("v3.kb.addSource")}</Btn>
           </>
         }

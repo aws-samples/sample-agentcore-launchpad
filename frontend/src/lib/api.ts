@@ -5056,6 +5056,27 @@ export interface RegistryCreateBody {
 
 /** `PUT /api/registry/records/{id}` — only the changed members; a zip replace sends
  *  `staging_id` + `index` from a prior inspect. */
+/** POST /api/registry/records/{id}/action. An edit of a PENDING_APPROVAL or APPROVED
+ *  record sends it back to DRAFT (AWS Agent Registry lifecycle; consumers keep the last
+ *  approved revision meanwhile); `republish` submits and approves it again in one call. */
+export type RegistryAction = "submit" | "approve" | "publish" | "reject" | "disable" | "republish";
+
+/** What a Skill record's delete did with the `skills/<name>/` files the platform wrote:
+ *  kept while a live agent mounts them (`agents`) or another same-name record shares
+ *  the prefix; `not_platform` = the bundle is not one the platform wrote. */
+export interface RegistrySkillFilesOutcome {
+  status: "deleted" | "kept_in_use" | "kept_shared" | "not_platform" | "failed";
+  prefix?: string;
+  agents?: string[];
+}
+
+export interface RegistryDeleteResult {
+  deleted: boolean;
+  record_id: string;
+  /** `null` for a record that is not a Skill */
+  files: RegistrySkillFilesOutcome | null;
+}
+
 export interface RegistryUpdateBody {
   description?: string;
   url?: string;
@@ -5851,7 +5872,8 @@ export const api = {
   registryRecord: (recordId: string) =>
     request<RegistryRecordOut>(`/api/registry/records/${encodeURIComponent(recordId)}`),
   /** Lifecycle action: `submit` | `approve` | `reject` | `disable`. */
-  registryAction: (recordId: string, action: string) =>
+  /** `republish` = submit + approve again, for a record an edit sent back to DRAFT. */
+  registryAction: (recordId: string, action: RegistryAction | string) =>
     request<RegistryRecordOut>(`/api/registry/records/${encodeURIComponent(recordId)}/action`, {
       method: "POST",
       body: JSON.stringify({ action }),
@@ -5866,8 +5888,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  /** 404 `registry.record_not_found` for an id that names no record. */
   registryDelete: (recordId: string) =>
-    request<unknown>(`/api/registry/records/${encodeURIComponent(recordId)}`, {
+    request<RegistryDeleteResult>(`/api/registry/records/${encodeURIComponent(recordId)}`, {
       method: "DELETE",
     }),
   /** Re-acquire a git/url skill from its stored source; bumps the record version. */
@@ -7930,8 +7953,10 @@ export const v2KnowledgeApi = {
       method: "PATCH",
       body: JSON.stringify({ description }),
     }),
+  /** 409 `kb.delete_conflict` while the KB is CREATING; `files_removed` counts the
+   *  uploaded objects purged from its artifacts-bucket prefix. */
   remove: (id: string, force: boolean) =>
-    request<Record<string, unknown>>(`${kbPath(id)}?force=${force}`, { method: "DELETE" }),
+    request<{ deleted: boolean; kb_id: string; files_removed?: number }>(`${kbPath(id)}?force=${force}`, { method: "DELETE" }),
   uploadFiles: (id: string, files: File[], projectId?: string | null) => {
     const form = new FormData();
     for (const f of files) form.append("files", f);

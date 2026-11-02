@@ -1565,6 +1565,8 @@ ROUTE_POLICY.update({
     ("DELETE", "/api/gateway-tools/lambda/{target_id}"): INFRA_AGENT_DEPLOY,
     ("GET", "/api/gateway-tools/external"): PERM_PROJECT_USE,
     ("POST", "/api/gateway-tools/external/{target_id}/adopt"): PERM_MCP_APPROVE,
+    ("GET", "/api/gateway-tools/unmanaged"): PERM_PROJECT_USE,
+    ("POST", "/api/gateway-tools/unmanaged/{target_id}/adopt"): PERM_MCP_APPROVE,
     ("GET", "/api/gateway-tools/{tool_id}/reviews"): PERM_PROJECT_USE,
     ("GET", "/api/gateway-tools/{tool_id}/reviews/{review_id}"): PERM_PROJECT_USE,
     ("POST", "/api/gateway-tools/{tool_id}/reviews/{review_id}/approve"): PERM_MCP_APPROVE,

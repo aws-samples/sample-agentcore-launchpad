@@ -394,7 +394,9 @@ def _require_mcp_record_approvable(request: Request, ws: WorkspaceScope, record_
 
 
 class ActionRequest(BaseModel):
-    action: str  # submit | approve | publish | reject | disable
+    # submit | approve | publish | reject | disable | republish (submit + approve again,
+    # for a record an edit sent back to DRAFT)
+    action: str
 
 
 @router.post("/records/{record_id}/action")
@@ -409,7 +411,7 @@ def record_action(
     # The caller's role reaches the service explicitly: a system-managed Skill's
     # lifecycle is administrator-only, ordinary records stay member-operable.
     identity = require_identity(request)
-    if req.action in ("approve", "publish"):
+    if req.action in ("approve", "publish", "republish"):
         _require_mcp_record_approvable(request, ws, record_id)
     try:
         console.console_action(ws.context, record_id, req.action, is_admin=identity.is_admin)
@@ -856,8 +858,10 @@ def delete_record(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    """404 for an id that names no record. A Skill's platform-written bundle files go
+    with it unless a live agent still mounts them (``files`` says what happened)."""
     _require_record_visible(ws, viewer, record_id)
-    console.console_delete(ws.context, record_id)
+    outcome = console.console_delete(ws.context, record_id)
     from app.core.db import SessionLocal
     from app.services import creators
 
@@ -867,7 +871,7 @@ def delete_record(
     finally:
         db.close()
     _invalidate_attachables(ws.id)
-    return {"deleted": True, "record_id": record_id}
+    return {"deleted": True, "record_id": record_id, "files": (outcome or {}).get("files")}
 
 
 @router.get("/attachables")

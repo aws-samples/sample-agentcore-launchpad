@@ -4,13 +4,13 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage, v2KnowledgeApi } from "../../../lib/api";
 import { isS3ObjectUrl, openKbSource } from "../../../lib/kb-source";
-import { KB_QUERY_MAX_RESULTS, type QueryResultItem } from "../../../lib/knowledgeBases";
+import { KB_QUERY_MAX_RESULTS, type QueryResultItem, scoresUninformative } from "../../../lib/knowledgeBases";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, LinkButton, Tag } from "../../ui";
 
 const CLAMP = 320;
 
-function ResultCard({ index, item }: { index: number; item: QueryResultItem }) {
+function ResultCard({ index, item, showScore }: { index: number; item: QueryResultItem; showScore: boolean }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const [open, setOpen] = useState(false);
@@ -35,10 +35,12 @@ function ResultCard({ index, item }: { index: number; item: QueryResultItem }) {
         ) : (
           <span className="uri mono">{item.location_uri || "—"}</span>
         )}
-        {typeof item.score === "number" && (
-          <Tag tone="blue">
-            {t("knowledge.detail.playground.score")} {item.score.toFixed(3)}
-          </Tag>
+        {showScore && typeof item.score === "number" && (
+          <span title={t("v2.knowledge.scoreHint")}>
+            <Tag tone="blue">
+              {t("knowledge.detail.playground.score")} {item.score.toFixed(3)}
+            </Tag>
+          </span>
         )}
       </div>
       <p className="text">{long && !open ? `${item.text.slice(0, CLAMP)}…` : item.text}</p>
@@ -86,6 +88,9 @@ export function KbRetrieve({ kbId, active }: { kbId: string; active: boolean }) 
     }
   };
 
+  // every result scored exactly 1.0 = a lone indexed chunk, not a relevance verdict
+  const uninformative = results !== null && scoresUninformative(results);
+
   return (
     <Card title={t("v2.knowledge.retrieveTest")} sub={t("knowledge.detail.playground.sub")} testId="v2-kb-retrieve">
       {!active && <Alert tone="warn">{t("v2.knowledge.retrieveNotActive")}</Alert>}
@@ -122,8 +127,13 @@ export function KbRetrieve({ kbId, active }: { kbId: string; active: boolean }) 
       {results && results.length > 0 && (
         <div className="v2-stack" data-testid="v2-kb-hits">
           <span className="v2-muted">{t("v2.knowledge.hits", { count: results.length })}</span>
+          {uninformative && (
+            <div data-testid="v2-kb-score-uninformative">
+              <Alert>{t("v2.knowledge.scoreUninformative")}</Alert>
+            </div>
+          )}
           {results.map((r, i) => (
-            <ResultCard key={i} index={i} item={r} />
+            <ResultCard key={i} index={i} item={r} showScore={!uninformative} />
           ))}
         </div>
       )}

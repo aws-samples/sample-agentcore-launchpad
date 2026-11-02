@@ -7,8 +7,8 @@ import { api, errorMessage, type RegistryInspectedSkill, type RegistryUpdateBody
 import { parseMcpUrl, parseSkillDefinition, parseSkillMd } from "../../../lib/registry";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Descriptions, Field, FlowHeader, OptionCard, Spin } from "../../ui";
-import { isStagingExpired, type RegistryRecord } from "./common";
+import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, OptionCard, Spin } from "../../ui";
+import { isStagingExpired, type RegistryRecord, statusLabel } from "./common";
 import { SourceTag, StatusTag, TypeTag } from "./tags";
 
 interface Draft {
@@ -16,6 +16,15 @@ interface Draft {
   url: string;
   md: string;
 }
+
+/**
+ * An update of a PENDING_APPROVAL or APPROVED record sends it back to DRAFT — the AWS
+ * Agent Registry lifecycle, not a Launchpad choice — and the edit stays unpublished
+ * (consumers keep the last approved revision) until it is submitted and approved again.
+ * The edit warns before saving and the detail page then offers that in one click
+ * (`&republish=<status>`).
+ */
+const RESETS_ON_EDIT = new Set(["APPROVED", "PENDING_APPROVAL"]);
 
 function draftFrom(record: RegistryRecord): Draft {
   return { desc: record.description ?? "", url: parseMcpUrl(record), md: parseSkillMd(record) };
@@ -62,6 +71,7 @@ export function RecordEdit({ id }: { id: string }) {
   const [staged, setStaged] = useState<{ stagingId: string; skill: RegistryInspectedSkill } | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const record = detail.data;
@@ -130,8 +140,10 @@ export function RecordEdit({ id }: { id: string }) {
     }
   };
 
+  const resets = RESETS_ON_EDIT.has(record.status);
   const save = async () => {
     if (!dirty || bundleInvalid) return;
+    setConfirmReset(false);
     setSaving(true);
     setError(null);
     const body: RegistryUpdateBody = {};
@@ -143,9 +155,15 @@ export function RecordEdit({ id }: { id: string }) {
       body.index = staged.skill.index ?? 0;
     }
     try {
-      await api.registryUpdate(record.record_id, body);
+      const updated = await api.registryUpdate(record.record_id, body);
       toast("success", t("registry.edit.saved", { name: record.name }));
-      setParams({ view: "detail", id: record.record_id });
+      // the save sent a published record back to DRAFT: the detail page offers to
+      // publish (or resubmit) it again
+      setParams(
+        resets && updated.status === "DRAFT"
+          ? { view: "detail", id: record.record_id, republish: record.status }
+          : { view: "detail", id: record.record_id },
+      );
     } catch (err) {
       if (isStagingExpired(err)) {
         clearZip();
@@ -173,7 +191,7 @@ export function RecordEdit({ id }: { id: string }) {
             kind="primary"
             disabled={saving || !dirty || bundleInvalid}
             title={disabledReason}
-            onClick={() => void save()}
+            onClick={() => (resets ? setConfirmReset(true) : void save())}
             testId="v2-registry-edit-save"
           >
             {saving ? t("registry.edit.saving") : t("v2.common.save")}
@@ -181,6 +199,11 @@ export function RecordEdit({ id }: { id: string }) {
         }
       />
       {error && <Alert tone="error">{error}</Alert>}
+      {resets && (
+        <div data-testid="v2-registry-edit-resets">
+          <Alert tone="warn">{t("v2.registry.editResets.banner", { status: statusLabel(t, record.status) })}</Alert>
+        </div>
+      )}
       <div className="v2-registry-layout">
         <div>
           <Card title={t("v2.registry.basic")}>
@@ -283,6 +306,15 @@ export function RecordEdit({ id }: { id: string }) {
         </div>
         <CurrentRecord record={record} />
       </div>
+      <Confirm
+        open={confirmReset}
+        title={t("v2.registry.editResets.confirmTitle")}
+        body={t("v2.registry.editResets.confirmBody", { name: record.name, status: statusLabel(t, record.status) })}
+        confirmLabel={t("v2.registry.editResets.confirm")}
+        busy={saving}
+        onConfirm={() => void save()}
+        onClose={() => setConfirmReset(false)}
+      />
     </>
   );
 }

@@ -767,6 +767,18 @@ lists both kinds, creates Lambda targets and adopts external ones; the gateways 
 review (`targetsNeedingAttention`, shared by both consoles). Routes:
 [api.md](api.md#console-gateway-tool-targets-api).
 
+**Other Gateway targets.** Whatever else sits on the workspace Gateway — a Lambda
+target made by hand (outside the console), a bootstrap target (`hr-database`,
+`office-facts`), a target bound to a Connection — is listed by
+`GET /api/gateway-tools/unmanaged` under the tab's *Other gateway targets*, each with
+why it cannot be adopted. A hand-made Lambda target with an inline schema in the
+workspace's account and region can be adopted
+(`POST /api/gateway-tools/unmanaged/{target_id}/adopt`): it becomes a `live`
+`lambda_tool_targets` row with its schema as the approved baseline and its function in
+`launchpad-lambda-tools`, and is then listed, reviewed and deleted like a
+console-created one. The Lambda form's ARN example names the current workspace's
+account and region (`lambdaArnPlaceholder`).
+
 **stdio bridge (§15.5).** A stdio-only server ships as a code zip with
 `mcp.stdio_wrapper = {command, args, base}` (code_zip only — a Dockerfile context or
 an image builds the bridge in itself). The deployer adds

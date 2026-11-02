@@ -1,7 +1,7 @@
 // Registry record helpers shared by the classic Registry page and the Console V2
 // registry module: descriptor parsing (AGENT_SKILLS bundle, A2A agent card, MCP
 // server url, SKILL.md) and the naming rule the register/import forms enforce.
-import type { RegistryRecordOut } from "./api";
+import type { RegistryDeleteResult, RegistryRecordOut } from "./api";
 
 export type RegistryRecordType = RegistryRecordOut["type"];
 
@@ -153,4 +153,18 @@ const PLATFORM_REASONS: Record<string, string> = {
 export function statusReasonText(reason: string, t: (key: string) => string): string {
   const key = PLATFORM_REASONS[reason.trim().toLowerCase()];
   return key ? t(key) : reason;
+}
+
+/** The toast after a record delete: a Skill whose bundle files had to stay says why. */
+export function deletedMessage(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  name: string,
+  result: RegistryDeleteResult | null | undefined,
+): string {
+  const files = result?.files;
+  if (files?.status === "kept_in_use") {
+    return t("registry.deletedFilesKept", { name, agents: (files.agents ?? []).join(", ") });
+  }
+  if (files?.status === "failed") return t("registry.deletedFilesFailed", { name, prefix: files.prefix ?? "" });
+  return t("registry.deleted", { name });
 }

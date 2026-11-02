@@ -592,10 +592,23 @@ def list_documents(
     if token:
         kwargs["nextToken"] = token
     try:
-        resp = client.list_knowledge_base_documents(**kwargs)
         full = client.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds_id)["dataSource"]
     except client.exceptions.ResourceNotFoundException as exc:
         raise NotFoundError("kb.ds_not_found", "data source not found") from exc
+    status = full.get("status")
+    # A data source that is not AVAILABLE yet (a KB still being created) has no
+    # document list: ListKnowledgeBaseDocuments 400s "Data source not in available
+    # status." That is a normal state of a new KB, not an error — answer an empty page.
+    if status and str(status).upper() != "AVAILABLE":
+        return _not_ready_page(status, page_size)
+    try:
+        resp = client.list_knowledge_base_documents(**kwargs)
+    except client.exceptions.ResourceNotFoundException as exc:
+        raise NotFoundError("kb.ds_not_found", "data source not found") from exc
+    except client.exceptions.ValidationException as exc:
+        if "available status" not in str(exc).lower():
+            raise
+        return _not_ready_page(status, page_size)  # flipped between the two reads
     bucket, prefix = _parse_ds_location(full)
     meta: dict[str, tuple[int, str | None]] = {}
     if bucket:
@@ -623,6 +636,15 @@ def list_documents(
         "documents": documents,
         "next_token": resp.get("nextToken"),
         "page_size": page_size,
+        "ready": True,
+        "data_source_status": status,
+    }
+
+
+def _not_ready_page(status: Any, page_size: int) -> dict[str, Any]:
+    return {
+        "documents": [], "next_token": None, "page_size": page_size,
+        "ready": False, "data_source_status": status,
     }
 
 
@@ -996,7 +1018,16 @@ def delete_kb(
     # delete outright (force or not) — see refuse_if_attached_to_system_agent.
     refuse_if_attached_to_system_agent(workspace, kb_id)
     client = agent_client(workspace)
-    placement = project_kb.placement_of(workspace, _require_managed(_get_kb(client, kb_id)))
+    detail = _require_managed(_get_kb(client, kb_id))
+    # DeleteKnowledgeBase refuses a KB that is still being created; refuse it here,
+    # before the data sources, gateway target and policy below are torn down.
+    if str(detail.get("status") or "").upper() == "CREATING":
+        raise AppError(
+            "kb.delete_conflict",
+            "the KB is still being created — wait for it to become ACTIVE before deleting",
+            status_code=409,
+        )
+    placement = project_kb.placement_of(workspace, detail)
     agents = attached_agents(workspace, kb_id)
     if agents and not force:
         raise KBAttachedError(kb_id, agents)
@@ -1037,7 +1068,40 @@ def delete_kb(
         creators.forget(db, workspace.id, creators.KB, kb_id)
     finally:
         db.close()
-    return {"deleted": True, "kb_id": kb_id}
+    return {"deleted": True, "kb_id": kb_id,
+            "files_removed": _purge_upload_prefixes(workspace, kb_id, placement)}
+
+
+def _purge_upload_prefixes(
+    workspace: WorkspaceContext, kb_id: str, placement: project_kb.KbPlacement,
+) -> int:
+    """After DeleteKnowledgeBase: drop the files the console uploaded for this KB —
+    ``kb/<id>/`` in the artifacts bucket and, for a project KB, its
+    ``projects/<pid>/kb/<id>/`` (a migration copies the first into the second and
+    leaves the original). Both are keyed by the KB id, so no other KB or record shares
+    them; an ``existing`` data source on a caller's own bucket is never touched.
+    Best-effort: the KB is already gone, a leftover is logged. Returns the count."""
+    bucket = workspace.resources.get("artifacts_bucket")
+    if not bucket:
+        return 0
+    s3 = workspace.client("s3")
+    removed = 0
+    for prefix in dict.fromkeys((f"{project_kb.SHARED_ROOT}{kb_id}/", placement.prefix(kb_id))):
+        try:
+            for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+                keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+                if not keys:
+                    continue
+                resp = s3.delete_objects(Bucket=bucket, Delete={"Objects": keys, "Quiet": True})
+                errors = resp.get("Errors") or []
+                removed += len(keys) - len(errors)
+                if errors:
+                    logger.warning("kb %s: %d object(s) under s3://%s/%s left behind: %s",
+                                   kb_id, len(errors), bucket, prefix, errors[0])
+        except Exception as exc:  # noqa: BLE001 — cleanup must never fail the delete
+            logger.warning("kb %s: s3://%s/%s not purged: %s",
+                           kb_id, bucket, prefix, cleanup_error(exc))
+    return removed
 
 
 def sample_document_names(workspace: WorkspaceContext, kb_id: str, limit: int = 8) -> list[str]:
