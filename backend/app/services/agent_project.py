@@ -7,6 +7,12 @@ target — files the new row under one *business* project: active, not a workspa
 System presets stay platform rows (``project_id`` NULL) and never come here; agents
 already filed under ``default`` keep it.
 
+One administrator switch loosens it (``services/agent_project_settings``, off by
+default): with ``agent_allow_default_project`` on, a workspace ``default`` project is
+eligible too and needs no department there (it never carries one); every other project
+keeps the full rule. Such agents belong to no department — department budgets and
+department administrators do not see them.
+
 * ``check_agent_project`` — the row-level rule only (no caller): the promotion
   worker uses it for the target workspace.
 * ``resolve_agent_project`` — a request's project for a new agent: the body's
@@ -28,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError, next_step
 from app.core.project_scope import project_context, set_current_project
+from app.services import agent_project_settings
 
 PROJECT_REQUIRED = "agent.project_required"
 PROJECT_NOT_FOUND = "agent.project_not_found"
@@ -66,13 +73,14 @@ def check_agent_project(db: Session, project_id: str | None, workspace_id: str |
     if row is None:
         raise _refuse(PROJECT_NOT_FOUND,
                       f"project '{pid}' is not bound to workspace '{workspace_id}'", pid)
-    if bool(row[2]) or row[0] == "default":
+    is_default = bool(row[2]) or row[0] == "default"
+    if is_default and not agent_project_settings.allowed():
         raise _refuse(PROJECT_DEFAULT,
                       "new agents cannot be created in the workspace default project — "
                       "pick a business project", pid)
     if row[1] != "active":
         raise _refuse(PROJECT_ARCHIVED, f"project '{pid}' is archived", pid)
-    if not row[3]:
+    if not row[3] and not is_default:  # a default project has no department by design
         raise _refuse(PROJECT_NO_DEPARTMENT,
                       f"project '{pid}' belongs to no department — assign one first", pid)
     return pid
@@ -123,24 +131,28 @@ CREATE_PERMISSIONS = ("agents.deploy", "agents.import", "agents.convert")
 def eligible_projects(
     db: Session, identity: Any, workspace_id: str, permission: str = "agents.deploy",
 ) -> list[dict[str, Any]]:
-    """The business projects of ``workspace_id`` the caller may create an agent in:
-    active, not a ``default`` project, with a department, and — unless the caller has
-    the administrator's data bypass — a membership whose effective keys hold
-    ``permission``. A project the caller does not reach is never listed."""
+    """The projects of ``workspace_id`` the caller may create an agent in: active,
+    bound to the workspace, a business project (not ``default``, with a department) —
+    or, with the ``agent_allow_default_project`` switch on, a ``default`` project too —
+    and, unless the caller has the administrator's data bypass, a membership whose
+    effective keys hold ``permission`` (an ``inherit`` member's are its account's
+    global keys). A project the caller does not reach is never listed."""
     from app.services import access
 
     with project_context(None):
         rows = db.execute(
             text(
-                "SELECT p.id, p.name, p.department_id, d.name, pw.is_workspace_default"
+                "SELECT p.id, p.name, p.department_id, d.name, pw.is_workspace_default,"
+                " (p.is_default != 0 OR p.id = 'default') AS is_default"
                 " FROM projects p"
                 " JOIN project_workspaces pw ON pw.project_id = p.id"
                 " LEFT JOIN departments d ON d.id = p.department_id"
-                " WHERE pw.workspace_id = :ws AND p.status = 'active' AND p.is_default = 0"
-                " AND p.id != 'default' AND p.department_id IS NOT NULL"
+                " WHERE pw.workspace_id = :ws AND p.status = 'active' AND ("
+                "  (p.is_default = 0 AND p.id != 'default' AND p.department_id IS NOT NULL)"
+                "  OR (:allow_default AND (p.is_default != 0 OR p.id = 'default')))"
                 " ORDER BY p.name, p.id"
             ),
-            {"ws": workspace_id},
+            {"ws": workspace_id, "allow_default": agent_project_settings.allowed()},
         ).fetchall()
         if access.has_data_bypass(identity):
             allowed = None
@@ -153,7 +165,7 @@ def eligible_projects(
     return [
         {
             "id": r[0], "name": r[1], "department_id": r[2], "department_name": r[3],
-            "is_workspace_default": bool(r[4]),
+            "is_workspace_default": bool(r[4]), "is_default": bool(r[5]),
         }
         for r in rows
         if allowed is None or r[0] in allowed

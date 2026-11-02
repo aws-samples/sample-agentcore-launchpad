@@ -21,6 +21,7 @@ import {
   SearchInput,
   Table,
 } from "../../ui";
+import { AgentProjectSettingsCard } from "./AgentProjectSettingsCard";
 import { workspaceAttention } from "./attention";
 import { WORKSPACE_STATUSES } from "./status";
 import { ExternalTag, HubTag, StatusTag, TierTag, VisibilityTag } from "./tags";
@@ -146,6 +147,7 @@ export function WorkspaceList() {
           }
         />
       )}
+      <AgentProjectSettingsCard />
       <Card>
         <div className="v2-toolbar">
           <Button onClick={reload}>

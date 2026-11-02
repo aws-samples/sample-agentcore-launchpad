@@ -2316,3 +2316,16 @@ ROUTE_POLICY.update(NAV_SETTINGS_ROUTES)
 HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/nav")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(NAV_SETTINGS_ROUTES)
 ADMIN_SPLIT.update({("PUT", "/api/nav/hidden-modules"): ADMIN_DATA})
+
+# ---- the agent-project switch (services/agent_project_settings) ----
+# Hub-global: may a new agent be filed under a workspace `default` project? Both the
+# read and the write are the administrators'; a steward neither reads nor flips it
+# (it decides where business data lands and which department budgets see it).
+AGENT_PROJECT_SETTINGS_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/settings/agent-projects"): ADMIN,
+    ("PUT", "/api/settings/agent-projects"): ADMIN,
+}
+ROUTE_POLICY.update(AGENT_PROJECT_SETTINGS_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/settings")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(AGENT_PROJECT_SETTINGS_ROUTES)
+ADMIN_SPLIT.update(dict.fromkeys(AGENT_PROJECT_SETTINGS_ROUTES, ADMIN_DATA))

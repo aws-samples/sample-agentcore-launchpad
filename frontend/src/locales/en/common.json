@@ -13287,7 +13287,27 @@
         "hint": "Every new agent belongs to a business project of a department; the workspace default project cannot hold new agents.",
         "none": "You have no business project here you can create agents in. Ask a department administrator to add you to one, or create one.",
         "open": "Open projects",
-        "err": "Choose the project this agent belongs to."
+        "err": "Choose the project this agent belongs to.",
+        "hintDefault": "A new agent usually belongs to a business project of a department. An administrator also allowed the workspace default project; agents created there belong to no department.",
+        "noneDefault": "You have no project here you can create agents in, the workspace default project included. Ask an administrator for the create permission, or to add you to a business project.",
+        "defaultTag": "default project, no department",
+        "settings": {
+          "title": "Agents in the default project",
+          "sub": "Platform-wide. Decides whether new agents may be filed under a workspace default project.",
+          "label": "Allow new agents in the workspace default project",
+          "on": "Allowed",
+          "off": "Not allowed",
+          "impactOn": "When allowed, any member with the create permission can file a new agent under the workspace default project. Those agents belong to no department: department budgets and department administrators do not see them.",
+          "impactOff": "Not allowed (the default): every new agent belongs to a business project of a department. Agents already in the default project are unaffected either way.",
+          "source": "Current value comes from: {{source}}",
+          "sourceConsole": "this console (set by {{by}})",
+          "sourceEnv": "the environment variable {{env}}",
+          "sourceConfig": "launchpad.yaml",
+          "sourceDefault": "the built-in default",
+          "clear": "Use the environment setting",
+          "saved": "Saved. New agents follow the change immediately.",
+          "confirmOn": "Allow new agents in the default project? They will belong to no department, so department budgets and department administrators will not see them."
+        }
       },
       "carries": "Deploys with",
       "longTerm": "long-term memory",

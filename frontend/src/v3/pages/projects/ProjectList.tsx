@@ -11,6 +11,7 @@ import { useProject } from "../../../workspace/project-context";
 import { useLoad, useToast } from "../../hooks";
 import { firstReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, Skeleton } from "../../ui";
+import { AgentProjectSettingsPanel } from "./AgentProjectSettingsPanel";
 import { isProjectId, slugFromName } from "./model";
 import { useStructureNames } from "./useStructureNames";
 import { Select } from "../../select";
@@ -141,6 +142,7 @@ export function ProjectList() {
           }}
         />
       )}
+      {isAdmin && <AgentProjectSettingsPanel />}
     </div>
   );
 }

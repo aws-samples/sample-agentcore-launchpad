@@ -1344,9 +1344,34 @@ function pinnedProject(projectId?: string | null): Record<string, string> | unde
 export interface EligibleAgentProject {
   id: string;
   name: string;
-  department_id: string;
+  /** null only for a workspace `default` project (listed while the switch is on) */
+  department_id: string | null;
   department_name: string | null;
   is_workspace_default: boolean;
+  /** a workspace `default` project: no department, listed only while
+   *  `agent_allow_default_project` is on; never preselected */
+  is_default?: boolean;
+}
+
+/** `GET /api/agents/eligible-projects`: the list plus which empty-list copy applies. */
+export interface EligibleAgentProjects {
+  projects: EligibleAgentProject[];
+  /** the agent-project switch: new agents may also land in a `default` project */
+  default_project_allowed?: boolean;
+}
+
+/** `GET|PUT /api/settings/agent-projects` (admin, hub-global): the agent-project switch. */
+export interface AgentProjectSettings {
+  /** effective value: console > env > launchpad.yaml > default */
+  allow_default_project: boolean;
+  source: "console" | "env" | "config" | "default";
+  /** the console override, null when none is set */
+  console_value: boolean | null;
+  env: string;
+  env_value: string | null;
+  default: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
 }
 
 /** The route keys that create an agent; the picker lists projects holding one. */
@@ -6219,9 +6244,17 @@ export const api = {
     }),
   /** Server-filtered: the business projects the caller may create an agent in. */
   agentEligibleProjects: (permission: AgentCreatePermission = "agents.deploy") =>
-    request<{ projects: EligibleAgentProject[] }>(
+    request<EligibleAgentProjects>(
       `/api/agents/eligible-projects?permission=${encodeURIComponent(permission)}`,
     ),
+  /** Admin: may new agents be filed under a workspace `default` project? */
+  agentProjectSettings: () => request<AgentProjectSettings>("/api/settings/agent-projects"),
+  /** Admin: set the console override (`null` clears it: back to env / yaml / default). */
+  setAgentProjectSettings: (allowDefaultProject: boolean | null) =>
+    request<AgentProjectSettings>("/api/settings/agent-projects", {
+      method: "PUT",
+      body: JSON.stringify({ allow_default_project: allowDefaultProject }),
+    }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
   /** T10: the wizard's scenario-template gallery (static, hub-global). */
   agentTemplates: () => request<{ templates: AgentTemplateInfo[] }>("/api/agent-templates"),

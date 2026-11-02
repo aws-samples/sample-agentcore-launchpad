@@ -8,6 +8,7 @@ runnable locally.
 
 import ipaddress
 import shutil
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -269,6 +270,11 @@ class Settings(BaseSettings):
     # Per-project Bedrock application inference profiles for isolated projects (projects
     # design §10.8): cost per project at the model call; off until verified live.
     project_inference_profiles: bool = False
+    # The agent-project rule's one switch (services/agent_project_settings): when true a
+    # new agent may also be filed under a workspace `default` project (no department
+    # needed there). Off = only a department's business project. An administrator can
+    # override it on the console (a `platform_settings` row wins over env / yaml).
+    agent_allow_default_project: bool = False
     # The architect assistant's replay budget (assistant-context C3): half the
     # architect model's input context window, in estimated tokens, capped at
     # assistant_replay_max_tokens; the other half stays free for the turn's own tool
@@ -580,6 +586,65 @@ def resolve_container_cli(value: str = "auto") -> str:
     return shutil.which("docker") or shutil.which("finch") or "docker"
 
 
+# ── console overrides ─────────────────────────────────────────────────────────
+# Fields an administrator overrode on the console (`platform_settings` rows: the model
+# roles of services/model_settings, the agent-project switch of
+# services/agent_project_settings). Precedence is console > env > launchpad.yaml >
+# default, so every Settings object `get_settings` builds gets this overlay applied —
+# a runtime `get_settings.cache_clear()` (the price refresher, a bootstrap writing
+# launchpad.yaml) rebuilds from env / yaml and must not drop a console value. Loaded
+# from the ledger at startup and updated by each console write; reading it is a dict
+# copy under the lock, never a query.
+_CONSOLE_OVERLAY: dict[str, Any] = {}
+_OVERLAY_LOCK = threading.Lock()
+
+
+def console_overrides() -> dict[str, Any]:
+    """A copy of the console overlay (field → value)."""
+    with _OVERLAY_LOCK:
+        return dict(_CONSOLE_OVERLAY)
+
+
+def set_console_override(field: str, value: Any) -> None:
+    """Record a console value and apply it to the cached Settings now."""
+    if field not in Settings.model_fields:
+        raise KeyError(field)
+    with _OVERLAY_LOCK:
+        _CONSOLE_OVERLAY[field] = value
+    setattr(get_settings(), field, value)
+
+
+def clear_console_override(field: str) -> None:
+    """Drop a console value; the cached Settings goes back to env / yaml / default."""
+    with _OVERLAY_LOCK:
+        _CONSOLE_OVERLAY.pop(field, None)
+    setattr(get_settings(), field, getattr(Settings(), field))
+
+
+def replace_console_overrides(fields: set[str] | frozenset[str], values: dict[str, Any]) -> None:
+    """Make ``values`` the overlay for ``fields`` (one owner's whole set, e.g. every
+    model role at startup): a field of ``fields`` absent from ``values`` is cleared."""
+    for field in values:
+        if field not in fields:
+            raise KeyError(field)
+    for field in fields:
+        if field in values:
+            set_console_override(field, values[field])
+        elif field in console_overrides():
+            clear_console_override(field)
+
+
+def reset_console_overrides_for_tests() -> bool:
+    """Empty the overlay (the suite's per-test isolation); True if it held anything."""
+    with _OVERLAY_LOCK:
+        held = bool(_CONSOLE_OVERLAY)
+        _CONSOLE_OVERLAY.clear()
+    return held
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    for field, value in console_overrides().items():
+        setattr(settings, field, value)
+    return settings
