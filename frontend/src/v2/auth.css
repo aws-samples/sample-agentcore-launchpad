@@ -38,6 +38,7 @@
 .v2-auth-fields { display: grid; gap: 16px; margin-top: 22px; }
 .v2-auth-fields .v2-input { width: 100%; height: 38px; }
 .v2-auth-error { min-height: 22px; margin-top: 12px; font-size: 13px; line-height: 1.5; color: var(--v2-danger); }
+.v2-auth-notice { margin: 16px 0 0; padding: 10px 12px; border: 1px solid var(--v2-line); border-radius: 6px; font-size: 13px; line-height: 1.6; color: var(--v2-ink-2); background: var(--v2-bg); white-space: pre-line; }
 .v2-auth-submit.v2-btn { width: 100%; height: 40px; font-size: 15px; margin-top: 4px; }
 
 .v2-auth-icon { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 14px; }

@@ -38,6 +38,9 @@ interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
   registration_enabled: boolean;
+  // present only while an operator closed registration (gate on, not SSO-hidden);
+  // "" = the console's generic "contact an administrator" copy. Also on /login.
+  registration_closed_notice?: string;
   username: string | null;
   role: ConsoleRole | null;
   email: string | null;
@@ -63,6 +66,14 @@ auth_registration_require_approval / …_AUTH_REGISTRATION_REQUIRE_APPROVAL  def
 auth_registration_valid_days / …_AUTH_REGISTRATION_VALID_DAYS  default: 7
 auth_allowed_email_domains / …_AUTH_ALLOWED_EMAIL_DOMAINS   default: [] (allow list wins when set)
 auth_blocked_email_domains / …_AUTH_BLOCKED_EMAIL_DOMAINS   default: free/disposable mail list
+auth_registration_closed_notice / …_AUTH_REGISTRATION_CLOSED_NOTICE  default: "" (≤ 500 chars)
+auth_registration_max_pending / …_AUTH_REGISTRATION_MAX_PENDING  default: 200 (0 = no cap)
+auth_register_rate_limit / …_window_s                       default: 10 per 3600 s per IP (0 = off)
+auth_login_rate_limit / …_window_s                          default: 30 per 300 s per IP (0 = off)
+auth_login_lockout_threshold / _base_s / _max_s             default: 5 / 60 / 900 (0 = off)
+auth_trusted_proxy_hops / …_AUTH_TRUSTED_PROXY_HOPS         default: 0 (X-Forwarded-For ignored)
+auth_trusted_proxies / …_AUTH_TRUSTED_PROXIES               default: ["127.0.0.1/32", "::1/128"]
+auth_client_ip_header / …_AUTH_CLIENT_IP_HEADER             default: "" (e.g. CloudFront-Viewer-Address)
 ```
 
 An unset or empty password disables the login gate: the console stays open **to
@@ -184,6 +195,33 @@ Regex-validated address; the lowercased domain is matched **exactly or as a
 suffix** (`x.gmail.com` counts as `gmail.com`). A non-empty
 `auth_allowed_email_domains` short-circuits as a whitelist; otherwise
 `auth_blocked_email_domains` (free + disposable providers) rejects the address.
+
+### 3.5a Throttling (`services/auth_throttle.py`)
+
+- **Client IP** = the TCP peer, unless the peer is inside `auth_trusted_proxies`;
+  only then are headers read: `auth_client_ip_header` first (an edge-written
+  `address:port`; the port is always the last `:` field, IPv6 bracketed or not),
+  else the `X-Forwarded-For` entry `auth_trusted_proxy_hops` from the right
+  (fewer entries → the leftmost). Entries further left are caller-supplied and
+  never read. Reference prod (CloudFront → nginx `$proxy_add_x_forwarded_for` →
+  uvicorn 127.0.0.1): header `CloudFront-Viewer-Address`, hops `2`.
+- **Per-IP sliding windows** on `register` and `login`, counted before the request
+  is processed, whatever its outcome; refusal `429 auth.too_many_attempts` with
+  `Retry-After` and `detail.retry_after_seconds`. Registration closed answers
+  `auth.registration_disabled` before the window counts.
+- **Login backoff** keyed on `(lower(username), ip)` — never on the username alone,
+  which would let anyone lock a real user out remotely. Only
+  `auth.invalid_credentials` counts; the `threshold`-th failure locks for `base_s`,
+  doubling per further failure up to `max_s`; a locked pair is refused
+  (`429 auth.login_locked`) even with the right password; a success clears it.
+- **Pending cap**: with approval required, a registration while
+  `auth_registration_max_pending` accounts are `pending` → `503
+  auth.registration_queue_full` (bounds an IP-rotating flood).
+- **No email enumeration**: with approval required, a registration whose email is
+  taken answers the exact pending-registration body (201) after one password hash
+  and writes nothing. Instant-activation mode keeps `409 auth.email_taken`.
+- State is process-local (one uvicorn process), bounded to 50 000 keys per table.
+  Distributed floods are the edge's job (AWS WAF in front of CloudFront).
 
 ### 3.6 Admin patch semantics
 
@@ -310,7 +348,11 @@ and runs to completion.
 | Malformed email | `400 auth.invalid_email` |
 | Free/disposable domain (or outside a configured allow list) | `400 auth.email_domain_blocked` |
 | `status` outside `pending`/`active`/`disabled` | `400 users.invalid_status` |
-| Email already registered | `409 auth.email_taken` |
+| Email already registered (approval required) | `201`, pending body, nothing written |
+| Email already registered (instant activation) | `409 auth.email_taken` |
+| Over the per-IP register / login window | `429 auth.too_many_attempts` + `Retry-After` |
+| `(username, ip)` locked after repeated wrong passwords | `429 auth.login_locked` + `Retry-After` |
+| `auth_registration_max_pending` accounts already pending | `503 auth.registration_queue_full` |
 | Password shorter than 8 characters | `400 auth.weak_password` |
 | Correct credentials, account still `pending` | `401 auth.account_pending` |
 | Missing/invalid login fields | `422 validation.invalid_request` |
@@ -327,9 +369,8 @@ and runs to completion.
 Credential and cookie-signature comparisons must use `hmac.compare_digest`, and
 an unknown username still burns one PBKDF2 verification so timing does not
 disclose account existence. The status endpoint must not disclose the configured
-username, role, or email before authentication. Registration is intentionally
-un-rate-limited in this sample asset — call that out rather than assuming a
-limiter exists.
+username, role, or email before authentication. Register and login are
+throttled per client IP (§3.5a); nothing else on the anonymous surface is.
 
 ## 5. Good / Base / Bad Cases
 
@@ -359,6 +400,11 @@ Backend tests must assert:
   `auth_registration_require_approval=false` yields an immediately usable account;
   every validation code in §4 is produced;
 - duplicate username/email detection is case-insensitive;
+- client-IP resolution (hops, spoofed prefixes, untrusted peer, viewer-address
+  forms), the per-IP windows, the `(username, ip)` backoff and its schedule, the
+  pending cap, the closed-registration notice on status + login, and that
+  mass-assigned query/body fields never set status, role or approval
+  (`tests/test_auth_throttle.py`, `tests/test_users_api.py`);
 - an established member session dies on expiry, disable, and delete;
 - the cookie expiry is clamped to a short account validity;
 - the `pending` filter and the `pending` stat surface the approval queue;

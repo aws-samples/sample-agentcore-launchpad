@@ -232,9 +232,63 @@ class TestRegistration:
         assert taken.status_code == 409
         assert taken.json()["code"] == "auth.username_taken"
 
+        # with approval required (the default) a taken address answers exactly like
+        # a fresh registration — the 409 let anyone probe which emails hold an
+        # account — and writes nothing
+        duplicate_email = register(anon, username="other", email="QA-USER@Acme-Corp.com")
+        assert duplicate_email.status_code == 201
+        assert duplicate_email.json() == {
+            "ok": True,
+            "username": "other",
+            "email": "qa-user@acme-corp.com",
+            "status": "pending",
+            "requires_approval": True,
+            "expires_at": None,
+            "valid_days": 7,
+        }
+        assert duplicate_email.json().keys() == register(
+            anon, username="fresh", email="fresh@acme-corp.com"
+        ).json().keys()
+        with SessionLocal() as db:
+            assert users_service.find_by_username(db, "other") is None
+
+    def test_duplicate_email_still_conflicts_for_instant_accounts(self, monkeypatch, anon):
+        # instant activation answers "ready to sign in", so a silent no-op would
+        # mislead the registrant; the conflict stays explicit there
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL", "false")
+        get_settings.cache_clear()
+        assert register(anon).status_code == 201
         duplicate_email = register(anon, username="other", email="QA-USER@Acme-Corp.com")
         assert duplicate_email.status_code == 409
         assert duplicate_email.json()["code"] == "auth.email_taken"
+
+    def test_registration_ignores_mass_assigned_fields(self, anon):
+        # seen in the wild against prod (2026-11): extra query params and body keys
+        # must never pick the status, role or approval of a self-registered account
+        response = anon.post(
+            "/api/auth/register?status=active&auto_approve=true&role=admin&is_admin=true",
+            json={
+                **MEMBER,
+                "status": "active",
+                "role": "admin",
+                "auto_approve": True,
+                "permissions": {"users.manage": True},
+                "expires_at": "2099-01-01T00:00:00Z",
+                "created_by": "admin",
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["status"] == "pending"
+        user = stored()
+        assert (user.status, user.role, user.created_by) == ("pending", "member", "self")
+        assert user.expires_at is None
+        assert not user.permissions
+        login = anon.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": MEMBER["password"]},
+        )
+        assert login.status_code == 401
+        assert login.json()["code"] == "auth.account_pending"
 
     def test_registration_can_be_disabled_by_configuration(self, monkeypatch, anon):
         monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_ENABLED", "false")
@@ -243,6 +297,43 @@ class TestRegistration:
         assert response.status_code == 400
         assert response.json()["code"] == "auth.registration_disabled"
         assert anon.get("/api/auth/status").json()["registration_enabled"] is False
+
+    def test_closed_registration_carries_the_operator_notice(self, monkeypatch, anon):
+        # open registration: no notice at all
+        assert "registration_closed_notice" not in anon.get("/api/auth/status").json()
+
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_ENABLED", "false")
+        get_settings.cache_clear()
+        # closed without a text: "" — the sign-in page shows its generic copy
+        assert anon.get("/api/auth/status").json()["registration_closed_notice"] == ""
+
+        text = "由于安全原因，已关闭自助注册，请联系后台人员申请账号。"
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_CLOSED_NOTICE", f"  {text} ")
+        get_settings.cache_clear()
+        status = anon.get("/api/auth/status").json()
+        assert status["registration_enabled"] is False
+        assert status["registration_closed_notice"] == text
+        # the login answer carries it too: a sign-out rebuilds the page from it
+        login = anon.post("/api/auth/login", json=ADMIN).json()
+        assert login["registration_closed_notice"] == text
+
+    def test_no_closed_notice_on_an_open_console(self, monkeypatch):
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_ENABLED", "false")
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_CLOSED_NOTICE", "closed")
+        monkeypatch.delenv("LAUNCHPAD_AUTH_PASSWORD", raising=False)
+        get_settings.cache_clear()
+        with TestClient(create_app()) as open_client:
+            assert "registration_closed_notice" not in open_client.get("/api/auth/status").json()
+        get_settings.cache_clear()
+
+    def test_no_closed_notice_while_local_login_is_hidden(self, monkeypatch, anon):
+        # with sso D-2 the identity provider is the account source, not an administrator
+        from app.routers import auth as auth_router
+
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_ENABLED", "false")
+        get_settings.cache_clear()
+        monkeypatch.setattr(auth_router, "_local_login_hidden", lambda: True)
+        assert "registration_closed_notice" not in anon.get("/api/auth/status").json()
 
     def test_allowed_domains_override_the_blacklist(self, monkeypatch, anon):
         monkeypatch.setenv("LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS", '["partner.io"]')

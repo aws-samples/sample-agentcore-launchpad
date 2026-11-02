@@ -28,6 +28,7 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.actor import set_current_actor
@@ -35,7 +36,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, envelope
 from app.models.ledger import User
-from app.services import admin_credential
+from app.services import admin_credential, auth_throttle
 from app.services import users as users_service
 from app.services.audit import record_audit_event
 
@@ -523,6 +524,7 @@ def status(request: Request) -> dict[str, Any]:
         "authenticated": identity is not None,
         "registration_enabled": registration_enabled(settings),
         "registration_requires_approval": registration_requires_approval(settings),
+        **_closed_notice(settings),
         **_identity_fields(identity if required else None),
         # the running commit (online update §2.4): the updater's health check waits for
         # the restarted console to report the commit it just installed
@@ -547,7 +549,7 @@ def _running_sha() -> str | None:
 
 
 @router.post("/login")
-def login(req: LoginRequest, response: Response) -> dict[str, Any]:
+def login(req: LoginRequest, request: Request, response: Response) -> dict[str, Any]:
     settings = get_settings()
     password = _password(settings)
     if password is None:
@@ -559,6 +561,45 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
             "registration_requires_approval": registration_requires_approval(settings),
             **_identity_fields(None),
         }
+
+    # per-IP window + per (username, IP) backoff, before any password is checked
+    # (services/auth_throttle.py); only a wrong password counts as a failure
+    ip = auth_throttle.client_ip(request, settings)
+    auth_throttle.check_login(ip, req.username, settings)
+    try:
+        identity, stamp = _authenticate(req, settings)
+    except AppError as exc:
+        if exc.code == "auth.invalid_credentials":
+            auth_throttle.login_failed(ip, req.username, settings)
+        raise
+    auth_throttle.login_succeeded(ip, req.username)
+
+    expiry = _set_session_cookie(response, identity, settings, stamp)
+    return {
+        "ok": True,
+        "auth_required": True,
+        "expires_at": expiry,
+        "registration_enabled": registration_enabled(settings),
+        "registration_requires_approval": registration_requires_approval(settings),
+        # carried here too: after a sign-out the login page is rebuilt from this answer
+        **_closed_notice(settings),
+        **_identity_fields(identity),
+    }
+
+
+def _closed_notice(settings: Settings) -> dict[str, str]:
+    """`registration_closed_notice` — present only while the gate is on and an operator
+    closed registration (`auth_registration_enabled: false`); "" = the console's
+    generic copy. Not with local login hidden (sso D-2): there the identity provider
+    is the account source, so "ask an administrator" would be wrong."""
+    if not enabled(settings) or settings.auth_registration_enabled or _local_login_hidden():
+        return {}
+    return {"registration_closed_notice": settings.auth_registration_closed_notice.strip()}
+
+
+def _authenticate(req: LoginRequest, settings: Settings) -> tuple[Identity, str | None]:
+    """The identity a username/password proves, and its session stamp; raises the
+    `auth.*` refusal otherwise."""
 
     username_ok = hmac.compare_digest(
         req.username.strip().encode("utf-8"),
@@ -605,31 +646,39 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
             )
         finally:
             db.close()
-
-    expiry = _set_session_cookie(response, identity, settings, stamp)
-    return {
-        "ok": True,
-        "auth_required": True,
-        "expires_at": expiry,
-        "registration_enabled": registration_enabled(settings),
-        "registration_requires_approval": registration_requires_approval(settings),
-        **_identity_fields(identity),
-    }
+    return identity, stamp
 
 
 @router.post("/register", status_code=201)
-def register(req: RegisterRequest) -> dict[str, Any]:
+def register(req: RegisterRequest, request: Request) -> dict[str, Any]:
     settings = get_settings()
     if not registration_enabled(settings):
         raise AppError(
             "auth.registration_disabled",
             "Self-service registration is not available on this console",
         )
+    auth_throttle.check_register(auth_throttle.client_ip(request, settings), settings)
     db = SessionLocal()
     try:
-        user = users_service.register_user(
-            db, req.username, req.email, req.password, settings
-        )
+        _check_pending_capacity(db, settings)
+        try:
+            user = users_service.register_user(
+                db, req.username, req.email, req.password, settings
+            )
+        except AppError as exc:
+            if exc.code == "auth.email_taken" and registration_requires_approval(settings):
+                # With approval required a new registration only ever answers
+                # "submitted for review", so a taken address answers exactly that
+                # too (same cost: one password hash) — the 409 let anyone probe
+                # which emails hold an account. No row is written; the owner of
+                # the address already has an account to sign in with.
+                users_service.hash_password(req.password)
+                return _pending_answer(
+                    users_service.normalize_username(req.username),
+                    users_service.normalize_email(req.email),
+                    settings,
+                )
+            raise
         expires_at = users_service.as_utc(user.expires_at)
         return {
             "ok": True,
@@ -643,6 +692,37 @@ def register(req: RegisterRequest) -> dict[str, Any]:
         }
     finally:
         db.close()
+
+
+def _pending_answer(username: str, email: str, settings: Settings) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "username": username,
+        "email": email,
+        "status": users_service.STATUS_PENDING,
+        "requires_approval": True,
+        "expires_at": None,
+        "valid_days": settings.auth_registration_valid_days,
+    }
+
+
+def _check_pending_capacity(db: Session, settings: Settings) -> None:
+    """Refuse a registration while `auth_registration_max_pending` accounts already
+    wait for approval: the bound on a flood that rotates IPs past the per-IP limit."""
+    cap = settings.auth_registration_max_pending
+    if cap <= 0 or not registration_requires_approval(settings):
+        return
+    waiting = db.scalar(
+        select(func.count()).select_from(User).where(
+            User.status == users_service.STATUS_PENDING
+        )
+    ) or 0
+    if waiting >= cap:
+        raise AppError(
+            "auth.registration_queue_full",
+            "Registration is temporarily closed: too many accounts await approval",
+            status_code=503,
+        )
 
 
 class PasswordChangeRequest(BaseModel):

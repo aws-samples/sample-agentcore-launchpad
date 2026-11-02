@@ -40,6 +40,10 @@
     "errEmailTaken": "该邮箱已注册。",
     "errWeakPassword": "密码至少 8 个字符。",
     "errRegistrationDisabled": "该控制台未开放自助注册。",
+    "errTooManyAttempts": "当前网络的尝试次数过多，请 {{minutes}} 分钟后再试。",
+    "errLoginLocked": "该账号登录失败次数过多，请 {{minutes}} 分钟后再试。",
+    "errRegistrationQueueFull": "待审批的账号过多，注册暂时关闭，请稍后再试。",
+    "registrationClosedNotice": "自助注册已关闭，如需账号请联系管理员申请。",
     "roleAdmin": "管理员",
     "roleMember": "成员",
     "daysLeft": "剩余 {{days}} 天",
@@ -3421,7 +3425,10 @@
     "workspace.prod_protected": "这是生产工作区——其 Agent 只能通过发布变更，不能直接修改。",
     "workspace.tier_change_unconfirmed": "更改级别会改变谁可以修改该工作区的 Agent——请确认后继续。",
     "project.department_required": "项目必须属于一个部门，请选择一个现有且未归档的部门。",
-    "steward.pending_group_retired": "此变更是为项目组提交的，而项目组已下线，请拒绝它，并直接修改各项目的成员。"
+    "steward.pending_group_retired": "此变更是为项目组提交的，而项目组已下线，请拒绝它，并直接修改各项目的成员。",
+    "auth.too_many_attempts": "尝试次数过多，请稍后再试。",
+    "auth.login_locked": "登录失败次数过多，请稍后再试。",
+    "auth.registration_queue_full": "待审批的账号过多，注册暂时关闭。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",

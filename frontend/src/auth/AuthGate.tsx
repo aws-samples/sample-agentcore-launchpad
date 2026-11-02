@@ -53,6 +53,7 @@ const LOGGED_OUT = (previous: AuthStatus | null): AuthStatus => ({
   authenticated: false,
   registration_enabled: previous?.registration_enabled ?? false,
   registration_requires_approval: previous?.registration_requires_approval ?? true,
+  registration_closed_notice: previous?.registration_closed_notice,
   username: null,
   role: null,
   email: null,
@@ -66,6 +67,8 @@ const LOGIN_ERROR_KEYS: Record<string, string> = {
   "auth.account_pending": "auth.accountPending",
   "auth.account_expired": "auth.accountExpired",
   "auth.account_disabled": "auth.accountDisabled",
+  "auth.too_many_attempts": "auth.errTooManyAttempts",
+  "auth.login_locked": "auth.errLoginLocked",
 };
 
 const REGISTER_ERROR_KEYS: Record<string, string> = {
@@ -76,7 +79,19 @@ const REGISTER_ERROR_KEYS: Record<string, string> = {
   "auth.email_taken": "auth.errEmailTaken",
   "auth.weak_password": "auth.errWeakPassword",
   "auth.registration_disabled": "auth.errRegistrationDisabled",
+  "auth.too_many_attempts": "auth.errTooManyAttempts",
+  "auth.registration_queue_full": "auth.errRegistrationQueueFull",
 };
+
+/** Whole minutes until a throttled sign-in / registration may retry (≥ 1). */
+function retryMinutes(caught: unknown): number {
+  const detail = caught instanceof ApiError ? caught.detail : null;
+  const seconds =
+    detail && typeof detail === "object" && "retry_after_seconds" in detail
+      ? Number((detail as { retry_after_seconds: unknown }).retry_after_seconds)
+      : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? Math.max(1, Math.ceil(seconds / 60)) : 1;
+}
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
@@ -110,6 +125,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       authenticated: true,
       registration_enabled: result.registration_enabled,
       registration_requires_approval: result.registration_requires_approval,
+      registration_closed_notice: result.registration_closed_notice,
       username: result.username,
       role: result.role,
       email: result.email,
@@ -168,6 +184,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         onLogin={onLogin}
         registrationEnabled={status.registration_enabled}
         requiresApproval={status.registration_requires_approval}
+        closedNotice={status.registration_closed_notice}
       />
     );
   }
@@ -197,14 +214,34 @@ const HERO_STEPS = [
   { key: "observe", icon: Activity },
 ] as const;
 
+/** Under the sign-in form while an operator closed registration: their own text
+ *  (`auth_registration_closed_notice`, shown as written) or the generic copy. */
+export function RegistrationClosedNotice({
+  skin,
+  notice,
+}: {
+  skin: "v2" | "v3";
+  notice: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <p className={`${skin}-auth-notice`} role="note" data-testid="auth-registration-closed">
+      {notice.trim() || t("auth.registrationClosedNotice")}
+    </p>
+  );
+}
+
 function LoginPage({
   onLogin,
   registrationEnabled,
   requiresApproval,
+  closedNotice,
 }: {
   onLogin: (result: AuthLoginResult) => void;
   registrationEnabled: boolean;
   requiresApproval: boolean;
+  /** set only while an operator closed registration; "" = the generic copy */
+  closedNotice?: string;
 }) {
   const { t } = useTranslation();
   const skin = useSkin();
@@ -249,6 +286,9 @@ function LoginPage({
       ) : (
         <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
       )}
+      {!registrationEnabled && closedNotice !== undefined ? (
+        <RegistrationClosedNotice skin={skin} notice={closedNotice} />
+      ) : null}
     </>
   );
 
@@ -373,7 +413,7 @@ function SignInForm({
     } catch (caught) {
       const key =
         caught instanceof ApiError ? LOGIN_ERROR_KEYS[caught.code] : undefined;
-      setError(t(key ?? "auth.loginFailed"));
+      setError(t(key ?? "auth.loginFailed", { minutes: retryMinutes(caught) }));
     } finally {
       setSubmitting(false);
     }
@@ -462,7 +502,7 @@ function RegisterForm({
     } catch (caught) {
       const key =
         caught instanceof ApiError ? REGISTER_ERROR_KEYS[caught.code] : undefined;
-      setError(t(key ?? "auth.registerFailed"));
+      setError(t(key ?? "auth.registerFailed", { minutes: retryMinutes(caught) }));
     } finally {
       setSubmitting(false);
     }
