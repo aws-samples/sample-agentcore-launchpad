@@ -6,13 +6,14 @@ Sources, in ascending precedence: defaults < config/launchpad.yaml < environment
 runnable locally.
 """
 
+import ipaddress
 import shutil
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -99,6 +100,45 @@ class Settings(BaseSettings):
     # instant-activation behavior.
     auth_registration_require_approval: bool = True
     auth_registration_valid_days: int = Field(default=7, gt=0, le=3650)
+    # While this many registrations already wait for approval, a new one is refused
+    # (`auth.registration_queue_full`) — the bound on a flood that rotates IPs past
+    # the per-IP limit below. 0 = no cap. Only counts with approval required.
+    auth_registration_max_pending: int = Field(default=200, ge=0)
+    # Shown under the sign-in form while registration is closed by
+    # `auth_registration_enabled: false` (`registration_closed_notice` in
+    # /api/auth/status); "" shows the console's generic "contact an administrator".
+    auth_registration_closed_notice: str = Field(default="", max_length=500)
+
+    # Throttling of the two anonymous auth endpoints (app/services/auth_throttle.py).
+    # The client is the transport peer unless the request came through a trusted
+    # proxy: the peer is one of `auth_trusted_proxies`, or uvicorn's default
+    # proxy-headers middleware (it trusts 127.0.0.1) already rewrote the peer to an
+    # X-Forwarded-For entry with port 0 — what the app sees behind nginx on
+    # loopback. Then it is the `auth_trusted_proxy_hops`-th
+    # X-Forwarded-For entry from the right — the address the outermost trusted
+    # proxy saw. Each trusted proxy that APPENDS to the header counts as one hop:
+    # CloudFront → nginx (passing the header through) → uvicorn is 1; when nginx
+    # appends too (`$proxy_add_x_forwarded_for`) it is 2. 0 ignores the header.
+    # Everything left of that entry is client-supplied and never read.
+    auth_trusted_proxy_hops: int = Field(default=0, ge=0, le=5)
+    auth_trusted_proxies: list[str] = ["127.0.0.1/32", "::1/128"]
+    # Optional header an edge writes itself as "address:port" and the viewer cannot
+    # forge — `CloudFront-Viewer-Address` (enable it in the distribution's origin
+    # request policy). Read first, with the same trusted-peer rule; when absent or
+    # unparseable the X-Forwarded-For hop rule above applies. "" = not used.
+    auth_client_ip_header: str = Field(default="", max_length=64)
+    # Per client IP, sliding window; a limit of 0 disables that limiter.
+    auth_register_rate_limit: int = Field(default=10, ge=0)
+    auth_register_rate_window_s: int = Field(default=3600, gt=0)
+    auth_login_rate_limit: int = Field(default=30, ge=0)
+    auth_login_rate_window_s: int = Field(default=300, gt=0)
+    # After this many consecutive wrong passwords for one username from one client
+    # IP, that pair is locked out for `base` seconds, doubling per further failure
+    # up to `max`. Keyed on the pair, so a stranger cannot lock a real user out
+    # from elsewhere. 0 disables the lockout.
+    auth_login_lockout_threshold: int = Field(default=5, ge=0)
+    auth_login_lockout_base_s: int = Field(default=60, gt=0)
+    auth_login_lockout_max_s: int = Field(default=900, gt=0)
     # "Company email" is enforced as a free-/disposable-mail blacklist. An
     # operator can pin their own corporate domains with the allow list, which
     # short-circuits the blacklist when non-empty.
@@ -475,6 +515,15 @@ class Settings(BaseSettings):
     # a stage that grows past the cap (`update.disk_low`).
     update_min_free_gb: float = Field(default=3.0, ge=0)
     update_stage_max_gb: float = Field(default=6.0, gt=0)
+
+    @field_validator("auth_trusted_proxies")
+    @classmethod
+    def _valid_proxy_networks(cls, value: list[str]) -> list[str]:
+        # a typo here would silently stop honouring X-Forwarded-For (every client
+        # then shares the proxy's address and its rate-limit bucket): fail at startup
+        for entry in value:
+            ipaddress.ip_network(entry.strip(), strict=False)
+        return [entry.strip() for entry in value]
 
     @model_validator(mode="after")
     def _seed_model_prices(self) -> "Settings":

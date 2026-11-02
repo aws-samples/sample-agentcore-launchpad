@@ -40,6 +40,10 @@
     "errEmailTaken": "That email is already registered.",
     "errWeakPassword": "Password must be at least 8 characters.",
     "errRegistrationDisabled": "Self-service registration is not available on this console.",
+    "errTooManyAttempts": "Too many attempts from this network. Try again in {{minutes}} min.",
+    "errLoginLocked": "Too many failed sign-ins for this account. Try again in {{minutes}} min.",
+    "errRegistrationQueueFull": "Registration is temporarily closed while administrators review pending accounts. Try again later.",
+    "registrationClosedNotice": "Self-service registration is closed. Please contact an administrator to request an account.",
     "roleAdmin": "ADMIN",
     "roleMember": "MEMBER",
     "daysLeft": "{{days}}d left",
@@ -3421,7 +3425,10 @@
     "workspace.prod_protected": "This is a production workspace — its agents are changed through a release, not directly.",
     "workspace.tier_change_unconfirmed": "Changing the tier changes who may modify this workspace's agents — confirm to continue.",
     "project.department_required": "A project belongs to a department — pick an existing, active one.",
-    "steward.pending_group_retired": "This change was staged for a project group, and project groups are retired — reject it and change the projects' members directly."
+    "steward.pending_group_retired": "This change was staged for a project group, and project groups are retired — reject it and change the projects' members directly.",
+    "auth.too_many_attempts": "Too many attempts from this address. Try again later.",
+    "auth.login_locked": "Too many failed sign-ins. Try again later.",
+    "auth.registration_queue_full": "Registration is temporarily closed while administrators review pending accounts."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",

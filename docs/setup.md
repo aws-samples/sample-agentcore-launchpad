@@ -653,6 +653,70 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'
 export LAUNCHPAD_AUTH_BLOCKED_EMAIL_DOMAINS='["gmail.com","qq.com"]'
 ```
 
+A domain entry matches that domain **and every subdomain of it**: `acme.com` in the
+allow list admits `eu.acme.com`, and `gmail.com` in the block list also blocks
+`mail.gmail.com`.
+
+With approval required, registering an email that already has an account answers
+exactly like a new registration ("waiting for approval") and writes nothing, so the
+form cannot be used to probe which addresses hold an account. Usernames still
+answer `auth.username_taken` (409): the registrant has to pick another one.
+
+**Throttling.** `POST /api/auth/register` and `POST /api/auth/login` are rate-limited
+per client IP (sliding window, counted before the request is processed), and a
+username that keeps failing from one IP is locked out with a doubling backoff —
+keyed on the (username, IP) pair, so nobody can lock a real user out from elsewhere.
+A correct password does not open a locked pair until the backoff expires. While
+`auth_registration_max_pending` accounts wait for approval, new registrations are
+refused (`auth.registration_queue_full`, 503) — the bound on a flood that rotates
+addresses. The state is in-process (one uvicorn process; a restart clears it).
+
+```bash
+export LAUNCHPAD_AUTH_REGISTER_RATE_LIMIT=10      # per IP per window; 0 = off
+export LAUNCHPAD_AUTH_REGISTER_RATE_WINDOW_S=3600
+export LAUNCHPAD_AUTH_LOGIN_RATE_LIMIT=30         # attempts per IP per window; 0 = off
+export LAUNCHPAD_AUTH_LOGIN_RATE_WINDOW_S=300
+export LAUNCHPAD_AUTH_LOGIN_LOCKOUT_THRESHOLD=5   # wrong passwords per (user, IP); 0 = off
+export LAUNCHPAD_AUTH_LOGIN_LOCKOUT_BASE_S=60     # first lockout, doubles per failure
+export LAUNCHPAD_AUTH_LOGIN_LOCKOUT_MAX_S=900
+export LAUNCHPAD_AUTH_REGISTRATION_MAX_PENDING=200  # 0 = no cap
+# behind a reverse proxy: see "Client IP behind a proxy" below
+export LAUNCHPAD_AUTH_TRUSTED_PROXY_HOPS=0
+export LAUNCHPAD_AUTH_TRUSTED_PROXIES='["127.0.0.1/32","::1/128"]'
+export LAUNCHPAD_AUTH_CLIENT_IP_HEADER=            # e.g. CloudFront-Viewer-Address
+```
+
+While `AUTH_REGISTRATION_ENABLED=false`, the sign-in page shows a notice under the
+form: `LAUNCHPAD_AUTH_REGISTRATION_CLOSED_NOTICE` as written, or a generic "contact
+an administrator" line when it is empty. (Not while local login is hidden for single
+sign-on — the identity provider is the account source there.)
+
+A workshop where many attendees sign in from one venue NAT shares one IP bucket:
+raise `AUTH_LOGIN_RATE_LIMIT` / `AUTH_REGISTER_RATE_LIMIT` for the day, or create
+the accounts in **Users → Add user**.
+
+**Client IP behind a proxy.** By default the client is the TCP peer, which behind a
+reverse proxy is the proxy itself, so every visitor shares one bucket. Set
+`AUTH_TRUSTED_PROXY_HOPS` to the number of trusted proxies that **append** to
+`X-Forwarded-For`; the backend then reads the entry that many places from the right
+(the address the outermost proxy saw), and only when the request came through a
+trusted proxy: the TCP peer is in `AUTH_TRUSTED_PROXIES`, or uvicorn already rewrote
+it. uvicorn's proxy headers are on by default and trust 127.0.0.1, so behind nginx
+on loopback the app sees the **CloudFront edge** (port 0) as its client; the backend
+recognises that rewrite and still reads the untouched headers, so no uvicorn flag is
+needed. A request that looks unproxied while these settings are on is keyed on its
+own address and logged once (`auth throttle: forwarding headers are configured but…`). Everything further left is client-supplied and ignored, so
+prepending fake addresses changes nothing. For the reference shape (CloudFront →
+nginx → uvicorn on 127.0.0.1): **2** when nginx sets
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (it appends the
+CloudFront edge address), **1** when nginx passes the header through untouched.
+Behind CloudFront, `AUTH_CLIENT_IP_HEADER=CloudFront-Viewer-Address` is the sturdier
+source: CloudFront writes it itself (`address:port`, forwarded when the distribution's
+origin request policy includes it), so it does not depend on how each proxy treats
+`X-Forwarded-For`. It is read under the same trusted-peer rule, and when it is absent
+the hop count applies — set both. Volume attacks spread over many IPs are the edge's job — put AWS WAF in front of
+CloudFront (rate-based rule + Bot Control / CAPTCHA on `/api/auth/*`).
+
 The admin sees a **User Management** module (`/users`) with an approval queue
 (`AWAITING APPROVAL` tile + `PENDING` filter, **APPROVE** / **REJECT** per row),
 registration statistics, and per-account actions: extend validity (+7 / +30 /

@@ -3803,6 +3803,9 @@ export interface AuthStatus {
   sso_providers?: { id: string; name: string; kind: "oidc" | "saml"; preset: string }[];
   /** 'sso' — the session came from an identity provider (sso §2.7); absent before sign-in */
   account_source?: "local" | "sso";
+  /** present only while an operator closed registration (gate on): the sign-in page's
+   *  notice; "" = show the console's generic "contact an administrator" copy */
+  registration_closed_notice?: string;
 }
 
 export interface AuthLoginResult extends AuthStatus {

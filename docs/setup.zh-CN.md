@@ -531,6 +531,51 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'
 export LAUNCHPAD_AUTH_BLOCKED_EMAIL_DOMAINS='["gmail.com","qq.com"]'
 ```
 
+域名条目匹配该域名**及其所有子域名**：白名单里的 `acme.com` 也放行 `eu.acme.com`，黑名单里的
+`gmail.com` 也拦截 `mail.gmail.com`。
+
+需要审批时，用已注册的邮箱再次注册，返回结果与新注册完全一致（“等待审批”），且不写入任何数据，
+因此无法借注册表单探测哪些邮箱已有账号。用户名重复仍返回 `auth.username_taken`（409），注册人需要换一个。
+
+**限流。** `POST /api/auth/register` 与 `POST /api/auth/login` 按客户端 IP 限流（滑动窗口，在处理请求之前计数）；
+同一用户名在同一 IP 上连续输错密码会被锁定，锁定时长逐次翻倍。锁定以（用户名，IP）为键，别人无法从其他地址把真实用户锁在外面；
+锁定期内即使密码正确也会被拒绝。待审批账号达到 `auth_registration_max_pending` 时拒绝新注册
+（`auth.registration_queue_full`，503），用来兜住轮换 IP 的批量注册。状态保存在进程内（单个 uvicorn 进程，重启即清空）。
+
+```bash
+export LAUNCHPAD_AUTH_REGISTER_RATE_LIMIT=10      # 每个 IP 每个窗口；0 = 关闭
+export LAUNCHPAD_AUTH_REGISTER_RATE_WINDOW_S=3600
+export LAUNCHPAD_AUTH_LOGIN_RATE_LIMIT=30         # 每个 IP 每个窗口的尝试次数；0 = 关闭
+export LAUNCHPAD_AUTH_LOGIN_RATE_WINDOW_S=300
+export LAUNCHPAD_AUTH_LOGIN_LOCKOUT_THRESHOLD=5   # 每个（用户名，IP）的错误次数；0 = 关闭
+export LAUNCHPAD_AUTH_LOGIN_LOCKOUT_BASE_S=60     # 首次锁定秒数，此后逐次翻倍
+export LAUNCHPAD_AUTH_LOGIN_LOCKOUT_MAX_S=900
+export LAUNCHPAD_AUTH_REGISTRATION_MAX_PENDING=200  # 0 = 不设上限
+# 位于反向代理之后：见下文“代理后的客户端 IP”
+export LAUNCHPAD_AUTH_TRUSTED_PROXY_HOPS=0
+export LAUNCHPAD_AUTH_TRUSTED_PROXIES='["127.0.0.1/32","::1/128"]'
+export LAUNCHPAD_AUTH_CLIENT_IP_HEADER=            # 例如 CloudFront-Viewer-Address
+```
+
+`AUTH_REGISTRATION_ENABLED=false` 时，登录页在表单下方显示一条提示：`LAUNCHPAD_AUTH_REGISTRATION_CLOSED_NOTICE`
+的原文；为空时显示通用的“请联系管理员”文案。（为单点登录隐藏本地登录时不显示：那种情况下账号来自身份提供商。）
+
+Workshop 现场很多学员经同一个出口 NAT 登录时会共用一个 IP 配额：当天调高
+`AUTH_LOGIN_RATE_LIMIT` / `AUTH_REGISTER_RATE_LIMIT`，或在**用户管理 → 新增用户**里直接建号。
+
+**代理后的客户端 IP。** 默认以 TCP 对端为客户端；在反向代理之后它就是代理本身，所有访客共用一个配额。
+把 `AUTH_TRUSTED_PROXY_HOPS` 设为会**追加** `X-Forwarded-For` 的可信代理层数，后端就读取从右数第这么多位的条目
+（最外层代理看到的地址），并且只在请求经过可信代理时才读：TCP 对端属于 `AUTH_TRUSTED_PROXIES`，或者已被 uvicorn 改写。
+uvicorn 默认开启 proxy headers 且信任 127.0.0.1，所以在回环地址上的 nginx 之后，应用看到的客户端是 **CloudFront 边缘地址**（端口为 0）；
+后端会识别这种改写，继续读取未被改动的请求头，无需给 uvicorn 加任何参数。开启这些配置后，看起来未经代理的请求按其自身地址计数，
+并记录一次日志（`auth throttle: forwarding headers are configured but…`）。更左边的条目都是客户端自己写的，
+一律忽略，所以在前面伪造地址不起作用。参考部署（CloudFront → nginx → 127.0.0.1 上的 uvicorn）：nginx 配置了
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`（会追加 CloudFront 边缘地址）时取 **2**，
+nginx 原样透传该头时取 **1**。在 CloudFront 之后，`AUTH_CLIENT_IP_HEADER=CloudFront-Viewer-Address` 是更稳妥的来源：该头由 CloudFront 自己写入
+（`地址:端口`，源请求策略包含它时才会转发），不依赖每一层代理如何处理 `X-Forwarded-For`。它同样只在 TCP 对端可信时读取，
+缺失时回退到跳数规则，所以两者都要设置。分散在大量 IP 上的攻击由边缘处理：在 CloudFront 前挂 AWS WAF
+（对 `/api/auth/*` 配置基于速率的规则和 Bot Control / CAPTCHA）。
+
 admin 账号会看到**用户管理**模块(`/users`):审批队列(「待审批」统计卡片 +
 `PENDING` 筛选 + 每行的**通过**/**拒绝**)、注册统计,以及逐账户操作(延期 +7/+30/
 自定义天数或指定到期时间、禁用/启用、修改角色、重置密码(仅显示一次)、删除)。

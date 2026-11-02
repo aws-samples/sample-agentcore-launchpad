@@ -104,6 +104,61 @@ The return URL is baked into each as_user agent at deploy time (runtime env
 setting or changing it, **re-publish every agent that has an as_user tool**.
 The frontend unit needs nothing.
 
+### Registration and sign-in hardening (public console)
+
+A console reachable from the internet gets automated registration and password
+guessing. Two drop-ins, same pattern as `public-base-url.conf` (the us-east-1,
+prod2 and prod3 boxes already carry `registration.conf` with registration closed —
+keep it across updates):
+
+```bash
+sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+# 1. close self-service registration (accounts come from Users → Add user / SSO);
+#    the sign-in page shows the notice (empty = the generic "contact an administrator")
+printf '%s\n' '[Service]' \
+  'Environment=LAUNCHPAD_AUTH_REGISTRATION_ENABLED=false' \
+  'Environment="LAUNCHPAD_AUTH_REGISTRATION_CLOSED_NOTICE=由于安全原因，已关闭自助注册，请联系后台人员申请账号。"' \
+  | sudo tee /etc/systemd/system/launchpad-backend.service.d/registration.conf
+# 2. real client IP for the register/login throttles. CloudFront → nginx :80 →
+#    uvicorn 127.0.0.1. uvicorn's default proxy headers (trusting 127.0.0.1) hand
+#    the app the CloudFront edge as client (port 0); the backend recognises that
+#    rewrite and reads the untouched headers — no uvicorn flag needed.
+#    CloudFront-Viewer-Address first; else X-Forwarded-For, counting the proxies that
+#    APPEND to it — `$proxy_add_x_forwarded_for` in nginx ⇒ 2, untouched ⇒ 1
+sudo nginx -T 2>/dev/null | grep -n 'X-Forwarded-For'
+printf '%s\n' '[Service]' \
+  'Environment=LAUNCHPAD_AUTH_CLIENT_IP_HEADER=CloudFront-Viewer-Address' \
+  'Environment=LAUNCHPAD_AUTH_TRUSTED_PROXY_HOPS=2' \
+  | sudo tee /etc/systemd/system/launchpad-backend.service.d/client-ip.conf
+sudo systemctl daemon-reload && sudo systemctl restart launchpad-backend
+systemctl show launchpad-backend -p Environment | tr ' ' '\n' \
+  | grep -E 'REGISTRATION_|CLIENT_IP_HEADER|TRUSTED_PROXY_HOPS'
+curl -s localhost:8000/api/auth/status | python3 -m json.tool \
+  | grep -E 'registration_(enabled|closed_notice)'   # false + the notice
+```
+
+`CloudFront-Viewer-Address` reaches the origin only when the distribution's origin
+request policy forwards it (`Managed-AllViewerAndCloudFrontHeaders-2022-06`, or a
+custom policy listing it); without it the hop count is what applies.
+
+Check the result end to end before trusting it: from your own machine, send five
+wrong passwords for a throwaway username through the public URL with forged
+headers, then read the lockout line — it must name **your** public IP, not
+`9.9.9.9` and not a CloudFront edge address (52.46.x / 15.158.x / 3.172.x / …):
+
+```bash
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-For: 9.9.9.9' -H 'CloudFront-Viewer-Address: 9.9.9.9:1' \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"hop-probe","password":"x"}' https://<public-host>/api/auth/login; done
+sudo journalctl -u launchpad-backend --since "5 min ago" -q | grep 'auth throttle'
+```
+
+A 401 ×5 then a lockout line with your IP confirms it; a CloudFront address means
+the source is wrong (hop count one too low), `9.9.9.9` one too high. The throttles,
+the pending-registration cap and their defaults are listed in
+[setup.md](setup.md#self-service-accounts-and-user-management).
+
 ### Platform model settings (accounts without OpenAI / Anthropic access)
 
 The models the platform itself calls (judge, intents, actor, architect, …) are

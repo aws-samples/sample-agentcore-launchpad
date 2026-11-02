@@ -209,6 +209,17 @@ def no_traffic_history(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def reset_auth_throttle():
+    # Every TestClient shares one peer address, so the per-IP login/register windows
+    # (services/auth_throttle.py) would otherwise fill up across a worker's tests.
+    from app.services import auth_throttle
+
+    auth_throttle.reset_for_tests()
+    yield
+    auth_throttle.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def reset_aws_client_cache():
     # Tests that stub aws_clients.get_session still populate the module-level
     # client cache; a fake cached under a real key must not leak across tests.
