@@ -575,6 +575,13 @@ another live agent of the workspace holds the name again, and never touches the
 platform's own build sources (`builds/coding-runtime/`, `builds/skill-lab-worker/`,
 the CodeBuild placeholder) or shared prefixes (`skills/`, `system-skills/`, `kb/`).
 A harness writes nothing per agent; BYOC staged uploads go with the BYOC teardown.
+A key another live Runtime of the account / region still names in its
+`codeConfiguration` is left too (fail-closed: unreadable runtimes delete nothing):
+two consoles on one account keep separate ledgers but share the bucket. AgentCore
+snapshots the package at Create/UpdateAgentRuntime — new sessions keep cold-starting
+after the object is gone — but an `UpdateAgentRuntime` that re-sends a deleted key is
+rejected with `ValidationException: S3 object not found in bucket` (dev probe,
+2026-11-02), which would break the other agent's config-only updates.
 
 **What is validated / what is not.** The upload gate enforces archive safety
 (zip-slip, absolute paths, symlinks, ≤250 MiB zip / ≤750 MiB uncompressed /

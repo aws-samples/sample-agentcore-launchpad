@@ -41,6 +41,38 @@ class FakeS3:
         return {}
 
 
+class FakeControl:
+    """ListAgentRuntimes / GetAgentRuntime over ``(runtime_id, status, bucket, key)``."""
+
+    def __init__(self, runtimes: list[tuple[str, str, str, str]] | None = None, *,
+                 fail: bool = False):
+        self.runtimes = {r[0]: r for r in runtimes or []}
+        self.fail = fail
+        self.gets: list[str] = []
+
+    def list_agent_runtimes(self, **_kw: Any) -> dict[str, Any]:
+        if self.fail:
+            raise RuntimeError("control plane unavailable")
+        return {"agentRuntimes": [{"agentRuntimeId": rid, "status": st}
+                                  for rid, st, _b, _k in self.runtimes.values()]}
+
+    def get_agent_runtime(self, agentRuntimeId: str) -> dict[str, Any]:
+        self.gets.append(agentRuntimeId)
+        rid, st, bucket, key = self.runtimes[agentRuntimeId]
+        return {"agentRuntimeId": rid, "status": st, "agentRuntimeArtifact": {
+            "codeConfiguration": {"code": {"s3": {"bucket": bucket, "prefix": key}}}}}
+
+
+@pytest.fixture(autouse=True)
+def control(monkeypatch):
+    """No other runtime references anything unless a test says so (and no real AWS)."""
+    from app.services.agentcore import client as agentcore_client
+
+    holder = {"control": FakeControl()}
+    monkeypatch.setattr(agentcore_client, "control_client", lambda _ctx: holder["control"])
+    return holder
+
+
 @pytest.fixture
 def s3(monkeypatch):
     """Route the real cleanup through one shared stub; quiet the other teardown steps."""
@@ -232,3 +264,53 @@ def test_deferred_teardown_sweep_cleans_artifacts_once_aws_lets_go(monkeypatch):
                   workspace_id=DEFAULT_WORKSPACE_ID)
     scheduler._finish_deferred_cleanup(agent, ws_ctx({"artifacts_bucket": BUCKET}))
     assert seen == ["late-agent"]
+
+
+PKG = "agents/probe-agent/deployment_package.zip"
+CANARY = "agents/probe-agent/canary/c1-restore.zip"
+
+
+def _probe_agent() -> Agent:
+    return Agent(id="a-probe", workspace_id=DEFAULT_WORKSPACE_ID, name="probe-agent",
+                 method="zip_runtime", status="deleted", resource_id="probe_agent_abc-OWN")
+
+
+def test_a_key_another_live_runtime_still_references_is_left(control):
+    """prod and prod2 share one account and bucket: the other console's same-named agent
+    still runs from the package. AgentCore snapshots code at deploy, but an
+    UpdateAgentRuntime re-sending a deleted key fails (dev probe 2026-11-02), so the key
+    stays; the canary mint nobody references goes."""
+    control["control"] = FakeControl([
+        ("probe_agent_abc-OWN", "DELETING", BUCKET, PKG),       # the agent's own runtime
+        ("probe_agent_xyz-OTHER", "READY", BUCKET, PKG),        # the other console's twin
+        ("unrelated_1-AAA", "READY", BUCKET, "agents/unrelated/deployment_package.zip"),
+        ("other_bucket-BBB", "READY", "another-bucket", CANARY),  # same key, other bucket
+    ])
+    fake = FakeS3([PKG, CANARY])
+    deleted = REAL_CLEANUP(_probe_agent(), ws_ctx({"artifacts_bucket": BUCKET}), s3_client=fake)
+    assert deleted == [CANARY]
+    assert fake.keys == {PKG}
+    assert "probe_agent_abc-OWN" not in control["control"].gets  # own / DELETING skipped
+
+
+def test_the_agents_own_runtime_never_holds_its_keys(control):
+    control["control"] = FakeControl([("probe_agent_abc-OWN", "READY", BUCKET, PKG)])
+    fake = FakeS3([PKG])
+    assert REAL_CLEANUP(_probe_agent(), ws_ctx({"artifacts_bucket": BUCKET}),
+                        s3_client=fake) == [PKG]
+
+
+def test_an_unreadable_runtime_list_deletes_nothing(control):
+    control["control"] = FakeControl(fail=True)
+    fake = FakeS3([PKG, CANARY])
+    assert REAL_CLEANUP(_probe_agent(), ws_ctx({"artifacts_bucket": BUCKET}),
+                        s3_client=fake) == []
+    assert fake.keys == {PKG, CANARY}
+    assert not [c for c in fake.calls if c[0] == "delete"]
+
+
+def test_no_reference_scan_when_there_is_nothing_to_delete(control):
+    control["control"] = FakeControl(fail=True)  # would fail closed if it were called
+    fake = FakeS3([])
+    assert REAL_CLEANUP(_probe_agent(), ws_ctx({"artifacts_bucket": BUCKET}),
+                        s3_client=fake) == []
