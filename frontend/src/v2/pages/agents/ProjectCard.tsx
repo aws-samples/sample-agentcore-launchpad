@@ -2,21 +2,22 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { agentProjectLabel } from "../../../lib/agent-project";
+import { agentProjectCopyKeys, agentProjectOptionLabel } from "../../../lib/agent-project";
 import { errorMessage } from "../../../lib/api";
 import type { AgentProjectPick } from "../../../lib/useAgentProjectPick";
 import { Alert, Button, Card, Field, Select } from "../../ui";
 
 /**
  * The business project a NEW agent is filed under (services/agent_project): the
- * server-filtered eligible list (`useAgentProjectPick`), so a `default` global
- * project never reaches the create call. The V2 shell has no project switch, so the
+ * server-filtered eligible list (`useAgentProjectPick`), so a `default` project
+ * reaches the create call only while the agent-project switch is on. The V2 shell has no project switch, so the
  * pick lives in the flow itself; the loading, failed and empty states each say why
  * it cannot go on. `ProjectField` is the bare field (dialogs), `ProjectCard` the
  * wizard's card around it.
  */
 export function ProjectField({ pick, error }: { pick: AgentProjectPick; error?: string }) {
   const { t } = useTranslation();
+  const copy = agentProjectCopyKeys(pick.defaultAllowed);
   const open = (
     <Link to="/v3/projects" className="v2-link">
       {t("v3.create.project.open")}
@@ -41,17 +42,20 @@ export function ProjectField({ pick, error }: { pick: AgentProjectPick; error?: 
   } else if (pick.rows.length === 0) {
     body = (
       <Alert tone={error ? "error" : "warn"}>
-        {t("v3.create.project.none")} {open}
+        {t(copy.none)} {open}
       </Alert>
     );
   } else {
     body = (
       <>
-        <Field label={t("v3.create.project.label")} required error={error} hint={t("v3.create.project.hint")}>
+        <Field label={t("v3.create.project.label")} required error={error} hint={t(copy.hint)}>
           <Select
             value={pick.projectId}
             placeholder={t("v3.create.project.placeholder")}
-            options={pick.rows.map((p) => ({ value: p.id, label: agentProjectLabel(p) }))}
+            options={pick.rows.map((p) => ({
+              value: p.id,
+              label: agentProjectOptionLabel(p, t("v3.create.project.defaultTag")),
+            }))}
             onChange={pick.pick}
             testId="v2-agent-project"
           />

@@ -71,6 +71,7 @@ class _ProjectColumn:
     __project_shareable__: ClassVar[bool] = False
     # a new (non-platform) row of this model is never *stamped* into a workspace
     # `default` project — its writer names the project (agents: services/agent_project)
+    # — unless the agent-project switch `agent_allow_default_project` is on
     __project_no_default_stamp__: ClassVar[bool] = False
 
     def project_platform_row(self) -> bool:
@@ -312,6 +313,15 @@ def _default_project(session: Session) -> str | None:
     return found[0] if found else None
 
 
+def _default_stamp_allowed() -> bool:
+    """The agent-project switch (services/agent_project_settings): on, a
+    ``__project_no_default_stamp__`` row may land in a ``default`` project. An attribute
+    of the cached Settings (the console override is applied onto it) — no query."""
+    from app.core.config import get_settings
+
+    return bool(get_settings().agent_allow_default_project)
+
+
 def _is_default_project(session: Session, pid: str) -> bool:
     found = session.connection().execute(
         text("SELECT is_default FROM projects WHERE id = :id"), {"id": pid},
@@ -366,8 +376,8 @@ def _stamp_new_rows(session: Session, _flush_context: Any, _instances: Any) -> N
                 or _CURRENT_PROJECT.get()
                 or _sole_workspace_project(session, getattr(obj, "workspace_id", None))
             )
-            if pid and type(obj).__project_no_default_stamp__ and _is_default_project(
-                    session, pid):
+            guarded = type(obj).__project_no_default_stamp__ and not _default_stamp_allowed()
+            if pid and guarded and _is_default_project(session, pid):
                 raise ProjectStampError(
                     f"new {type(obj).__name__} would be filed under the default project "
                     f"'{pid}' — set its project_id to a business project explicitly"

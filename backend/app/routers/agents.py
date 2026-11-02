@@ -506,10 +506,12 @@ def list_eligible_projects(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """The business projects the caller may file a new agent under (the create
-    flow's project picker): active, non-default, with a department, and holding
-    ``permission`` (one of the creation keys) for the caller — server-filtered, so a
-    project the caller cannot create in is never listed."""
+    """The projects the caller may file a new agent under (the create flow's project
+    picker): active business projects with a department — plus the workspace
+    ``default`` project while ``agent_allow_default_project`` is on — holding
+    ``permission`` (one of the creation keys) for the caller; server-filtered, so a
+    project the caller cannot create in is never listed. ``default_project_allowed``
+    tells the picker which empty-list copy applies."""
     if permission not in agent_project.CREATE_PERMISSIONS:
         raise AppError(
             "agent.project_permission_invalid",
@@ -517,7 +519,12 @@ def list_eligible_projects(
             status_code=422,
         )
     identity = require_identity(request)
-    return {"projects": agent_project.eligible_projects(db, identity, ws.id, permission)}
+    from app.services import agent_project_settings
+
+    return {
+        "projects": agent_project.eligible_projects(db, identity, ws.id, permission),
+        "default_project_allowed": agent_project_settings.allowed(),
+    }
 
 
 @router.get("/agents/discovery")

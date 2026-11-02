@@ -18,13 +18,17 @@ export interface AgentProjectPick {
   pick: (id: string) => void;
   /** `Department · Project` of the pick, for a review line */
   label: string | null;
+  /** the agent-project switch is on: a `default` project may be listed (and the
+   *  empty-list copy says so); absent = off */
+  defaultAllowed?: boolean;
 }
 
 /**
  * The business project a NEW agent is filed under (services/agent_project), for
  * every creation path: the server-filtered eligible list for the route's key
  * (`agents.deploy` / `agents.import` / `agents.convert`), starting on the shell's
- * project only when it is eligible — a `default` selection is never preselected.
+ * project only when it is eligible — a `default` project (listed only while the
+ * agent-project switch is on) is never preselected.
  * The pick is sent as the body `project_id` (the typed client pins the matching
  * `X-Project`). `enabled: false` (a re-publish, a closed dialog) loads nothing.
  */
@@ -34,7 +38,12 @@ export function useAgentProjectPick(
 ): AgentProjectPick {
   const { current: workspace } = useWorkspace();
   const { current: shellProject } = useProject();
-  const [state, setState] = useState<{ rows: EligibleAgentProject[] | null; error: unknown; loading: boolean }>({
+  const [state, setState] = useState<{
+    rows: EligibleAgentProject[] | null;
+    error: unknown;
+    loading: boolean;
+    defaultAllowed?: boolean;
+  }>({
     rows: null,
     error: null,
     loading: enabled,
@@ -48,7 +57,11 @@ export function useAgentProjectPick(
     setState((prev) => ({ ...prev, loading: true, error: null }));
     api
       .agentEligibleProjects(permission)
-      .then(({ projects }) => live && setState({ rows: projects, error: null, loading: false }))
+      .then(
+        ({ projects, default_project_allowed }) =>
+          live &&
+          setState({ rows: projects, error: null, loading: false, defaultAllowed: default_project_allowed === true }),
+      )
       .catch((error: unknown) => live && setState((prev) => ({ ...prev, error, loading: false })));
     return () => {
       live = false;
@@ -67,5 +80,6 @@ export function useAgentProjectPick(
     projectId,
     pick: setPicked,
     label: row ? agentProjectLabel(row) : null,
+    defaultAllowed: state.defaultAllowed === true,
   };
 }

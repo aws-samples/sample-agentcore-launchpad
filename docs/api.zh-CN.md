@@ -1378,6 +1378,8 @@ Workspace、网络与存储目录——从不接触数据。路由表归为结�
 |---|---|---|---|
 | `GET` | `/api/nav/hidden-modules` | 成员 | `{hidden: [path], updated_by, updated_at}`（已排序；从未保存过 → `hidden: []` 且 `updated_at: null`，控制台按默认的 Normal 预设显示；保存过的空列表即 Full） |
 | `PUT` | `/api/nav/hidden-modules` | 管理员（数据：组织管理员不行） | 请求体 `{hidden: [path]}`（最多 100 项，自动去重）→ 同 GET 形状；有变化时记为 `console.nav_hidden`。不是 `/v2/…` 或 `/v3/…` 的路径 → `422 nav.bad_path`；超过 100 项 → `422 nav.too_many` |
+| `GET` | `/api/settings/agent-projects` | 管理员（数据：组织管理员不行） | 智能体项目开关：`{allow_default_project, source: console\|env\|config\|default, console_value, env, env_value, default, updated_by, updated_at}`。`allow_default_project` 是生效值（控制台 > 环境变量 `LAUNCHPAD_AGENT_ALLOW_DEFAULT_PROJECT` > `launchpad.yaml` > `false`） |
+| `PUT` | `/api/settings/agent-projects` | 管理员（数据：组织管理员不行） | 请求体 `{allow_default_project: true\|false\|null}`（`null` 清除控制台覆盖值）→ 同 GET 形状；立即生效，记为 `platform.agent_default_project`。打开后，新智能体也可以建在工作空间的 `default` 项目里（不属于任何部门） |
 
 注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、
 `auth.invalid_username` / `auth.invalid_email` / `auth.email_domain_blocked` / `auth.weak_password`（400）、
@@ -1774,7 +1776,7 @@ created_at, updated_at, role_arn}`；从不返回 `external_id`。删除或清�
 | `DELETE` | `/api/agents/{agent_id}` | `perm:agents.delete` | project | `{deleted: true, agent_id, aws_resource_deleted}`。受 prod 保护。其架构助手会话正在清理时 `409 assistant.agent_clearing` |
 | `GET` | `/api/agents/discovery` | member | project | `{region, runtimes[…], harnesses[…], harness_scan_error}`：Workspace 账号中的 Runtime 与 Harness，被管理的标出管理它的 Agent；其他项目管理的 runtime 只显示“已被管理”。没有 Agent 管理的 runtime 只对持有 `agents.import` 的调用者列出 |
 | `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | 请求体 `{runtime_ids[], harness_ids[], project_id?}` → 按类型分桶的结果（已导入、已被管理、失败）。导入的 Agent 属于请求所在的业务项目（见下文）。受 prod 保护 |
-| `GET` | `/api/agents/eligible-projects?permission=agents.deploy` | member | workspace | `{projects[{id, name, department_id, department_name, is_workspace_default}]}`：调用者持有 `permission`（`agents.deploy` / `agents.import` / `agents.convert`，否则 `422 agent.project_permission_invalid`）的业务项目（`active`、非 `default`、有部门）；管理员看到全部。供创建表单的项目选择器使用 |
+| `GET` | `/api/agents/eligible-projects?permission=agents.deploy` | member | workspace | `{projects[{id, name, department_id, department_name, is_workspace_default, is_default}], default_project_allowed}`：调用者持有 `permission`（`agents.deploy` / `agents.import` / `agents.convert`，否则 `422 agent.project_permission_invalid`）的业务项目（`active`、非 `default`、有部门）；管理员看到全部。智能体项目开关打开时（`default_project_allowed: true`，见 `/api/settings/agent-projects`），只要调用者在工作空间的 `default` 项目里持有 `permission`，该项目也会列出（`is_default: true`，`department_id: null`）。供创建表单的项目选择器使用 |
 | `POST` | `/api/agent-skills/import` | `perm:agents.deploy` | project | 请求体 `{staging_id, selections[]}` → 部署向导可挂载的 `{name, path}` 条目（上传到按请求划分的 S3 前缀）。单项失败不中止整批。受 prod 保护 |
 | `GET` | `/api/agents/{agent_id}/snapshots` | member | project | `{snapshots[…]}`：台账中的 spec 快照，最新在前，不含 spec |
 | `GET` | `/api/agents/{agent_id}/snapshots/{seq}` | member | project | 单个快照，含 `spec` |

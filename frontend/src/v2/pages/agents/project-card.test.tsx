@@ -54,6 +54,23 @@ describe("ProjectCard (#351)", () => {
     expect(html).not.toContain('data-testid="v2-agent-project"');
   });
 
+  it("with the agent-project switch on: lists the default project with its tag and says so when empty", () => {
+    const def: EligibleAgentProject = {
+      id: "default",
+      name: "Default",
+      department_id: null,
+      department_name: null,
+      is_workspace_default: true,
+      is_default: true,
+    };
+    const listed = render(loaded({ data: { projects: [def, risk] }, defaultAllowed: true }), "default");
+    expect(listed).toContain("Default · default project, no department");
+    expect(listed).toContain("An administrator also allowed the workspace default project");
+    const empty = render(loaded({ data: { projects: [] }, defaultAllowed: true }));
+    expect(empty).toContain("the workspace default project included");
+    expect(empty).not.toContain("You have no business project here");
+  });
+
   it("shows a failed read with a retry, and a loading state before the list lands", () => {
     const failed = render(loaded({ error: new Error("boom") }));
     expect(failed).toContain("boom");

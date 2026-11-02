@@ -31,6 +31,7 @@ from app.optimization.canary_service import (
 )
 from app.optimization.routers import router as experiments_router
 from app.optimization.service import clear_stale_running_actions
+from app.routers.agent_project_settings import router as agent_project_settings_router
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agent_story import router as agent_story_router
 from app.routers.agent_telemetry import router as agent_telemetry_router
@@ -182,11 +183,13 @@ def _apply_model_overrides() -> None:
     """Console model choices (admin Models page) win over env — load them onto the
     cached Settings before any route reads a model id."""
     from app.core.db import SessionLocal
-    from app.services import model_settings
+    from app.services import agent_project_settings, model_settings
 
     db = SessionLocal()
     try:
         model_settings.apply_overrides(db)
+        # the agent-project switch, same console > env precedence (no query per flush)
+        agent_project_settings.apply_override(db)
     finally:
         db.close()
 
@@ -283,6 +286,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
     app.include_router(nav_settings_router)  # the rail modules an administrator hid
+    app.include_router(agent_project_settings_router)  # may new agents use `default`?
     app.include_router(departments_router)  # departments (projects §2.1, §7.10)
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
     app.include_router(storage_mounts_router)  # the storage catalog (storage-mounts §4)

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { agentProjectLabel } from "../../../lib/agent-project";
+import { agentProjectCopyKeys, agentProjectOptionLabel } from "../../../lib/agent-project";
 import type { AgentProjectPick } from "../../../lib/useAgentProjectPick";
 import { Select } from "../../select";
 import { Notice, Skeleton } from "../../ui";
@@ -23,6 +23,7 @@ export function ProjectField({
 }) {
   const { t } = useTranslation();
   const missing = !pick.projectId;
+  const copy = agentProjectCopyKeys(pick.defaultAllowed);
   const open = (
     <Link to="/v3/projects" style={{ textDecoration: "underline" }}>
       {t("v3.create.project.open")}
@@ -44,7 +45,7 @@ export function ProjectField({
         <Skeleton rows={1} />
       ) : pick.rows.length === 0 ? (
         <small id={`${idBase}-hint`} className={touched ? "v3-err" : "v3-hint"} role={touched ? "alert" : undefined}>
-          {t("v3.create.project.none")} {open}
+          {t(copy.none)} {open}
         </small>
       ) : (
         <>
@@ -62,12 +63,12 @@ export function ProjectField({
             </option>
             {pick.rows.map((p) => (
               <option key={p.id} value={p.id}>
-                {agentProjectLabel(p)}
+                {agentProjectOptionLabel(p, t("v3.create.project.defaultTag"))}
               </option>
             ))}
           </Select>
           <small id={`${idBase}-hint`} className={touched && missing ? "v3-err" : "v3-hint"}>
-            {touched && missing ? t("v3.create.project.err") : t("v3.create.project.hint")} {missing && open}
+            {touched && missing ? t("v3.create.project.err") : t(copy.hint)} {missing && open}
           </small>
         </>
       )}

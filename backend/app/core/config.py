@@ -269,6 +269,11 @@ class Settings(BaseSettings):
     # Per-project Bedrock application inference profiles for isolated projects (projects
     # design §10.8): cost per project at the model call; off until verified live.
     project_inference_profiles: bool = False
+    # The agent-project rule's one switch (services/agent_project_settings): when true a
+    # new agent may also be filed under a workspace `default` project (no department
+    # needed there). Off = only a department's business project. An administrator can
+    # override it on the console (a `platform_settings` row wins over env / yaml).
+    agent_allow_default_project: bool = False
     # The architect assistant's replay budget (assistant-context C3): half the
     # architect model's input context window, in estimated tokens, capped at
     # assistant_replay_max_tokens; the other half stays free for the turn's own tool

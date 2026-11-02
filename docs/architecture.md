@@ -5332,6 +5332,35 @@ platform rows (`project_id` NULL) and agents already in `default` keep it. The V
 form's project picker reads `GET /api/agents/eligible-projects`, which lists, server-side,
 only the business projects the caller may create agents in.
 
+One administrator switch loosens the rule: `agent_allow_default_project` (env
+`LAUNCHPAD_AGENT_ALLOW_DEFAULT_PROJECT`, default `false` = the rule above, unchanged).
+`services/agent_project_settings.py` owns it; an administrator overrides it on the console
+through `GET`/`PUT /api/settings/agent-projects` (hub-global, `ADMIN`, `ADMIN_DATA` in the
+steward split, so a steward neither reads nor flips it). The override is one
+`platform_settings` row, precedence console > env > `launchpad.yaml` > default like the
+model settings; it is applied onto the cached `Settings` at startup and on every write, so
+every reader is an attribute read with no query. `PUT {"allow_default_project": null}` clears
+the override, and every flip is journaled (`platform.agent_default_project`). With the
+switch on:
+
+- `check_agent_project` accepts a workspace `default` project (`is_default` or id
+  `default`) bound to the workspace and `active`, and does not ask it for a department;
+  every other project keeps the full rule. All five creation paths go through it, so they
+  follow the switch together.
+- `eligible_projects` also lists that `default` project (`is_default: true`,
+  `department_id` null) when the caller's effective keys there hold the route's key. An
+  `inherit` member's keys are the account's global keys (`access.snapshot_for`); an
+  administrator always sees it. The response carries `default_project_allowed` so the
+  pickers show the matching hint and empty-list copy.
+- the `before_flush` stamp guard lets an `Agent` row land in `default` instead of raising
+  `ProjectStampError`.
+
+Agents filed under `default` belong to no department: department budgets and department
+administrators do not see them. The console states this next to the switch (V2
+Workspaces list, V3 Projects page, administrators only) and asks for confirmation before
+turning it on. The pickers never preselect a `default` project: the member picks it
+explicitly.
+
 ### Requests: route roles and `X-Project`
 
 `ROUTE_POLICY` (`app/core/route_policy.py`) classifies every route. Besides

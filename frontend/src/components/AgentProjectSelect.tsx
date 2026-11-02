@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { agentProjectLabel } from "../lib/agent-project";
+import { agentProjectCopyKeys, agentProjectOptionLabel } from "../lib/agent-project";
 import { errorMessage } from "../lib/api";
 import type { AgentProjectPick } from "../lib/useAgentProjectPick";
 import { Btn } from "./Btn";
@@ -24,6 +24,7 @@ export function AgentProjectSelect({
   touched?: boolean;
 }) {
   const { t } = useTranslation();
+  const copy = agentProjectCopyKeys(pick.defaultAllowed);
   const open = (
     <Link to="/v3/projects" style={{ textDecoration: "underline" }}>
       {t("v3.create.project.open")}
@@ -51,7 +52,7 @@ export function AgentProjectSelect({
       ) : pick.loading ? (
         <div className="dim">{t("v2.common.loading")}</div>
       ) : pick.rows.length === 0 ? (
-        note(touched ? "crit" : "amber", t("v3.create.project.none"), open)
+        note(touched ? "crit" : "amber", t(copy.none), open)
       ) : (
         <>
           <select
@@ -67,12 +68,12 @@ export function AgentProjectSelect({
             </option>
             {pick.rows.map((p) => (
               <option key={p.id} value={p.id}>
-                {agentProjectLabel(p)}
+                {agentProjectOptionLabel(p, t("v3.create.project.defaultTag"))}
               </option>
             ))}
           </select>
           <div className="dim" style={{ marginTop: 6, fontSize: 12, color: touched && !pick.projectId ? "var(--crit)" : undefined }}>
-            {touched && !pick.projectId ? t("v3.create.project.err") : t("v3.create.project.hint")}{" "}
+            {touched && !pick.projectId ? t("v3.create.project.err") : t(copy.hint)}{" "}
             {!pick.projectId && open}
           </div>
         </>
