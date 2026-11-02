@@ -120,7 +120,9 @@ printf '%s\n' '[Service]' \
   'Environment="LAUNCHPAD_AUTH_REGISTRATION_CLOSED_NOTICE=由于安全原因，已关闭自助注册，请联系后台人员申请账号。"' \
   | sudo tee /etc/systemd/system/launchpad-backend.service.d/registration.conf
 # 2. real client IP for the register/login throttles. CloudFront → nginx :80 →
-#    uvicorn 127.0.0.1: the TCP peer is nginx (loopback, trusted by default).
+#    uvicorn 127.0.0.1. uvicorn's default proxy headers (trusting 127.0.0.1) hand
+#    the app the CloudFront edge as client (port 0); the backend recognises that
+#    rewrite and reads the untouched headers — no uvicorn flag needed.
 #    CloudFront-Viewer-Address first; else X-Forwarded-For, counting the proxies that
 #    APPEND to it — `$proxy_add_x_forwarded_for` in nginx ⇒ 2, untouched ⇒ 1
 sudo nginx -T 2>/dev/null | grep -n 'X-Forwarded-For'

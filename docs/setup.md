@@ -699,8 +699,13 @@ the accounts in **Users → Add user**.
 reverse proxy is the proxy itself, so every visitor shares one bucket. Set
 `AUTH_TRUSTED_PROXY_HOPS` to the number of trusted proxies that **append** to
 `X-Forwarded-For`; the backend then reads the entry that many places from the right
-(the address the outermost proxy saw), and only when the TCP peer is in
-`AUTH_TRUSTED_PROXIES`. Everything further left is client-supplied and ignored, so
+(the address the outermost proxy saw), and only when the request came through a
+trusted proxy: the TCP peer is in `AUTH_TRUSTED_PROXIES`, or uvicorn already rewrote
+it. uvicorn's proxy headers are on by default and trust 127.0.0.1, so behind nginx
+on loopback the app sees the **CloudFront edge** (port 0) as its client; the backend
+recognises that rewrite and still reads the untouched headers, so no uvicorn flag is
+needed. A request that looks unproxied while these settings are on is keyed on its
+own address and logged once (`auth throttle: forwarding headers are configured but…`). Everything further left is client-supplied and ignored, so
 prepending fake addresses changes nothing. For the reference shape (CloudFront →
 nginx → uvicorn on 127.0.0.1): **2** when nginx sets
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (it appends the

@@ -330,3 +330,135 @@ class TestRegisterEndpoint:
         )
         for n in range(3):
             assert _register(client, n).status_code == 201
+
+
+# --- the real prod topology: CloudFront → nginx ($proxy_add_x_forwarded_for) →
+# uvicorn on 127.0.0.1 with its default proxy headers (trusts 127.0.0.1), which
+# rewrites scope["client"] to the CloudFront edge before the app ever runs
+
+VIEWER = "198.51.100.7"
+PROD = {
+    "auth_client_ip_header": "CloudFront-Viewer-Address",
+    "auth_trusted_proxy_hops": 2,
+}
+
+
+def _through_uvicorn(peer, headers: list[tuple[str, str]]) -> Request:
+    """The request the app sees after uvicorn's own ProxyHeadersMiddleware."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    seen: dict = {}
+
+    async def app(scope, receive, send):
+        seen["scope"] = scope
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "scheme": "http",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers],
+        "client": peer,
+    }
+    import asyncio
+
+    asyncio.run(ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")(scope, None, None))
+    return Request(seen["scope"])
+
+
+def _cloudfront(viewer: str = VIEWER, edge: str = CLOUDFRONT_EDGE, *, forged: str = ""):
+    xff = f"{forged + ', ' if forged else ''}{viewer}, {edge}"
+    return [("X-Forwarded-For", xff), ("CloudFront-Viewer-Address", f"{viewer}:46164")]
+
+
+class TestBehindUvicornProxyHeaders:
+    def test_uvicorn_really_rewrites_the_peer_to_the_edge(self):
+        request = _through_uvicorn(("127.0.0.1", 51000), _cloudfront())
+        assert (request.client.host, request.client.port) == (CLOUDFRONT_EDGE, 0)
+        # ...which is why the defaults (no header, no hops) key on the edge
+        assert auth_throttle.client_ip(request, _settings()) == CLOUDFRONT_EDGE
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            PROD,
+            {"auth_client_ip_header": "CloudFront-Viewer-Address"},
+            {"auth_trusted_proxy_hops": 2},
+        ],
+    )
+    def test_prod_settings_find_the_viewer(self, overrides):
+        request = _through_uvicorn(("127.0.0.1", 51000), _cloudfront())
+        assert auth_throttle.client_ip(request, _settings(**overrides)) == VIEWER
+
+    def test_forged_forwarded_for_prefix_changes_nothing(self):
+        request = _through_uvicorn(("127.0.0.1", 51000), _cloudfront(forged="9.9.9.9, 10.0.0.1"))
+        assert auth_throttle.client_ip(request, _settings(**PROD)) == VIEWER
+        assert auth_throttle.client_ip(
+            request, _settings(auth_trusted_proxy_hops=2)
+        ) == VIEWER
+
+    def test_a_caller_supplied_viewer_address_is_not_trusted(self):
+        # CloudFront overwrites the header; if a copy of the caller's still came
+        # through beside CloudFront's, neither is trusted and the hop rule decides
+        headers = [("CloudFront-Viewer-Address", "9.9.9.9:1"), *_cloudfront()]
+        request = _through_uvicorn(("127.0.0.1", 51000), headers)
+        assert auth_throttle.client_ip(request, _settings(**PROD)) == VIEWER
+
+    def test_ipv6_viewer(self):
+        headers = [
+            ("X-Forwarded-For", f"2001:db8::7, {CLOUDFRONT_EDGE}"),
+            ("CloudFront-Viewer-Address", "2001:db8::7:46164"),
+        ]
+        request = _through_uvicorn(("127.0.0.1", 51000), headers)
+        assert auth_throttle.client_ip(request, _settings(**PROD)) == "2001:db8::7"
+
+    def test_a_direct_caller_cannot_borrow_the_rewrite(self, caplog):
+        # uvicorn bound to a public interface: an outsider is not rewritten (uvicorn
+        # does not trust it) and its forged headers are never read
+        request = _through_uvicorn(("203.0.113.50", 40000), _cloudfront())
+        assert request.client.host == "203.0.113.50"
+        with caplog.at_level("WARNING", logger="app.services.auth_throttle"):
+            assert auth_throttle.client_ip(request, _settings(**PROD)) == "203.0.113.50"
+            assert auth_throttle.client_ip(request, _settings(**PROD)) == "203.0.113.50"
+        warnings = [r for r in caplog.records if "neither in auth_trusted_proxies" in r.message]
+        assert len(warnings) == 1  # logged once, so a misconfiguration is visible
+
+    def test_a_portful_entry_is_not_mistaken_for_a_rewrite(self):
+        # a TCP peer always has a real port; only uvicorn's rewrite yields port 0
+        request = _request(CLOUDFRONT_EDGE, f"{VIEWER}, {CLOUDFRONT_EDGE}")
+        assert request.client.port == 1234
+        assert auth_throttle.client_ip(request, _settings(**PROD)) == CLOUDFRONT_EDGE
+
+
+@pytest.fixture
+def prod_client(env):
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    env(auth_login_lockout_threshold=3, **PROD)
+    wrapped = ProxyHeadersMiddleware(create_app(), trusted_hosts="127.0.0.1")
+    with TestClient(wrapped, client=("127.0.0.1", 40000)) as test_client:
+        yield test_client
+
+
+def _prod_login(client, password, viewer, edge=CLOUDFRONT_EDGE, *, forged=""):
+    return client.post(
+        "/api/auth/login",
+        json={"username": ADMIN["username"], "password": password},
+        headers=dict(_cloudfront(viewer, edge, forged=forged)),
+    )
+
+
+class TestProdTopologyEndToEnd:
+    def test_lockout_follows_the_viewer_not_the_edge(self, prod_client):
+        for _ in range(3):
+            assert _prod_login(prod_client, "wrong", VIEWER).status_code == 401
+        assert _prod_login(prod_client, ADMIN["password"], VIEWER).json()["code"] == (
+            "auth.login_locked"
+        )
+        # rotating CloudFront PoPs (edges) does not escape it...
+        assert _prod_login(prod_client, ADMIN["password"], VIEWER, "15.158.0.9").status_code == 429
+        # ...nor does a forged X-Forwarded-For prefix
+        forged = _prod_login(prod_client, ADMIN["password"], VIEWER, forged="9.9.9.9")
+        assert forged.status_code == 429
+        # and another visitor behind the same edge is not caught in it
+        assert _prod_login(prod_client, ADMIN["password"], "198.51.100.8").status_code == 200

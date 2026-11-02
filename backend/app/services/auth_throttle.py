@@ -14,8 +14,11 @@ forgets them, which is acceptable for a brake whose windows are minutes long):
 * the pending-registration cap lives with registration itself
   (``users.register_user``'s caller in ``routers/auth``).
 
-The client IP (:func:`client_ip`) is the transport peer unless that peer is a
-configured trusted proxy; only then are forwarding headers read. First the
+The client IP (:func:`client_ip`) is the transport peer unless the request came
+through a trusted proxy — the peer is in ``auth_trusted_proxies``, or uvicorn's own
+proxy-headers middleware already rewrote the peer (its default: it trusts
+127.0.0.1, so behind nginx the app sees the CloudFront edge with port 0; see
+:func:`_rewritten_by_uvicorn`). Only then are forwarding headers read. First the
 optional ``auth_client_ip_header`` (CloudFront-Viewer-Address: written by the edge
 itself, ``address:port``), else the ``X-Forwarded-For`` entry
 ``auth_trusted_proxy_hops`` from the right — the one the outermost trusted proxy
@@ -85,38 +88,81 @@ def _parse_ip_port(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address 
         return None
 
 
-def client_ip(request: Request, settings: Settings | None = None) -> str:
-    """The address the throttles key on (see the module docstring)."""
-    current = settings or get_settings()
-    peer = request.client.host if request.client and request.client.host else ""
-    hops = current.auth_trusted_proxy_hops
-    header = current.auth_client_ip_header.strip()
-    if hops <= 0 and not header:
-        return peer or "unknown"
-    peer_ip = _parse_ip(peer)
-    trusted = _networks(tuple(current.auth_trusted_proxies))
-    if peer_ip is None or not any(peer_ip in net for net in trusted):
-        # reached the backend without going through the proxy: the headers are the
-        # caller's own claim, so they are never read
-        return peer or "unknown"
-    if header:
-        # an edge-generated "address:port" header (CloudFront-Viewer-Address) wins —
-        # CloudFront writes it over anything the viewer sent (the runbook's probe
-        # forges one to prove that); if several arrive, the last hop's is used
-        values = request.headers.getlist(header)
-        viewer = _parse_ip_port(values[-1]) if values else None
-        if viewer is not None:
-            return str(viewer)
-    if hops <= 0:
-        return peer
-    entries = [
+def _forwarded_for(request: Request) -> list[str]:
+    return [
         part.strip()
         for raw in request.headers.getlist("x-forwarded-for")
         for part in raw.split(",")
         if part.strip()
     ]
-    if not entries:
-        return peer
+
+
+def _rewritten_by_uvicorn(host: str, port: int | None, entries: list[str]) -> bool:
+    """Whether uvicorn's ProxyHeadersMiddleware already replaced the peer.
+
+    uvicorn runs with ``proxy_headers`` on by default and trusts 127.0.0.1
+    (``FORWARDED_ALLOW_IPS``): a request from nginx on loopback reaches the app with
+    ``scope["client"]`` overwritten by the rightmost X-Forwarded-For entry uvicorn
+    does not trust — behind CloudFront → nginx, the CloudFront edge — and port 0
+    (no X-Forwarded-For writer here adds one). The original peer is gone by then,
+    so the rewrite itself is the evidence: a TCP peer never has port 0, and uvicorn
+    only rewrites when the real peer was one it trusts. The X-Forwarded-For header
+    is left untouched, so the hop rule below still reads the right entry.
+    """
+    if port != 0 or not host:
+        return False
+    peer = _parse_ip(host)
+    return peer is not None and any(_parse_ip(entry) == peer for entry in entries)
+
+
+_warned_untrusted: set[str] = set()
+
+
+def _warn_untrusted_once(peer: str) -> None:
+    if peer in _warned_untrusted or len(_warned_untrusted) > 32:
+        return
+    _warned_untrusted.add(peer)
+    logger.warning(
+        "auth throttle: forwarding headers are configured but a request came from "
+        "%s, which is neither in auth_trusted_proxies nor rewritten by uvicorn's "
+        "proxy headers; keying on that address (if it is your proxy, add it to "
+        "auth_trusted_proxies)",
+        peer,
+    )
+
+
+def client_ip(request: Request, settings: Settings | None = None) -> str:
+    """The address the throttles key on (see the module docstring)."""
+    current = settings or get_settings()
+    client = request.client
+    peer = client.host if client and client.host else ""
+    hops = current.auth_trusted_proxy_hops
+    header = current.auth_client_ip_header.strip()
+    if hops <= 0 and not header:
+        return peer or "unknown"
+    entries = _forwarded_for(request)
+    peer_ip = _parse_ip(peer)
+    trusted = _networks(tuple(current.auth_trusted_proxies))
+    via_proxy = (peer_ip is not None and any(peer_ip in net for net in trusted)) or (
+        _rewritten_by_uvicorn(peer, client.port if client else None, entries)
+    )
+    if not via_proxy:
+        # reached the backend without going through the proxy: the headers are the
+        # caller's own claim, so they are never read
+        if peer:
+            _warn_untrusted_once(peer)
+        return peer or "unknown"
+    if header:
+        # an edge-generated "address:port" header (CloudFront-Viewer-Address) wins —
+        # CloudFront writes it over anything the viewer sent (the runbook's probe
+        # forges one to prove that). More than one value means something in the
+        # chain passed a caller's copy along: trust none of them, use the hop rule.
+        values = request.headers.getlist(header)
+        viewer = _parse_ip_port(values[0]) if len(values) == 1 else None
+        if viewer is not None:
+            return str(viewer)
+    if hops <= 0 or not entries:
+        return peer or "unknown"
     # fewer entries than hops: the leftmost one was still written by a trusted proxy
     chosen = _parse_ip(entries[max(0, len(entries) - hops)])
     return str(chosen) if chosen is not None else peer
@@ -213,6 +259,7 @@ throttle = AuthThrottle()
 
 def reset_for_tests() -> None:
     throttle.reset()
+    _warned_untrusted.clear()
 
 
 def _retry_after(seconds: float) -> int:

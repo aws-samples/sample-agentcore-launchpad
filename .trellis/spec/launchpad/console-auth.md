@@ -198,9 +198,16 @@ suffix** (`x.gmail.com` counts as `gmail.com`). A non-empty
 
 ### 3.5a Throttling (`services/auth_throttle.py`)
 
-- **Client IP** = the TCP peer, unless the peer is inside `auth_trusted_proxies`;
-  only then are headers read: `auth_client_ip_header` first (an edge-written
-  `address:port`; the port is always the last `:` field, IPv6 bracketed or not),
+- **Client IP** = the TCP peer, unless the request came through a trusted proxy:
+  the peer is inside `auth_trusted_proxies`, **or uvicorn's ProxyHeadersMiddleware
+  already rewrote it** (default `proxy_headers=True`, `FORWARDED_ALLOW_IPS=127.0.0.1`:
+  behind nginx on loopback the app's `scope["client"]` is the CloudFront edge with
+  port 0, the original peer is gone). Detected as port 0 + host present in
+  X-Forwarded-For — a TCP peer never has port 0, and uvicorn only rewrites a peer it
+  trusts. Unproxied-looking requests with headers configured are keyed on the peer
+  and logged once. Only then are headers read: `auth_client_ip_header` first (an edge-written
+  `address:port`; the port is always the last `:` field, IPv6 bracketed or not;
+  more than one value → none is trusted),
   else the `X-Forwarded-For` entry `auth_trusted_proxy_hops` from the right
   (fewer entries → the leftmost). Entries further left are caller-supplied and
   never read. Reference prod (CloudFront → nginx `$proxy_add_x_forwarded_for` →

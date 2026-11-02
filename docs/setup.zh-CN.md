@@ -565,7 +565,10 @@ Workshop 现场很多学员经同一个出口 NAT 登录时会共用一个 IP �
 
 **代理后的客户端 IP。** 默认以 TCP 对端为客户端；在反向代理之后它就是代理本身，所有访客共用一个配额。
 把 `AUTH_TRUSTED_PROXY_HOPS` 设为会**追加** `X-Forwarded-For` 的可信代理层数，后端就读取从右数第这么多位的条目
-（最外层代理看到的地址），并且只在 TCP 对端属于 `AUTH_TRUSTED_PROXIES` 时才读。更左边的条目都是客户端自己写的，
+（最外层代理看到的地址），并且只在请求经过可信代理时才读：TCP 对端属于 `AUTH_TRUSTED_PROXIES`，或者已被 uvicorn 改写。
+uvicorn 默认开启 proxy headers 且信任 127.0.0.1，所以在回环地址上的 nginx 之后，应用看到的客户端是 **CloudFront 边缘地址**（端口为 0）；
+后端会识别这种改写，继续读取未被改动的请求头，无需给 uvicorn 加任何参数。开启这些配置后，看起来未经代理的请求按其自身地址计数，
+并记录一次日志（`auth throttle: forwarding headers are configured but…`）。更左边的条目都是客户端自己写的，
 一律忽略，所以在前面伪造地址不起作用。参考部署（CloudFront → nginx → 127.0.0.1 上的 uvicorn）：nginx 配置了
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`（会追加 CloudFront 边缘地址）时取 **2**，
 nginx 原样透传该头时取 **1**。在 CloudFront 之后，`AUTH_CLIENT_IP_HEADER=CloudFront-Viewer-Address` 是更稳妥的来源：该头由 CloudFront 自己写入

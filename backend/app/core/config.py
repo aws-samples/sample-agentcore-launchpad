@@ -110,8 +110,11 @@ class Settings(BaseSettings):
     auth_registration_closed_notice: str = Field(default="", max_length=500)
 
     # Throttling of the two anonymous auth endpoints (app/services/auth_throttle.py).
-    # The client is the transport peer unless that peer is one of
-    # `auth_trusted_proxies`; then it is the `auth_trusted_proxy_hops`-th
+    # The client is the transport peer unless the request came through a trusted
+    # proxy: the peer is one of `auth_trusted_proxies`, or uvicorn's default
+    # proxy-headers middleware (it trusts 127.0.0.1) already rewrote the peer to an
+    # X-Forwarded-For entry with port 0 — what the app sees behind nginx on
+    # loopback. Then it is the `auth_trusted_proxy_hops`-th
     # X-Forwarded-For entry from the right — the address the outermost trusted
     # proxy saw. Each trusted proxy that APPENDS to the header counts as one hop:
     # CloudFront → nginx (passing the header through) → uvicorn is 1; when nginx
