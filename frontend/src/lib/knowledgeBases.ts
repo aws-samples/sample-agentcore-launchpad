@@ -84,10 +84,28 @@ export interface KBDocument {
   uploaded_at?: string | null;
 }
 
-/** One token page of documents — `next_token` null on the last page. */
+/** One token page of documents — `next_token` null on the last page. `ready: false`
+ *  = the data source is not AVAILABLE yet (a KB still being created): an empty page,
+ *  not an error; `data_source_status` names where it stands. */
 export interface KBDocumentPage {
   documents: KBDocument[];
   next_token: string | null;
+  ready?: boolean;
+  data_source_status?: string | null;
+}
+
+/** A data source lists its documents only once it is AVAILABLE — before that (a KB
+ *  still being created) ListKnowledgeBaseDocuments refuses, so nothing is requested. */
+export function sourceReady(status: string | null | undefined): boolean {
+  return String(status ?? "").toUpperCase() === "AVAILABLE";
+}
+
+/** Managed-search retrieval scores rank results relative to each other; a lone indexed
+ *  chunk (a one-document KB) comes back scored exactly 1.0 for any query, which says
+ *  nothing about relevance. True when every result carries that degenerate 1.0. */
+export function scoresUninformative(results: { score: number | null }[]): boolean {
+  const scored = results.filter((r) => typeof r.score === "number");
+  return scored.length > 0 && scored.every((r) => r.score === 1);
 }
 
 /** Source of a KB / data source: files uploaded to the artifacts bucket, or an

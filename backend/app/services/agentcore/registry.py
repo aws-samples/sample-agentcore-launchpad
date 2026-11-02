@@ -563,6 +563,30 @@ def get_record(client: Any, registry_id: str, record_id: str) -> dict[str, Any]:
     )
 
 
+_NOT_FOUND_ERRORS = frozenset({"ResourceNotFoundException", "NotFoundException"})
+
+
+def _error_code(exc: BaseException) -> str:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        return str((response.get("Error") or {}).get("Code") or "")
+    return type(exc).__name__
+
+
+def find_record_by_id(client: Any, registry_id: str, record_id: str) -> dict[str, Any] | None:
+    """The record, or None when ``record_id`` names none.
+
+    A delete of an unknown id raised nothing (prod QA 2026-11-02: the console answered
+    200 ``{"deleted": true}``), so a delete reads the record first. An id the service
+    rejects as malformed (``ValidationException`` on the read) names no record either."""
+    try:
+        return get_record(client, registry_id, record_id)
+    except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+        if _error_code(exc) in _NOT_FOUND_ERRORS | {"ValidationException"}:
+            return None
+        raise
+
+
 def wait_record_settled(
     client: Any,
     registry_id: str,
@@ -698,6 +722,66 @@ def reject_record(client: Any, registry_id: str, record_id: str) -> dict[str, An
 
 def delete_record(client: Any, registry_id: str, record_id: str) -> None:
     client.delete_registry_record(registryId=registry_id, recordId=record_id)
+
+
+# An update of a PENDING_APPROVAL or APPROVED record sends it back to DRAFT — the AWS
+# Agent Registry lifecycle ("Publisher Updates Record … sends it back to DRAFT state,
+# restarting the submission process"), not a Launchpad choice. Live on dev 2026-11-02:
+# the data plane keeps serving the previously approved revision meanwhile, so the edit
+# itself stays unpublished until the record is submitted and approved again.
+REPUBLISHABLE = frozenset({"DRAFT", "PENDING_APPROVAL"})
+_SUBMITTED = frozenset({"PENDING_APPROVAL", "APPROVED", "REJECTED"})
+
+
+def _wait_submitted(
+    client: Any, registry_id: str, record_id: str, timeout_s: int, sleeper: Any,
+) -> dict[str, Any]:
+    """Submit answers 202; the record reads DRAFT/UPDATING for a moment after it."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        record = get_record(client, registry_id, record_id)
+        if record["status"] in _SUBMITTED:
+            return record
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"record {record_id} still {record['status']} after submit")
+        sleeper(2)
+
+
+def republish_record(
+    client: Any,
+    registry_id: str,
+    record_id: str,
+    *,
+    timeout_s: int = 60,
+    sleeper: Any = time.sleep,
+) -> dict[str, Any]:
+    """Bring a record an edit sent back to DRAFT to APPROVED in one call: submit
+    (DRAFT only), wait for the submission to land, then approve unless the registry
+    auto-approved it. ``ValueError`` for a status this does not start from."""
+    record = get_record(client, registry_id, record_id)
+    status = record["status"]
+    if status not in REPUBLISHABLE:
+        raise ValueError(f"cannot republish a {status} record")
+    if status == "DRAFT":
+        submit_record(client, registry_id, record_id)
+        record = _wait_submitted(client, registry_id, record_id, timeout_s, sleeper)
+    if record["status"] == "PENDING_APPROVAL":
+        last: Exception | None = None
+        for delay in (*SUBMIT_RETRY_DELAYS_S, None):
+            try:
+                approve_record(client, registry_id, record_id)
+                break
+            except Exception as exc:  # noqa: BLE001 - same retryable conflict as submit
+                retryable = (
+                    type(exc).__name__ == "ConflictException"
+                    and "concurrent" in str(exc).lower()
+                )
+                if not retryable or delay is None:
+                    raise
+                last = exc
+                logger.info("registry approve %s: %s — retrying in %ss", record_id, last, delay)
+                sleeper(delay)
+    return get_record(client, registry_id, record_id)
 
 
 def search_records(

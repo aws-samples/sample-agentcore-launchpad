@@ -1107,7 +1107,10 @@
       "request": "REQUEST",
       "response": "RESPONSE",
       "govNote": "Governance loop: REJECT a specialist's record in the Registry and it vanishes from DISCOVER on the next question; re-APPROVE to restore it. (REJECTED is recoverable — never use DISABLE, DEPRECATED is terminal.)"
-    }
+    },
+    "deletedFilesKept": "Deleted “{{name}}”. Its skill files were kept: still mounted by {{agents}}.",
+    "deletedFilesFailed": "Deleted “{{name}}”, but its skill files at {{prefix}} could not be removed.",
+    "deletedFilesUnverified": "Deleted “{{name}}”. Its skill files were kept: it could not be confirmed that no Harness on this AWS account still mounts them ({{reason}})."
   },
   "knowledge": {
     "kicker": "// GROUNDING LAYER",
@@ -3428,7 +3431,10 @@
     "steward.pending_group_retired": "This change was staged for a project group, and project groups are retired — reject it and change the projects' members directly.",
     "auth.too_many_attempts": "Too many attempts from this address. Try again later.",
     "auth.login_locked": "Too many failed sign-ins. Try again later.",
-    "auth.registration_queue_full": "Registration is temporarily closed while administrators review pending accounts."
+    "auth.registration_queue_full": "Registration is temporarily closed while administrators review pending accounts.",
+    "registry.record_not_found": "Registry record not found.",
+    "registry.not_republishable": "Only a Draft or Pending-approval record can be published again.",
+    "gateway_tool.not_adoptable": "Only a hand-made Lambda target with an inline tool schema in this workspace's account and region can be brought under management."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -9307,7 +9313,11 @@
       "attachCta": "Create an agent",
       "attachHint": "Mounting happens in the Create-Agent wizard: an ACTIVE knowledge base can be attached to Harness agents.",
       "attachedHidden": "+{{n}} agent(s) not visible to you",
-      "comingSoonLabel": "Coming soon:"
+      "comingSoonLabel": "Coming soon:",
+      "docsNotReady": "The data source is not available yet (status: {{status}}) — its documents are listed once it is AVAILABLE. A new knowledge base gets there by itself; this page refreshes on its own.",
+      "deleteWhileCreating": "The knowledge base is still being created — it can be deleted once it is Active.",
+      "scoreHint": "Managed search ranks results relative to each other; the score is not an absolute relevance measure.",
+      "scoreUninformative": "Every result scored exactly 1.000. That usually means the knowledge base has a single indexed chunk: managed search then scores the lone candidate 1.0 whatever the query, so the scores say nothing about relevance and are hidden here. Add more documents for a meaningful ranking."
     },
     "memory": {
       "desc": "Short-term events, long-term records and memory resources of AgentCore Memory",
@@ -9756,6 +9766,27 @@
       "attention": {
         "title": "Waiting on approval",
         "empty": "Nothing is waiting on approval."
+      },
+      "searchNoHits": "No discoverable record matches “{{q}}” — semantic search only covers published records.",
+      "filterNoHits": "No record matches the current filters.",
+      "importPicker": {
+        "title": "Import a gateway into the registry",
+        "intro": "A gateway's MCP record is previewed and imported from its governance page — the Registry card there shows the record it would write and any name conflict. Pick the gateway to open that card.",
+        "colGateway": "Gateway",
+        "colRecord": "Registry record",
+        "notImported": "Not imported",
+        "go": "Import",
+        "open": "Open",
+        "empty": "This workspace has no gateway."
+      },
+      "editResets": {
+        "banner": "This record is {{status}}. Saving an edit puts it back in Draft (the AWS Agent Registry lifecycle): the change is not published — agents and consumers keep seeing the last approved version, if any — until it is submitted and approved again. The record page offers that in one click after the save.",
+        "confirmTitle": "Save and return to Draft?",
+        "confirmBody": "“{{name}}” is {{status}}. After this save AWS Agent Registry puts it back in Draft: the change is not published — agents and consumers keep the last approved version, if any — until it is submitted and approved again.",
+        "confirm": "Save",
+        "afterSave": "Saved. The edit sent this record back to Draft (it was {{status}}): the change is not published until it is approved again — consumers still see the last approved version, if any.",
+        "republish": "Publish again",
+        "resubmit": "Submit again"
       }
     },
     "governance": {
@@ -17282,7 +17313,7 @@
     },
     "list": {
       "title": "Lambda tool targets",
-      "empty": "No Lambda tool targets yet",
+      "empty": "No Lambda target is managed here yet — targets made on the Gateway by hand are listed under “Other gateway targets” below, where a Lambda one can be brought under management.",
       "tools": "{{count}} tool(s)",
       "showReview": "Review",
       "hideReview": "Hide review",
@@ -17302,6 +17333,26 @@
       "adopted": "{{name}} is under tool review",
       "adoptFailed": "Could not bring the target under review",
       "elsewhere": "under review in another project"
+    },
+    "unmanaged": {
+      "title": "Other gateway targets",
+      "intro": "Targets on the workspace Gateway that neither list above manages: Lambda targets made by hand, bootstrap targets, and targets bound to a Connection. A hand-made Lambda target with an inline tool schema can be brought under management — its tool list today becomes the approved baseline (nothing is cut off), and it is then listed, reviewed and deleted like a console-created one.",
+      "empty": "No other target on this gateway.",
+      "system": "Bootstrap",
+      "adopt": "Manage",
+      "adoptHint": "Record its current tool list as the approved baseline and manage it like a console-created Lambda target",
+      "adoptTitle": "Manage {{name}} here?",
+      "adoptBody": "Its {{count}} tool(s) as listed today are recorded as approved, so agents calling them keep working. The function joins the invoke grant the console keeps on the Gateway role. From then on the target is managed here: deleting it from the console removes the Gateway target.",
+      "adopted": "{{name}} is now managed here",
+      "adoptFailed": "Could not bring the target under management",
+      "reason": {
+        "system": "Kept by bootstrap",
+        "connection": "Bound to Connection “{{connection}}” — managed under Connections",
+        "kind": "{{kind}} targets cannot be managed here yet",
+        "schema": "Its tool schema is not an inline list this console can record",
+        "environment": "The function is outside this workspace's account and region",
+        "elsewhere": "Managed by another project"
+      }
     }
   },
   "storage": {

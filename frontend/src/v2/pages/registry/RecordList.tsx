@@ -1,11 +1,11 @@
 import { Network, Plus, Search, Shuffle } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, type DiscoverableRegistryRecord, errorMessage } from "../../../lib/api";
-import { REGISTRY_STATUSES, REGISTRY_TYPES } from "../../../lib/registry";
+import { deletedMessage, REGISTRY_STATUSES, REGISTRY_TYPES } from "../../../lib/registry";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -29,6 +29,7 @@ import {
 } from "../../ui";
 import { APPROVAL_CAP, approvalQueue } from "./attention";
 import { isRegistryUnavailable, type RegistryRecord, statusLabel, typeLabel } from "./common";
+import { ImportGatewayDialog } from "./ImportGateway";
 import { StatusTag, SystemTag, TypeTag } from "./tags";
 
 type Tab = "records" | "discoverable";
@@ -113,7 +114,6 @@ function NotDiscoverableTag() {
 // ─── publisher list ────────────────────────────────────────────────────────
 export function RecordList() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const toast = useV2Toast();
   const [params, setParams] = useSearchParams();
   const { data, loading, error, reload } = useRegistryData(t("registry.unavailableBody"));
@@ -124,6 +124,8 @@ export function RecordList() {
   const [searchHits, setSearchHits] = useState<RegistryRecord[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [deleting, setDeleting] = useState<RegistryRecord | null>(null);
+  // `?import=gateway` (V3's 导入 Gateway) opens the gateway picker directly
+  const [importing, setImporting] = useState(() => params.get("import") === "gateway");
   const [busy, setBusy] = useState(false);
   const { isAdmin } = useAuth();
   // records whose inline approve / reject is in flight
@@ -146,6 +148,12 @@ export function RecordList() {
     });
   }, [records, searchHits, type, status, q]);
   const paged = usePaged(rows, 12);
+  // an empty table after a search or a filter is "nothing matched", not "no records"
+  const emptyText = searchHits
+    ? t("v2.registry.searchNoHits", { q: q.trim() })
+    : records.length > 0
+      ? t("v2.registry.filterNoHits")
+      : t("v2.registry.empty");
 
   const setType = (next: string) => {
     const p = new URLSearchParams(params);
@@ -177,8 +185,8 @@ export function RecordList() {
     if (!deleting) return;
     setBusy(true);
     try {
-      await api.registryDelete(deleting.record_id);
-      toast("success", t("registry.deleted", { name: deleting.name }));
+      const result = await api.registryDelete(deleting.record_id);
+      toast("success", deletedMessage(t, deleting.name, result));
       setDeleting(null);
       setSearchHits(null);
       reload();
@@ -346,7 +354,7 @@ export function RecordList() {
             <Plus size={14} aria-hidden="true" />
             {t("v2.registry.register")}
           </Button>
-          <Button onClick={() => navigate("/v2/governance")} title={t("v2.registry.importGatewayHint")}>
+          <Button onClick={() => setImporting(true)} title={t("v2.registry.importGatewayHint")} testId="v2-registry-import-gateway">
             <Network size={14} aria-hidden="true" />
             {t("v2.registry.importGateway")}
           </Button>
@@ -404,7 +412,7 @@ export function RecordList() {
           loading={loading}
           error={data ? null : error}
           onRetry={reload}
-          empty={t("v2.registry.empty")}
+          empty={emptyText}
           testId="v2-registry-table"
         />
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
@@ -419,6 +427,17 @@ export function RecordList() {
         busy={busy}
         onConfirm={() => void remove()}
         onClose={() => setDeleting(null)}
+      />
+      <ImportGatewayDialog
+        open={importing}
+        onClose={() => {
+          setImporting(false);
+          if (params.has("import")) {
+            const p = new URLSearchParams(params);
+            p.delete("import");
+            setParams(p, { replace: true });
+          }
+        }}
       />
     </>
   );

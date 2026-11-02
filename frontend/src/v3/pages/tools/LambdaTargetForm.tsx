@@ -2,7 +2,8 @@ import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ErrorCallout } from "../../../components/ErrorCallout";
-import { createLambdaTarget, type LambdaToolTarget, parseToolSchema, validateLambdaForm } from "../../../lib/api/mcpReviews";
+import { createLambdaTarget, lambdaArnPlaceholder, type LambdaToolTarget, parseToolSchema, validateLambdaForm } from "../../../lib/api/mcpReviews";
+import { useWorkspace } from "../../../workspace/workspace-context";
 import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Notice } from "../../ui";
@@ -23,6 +24,8 @@ export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToo
   const { t } = useTranslation();
   const toast = useToast();
   const failed = useFailure();
+  // the function must be in this workspace's account and region — the example says so
+  const { current: workspace } = useWorkspace();
   const [arn, setArn] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -69,7 +72,7 @@ export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToo
       <input
         id="lambda-arn"
         className="v3-input mono"
-        placeholder="arn:aws:lambda:us-west-2:111122223333:function:crm-tools"
+        placeholder={lambdaArnPlaceholder(workspace)}
         value={arn}
         onChange={(e) => setArn(e.target.value)}
       />

@@ -21,6 +21,7 @@ from app.core.errors import AppError, cleanup_error, is_not_found
 from app.core.project_scope import current_project
 from app.models.ledger import Agent
 from app.services import mcp_client, project_gateway, user_gateways
+from app.services.agentcore import harness as harness_api
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
@@ -373,16 +374,135 @@ def console_action(
         return reg.reject_record(client, registry_id, record_id)
     if action == "disable":
         return reg.disable_record(client, registry_id, record_id)
+    if action == "republish":
+        # an edit sent a published record back to DRAFT (AWS lifecycle): submit and
+        # approve again in one step
+        try:
+            return reg.republish_record(client, registry_id, record_id)
+        except ValueError as exc:
+            raise AppError(
+                "registry.not_republishable",
+                "only a DRAFT or PENDING_APPROVAL record can be published again",
+                {"record_id": record_id},
+                status_code=409,
+            ) from exc
     raise ValueError(f"unknown action '{action}'")
 
 
-def console_delete(workspace: WorkspaceContext, record_id: str) -> None:
+def console_delete(workspace: WorkspaceContext, record_id: str) -> dict[str, Any]:
+    """Delete a record — 404 when the id names none — and, for a Skill, the bundle
+    files the platform wrote for it (see ``_drop_skill_files``). Returns the file
+    cleanup outcome (``None`` for other record types)."""
     from app.system_agents.skill_registry import refuse_protected_mutation
 
     refuse_protected_mutation(workspace, record_id, "delete")  # before any AWS client
-    reg.delete_record(
-        registry_control_client(workspace), _registry_id(workspace), record_id
-    )
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
+    record = reg.find_record_by_id(client, registry_id, record_id)
+    if record is None:
+        raise AppError(
+            "registry.record_not_found", "registry record not found",
+            {"record_id": record_id}, status_code=404,
+        )
+    reg.delete_record(client, registry_id, record_id)
+    if record.get("descriptorType") != "AGENT_SKILLS":
+        return {"files": None}
+    return {"files": _drop_skill_files(workspace, client, registry_id, record)}
+
+
+def _skill_files_prefix(workspace: WorkspaceContext, record: dict[str, Any]) -> str | None:
+    """``skills/<name>/`` when the record's bundle is the one the platform wrote — its
+    definition path is exactly that prefix of this workspace's artifacts bucket.
+    A system preset's bundle lives under ``system-skills/`` and never matches."""
+    name = (record.get("name") or "").strip()
+    bucket = workspace.resources.get("artifacts_bucket")
+    if not bucket or not SKILL_NAME_RE.match(name):
+        return None
+    try:
+        definition = json.loads(
+            record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
+    path = str((definition or {}).get("path") or "") if isinstance(definition, dict) else ""
+    prefix = f"skills/{name}/"
+    if path.rstrip("/") + "/" != f"s3://{bucket}/{prefix}":
+        return None
+    return prefix
+
+
+def _agents_mounting(workspace: WorkspaceContext, s3_path: str) -> list[str]:
+    """Names of this workspace's live agents (any project) whose spec mounts the path.
+    A Harness reads its Skills from S3 at session start, so their files must stay."""
+    from app.core.db import SessionLocal
+    from app.core.project_scope import project_context
+
+    want = s3_path.rstrip("/")
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            agents = db.query(Agent).filter(
+                Agent.workspace_id == workspace.id, Agent.status != "deleted"
+            ).all()
+            return sorted(
+                a.name for a in agents
+                if any(str(p).rstrip("/") == want for p in (a.spec or {}).get("skills") or [])
+            )
+    finally:
+        db.close()
+
+
+def _drop_skill_files(
+    workspace: WorkspaceContext, client: Any, registry_id: str, record: dict[str, Any],
+) -> dict[str, Any]:
+    """After a Skill record's delete, remove the ``skills/<name>/`` objects the
+    platform uploaded for it — unless something still reads them: a live agent of
+    this hub that mounts the bundle, any Harness of the account and region that does
+    (another hub on the same account shares the bucket — `kept_in_use`), or another
+    record of the same name (a name re-registered after its old record was deprecated
+    shares the prefix — `kept_shared`). When the Harness question cannot be answered
+    the files stay (`kept_unverified`, with the reason). Best-effort: a failure is
+    reported, never raised — the record is already gone."""
+    prefix = _skill_files_prefix(workspace, record)
+    if prefix is None:
+        return {"status": "not_platform"}
+    bucket = workspace.resources["artifacts_bucket"]
+    out: dict[str, Any] = {"prefix": f"s3://{bucket}/{prefix}"}
+    agents = _agents_mounting(workspace, out["prefix"])
+    if agents:
+        return {**out, "status": "kept_in_use", "agents": agents}
+    name = record.get("name")
+    # The ledger only knows this hub. Hubs sharing the account and region (prod and
+    # its clone) share the bucket too, so every Harness of the account is asked; an
+    # unanswered question keeps the files.
+    try:
+        harnesses = harness_api.harnesses_mounting_prefix(control_client(workspace), out["prefix"])
+    except Exception as exc:  # noqa: BLE001 — unverifiable ⇒ keep, never fail the delete
+        reason = cleanup_error(exc)
+        logger.warning("skill %s: Harness usage of %s not verified, files kept: %s",
+                       name, out["prefix"], reason)
+        return {**out, "status": "kept_unverified", "reason": reason}
+    if harnesses:
+        logger.info("skill %s: %s still mounted by Harness %s, files kept",
+                    name, out["prefix"], ", ".join(harnesses))
+        return {**out, "status": "kept_in_use", "agents": [], "harnesses": harnesses}
+    try:
+        siblings = [
+            r for r in reg.find_records(client, registry_id, name, "AGENT_SKILLS")
+            if r.get("recordId") != record.get("recordId")
+            and r.get("status") != "DELETING"
+        ]
+    except Exception as exc:  # noqa: BLE001 — the record is gone; never fail the delete
+        logger.warning("skill %s: same-name check failed, files kept: %s", name, exc)
+        return {**out, "status": "failed"}
+    if siblings:
+        return {**out, "status": "kept_shared"}
+    try:
+        _delete_prefix(workspace.client("s3"), bucket, prefix)
+    except Exception as exc:  # noqa: BLE001 — the record is gone; never fail the delete
+        logger.warning("skill %s: %s left behind: %s", name, out["prefix"], cleanup_error(exc))
+        return {**out, "status": "failed"}
+    return {**out, "status": "deleted"}
 
 
 def build_gateway_record(

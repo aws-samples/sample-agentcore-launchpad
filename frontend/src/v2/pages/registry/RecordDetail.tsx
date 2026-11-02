@@ -5,7 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { type AgentInfo, api, errorMessage, type LiveAgentCard } from "../../../lib/api";
-import { descriptorExcerpt, parseAgentCard, parseSkillDefinition, skillPath } from "../../../lib/registry";
+import { deletedMessage, descriptorExcerpt, parseAgentCard, parseSkillDefinition, skillPath } from "../../../lib/registry";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
@@ -24,7 +24,7 @@ import {
 import { type RegistryRecord, statusLabel } from "./common";
 import { SourceTag, StatusTag, SystemTag, TypeTag } from "./tags";
 
-type Lifecycle = "submit" | "approve" | "reject" | "disable";
+type Lifecycle = "submit" | "approve" | "reject" | "disable" | "republish";
 
 /** DRAFT → PENDING_APPROVAL → APPROVED, with REJECTED / DEPRECATED as side exits. */
 function LifecycleFlow({ status }: { status: string }) {
@@ -127,10 +127,12 @@ type CardSkill = NonNullable<NonNullable<ReturnType<typeof parseAgentCard>>["ski
 export function RecordDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const toast = useV2Toast();
   const { isAdmin } = useAuth();
   const [tick, setTick] = useState(0);
+  // set by the edit page when its save sent a published (or submitted) record back to DRAFT
+  const republishFrom = params.get("republish");
   const detail = useLoad(() => api.registryRecord(id), `registry-record:${id}:${tick}`);
   // Ledger agents keyed by the registry record they own — decides whether an A2A
   // record can serve a live card; `null` (list failed) leaves the call to the backend.
@@ -180,6 +182,7 @@ export function RecordDetail({ id }: { id: string }) {
     try {
       const updated = await api.registryAction(record.record_id, action);
       toast("success", t("v2.registry.actionDone", { name: record.name, status: statusLabel(t, updated.status) }));
+      if (republishFrom) setParams({ view: "detail", id: record.record_id }, { replace: true });
       setTick((n) => n + 1);
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
@@ -192,8 +195,8 @@ export function RecordDetail({ id }: { id: string }) {
   const remove = async () => {
     setBusy(true);
     try {
-      await api.registryDelete(record.record_id);
-      toast("success", t("registry.deleted", { name: record.name }));
+      const result = await api.registryDelete(record.record_id);
+      toast("success", deletedMessage(t, record.name, result));
       setParams({});
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
@@ -325,6 +328,26 @@ export function RecordDetail({ id }: { id: string }) {
         }
       />
       {record.status_reason && <Alert tone={record.status === "REJECTED" ? "error" : "info"}>{record.status_reason}</Alert>}
+      {republishFrom && record.status === "DRAFT" && lifecycleAllowed && (
+        <div data-testid="v2-registry-republish">
+          <Alert
+            tone="warn"
+            action={
+              republishFrom === "APPROVED" ? (
+                <Button kind="primary" size="sm" disabled={busy} onClick={() => void act("republish")} testId="v2-registry-republish-btn">
+                  {t("v2.registry.editResets.republish")}
+                </Button>
+              ) : (
+                <Button kind="primary" size="sm" disabled={busy} onClick={() => void act("submit")} testId="v2-registry-resubmit-btn">
+                  {t("v2.registry.editResets.resubmit")}
+                </Button>
+              )
+            }
+          >
+            {t("v2.registry.editResets.afterSave", { status: statusLabel(t, republishFrom) })}
+          </Alert>
+        </div>
+      )}
 
       <Card title={t("v2.registry.basic")}>
         <Descriptions

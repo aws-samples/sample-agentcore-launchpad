@@ -50,6 +50,10 @@ describe("V2 Gateway governance", () => {
     // the lists before the form, the externally hosted targets after it
     expect(html.indexOf('data-testid="v2-lambda-targets"')).toBeLessThan(html.indexOf('data-testid="v2-lambda-form"'));
     expect(html.indexOf('data-testid="v2-lambda-form"')).toBeLessThan(html.indexOf('data-testid="v2-external-targets"'));
+    // the Gateway's other targets (hand-made Lambda, bootstrap, OpenAPI) last
+    expect(html.indexOf('data-testid="v2-external-targets"')).toBeLessThan(html.indexOf('data-testid="v2-unmanaged-targets"'));
+    // the ARN example follows the workspace, never a fixed foreign account/region
+    expect(html).not.toContain("111122223333");
   });
 
   it("falls back to the gateways tab on an unknown tab", () => {

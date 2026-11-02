@@ -59,7 +59,7 @@ interface LoadErrors {
 /** One MCP Gateway: identity, Registry, Policy Engine + mode, IAM, policies, targets, limits, decisions, audit. */
 export function GatewayDetail({ gatewayId, section }: { gatewayId: string; section: GatewaySection }) {
   const { t, i18n } = useTranslation();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const toast = useV2Toast();
   const copy = useCopy(t);
   const [gateway, setGateway] = useState<GovernanceGatewayDetail | null>(null);
@@ -125,6 +125,17 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
   }, [load]);
 
   const { operation, setOperation, pending: operationPending } = useGovernanceOperation(() => void load());
+
+  // the registry's 导入 Gateway lands here with `focus=registry`: bring the Registry card
+  // (where the record is previewed and imported) into view once the gateway has loaded
+  const focusRegistry = params.get("focus") === "registry" && section === "overview";
+  const loaded = gateway !== null;
+  useEffect(() => {
+    if (!focusRegistry || !loaded) return;
+    const card = document.querySelector('[data-testid="v2-governance-registry"]');
+    // below the sticky top bar, not under it
+    if (card) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 72, behavior: "smooth" });
+  }, [focusRegistry, loaded]);
 
   const synchronizingTargets = useMemo(
     () => gateway?.targets.filter((target) => target.status === "SYNCHRONIZING") ?? [],

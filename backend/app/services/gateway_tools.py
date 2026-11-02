@@ -315,6 +315,13 @@ def publish_lambda(workspace: WorkspaceContext, row_id: str) -> None:
         db.close()
 
 
+def record_ownership(row: LambdaToolTarget) -> None:
+    """An adopted target becomes the current project's, as a published one does."""
+    if row.target_id:
+        _owned(row.workspace_id, row.target_id,
+               creators.Creator(user_id=row.created_by_user_id, name=row.created_by))
+
+
 def _owned(workspace_id: str, target_id: str, creator: creators.Creator | None) -> None:
     """Record the published target as the current project's (its Gateway ownership,
     projects design §5.5) and, in an isolated project, have its Cedar rule written
@@ -536,6 +543,150 @@ def adopt_external(
         note=f"recorded as approved: hand-made target brought under review by {actor}",
     )
     record_audit_event(workspace_id=workspace.id, actor=actor, action="gateway_tool.adopt",
+                       target=row.id, db=db, actor_user_id=actor_user_id)
+    return row
+
+
+# ── other targets nothing here manages yet (hand-made Lambda, OpenAPI, …) ────────
+
+
+def _target_kind(target: dict[str, Any]) -> str:
+    """The `mcp` union member a target uses: lambda, mcpServer, openApiSchema, …"""
+    mcp = (target.get("targetConfiguration") or {}).get("mcp") or {}
+    return next(iter(mcp), "unknown") if isinstance(mcp, dict) else "unknown"
+
+
+def _inline_lambda(target: dict[str, Any]) -> tuple[str, list[dict[str, Any]] | None]:
+    """(function ARN, inline tool schema) of a Lambda target; the schema is None when
+    it lives in S3 (no list to record as the approved baseline)."""
+    lam = ((target.get("targetConfiguration") or {}).get("mcp") or {}).get("lambda") or {}
+    payload = (lam.get("toolSchema") or {}).get("inlinePayload")
+    return str(lam.get("lambdaArn") or ""), payload if isinstance(payload, list) else None
+
+
+def _unmanaged_reason(
+    workspace: WorkspaceContext, target: dict[str, Any], kind: str,
+) -> str | None:
+    """Why a target cannot be adopted here (None = it can): a bootstrap target, one
+    bound to a Connection (managed under Connections), a kind other than an inline-
+    schema Lambda in this workspace's account and region."""
+    from app.services import identity_gateway_targets
+
+    if str(target.get("name") or "") in identity_gateway_targets.SYSTEM_TARGET_NAMES:
+        return "system"
+    if identity_gateway_targets.target_binding(target).get("connection"):
+        return "connection"
+    if kind != "lambda":
+        return "kind"
+    arn, payload = _inline_lambda(target)
+    if payload is None:
+        return "schema"
+    found = LAMBDA_ARN_RE.match(arn)
+    if not found or found.group(2) != workspace.region or (
+        workspace.account_id and found.group(3) != workspace.account_id
+    ):
+        return "environment"
+    try:
+        validate_tool_schema(payload)
+    except AppError:
+        return "schema"
+    return None
+
+
+def list_unmanaged(db: Session, workspace: WorkspaceContext) -> list[dict[str, Any]]:
+    """Targets on the workspace Gateway that neither tab above lists: not a console
+    Lambda target, not a hosted MCP server, not an MCP-server target (those are the
+    externally hosted list) — typically a Lambda target made by hand or a bootstrap
+    one. Each says whether it can be brought under management here and why not."""
+    from app.services import identity_gateway_targets
+
+    gateway_id = _gateway_id(workspace)
+    hosted_ids, hosted_names = _hosted_target_ids(db, workspace.id)
+    mine = set(db.scalars(select(LambdaToolTarget.target_id).where(
+        LambdaToolTarget.workspace_id == workspace.id)))
+    with project_context(None):
+        anywhere = set(db.scalars(select(LambdaToolTarget.target_id).where(
+            LambdaToolTarget.workspace_id == workspace.id)))
+    out: list[dict[str, Any]] = []
+    for target in policy_api.list_gateway_target_details(control_client(workspace), gateway_id):
+        target_id = str(target.get("targetId") or "")
+        name = str(target.get("name") or "")
+        kind = _target_kind(target)
+        if (kind == "mcpServer" or target_id in mine or target_id in hosted_ids
+                or name in hosted_names):
+            continue
+        arn, payload = _inline_lambda(target) if kind == "lambda" else ("", None)
+        elsewhere = target_id in anywhere
+        out.append({
+            "target_id": target_id, "target_name": name, "kind": kind,
+            "status": target.get("status"), "description": target.get("description") or "",
+            "lambda_arn": arn or None,
+            "tool_names": [str(t.get("name")) for t in payload or [] if isinstance(t, dict)],
+            "system": name in identity_gateway_targets.SYSTEM_TARGET_NAMES,
+            "connection": identity_gateway_targets.target_binding(target).get("connection"),
+            "adopted_elsewhere": elsewhere,
+            "reason": "elsewhere" if elsewhere else _unmanaged_reason(workspace, target, kind),
+        })
+    return sorted(out, key=lambda item: item["target_name"])
+
+
+def adopt_lambda(
+    db: Session, workspace: WorkspaceContext, target_id: str, *, actor: str,
+    actor_user_id: str | None,
+) -> LambdaToolTarget:
+    """Bring a hand-made Lambda target under management: a ``live`` console row for
+    it, its inline schema recorded as the approved baseline (agents calling it are not
+    cut off), the function added to the Gateway role's invoke grant the console keeps,
+    and the target owned by the current project. Nothing on the target changes; from
+    here it is listed, reviewed and deleted like a console-created one. The caller
+    commits."""
+    gateway_id = _gateway_id(workspace)
+    control = control_client(workspace)
+    try:
+        target = policy_api.get_gateway_target(control, gateway_id, target_id)
+    except ClientError as exc:
+        if is_not_found(exc):
+            raise AppError("gateway_tool.not_found", "gateway target not found",
+                           status_code=404) from exc
+        raise
+    with project_context(None):
+        taken = db.scalars(select(LambdaToolTarget.id).where(
+            LambdaToolTarget.workspace_id == workspace.id,
+            LambdaToolTarget.target_id == target_id,
+        )).first()
+    if taken is not None:
+        raise AppError("gateway_tool.already_adopted",
+                       "this target is already managed here", status_code=409)
+    hosted_ids, hosted_names = _hosted_target_ids(db, workspace.id)
+    name = str(target.get("name") or "")
+    kind = _target_kind(target)
+    reason = (
+        "hosted" if target_id in hosted_ids or name in hosted_names
+        else _unmanaged_reason(workspace, target, kind)
+    )
+    if reason is not None:
+        raise AppError(
+            "gateway_tool.not_adoptable",
+            "only a hand-made Lambda target with an inline tool schema in this "
+            "workspace's account and region can be brought under management",
+            {"target_id": target_id, "reason": reason}, status_code=409,
+        )
+    arn, payload = _inline_lambda(target)
+    schema = validate_tool_schema(payload)
+    row = LambdaToolTarget(
+        workspace_id=workspace.id, gateway_id=gateway_id, target_id=target_id,
+        target_name=name, lambda_arn=arn,
+        description=str(target.get("description") or "")[:500], tool_schema=schema,
+        status="live", created_by=actor[:64], created_by_user_id=actor_user_id,
+    )
+    db.add(row)
+    db.flush()
+    mcp_reviews.record_baseline(
+        db, lambda_subject(row), review_tools(schema),
+        note=f"recorded as approved: hand-made Lambda target brought under management by {actor}",
+    )
+    _sync_invoke_policy(db, workspace, control, gateway_id)
+    record_audit_event(workspace_id=workspace.id, actor=actor, action="lambda_tool.adopt",
                        target=row.id, db=db, actor_user_id=actor_user_id)
     return row
 
