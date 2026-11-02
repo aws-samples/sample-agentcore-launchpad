@@ -64,6 +64,14 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       label: "GPT-6.1 Sol (global)",
       api_format: "converse_stream",
     },
+    // GPT-6.1 Terra: Converse, tool use (auto + forced any) and reasoning.effort
+    // live-probed on the global + US profiles in us-east-1 and us-west-2, 2026-11-02.
+    // Converse refuses `document` blocks for it (model card) — send files as text.
+    {
+      model_id: "global.openai.gpt-6.1-terra",
+      label: "GPT-6.1 Terra (global)",
+      api_format: "converse_stream",
+    },
     { model_id: "global.openai.gpt-6-astra", label: "GPT-6 Astra (global)", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-luna", label: "GPT-6 Luna (global)", api_format: "converse_stream" },
     {
