@@ -33,6 +33,43 @@ def test_defaults_are_unchanged():
     assert defaults["studio_fallback_model_id"] == "global.anthropic.claude-sonnet-5"
     assert defaults["claude_sdk_model_id"] == "global.anthropic.claude-sonnet-5"
     assert defaults["codegen_model"] == "global.anthropic.claude-sonnet-5"
+    assert defaults["skill_lab_judge_model_id"] == "global.openai.gpt-6.1-sol"
+    assert defaults["skill_lab_target_model_id"] == "global.anthropic.claude-opus-5-5"
+    assert defaults["skill_lab_codex_target_model_id"] == "global.openai.gpt-6.1-sol"
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "global.openai.gpt-6.1-sol",
+        "global.openai.gpt-6.1-terra",
+        "global.openai.gpt-6-astra",
+        "global.moonshotai.kimi-k3",
+    ],
+)
+def test_codex_target_accepts_openai_and_kimi(model_id):
+    from app.services import model_settings as ms
+
+    assert ms.validate(ms.role("skill_lab_codex_target_model_id"), model_id) == model_id
+
+
+@pytest.mark.parametrize("model_id", ["global.anthropic.claude-opus-5-5", GLM])
+def test_codex_target_refuses_other_families(model_id):
+    from app.core.errors import AppError
+    from app.services import model_settings as ms
+
+    with pytest.raises(AppError) as err:
+        ms.validate(ms.role("skill_lab_codex_target_model_id"), model_id)
+    assert err.value.code == "models.wrong_family"
+
+
+@pytest.mark.parametrize(
+    "model_id", ["global.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5"]
+)
+def test_claude_target_accepts_the_5_5_profiles(model_id):
+    from app.services import model_settings as ms
+
+    assert ms.validate(ms.role("skill_lab_target_model_id"), model_id) == model_id
 
 
 def test_env_overrides_use_the_launchpad_prefix(monkeypatch):

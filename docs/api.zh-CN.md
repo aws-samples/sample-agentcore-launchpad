@@ -2015,7 +2015,7 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 
 | 方法 | 路径 | 角色 | 范围 | 结果 |
 |---|---|---|---|---|
-| `GET` | `/api/skill-lab/status` | member | ws | `{provisioned, missing[], venv_ready, default_target_model, default_judge_model, default_codex_target_model, target_backends[], judge_modes[], agentic_judge_ready, judge_codex_ready, judge_claude_ready, judge_cli_ready}` |
+| `GET` | `/api/skill-lab/status` | member | ws | `{provisioned, missing[], venv_ready, default_target_model, default_judge_model, default_codex_target_model, default_effort, efforts[], target_backends[], judge_modes[], agentic_judge_ready, judge_codex_ready, judge_claude_ready, judge_cli_ready}` |
 | `GET` | `/api/skill-lab/tasksets` | member | project | `[任务集]`：本项目的任务集 |
 | `POST` | `/api/skill-lab/tasksets` | `perm:project.write` | project | 请求体 `{name, description?, mode, tasks_by_split{…}}` → `201` 任务集 |
 | `GET` | `/api/skill-lab/tasksets/{taskset_id}?full=` | member | project | 单个任务集（`full=true` 含全部任务） |
@@ -2023,7 +2023,7 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `DELETE` | `/api/skill-lab/tasksets/{taskset_id}` | `perm:project.write` | project | `{ok: true}` |
 | `POST` | `/api/skill-lab/task-assets` | `perm:project.write` | project | multipart `files[]` → `201 {assets[…]}`：暂存的任务附件 |
 | `GET` | `/api/skill-lab/jobs?type=` | member | project | `[任务]` |
-| `POST` | `/api/skill-lab/jobs` | `perm:project.write` | project | 请求体 `{type: eval\|train\|taskgen, skill_source, taskset_id, split?, target_split?, attachments?, params?}` → `201` 任务。`422 skill_lab.bad_params` |
+| `POST` | `/api/skill-lab/jobs` | `perm:project.write` | project | 请求体 `{type: eval\|train\|taskgen, skill_source, taskset_id, split?, target_split?, attachments?, params?}` → `201` 任务。`params.effort`（`low\|medium\|high\|xhigh\|max`，留空取 `skill_lab_target_effort`，默认 `high`）设定两种 CLI 下被测 / 生成模型的推理强度；`none` 会被拒绝。`422 skill_lab.bad_params` |
 | `GET` | `/api/skill-lab/jobs/{job_id}` | member | project | 单个任务 |
 | `GET` | `/api/skill-lab/jobs/{job_id}/log?offset=` | member | project | 从 `offset` 起的任务日志 |
 | `GET` | `/api/skill-lab/jobs/{job_id}/diff` | member | project | 训练任务的技能版本差异。`404 skill_lab.results_pending` |

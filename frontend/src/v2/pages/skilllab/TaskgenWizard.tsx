@@ -6,10 +6,11 @@ import {
   api,
   errorMessage,
   type SkillLabAssetDescriptor,
+  type SkillLabEffort,
   type SkillLabStatus,
   type SkillLabTargetBackend,
 } from "../../../lib/api";
-import { modelDefault } from "../../../lib/skillLab";
+import { effortDefault, modelDefault } from "../../../lib/skillLab";
 import { TASK_ASSET_ACCEPT } from "../../../lib/skillLabTasksets";
 import { Alert, Button, Card, Field, FlowHeader, LinkButton, Select } from "../../ui";
 import { ModelFields } from "./ModelFields";
@@ -34,6 +35,7 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
   const [recordIds, setRecordIds] = useState<string[]>([]);
   const [backend, setBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState<SkillLabEffort | null>(null); // null = follow status.default_effort
   const [count, setCount] = useState(5);
   const [guidance, setGuidance] = useState("");
   const [timeout, setTimeoutSeconds] = useState(900);
@@ -93,7 +95,14 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
         ...(attachments.length
           ? { attachments: attachments.map((asset) => ({ staged_asset: String(asset.staged_asset) })) }
           : {}),
-        params: { target_backend: backend, model: model.trim(), count, guidance: guidance.trim(), timeout },
+        params: {
+          target_backend: backend,
+          model: model.trim(),
+          effort: effort ?? effortDefault(status),
+          count,
+          guidance: guidance.trim(),
+          timeout,
+        },
       });
       setParams({ tab: "tasksets", view: "gen", id: job.id });
     } catch (err) {
@@ -130,6 +139,8 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
           setBackend={setBackend}
           targetModel={model}
           setTargetModel={setModel}
+          effort={effort ?? effortDefault(status)}
+          setEffort={setEffort}
         />
         <div className="v2-form cols-2" style={{ marginTop: 16 }}>
           <Field label={t("skillLab.taskgen.field.count")} hint={t("skillLab.taskgen.hint.count", { min: 1, max: 30 })}>

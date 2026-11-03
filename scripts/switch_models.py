@@ -95,6 +95,8 @@ R1 = "us.deepseek.r1-v1:0"
 TOOL_KINDS = {"tools", "tool_any"}
 
 ANY, CLAUDE, OPENAI, OPENAI_OR_CLAUDE = None, {"anthropic"}, {"openai"}, {"openai", "anthropic"}
+# codex's amazon-bedrock-runtime provider also drives Kimi (live-verified 2026-11-02)
+OPENAI_OR_KIMI = {"openai", "moonshotai"}
 
 
 @dataclass
@@ -149,14 +151,14 @@ ROLES = [
     Role("prompt_opt", "prompt_opt_default_model_id", OPUS5, "converse",
          [OPUS5, OPUS55, SONNET55, SONNET5, SONNET46, "us.openai.gpt-5.6-sol", GPT6_SOL, *GLM,
           *DS_KIMI, NOVA_PRO, QWEN, R1], note="GEPA-lite reflection (+ PROMPT_OPT_MODELS)"),
-    Role("skill_lab_judge", "skill_lab_judge_model_id", "us.openai.gpt-6-sol", "converse",
-         ["us.openai.gpt-6-sol", GPT6_SOL, SONNET55, SONNET5, OPUS5], OPENAI_OR_CLAUDE,
+    Role("skill_lab_judge", "skill_lab_judge_model_id", GPT61_SOL, "converse",
+         [GPT61_SOL, GPT6_SOL, OPUS55, SONNET55, SONNET5], OPENAI_OR_CLAUDE,
          "agentic judge runs on the codex (openai) or claude CLI only"),
     Role("skill_lab_target", "skill_lab_target_model_id", OPUS55, "converse",
          [OPUS55, OPUS5, SONNET55, SONNET5], CLAUDE, "Skill Lab claude CLI target (Claude-only)"),
-    Role("skill_lab_codex_target", "skill_lab_codex_target_model_id", GPT6_SOL, "converse",
-         [GPT6_SOL, "us.openai.gpt-6-sol", GPT61_SOL, "global.openai.gpt-5.6-sol"], OPENAI,
-         "Skill Lab codex CLI target (OpenAI-only)"),
+    Role("skill_lab_codex_target", "skill_lab_codex_target_model_id", GPT61_SOL, "converse",
+         [GPT61_SOL, GPT61_TERRA, GPT6_ASTRA, GPT6_SOL, KIMI[0]], OPENAI_OR_KIMI,
+         "Skill Lab codex CLI target (OpenAI or Kimi)"),
 ]
 PROMPT_OPT_MODELS_ENV = "LAUNCHPAD_PROMPT_OPT_MODELS"
 PROMPT_OPT_LIST_MAX = 4

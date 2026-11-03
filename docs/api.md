@@ -2732,7 +2732,7 @@ everything, as before.
 
 | Method | Path | Role | Scope | Result |
 |---|---|---|---|---|
-| `GET` | `/api/skill-lab/status` | member | ws | `{provisioned, missing[], venv_ready, default_target_model, default_judge_model, default_codex_target_model, target_backends[], judge_modes[], agentic_judge_ready, judge_codex_ready, judge_claude_ready, judge_cli_ready}` |
+| `GET` | `/api/skill-lab/status` | member | ws | `{provisioned, missing[], venv_ready, default_target_model, default_judge_model, default_codex_target_model, default_effort, efforts[], target_backends[], judge_modes[], agentic_judge_ready, judge_codex_ready, judge_claude_ready, judge_cli_ready}` |
 | `GET` | `/api/skill-lab/tasksets` | member | project | `[taskset]`: the project's task sets |
 | `POST` | `/api/skill-lab/tasksets` | `perm:project.write` | project | Body `{name, description?, mode, tasks_by_split{…}}` → `201` task set |
 | `GET` | `/api/skill-lab/tasksets/{taskset_id}?full=` | member | project | One task set (`full=true` includes every task) |
@@ -2740,7 +2740,7 @@ everything, as before.
 | `DELETE` | `/api/skill-lab/tasksets/{taskset_id}` | `perm:project.write` | project | `{ok: true}` |
 | `POST` | `/api/skill-lab/task-assets` | `perm:project.write` | project | Multipart `files[]` → `201 {assets[…]}`: staged task attachments |
 | `GET` | `/api/skill-lab/jobs?type=` | member | project | `[job]` |
-| `POST` | `/api/skill-lab/jobs` | `perm:project.write` | project | Body `{type: eval\|train\|taskgen, skill_source, taskset_id, split?, target_split?, attachments?, params?}` → `201` job. `422 skill_lab.bad_params` |
+| `POST` | `/api/skill-lab/jobs` | `perm:project.write` | project | Body `{type: eval\|train\|taskgen, skill_source, taskset_id, split?, target_split?, attachments?, params?}` → `201` job. `params.effort` (`low\|medium\|high\|xhigh\|max`, blank = `skill_lab_target_effort`, default `high`) sets the target / generation reasoning effort for both CLIs; `none` is refused. `422 skill_lab.bad_params` |
 | `GET` | `/api/skill-lab/jobs/{job_id}` | member | project | One job |
 | `GET` | `/api/skill-lab/jobs/{job_id}/log?offset=` | member | project | The job log from `offset` |
 | `GET` | `/api/skill-lab/jobs/{job_id}/diff` | member | project | The skill-version diff of a training job. `404 skill_lab.results_pending` |

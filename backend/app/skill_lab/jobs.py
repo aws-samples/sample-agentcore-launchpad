@@ -1047,12 +1047,13 @@ def _run_job(job_id: str, command: list[str]) -> None:
         if row is None or row.status != "queued":
             return  # cancelled while queued, or swept
         workspace_id = row.workspace_id or ""
+        effort = runner.job_effort(row.params)
     finally:
         db.close()
 
     try:
         workspace = context_for_workspace(workspace_id)
-        env = runner.build_job_env(workspace)
+        env = runner.build_job_env(workspace, effort=effort)
         _set_status(job_id, status="running", started_at=datetime.now(UTC), queue_position=0)
         log_path = artifacts.job_dir(job_id) / "log.txt"
         with open(log_path, "ab") as log_file:

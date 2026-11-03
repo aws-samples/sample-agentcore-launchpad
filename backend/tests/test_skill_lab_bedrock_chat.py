@@ -130,7 +130,7 @@ def test_tools_are_refused(bedrock_chat):
 
 def test_deployment_setter_and_default(bedrock_chat):
     bedrock_chat.set_optimizer_deployment("")
-    assert bedrock_chat.OPTIMIZER_CONFIG.deployment == "global.anthropic.claude-opus-5"
+    assert bedrock_chat.OPTIMIZER_CONFIG.deployment == "global.anthropic.claude-opus-5-5"
     bedrock_chat.set_optimizer_deployment("us.anthropic.claude-sonnet-5")
     assert bedrock_chat.OPTIMIZER_CONFIG.deployment == "us.anthropic.claude-sonnet-5"
 

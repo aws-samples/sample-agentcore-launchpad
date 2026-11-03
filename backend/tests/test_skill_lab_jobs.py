@@ -31,6 +31,7 @@ parser = argparse.ArgumentParser()
 for flag in ("--skill","--tasks","--out_root","--target_backend","--model",
              "--optimizer_backend","--optimizer_model","--judge_mode",
              "--judge_exec_backend","--judge_exec_model","--judge_exec_effort",
+             "--claude_code_exec_effort",
              "--judge_sandbox_command","--workers","--timeout","--limit","--assets-dir"):
     parser.add_argument(flag)
 args = parser.parse_args()
@@ -295,7 +296,7 @@ def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):
 
 
 def test_judge_exec_route_by_family(lab, tmp_path):
-    """An openai-family judge model (the default: us.openai.gpt-6-sol) runs
+    """An openai-family judge model (e.g. us.openai.gpt-6-sol) runs
     the agentic judge on the host codex CLI with the SAME profile id — codex's
     amazon-bedrock-runtime provider rejects bare ids for on-demand throughput.
     Anthropic judges keep the claude CLI unchanged."""
@@ -349,9 +350,84 @@ def test_env_is_allowlisted(lab, monkeypatch):
     # the VM itself is the sandbox. Live-verified 2026-08-18.
     assert env["CODEX_EXEC_FULL_AUTO"] == "false"
     assert env["CODEX_EXEC_SANDBOX"] == "danger-full-access"
+    # the vendored "none" default reaches the CLI verbatim and GPT-6.1 Sol /
+    # GPT-6 Astra refuse it (live 2026-11-03)
+    assert env["CODEX_EXEC_REASONING_EFFORT"] == "high"
     assert env["SKILLOPT_AGENTCORE_S3_PREFIX"] == "skill-lab/exec-jobs"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTHONUNBUFFERED"] == "1"  # killed jobs must not lose buffered log output
+
+
+def test_effort_defaults_to_high_and_rejects_none(lab):
+    from app.core.errors import AppError
+
+    assert runner.clamp_params(None)["effort"] == "high"
+    assert runner.clamp_params({"effort": ""})["effort"] == "high"
+    assert runner.clamp_params({"effort": "XHigh"})["effort"] == "xhigh"
+    assert runner.clamp_train_params({"effort": "low"})["effort"] == "low"
+    assert runner.clamp_taskgen_params({"effort": "max"})["effort"] == "max"
+    assert runner.clamp_taskgen_params(None)["effort"] == "high"
+    # "none" is what broke GPT-6.1 Sol / GPT-6 Astra rollouts (live 2026-11-03)
+    for bad in ("none", "turbo"):
+        with pytest.raises(AppError) as err:
+            runner.clamp_params({"effort": bad})
+        assert err.value.code == "skill_lab.bad_params"
+    # a row written before `effort` existed (or resumed) runs on the default
+    assert runner.job_effort({}) == runner.job_effort(None) == "high"
+    assert runner.job_effort({"effort": "none"}) == "high"
+
+
+def test_effort_reaches_every_cli_path(lab, tmp_path):
+    import yaml
+
+    params = runner.clamp_params({"effort": "medium"})
+    command = runner.build_eval_command(
+        skill_dir=tmp_path / "s", tasks_file=tmp_path / "t.json",
+        out_dir=tmp_path / "o", params=params,
+    )
+    assert "--claude_code_exec_effort medium" in " ".join(command)
+    # the judge keeps its own fixed effort
+    assert "--judge_exec_effort low" in " ".join(command)
+
+    cfg = runner.build_train_config(
+        skill_dir=tmp_path / "skill",
+        split_env={"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"},
+        eval_test=True,
+        out_config=tmp_path / "cfg.yaml",
+        params=runner.clamp_train_params({"effort": "max"}),
+    )
+    model = yaml.safe_load(cfg.read_text())["model"]
+    assert model["codex_exec_reasoning_effort"] == "max"
+    assert model["claude_code_exec_effort"] == "max"
+
+    workspace = SimpleNamespace(resources=dict(WORKER_RESOURCES), region="us-west-2")
+    env = runner.build_job_env(workspace, effort="xhigh")
+    assert env["CODEX_EXEC_REASONING_EFFORT"] == env["CLAUDE_CODE_EXEC_EFFORT"] == "xhigh"
+    default_env = runner.build_job_env(workspace)
+    assert default_env["CODEX_EXEC_REASONING_EFFORT"] == "high"
+
+
+def test_submitted_job_runs_with_its_effort(lab, monkeypatch):
+    seen: list[str | None] = []
+    real = runner.build_job_env
+
+    def spy(workspace, *, effort=None):
+        seen.append(effort)
+        return real(workspace, effort=effort)
+
+    monkeypatch.setattr(runner, "build_job_env", spy)
+    ts = _taskset(lab, ["do a"])
+    created = _submit(lab, ts, params={"effort": "low"})
+    assert created.status_code == 201, created.text
+    assert created.json()["params"]["effort"] == "low"
+    assert _wait(lab, created.json()["id"])["status"] == "succeeded"
+    assert seen == ["low"]
+
+
+def test_status_reports_effort_choices(lab):
+    body = lab.get("/api/skill-lab/status").json()
+    assert body["default_effort"] == "high"
+    assert body["efforts"] == ["low", "medium", "high", "xhigh", "max"]
 
 
 def test_worker_role_policy_covers_codex_mantle_path():

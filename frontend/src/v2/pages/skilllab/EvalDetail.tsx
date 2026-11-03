@@ -34,6 +34,8 @@ export function JobOverview({ job, extra = [] }: { job: SkillLabJobInfo; extra?:
     { label: t("skillLab.eval.col.taskset"), value: tasksetLabel(job) },
     { label: t("skillLab.backend.field"), value: <span className="mono">{job.params.target_backend ?? "claude_code_exec"}</span> },
     { label: t("skillLab.eval.wizard.field.targetModel"), value: <span className="mono">{job.params.target_model}</span> },
+    // jobs submitted before the effort setting carry none — they ran on the CLI defaults
+    { label: t("skillLab.backend.effort"), value: <span className="mono">{job.params.effort ?? "—"}</span> },
     {
       label: job.type === "train" ? t("skillLab.train.wizard.field.judgeModel") : t("skillLab.eval.wizard.field.judgeModel"),
       value: (

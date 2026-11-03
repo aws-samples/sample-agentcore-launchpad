@@ -8,7 +8,7 @@
 # The model catalog file is staged into the build context from the backend
 # host's ~/.codex/model-catalogs/ (never committed — it carries proprietary
 # model instructions); an empty `{}` catalog is the documented fallback.
-model = "global.openai.gpt-6-sol"
+model = "global.openai.gpt-6.1-sol"
 model_provider = "amazon-bedrock-runtime"
 model_catalog_json = "/home/agent/.codex/model-catalogs/bedrock-models.json"
 # codex 0.147 + the bedrock provider misbehaves with the web-search tool and the
@@ -20,7 +20,7 @@ web_search = "disabled"
 enabled = false
 
 [model_providers.amazon-bedrock-runtime.aws]
-# Bedrock runtime with inference-profile ids (global.openai.gpt-6-sol …); needs
+# Bedrock runtime with inference-profile ids (global.openai.gpt-6.1-sol …); needs
 # codex >= 0.155 (0.147 only supports aws auth on the Mantle `amazon-bedrock`
 # provider). us-east-1 carries every openai profile the catalog lists.
 region = "us-east-1"

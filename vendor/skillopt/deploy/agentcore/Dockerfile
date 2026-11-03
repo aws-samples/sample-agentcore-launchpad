@@ -9,8 +9,12 @@
 # this directory + the bedrock model catalog read from the backend host).
 FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 
-ARG CLAUDE_CLI_VERSION=2.1.283
-ARG CODEX_CLI_VERSION=0.155.1
+# Ceiling, not just a pin: from 2.1.295 on, a claude CLI with an empty HOME (as
+# here) makes Opus 5.5's safeguards flag ordinary rollouts as `[cyber]`
+# (stop_reason "refusal") — the log-triage demo went 0/8 on 2.1.311 / 2.1.317
+# and 8/8 on 2.1.294 (bisected 2026-11-03). Re-run that check before raising it.
+ARG CLAUDE_CLI_VERSION=2.1.294
+ARG CODEX_CLI_VERSION=0.166.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ripgrep procps unzip jq \

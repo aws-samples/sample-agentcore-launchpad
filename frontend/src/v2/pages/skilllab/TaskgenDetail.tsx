@@ -252,6 +252,7 @@ export function TaskgenDetail({ id }: { id: string }) {
             { label: t("skillLab.taskgen.col.target"), value: taskgenTarget(detail, t("skillLab.taskgen.target.new")) },
             { label: t("skillLab.backend.field"), value: <span className="mono">{detail.params.target_backend ?? "claude_code_exec"}</span> },
             { label: t("skillLab.eval.wizard.field.targetModel"), value: <span className="mono">{detail.params.model ?? "—"}</span> },
+            { label: t("skillLab.backend.effort"), value: <span className="mono">{detail.params.effort ?? "—"}</span> },
             { label: t("skillLab.taskgen.field.count"), value: detail.params.count ?? "—" },
             { label: t("skillLab.taskgen.field.timeout"), value: `${detail.params.timeout}s` },
             { label: t("skillLab.taskgen.field.attachments"), value: attachedNames.length ? <span className="mono">{attachedNames.join(" · ")}</span> : "—" },

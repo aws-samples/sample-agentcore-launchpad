@@ -433,13 +433,14 @@ Skill Lab 负责评估与训练 Registry 里的技能记录：vendored 的 Skill
 |---|---|---|
 | `skill_lab_python` | `<repo>/data/skill-lab-venv/bin/python` | 运行 vendored 的 `evaluate_skill.py` / `train.py` / 任务集校验器的解释器。bootstrap 依据 `vendor/skillopt/requirements-launchpad.txt` 构建它，并在该文件变化时重建；后端进程自身永不 import vendored 目录树。该路径缺失时 `GET /api/skill-lab/status` 会返回 `venv_ready: false`——这就是未开通的 workspace 的样子。 |
 | `skill_lab_max_concurrent_jobs` | `1`（1–4） | 同时运行的评估/训练任务数。每个任务是一个 CLI 子进程外加它自己的 worker 会话，因此这是在墙上时间与主机 CPU/内存、worker runtime 压力之间取舍；超出的任务排队而不是失败。 |
-| `skill_lab_judge_model_id` | `us.openai.gpt-6-sol` | 给 rollout 打分的模型。必须是 Bedrock 的 **Converse inference-profile id**——`bedrock_chat` 判分器会拒绝裸 model id。它同时按模型家族决定 agentic 判分器使用的宿主 CLI：`openai.*` 的 id 会原样路由到宿主的 `codex`（需 codex >= 0.155，且其模型目录要有该 id 的条目），其余路由到宿主的 `claude`（`runner.judge_exec_route`）。因此改这一项也就改变了宿主必须安装哪个 CLI。 |
+| `skill_lab_judge_model_id` | `global.openai.gpt-6.1-sol` | 给 rollout 打分的模型。必须是 Bedrock 的 **Converse inference-profile id**——`bedrock_chat` 判分器会拒绝裸 model id；优先用 `global.` profile，所有 workspace 区域都能用。它同时按模型家族决定 agentic 判分器使用的宿主 CLI：`openai.*` 的 id 会原样路由到宿主的 `codex`（需 codex >= 0.155；模型目录里没有该 id 时，codex 用兜底元数据运行），其余路由到宿主的 `claude`（`runner.judge_exec_route`）。因此改这一项也就改变了宿主必须安装哪个 CLI。 |
 | `skill_lab_target_model_id` | `global.anthropic.claude-opus-5-5` | `claude_code_exec` 目标后端下被测技能默认运行的模型，同样是 Converse inference-profile id。逐任务参数可以覆盖它；空值永远不会被下发，因为空的 `--model` 会让 vendored CLI 换上它自己的非 Bedrock 默认值。 |
-| `skill_lab_codex_target_model_id` | `global.openai.gpt-6-sol` | `codex_exec` 目标后端下的同一个默认值。codex 自行解析模型：配置里内置的 `amazon-bedrock-runtime` provider 直接调用这个 **inference-profile id**（裸 `openai.*` id 会因不支持按需吞吐而被拒绝），并从宿主的模型目录（`skill_lab_codex_catalog_path`）读取它的元数据，因此目录里必须有与该 id 完全一致的条目。单独设一个 key，是为了让每个后端都拿到自己 CLI 能接受的 id。 |
+| `skill_lab_codex_target_model_id` | `global.openai.gpt-6.1-sol` | `codex_exec` 目标后端下的同一个默认值，可以是 OpenAI 或 Kimi（`moonshotai`）的 profile——`global.openai.gpt-6.1-sol`、`global.openai.gpt-6.1-terra`、`global.openai.gpt-6-astra` 和 `global.moonshotai.kimi-k3` 已在 worker 上实测通过。codex 自行解析模型：配置里内置的 `amazon-bedrock-runtime` provider 直接调用这个 **inference-profile id**（裸 model id 会因不支持按需吞吐而被拒绝），并从宿主的模型目录（`skill_lab_codex_catalog_path`）读取它的元数据；目录里没有的 id 也能运行，codex 会改用兜底元数据，并在 rollout 日志里给出警告。单独设一个 key，是为了让每个后端都拿到自己 CLI 能接受的 id。 |
+| `skill_lab_target_effort` | `high` | 任务 `params.effort` 留空时，目标 rollout 与 taskgen 生成所用的推理强度：`low`、`medium`、`high`、`xhigh` 或 `max`（`none` 会被拒绝——GPT-6.1 Sol 和 GPT-6 Astra 不接受它）。codex 以 `model_reasoning_effort` 接收，claude CLI 以 `--effort` 接收（`xhigh` 按 `max` 运行）。向导会预填它，每个任务也可以另选；agentic 判分器仍固定用 `low`。 |
 | `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | 构建时从后端主机读取、并塞进 worker 镜像 codex-home 的 Bedrock 模型目录。该文件内嵌了专有的模型指令，因此从不入库；缺失时构建会塞一个空的 `{}` 目录并在日志里写明——那个镜像上的 codex 目标也就没有目录可供解析。 |
 | `skill_lab_judge_sandbox` | `bwrap` | agentic 判分器的产物解析器所用的沙箱启动 argv（按 shlex 切分），它跑在后端**主机**上——worker microVM 无法运行 bubblewrap。若主机上非特权 `bwrap` 被 AppArmor 拦住，改成 `sudo -n bwrap`。`GET /api/skill-lab/status` 会探测该 argv 的第一个词来给出 `agentic_judge_ready`，vendored 那层 fail-closed 的边界校验仍然叠加生效。 |
-| `skill_lab_worker_cli_version` | `2.1.283` | 报告 worker 镜像里内置的 `claude` CLI 版本。 |
-| `skill_lab_worker_codex_version` | `0.155.1` | 报告 worker 镜像里内置的 `codex` CLI 版本。 |
+| `skill_lab_worker_cli_version` | `2.1.294` | 报告 worker 镜像里内置的 `claude` CLI 版本。这是一个上限：从 2.1.295 起，镜像里的 CLI（HOME 为空）会让 Opus 5.5 把正常的 rollout 判为 `[cyber]` 而拒答（2026-11-03 二分定位），升级前请先复测。 |
+| `skill_lab_worker_codex_version` | `0.166.0` | 报告 worker 镜像里内置的 `codex` CLI 版本。 |
 
 最后两个 `*_version` 是**镜像值，不是输入值**。真正生效的是
 `vendor/skillopt/deploy/agentcore/Dockerfile` 里 `ARG CLAUDE_CLI_VERSION` /
@@ -481,7 +482,7 @@ Agent、评估器和预设保留创建时的模型 ID——角色只决定*新�
 | `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5` | Studio 画布中未指定模型的节点所生成的模型。后端按同一个值为该 Agent 的执行角色授权，画布也从服务端读取它，因此两边始终一致。它刻意与 Agent 默认模型分开：改它会改动所有已有流程中未指定模型的节点。 |
 | `codegen_model` | `global.anthropic.claude-sonnet-5` | Studio AI 修复所用的编码 Agent。仅限 Claude。 |
 | `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | 见[提示词优化](#提示词优化)。 |
-| `skill_lab_judge_model_id`、`skill_lab_target_model_id`、`skill_lab_codex_target_model_id` | 见 [Skill Lab](#skill-lab) | 评审模型为 OpenAI 或 Claude；Claude CLI 目标仅限 Claude；codex 目标仅限 OpenAI。 |
+| `skill_lab_judge_model_id`、`skill_lab_target_model_id`、`skill_lab_codex_target_model_id` | 见 [Skill Lab](#skill-lab) | 评审模型为 OpenAI 或 Claude；Claude CLI 目标仅限 Claude；codex 目标为 OpenAI 或 Kimi。 |
 
 会运行工具的角色拒绝实测不支持 Converse 工具调用的模型（DeepSeek R1）。每个 ID 都必须是
 Bedrock ID（`[A-Za-z0-9._:/-]`，3–121 个字符）。
@@ -645,9 +646,10 @@ uv run python scripts/e2e_agent_dlc_browser.py --ui http://localhost:5173 --lang
 | `LAUNCHPAD_PROMPT_OPT_MODELS` | [提示词优化](#提示词优化)里的四个 id | 控制台提供的反思模型清单，JSON 数组（`'["global.zai.glm-5.3","deepseek.v3.2"]'`）。只能用环境变量或 `launchpad.yaml` 设置，模型设置页不编辑这份清单。 |
 | `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Claude Agent SDK（容器）方式的默认模型。**仅限 Claude。** |
 | `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio 的 AI Fix，运行在 Claude Agent SDK 上（见[代码生成（AI Fix）](#代码生成ai-fix)）。**仅限 Claude。** |
-| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `us.openai.gpt-6-sol` | Skill Lab 的评审。OpenAI id 走主机上的 `codex` CLI，Claude id 走主机上的 `claude` CLI。**仅限 OpenAI 或 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab 的评审。OpenAI id 走主机上的 `codex` CLI，Claude id 走主机上的 `claude` CLI。**仅限 OpenAI 或 Claude。** |
 | `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab 的 `claude_code_exec` 目标。**仅限 Claude。** |
-| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6-sol` | Skill Lab 的 `codex_exec` 目标。**仅限 OpenAI。** |
+| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab 的 `codex_exec` 目标。**仅限 OpenAI 或 Kimi。** |
+| `LAUNCHPAD_SKILL_LAB_TARGET_EFFORT` | `high` | Skill Lab 默认的目标推理强度（`low`/`medium`/`high`/`xhigh`/`max`）；任务的 `params.effort` 会覆盖它。 |
 
 这些配置项是“接下来新建的东西”的默认值。已有 Agent 保留各自的 `model_id`，已安装的架构师保留它的模型，已有评估器保留创建时的评审模型（下面的脚本可以把它们迁过去）。
 
@@ -730,7 +732,7 @@ sudo systemctl restart launchpad-backend
 
 ### 不能换成其他家族的功能
 
-有些功能被它运行所在的 SDK 或 CLI 绑定在某一个模型家族上。没有 Anthropic 权限的账号里，无论怎么设置，下面这些都不可用：**Claude Agent SDK** 部署方式、**Studio AI Fix**（codegen）、Skill Lab 的 `claude_code_exec` 目标和走 claude CLI 的评审。没有 OpenAI 权限时，Skill Lab 的 `codex_exec` 目标和走 codex 的评审不可用。Skill Lab 评审需要这两家之一。
+有些功能被它运行所在的 SDK 或 CLI 绑定在某一个模型家族上。没有 Anthropic 权限的账号里，无论怎么设置，下面这些都不可用：**Claude Agent SDK** 部署方式、**Studio AI Fix**（codegen）、Skill Lab 的 `claude_code_exec` 目标和走 claude CLI 的评审。没有 OpenAI 权限时，走 codex 的评审不可用，Skill Lab 的 `codex_exec` 目标只能用 Kimi（`global.moonshotai.kimi-k3`）。Skill Lab 评审需要这两家之一。
 
 ### 换评审模型会改变分数
 

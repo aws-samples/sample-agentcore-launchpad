@@ -1,4 +1,5 @@
 import type {
+  SkillLabEffort,
   SkillLabJobInfo,
   SkillLabStatus,
   SkillLabTargetBackend,
@@ -24,11 +25,11 @@ export const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
  * The agentic judge routes by family: openai.* → host codex CLI, else claude.
  */
 export const JUDGE_MODEL_SUGGESTIONS = [
-  "us.openai.gpt-6-sol",
+  "global.openai.gpt-6.1-sol",
   "global.anthropic.claude-opus-5-5",
-  "us.openai.gpt-5.6-sol",
-  "global.anthropic.claude-opus-5",
-  "us.anthropic.claude-sonnet-5",
+  "global.anthropic.claude-sonnet-5-5",
+  "global.openai.gpt-6.1-terra",
+  "global.openai.gpt-6-astra",
 ];
 
 /** Judge datalist: the platform's configured judge, the static suggestions of this
@@ -44,15 +45,37 @@ export function skillLabJudgeSuggestions(
   ]);
 }
 
-/** Target-model datalist: the backend's configured default, then the account catalog
- *  models of the family its CLI drives (codex → OpenAI, Claude Code → Anthropic). */
+/** Model families each target CLI drives — mirrors the backend's
+ *  `skill_lab_codex_target_model_id` / `skill_lab_target_model_id` roles. codex's
+ *  amazon-bedrock-runtime provider also runs Kimi (Responses API on bedrock-runtime). */
+export const TARGET_FAMILIES: Record<SkillLabTargetBackend, readonly string[]> = {
+  claude_code_exec: ["anthropic"],
+  codex_exec: ["openai", "moonshotai"],
+};
+
+/** Global inference profiles live-verified per target CLI (offered even when the
+ *  account catalog read fails). */
+export const TARGET_MODEL_SUGGESTIONS: Record<SkillLabTargetBackend, readonly string[]> = {
+  claude_code_exec: ["global.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5"],
+  codex_exec: [
+    "global.openai.gpt-6.1-sol",
+    "global.openai.gpt-6.1-terra",
+    "global.openai.gpt-6-astra",
+    "global.moonshotai.kimi-k3",
+  ],
+};
+
+/** Target-model datalist: the backend's configured default, the verified suggestions,
+ *  then the account catalog models of the families its CLI drives. */
 export function skillLabTargetSuggestions(
   status: SkillLabStatus | null,
   backend: SkillLabTargetBackend,
   catalog: readonly string[] = activeCatalogIds(),
 ): string[] {
-  const family = backend === "codex_exec" ? "openai" : "anthropic";
-  return mergeModelOptions(modelDefault(status, backend), [], inFamilies(catalog, [family]));
+  return mergeModelOptions(modelDefault(status, backend), [], [
+    ...modelsForActiveRegion(TARGET_MODEL_SUGGESTIONS[backend]),
+    ...inFamilies(catalog, TARGET_FAMILIES[backend]),
+  ]);
 }
 
 /** Mirrors backend runner.judge_exec_route's family test. */
@@ -63,6 +86,16 @@ export function modelDefault(status: SkillLabStatus | null, backend: SkillLabTar
   if (status === null) return "";
   return backend === "codex_exec" ? status.default_codex_target_model : status.default_target_model;
 }
+
+/** Target efforts, ascending — the fallback until `status.efforts` lands (mirrors runner.EFFORTS). */
+export const EFFORTS: readonly SkillLabEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+export const effortsOf = (status: SkillLabStatus | null): readonly SkillLabEffort[] =>
+  status?.efforts?.length ? status.efforts : EFFORTS;
+
+/** The platform's effort default ("high" until status lands, as the backend's). */
+export const effortDefault = (status: SkillLabStatus | null): SkillLabEffort =>
+  status?.default_effort ?? "high";
 
 export const backendsOf = (status: SkillLabStatus | null): SkillLabTargetBackend[] =>
   status?.target_backends?.length

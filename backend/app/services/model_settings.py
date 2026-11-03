@@ -74,7 +74,9 @@ ROLES: tuple[Role, ...] = (
     # openai.* runs on the host codex CLI, everything else on the claude CLI
     Role("skill_lab_judge_model_id", families=("openai", "anthropic")),
     Role("skill_lab_target_model_id", families=("anthropic",)),
-    Role("skill_lab_codex_target_model_id", families=("openai",)),
+    # codex's amazon-bedrock-runtime provider drives any Responses-API model on
+    # bedrock-runtime; Kimi K3 was live-verified on the worker (2026-11-02)
+    Role("skill_lab_codex_target_model_id", families=("openai", "moonshotai")),
 )
 ROLE_BY_FIELD = {r.field: r for r in ROLES}
 # Bedrock models measured to refuse toolConfig ("This model doesn't support tool

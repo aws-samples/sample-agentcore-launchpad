@@ -32,9 +32,9 @@ export const STATIC_MODEL_DEFAULTS: Readonly<ModelDefaults> = Object.freeze({
   agent_default_model_id: GLM_MODEL_ID,
   codegen_model: "global.anthropic.claude-sonnet-5",
   prompt_opt_default_model_id: "global.anthropic.claude-opus-5",
-  skill_lab_judge_model_id: "us.openai.gpt-6-sol",
+  skill_lab_judge_model_id: "global.openai.gpt-6.1-sol",
   skill_lab_target_model_id: "global.anthropic.claude-opus-5-5",
-  skill_lab_codex_target_model_id: "global.openai.gpt-6-sol",
+  skill_lab_codex_target_model_id: "global.openai.gpt-6.1-sol",
 });
 
 let resolved: ModelDefaults | null = null;

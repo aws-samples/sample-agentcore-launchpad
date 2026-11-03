@@ -2,8 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type SkillLabJudgeMode, type SkillLabStatus, type SkillLabTargetBackend } from "../../../lib/api";
-import { canSubmitJobs, evalSplitsOf } from "../../../lib/skillLab";
+import {
+  api,
+  errorMessage,
+  type SkillLabEffort,
+  type SkillLabJudgeMode,
+  type SkillLabStatus,
+  type SkillLabTargetBackend,
+} from "../../../lib/api";
+import { canSubmitJobs, effortDefault, evalSplitsOf } from "../../../lib/skillLab";
 import { Alert, Button, Card, Field, FlowHeader, Segmented, Select } from "../../ui";
 import { ModelFields } from "./ModelFields";
 import { SkillSourcePicker } from "./SkillPicker";
@@ -59,6 +66,7 @@ export function EvalWizard({ status }: { status: SkillLabStatus | null }) {
   const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");
+  const [effort, setEffort] = useState<SkillLabEffort | null>(null); // null = follow status.default_effort
   const [workers, setWorkers] = useState(2);
   const [timeout, setTimeoutSeconds] = useState(600);
   const [limit, setLimit] = useState(0);
@@ -108,6 +116,7 @@ export function EvalWizard({ status }: { status: SkillLabStatus | null }) {
           target_model: targetModel.trim(),
           judge_model: judgeModel.trim(),
           judge_mode: judgeMode,
+          effort: effort ?? effortDefault(status),
           workers,
           timeout,
           limit,
@@ -174,6 +183,8 @@ export function EvalWizard({ status }: { status: SkillLabStatus | null }) {
           setBackend={setBackend}
           targetModel={targetModel}
           setTargetModel={setTargetModel}
+          effort={effort ?? effortDefault(status)}
+          setEffort={setEffort}
           judge={{ model: judgeModel, setModel: setJudgeModel, mode: judgeMode, setMode: setJudgeMode }}
         />
       </Card>
