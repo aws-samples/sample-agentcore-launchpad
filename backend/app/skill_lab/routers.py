@@ -60,6 +60,8 @@ def skill_lab_status(ws: WorkspaceScope = Depends(require_workspace)) -> dict[st
         "default_target_model": settings.skill_lab_target_model_id,
         "default_judge_model": settings.skill_lab_judge_model_id,
         "default_codex_target_model": settings.skill_lab_codex_target_model_id,
+        "default_effort": settings.skill_lab_target_effort,
+        "efforts": list(runner.EFFORTS),
         "target_backends": list(runner.TARGET_BACKENDS),
         "judge_modes": list(runner.JUDGE_MODES),
         # The SHARED agentic-judge prerequisite only: the sandbox launcher binary

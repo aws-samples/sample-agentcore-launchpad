@@ -392,6 +392,11 @@ class Settings(BaseSettings):
     # (codex does its own model resolution; metadata comes from the catalog below,
     # and an id the catalog lacks runs on codex's fallback metadata).
     skill_lab_codex_target_model_id: str = "global.openai.gpt-6.1-sol"
+    # Default reasoning effort of the TARGET rollout (and of taskgen generation)
+    # when a job's params omit `effort`: codex gets it as model_reasoning_effort,
+    # the claude CLI as --effort. One of runner.EFFORTS; the agentic judge keeps
+    # its own fixed "low".
+    skill_lab_target_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # Bedrock model catalog staged into the worker image's codex-home. Read from
     # the backend host at build-context assembly; `{}` fallback when absent. The
     # file embeds proprietary model instructions, so it is never committed.

@@ -1,4 +1,5 @@
 import type {
+  SkillLabEffort,
   SkillLabJobInfo,
   SkillLabStatus,
   SkillLabTargetBackend,
@@ -85,6 +86,16 @@ export function modelDefault(status: SkillLabStatus | null, backend: SkillLabTar
   if (status === null) return "";
   return backend === "codex_exec" ? status.default_codex_target_model : status.default_target_model;
 }
+
+/** Target efforts, ascending — the fallback until `status.efforts` lands (mirrors runner.EFFORTS). */
+export const EFFORTS: readonly SkillLabEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+export const effortsOf = (status: SkillLabStatus | null): readonly SkillLabEffort[] =>
+  status?.efforts?.length ? status.efforts : EFFORTS;
+
+/** The platform's effort default ("high" until status lands, as the backend's). */
+export const effortDefault = (status: SkillLabStatus | null): SkillLabEffort =>
+  status?.default_effort ?? "high";
 
 export const backendsOf = (status: SkillLabStatus | null): SkillLabTargetBackend[] =>
   status?.target_backends?.length

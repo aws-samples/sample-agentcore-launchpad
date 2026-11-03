@@ -44,6 +44,11 @@ TARGET_BACKENDS = ("claude_code_exec", "codex_exec")
 # artifacts need inspection). The agentic judge runs on the HOST — its claude
 # CLI + bwrap-sandboxed artifact parsers; see design.md for why not the worker.
 JUDGE_MODES = ("auto", "chat", "agentic")
+# Target reasoning effort a job may pick (the default is
+# settings.skill_lab_target_effort). Every codex target model accepts all five —
+# "none" is deliberately absent: GPT-6.1 Sol / GPT-6 Astra reject it — and the
+# vendored claude mapping folds "xhigh" into "max".
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _BASE_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR")
 _EXEC_JOBS_TTL = timedelta(days=7)
 # Isolation profile for the CLI child. `build_spawn_kwargs`' own defaults describe
@@ -65,6 +70,25 @@ _SPAWN_CEILINGS = {
     "studio_exec_memory_mb": 8192,
     "studio_exec_max_file_mb": 1024,
 }
+
+
+def _clamp_effort(merged: dict[str, Any]) -> None:
+    """Resolve and validate the job's target effort in place (blank = default)."""
+    effort = str(merged.get("effort") or get_settings().skill_lab_target_effort).strip().lower()
+    if effort not in EFFORTS:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"effort must be one of {'/'.join(EFFORTS)}",
+            status_code=422,
+        )
+    merged["effort"] = effort
+
+
+def job_effort(params: dict[str, Any] | None) -> str:
+    """The effort a job runs with — rows written before `effort` existed (or a
+    resumed job) carry none and fall back to the configured default."""
+    effort = str((params or {}).get("effort") or "").strip().lower()
+    return effort if effort in EFFORTS else get_settings().skill_lab_target_effort
 
 
 def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
@@ -96,6 +120,7 @@ def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
         "limit": 0,
     }
     merged.update(incoming)
+    _clamp_effort(merged)
     if merged["judge_mode"] not in JUDGE_MODES:
         raise AppError(
             "skill_lab.bad_params",
@@ -372,6 +397,10 @@ def build_eval_command(
         "--optimizer_backend", "bedrock_chat",
         "--optimizer_model", str(params["judge_model"]),
         "--judge_mode", str(params["judge_mode"]),
+        # claude target: evaluate_skill.py passes its own --claude_code_exec_effort
+        # (default "medium") explicitly, so the env alone would not reach it; the
+        # codex target reads CODEX_EXEC_REASONING_EFFORT (build_job_env).
+        "--claude_code_exec_effort", job_effort(params),
         *_judge_exec_flags(params),
         "--workers", str(params["workers"]),
         "--timeout", str(params["timeout"]),
@@ -425,6 +454,7 @@ def clamp_taskgen_params(params: dict[str, Any] | None) -> dict[str, Any]:
         "timeout": 900,
     }
     merged.update(incoming)
+    _clamp_effort(merged)
     for key, (low, high) in TASKGEN_PARAM_BOUNDS.items():
         try:
             value = int(merged[key])
@@ -518,7 +548,7 @@ def build_taskgen_command(
     return command
 
 
-def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
+def build_job_env(workspace: WorkspaceContext, *, effort: str | None = None) -> dict[str, str]:
     """Allowlist env for the vendored CLI (foundation spec §4 contract)."""
     env = {
         key: value
@@ -552,12 +582,14 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             #   Bash, no OS sandbox).
             "CODEX_EXEC_FULL_AUTO": "false",
             "CODEX_EXEC_SANDBOX": "danger-full-access",
-            # The vendored default is "none", and the codex CLI path passes it
-            # verbatim as `-c model_reasoning_effort="none"` (the SDK paths drop
-            # it). GPT-6.1 Sol and GPT-6 Astra reject "none" (low…max only) —
-            # live-found 2026-11-03, every rollout failed; "low" is accepted by
-            # every codex target model and is gpt-6-sol's catalog default.
-            "CODEX_EXEC_REASONING_EFFORT": "low",
+            # The job's target effort (runner.EFFORTS). The vendored codex default
+            # is "none", which the CLI path passes verbatim as
+            # `-c model_reasoning_effort="none"` and GPT-6.1 Sol / GPT-6 Astra
+            # reject (low…max only — live-found 2026-11-03, every rollout
+            # failed). Codex reads it from here in eval and taskgen, the claude
+            # CLI in taskgen (eval passes a flag, train its config keys).
+            "CODEX_EXEC_REASONING_EFFORT": effort or get_settings().skill_lab_target_effort,
+            "CLAUDE_CODE_EXEC_EFFORT": effort or get_settings().skill_lab_target_effort,
             # The agentic judge's claude CLI runs on THIS host (never the
             # worker) and must take the Bedrock path with the instance role.
             # Rollout claude runs in the worker with the image's own env, so
@@ -830,6 +862,10 @@ def build_train_config(
             "target": str(params["target_model"]),
             "optimizer_backend": "bedrock_chat",
             "optimizer": str(params["judge_model"]),
+            # trainer.py reads these with defaults of its own ("none" for codex,
+            # which GPT-6.1 Sol / GPT-6 Astra reject) that override the env.
+            "codex_exec_reasoning_effort": job_effort(params),
+            "claude_code_exec_effort": job_effort(params),
         },
         "train": {"num_epochs": int(params["epochs"])},
         "optimizer": {"learning_rate": int(params["learning_rate"])},

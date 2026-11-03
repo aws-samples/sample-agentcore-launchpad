@@ -436,6 +436,7 @@ Skill Lab 负责评估与训练 Registry 里的技能记录：vendored 的 Skill
 | `skill_lab_judge_model_id` | `global.openai.gpt-6.1-sol` | 给 rollout 打分的模型。必须是 Bedrock 的 **Converse inference-profile id**——`bedrock_chat` 判分器会拒绝裸 model id；优先用 `global.` profile，所有 workspace 区域都能用。它同时按模型家族决定 agentic 判分器使用的宿主 CLI：`openai.*` 的 id 会原样路由到宿主的 `codex`（需 codex >= 0.155；模型目录里没有该 id 时，codex 用兜底元数据运行），其余路由到宿主的 `claude`（`runner.judge_exec_route`）。因此改这一项也就改变了宿主必须安装哪个 CLI。 |
 | `skill_lab_target_model_id` | `global.anthropic.claude-opus-5-5` | `claude_code_exec` 目标后端下被测技能默认运行的模型，同样是 Converse inference-profile id。逐任务参数可以覆盖它；空值永远不会被下发，因为空的 `--model` 会让 vendored CLI 换上它自己的非 Bedrock 默认值。 |
 | `skill_lab_codex_target_model_id` | `global.openai.gpt-6.1-sol` | `codex_exec` 目标后端下的同一个默认值，可以是 OpenAI 或 Kimi（`moonshotai`）的 profile——`global.openai.gpt-6.1-sol`、`global.openai.gpt-6.1-terra`、`global.openai.gpt-6-astra` 和 `global.moonshotai.kimi-k3` 已在 worker 上实测通过。codex 自行解析模型：配置里内置的 `amazon-bedrock-runtime` provider 直接调用这个 **inference-profile id**（裸 model id 会因不支持按需吞吐而被拒绝），并从宿主的模型目录（`skill_lab_codex_catalog_path`）读取它的元数据；目录里没有的 id 也能运行，codex 会改用兜底元数据，并在 rollout 日志里给出警告。单独设一个 key，是为了让每个后端都拿到自己 CLI 能接受的 id。 |
+| `skill_lab_target_effort` | `high` | 任务 `params.effort` 留空时，目标 rollout 与 taskgen 生成所用的推理强度：`low`、`medium`、`high`、`xhigh` 或 `max`（`none` 会被拒绝——GPT-6.1 Sol 和 GPT-6 Astra 不接受它）。codex 以 `model_reasoning_effort` 接收，claude CLI 以 `--effort` 接收（`xhigh` 按 `max` 运行）。向导会预填它，每个任务也可以另选；agentic 判分器仍固定用 `low`。 |
 | `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | 构建时从后端主机读取、并塞进 worker 镜像 codex-home 的 Bedrock 模型目录。该文件内嵌了专有的模型指令，因此从不入库；缺失时构建会塞一个空的 `{}` 目录并在日志里写明——那个镜像上的 codex 目标也就没有目录可供解析。 |
 | `skill_lab_judge_sandbox` | `bwrap` | agentic 判分器的产物解析器所用的沙箱启动 argv（按 shlex 切分），它跑在后端**主机**上——worker microVM 无法运行 bubblewrap。若主机上非特权 `bwrap` 被 AppArmor 拦住，改成 `sudo -n bwrap`。`GET /api/skill-lab/status` 会探测该 argv 的第一个词来给出 `agentic_judge_ready`，vendored 那层 fail-closed 的边界校验仍然叠加生效。 |
 | `skill_lab_worker_cli_version` | `2.1.294` | 报告 worker 镜像里内置的 `claude` CLI 版本。这是一个上限：从 2.1.295 起，镜像里的 CLI（HOME 为空）会让 Opus 5.5 把正常的 rollout 判为 `[cyber]` 而拒答（2026-11-03 二分定位），升级前请先复测。 |
@@ -648,6 +649,7 @@ uv run python scripts/e2e_agent_dlc_browser.py --ui http://localhost:5173 --lang
 | `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab 的评审。OpenAI id 走主机上的 `codex` CLI，Claude id 走主机上的 `claude` CLI。**仅限 OpenAI 或 Claude。** |
 | `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab 的 `claude_code_exec` 目标。**仅限 Claude。** |
 | `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab 的 `codex_exec` 目标。**仅限 OpenAI 或 Kimi。** |
+| `LAUNCHPAD_SKILL_LAB_TARGET_EFFORT` | `high` | Skill Lab 默认的目标推理强度（`low`/`medium`/`high`/`xhigh`/`max`）；任务的 `params.effort` 会覆盖它。 |
 
 这些配置项是“接下来新建的东西”的默认值。已有 Agent 保留各自的 `model_id`，已安装的架构师保留它的模型，已有评估器保留创建时的评审模型（下面的脚本可以把它们迁过去）。
 

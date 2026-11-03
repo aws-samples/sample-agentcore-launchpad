@@ -1,10 +1,11 @@
 import { useTranslation } from "react-i18next";
 
 import { useModelCatalog } from "../../../lib/model-catalog";
-import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../../lib/api";
+import type { SkillLabEffort, SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../../lib/api";
 import {
   BACKEND_LABELS,
   backendsOf,
+  effortsOf,
   judgeReadiness,
   modelDefault,
   skillLabJudgeSuggestions,
@@ -34,6 +35,8 @@ export function ModelFields({
   setBackend,
   targetModel,
   setTargetModel,
+  effort,
+  setEffort,
   judge,
 }: {
   status: SkillLabStatus | null;
@@ -42,6 +45,9 @@ export function ModelFields({
   setBackend: (b: SkillLabTargetBackend) => void;
   targetModel: string;
   setTargetModel: (m: string) => void;
+  /** target reasoning effort (both CLIs); prefilled from `status.default_effort` */
+  effort: SkillLabEffort;
+  setEffort: (e: SkillLabEffort) => void;
   judge?: JudgeFields;
 }) {
   const { t } = useTranslation();
@@ -82,6 +88,17 @@ export function ModelFields({
             <option key={model} value={model} />
           ))}
         </datalist>
+      </Field>
+      <Field label={t("skillLab.backend.effort")} hint={t("skillLab.backend.effortHint")}>
+        <Select
+          value={effort}
+          testId={`${testId}-effort`}
+          options={effortsOf(status).map((option) => ({
+            value: option,
+            label: t(`skillLab.backend.effortOption.${option}`),
+          }))}
+          onChange={(v) => setEffort(v as SkillLabEffort)}
+        />
       </Field>
       {judge && (
         <>

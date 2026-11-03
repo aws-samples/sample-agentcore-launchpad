@@ -1738,6 +1738,15 @@
       "targetHintClaude": "claude CLI 运行的 Bedrock inference profile ID（global. 前缀，如 global.anthropic.claude-opus-5-5）。",
       "targetHintCodex": "codex 的 amazon-bedrock-runtime provider 调用的 inference-profile id（OpenAI 或 Kimi，如 global.openai.gpt-6.1-sol）；主机模型目录里没有的 id 会用 codex 的兜底元数据运行。",
       "judgeHint": "LLM 判分模型的 Converse inference profile ID（global. 前缀，可自由输入）。",
+      "effort": "推理强度",
+      "effortHint": "被测模型在每个任务上的推理强度：codex 作为 model_reasoning_effort，claude CLI 作为 --effort（xhigh 按 max 运行）。越高越慢、token 消耗越多；评审模型的设置不受影响。",
+      "effortOption": {
+        "low": "low（低）",
+        "medium": "medium（中）",
+        "high": "high（高，默认）",
+        "xhigh": "xhigh（很高）",
+        "max": "max（最高）"
+      },
       "judgeMode": "判分模式",
       "judgeModeOption": {
         "auto": "auto — 按任务自动",

@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import type { SkillLabJobInfo, SkillLabStatus } from "./api";
 import { setActiveRegion } from "./regions";
-import { elapsed, skillLabJudgeSuggestions, skillLabTargetSuggestions } from "./skillLab";
+import {
+  EFFORTS,
+  effortDefault,
+  effortsOf,
+  elapsed,
+  skillLabJudgeSuggestions,
+  skillLabTargetSuggestions,
+} from "./skillLab";
 
 const job = (started_at: string | null, finished_at: string | null = null) =>
   ({ started_at, finished_at }) as SkillLabJobInfo;
@@ -79,5 +86,19 @@ describe("model suggestions", () => {
     expect(out[0]).toBe("global.openai.gpt-6.1-sol");
     expect(out).toContain("global.anthropic.claude-sonnet-5-5");
     expect(out.every((id) => id.startsWith("global."))).toBe(true);
+  });
+});
+
+describe("effort", () => {
+  it("defaults to high until the server answers, then follows it", () => {
+    expect(effortDefault(null)).toBe("high");
+    expect(effortDefault({ default_effort: "medium" } as SkillLabStatus)).toBe("medium");
+  });
+
+  it("offers the server's efforts, falling back to the five known ones (never none)", () => {
+    expect(effortsOf(null)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(EFFORTS).not.toContain("none");
+    expect(effortsOf({ efforts: ["low", "high"] } as SkillLabStatus)).toEqual(["low", "high"]);
+    expect(effortsOf({ efforts: [] } as unknown as SkillLabStatus)).toEqual(EFFORTS);
   });
 });

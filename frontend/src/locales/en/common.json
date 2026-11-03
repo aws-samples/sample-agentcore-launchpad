@@ -1738,6 +1738,15 @@
       "targetHintClaude": "Bedrock inference-profile id the claude CLI runs (global. prefix, e.g. global.anthropic.claude-opus-5-5).",
       "targetHintCodex": "Inference-profile id invoked by codex's amazon-bedrock-runtime provider (OpenAI or Kimi, e.g. global.openai.gpt-6.1-sol); an id missing from the host model catalog runs on codex's fallback metadata.",
       "judgeHint": "Converse inference-profile id for the LLM judge (global. prefix; free text).",
+      "effort": "Reasoning effort",
+      "effortHint": "How hard the target model thinks on every task: codex gets it as model_reasoning_effort, the claude CLI as --effort (xhigh runs as max). Higher is slower and costs more tokens; the judge keeps its own setting.",
+      "effortOption": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high (default)",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
       "judgeMode": "Judge mode",
       "judgeModeOption": {
         "auto": "auto — per task",

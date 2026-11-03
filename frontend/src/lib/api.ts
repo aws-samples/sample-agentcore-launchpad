@@ -4557,6 +4557,10 @@ export interface SkillLabStatus {
   default_judge_model: string;
   /** blank-model default for the codex_exec backend (an inference-profile id codex invokes) */
   default_codex_target_model: string;
+  /** target reasoning effort a job runs with when its params omit `effort` */
+  default_effort: SkillLabEffort;
+  /** the efforts a job may pick, in ascending order */
+  efforts: SkillLabEffort[];
   /** exec backends baked into the worker image */
   target_backends: SkillLabTargetBackend[];
   judge_modes: SkillLabJudgeMode[];
@@ -4580,6 +4584,8 @@ export interface SkillLabStatus {
 export type SkillLabTargetBackend = "claude_code_exec" | "codex_exec";
 /** auto = per task (chat for text-only, agentic when artifacts need inspection) */
 export type SkillLabJudgeMode = "auto" | "chat" | "agentic";
+/** target rollout / generation reasoning effort (codex model_reasoning_effort, claude --effort) */
+export type SkillLabEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type SkillLabTasksetMode = "single" | "split";
 
@@ -4682,6 +4688,8 @@ export interface SkillLabJobParams {
   judge_model: string;
   /** eval/train: how verdicts are produced (default auto) */
   judge_mode?: SkillLabJudgeMode;
+  /** eval/train/taskgen: target reasoning effort (default `status.default_effort`) */
+  effort?: SkillLabEffort;
   /** taskgen only: the generation agent's model (no judge/target split) */
   model?: string;
   /** taskgen only: how many tasks to author (1-30) */

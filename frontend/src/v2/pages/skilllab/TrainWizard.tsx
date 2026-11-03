@@ -5,12 +5,13 @@ import { useSearchParams } from "react-router-dom";
 import {
   api,
   errorMessage,
+  type SkillLabEffort,
   type SkillLabGateMetric,
   type SkillLabJudgeMode,
   type SkillLabStatus,
   type SkillLabTargetBackend,
 } from "../../../lib/api";
-import { canSubmitJobs, trainRunEstimate, trainSplitCounts } from "../../../lib/skillLab";
+import { canSubmitJobs, effortDefault, trainRunEstimate, trainSplitCounts } from "../../../lib/skillLab";
 import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
 import { NumberField } from "./EvalWizard";
 import { ModelFields } from "./ModelFields";
@@ -44,6 +45,7 @@ export function TrainWizard({ status }: { status: SkillLabStatus | null }) {
   const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");
+  const [effort, setEffort] = useState<SkillLabEffort | null>(null); // null = follow status.default_effort
   const [workers, setWorkers] = useState(2);
   const [timeout, setTimeoutSeconds] = useState(900);
   const [limit, setLimit] = useState(0);
@@ -122,6 +124,7 @@ export function TrainWizard({ status }: { status: SkillLabStatus | null }) {
           target_model: targetModel.trim(),
           judge_model: judgeModel.trim(),
           judge_mode: judgeMode,
+          effort: effort ?? effortDefault(status),
           epochs,
           learning_rate: learningRate,
           gate_metric: gateMetric,
@@ -228,6 +231,8 @@ export function TrainWizard({ status }: { status: SkillLabStatus | null }) {
           setBackend={setBackend}
           targetModel={targetModel}
           setTargetModel={setTargetModel}
+          effort={effort ?? effortDefault(status)}
+          setEffort={setEffort}
           judge={{
             model: judgeModel,
             setModel: setJudgeModel,
