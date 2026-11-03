@@ -1735,9 +1735,9 @@
     "backend": {
       "field": "Execution backend",
       "hint": "Which CLI runs the tasks inside the exec worker — both talk to Bedrock with the execution role, no API key.",
-      "targetHintClaude": "Bedrock inference-profile id the claude CLI runs (us./global. prefix).",
-      "targetHintCodex": "Inference-profile id invoked by codex's amazon-bedrock-runtime provider (e.g. global.openai.gpt-6-sol); the host model catalog needs an entry for it.",
-      "judgeHint": "Converse inference-profile id for the LLM judge (us./global. prefix; free text).",
+      "targetHintClaude": "Bedrock inference-profile id the claude CLI runs (global. prefix, e.g. global.anthropic.claude-opus-5-5).",
+      "targetHintCodex": "Inference-profile id invoked by codex's amazon-bedrock-runtime provider (OpenAI or Kimi, e.g. global.openai.gpt-6.1-sol); an id missing from the host model catalog runs on codex's fallback metadata.",
+      "judgeHint": "Converse inference-profile id for the LLM judge (global. prefix; free text).",
       "judgeMode": "Judge mode",
       "judgeModeOption": {
         "auto": "auto — per task",

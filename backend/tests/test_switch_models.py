@@ -442,7 +442,9 @@ TOOL_ROLES = {"agent_default", "assistant", "architect", "studio_fallback", "act
 def test_deepseek_and_kimi_in_every_unrestricted_role():
     for r in sm.ROLES:
         if r.restricted:
-            assert not set(sm.DS_KIMI) & set(r.candidates), r.name
+            # a family-bound role offers only its own families (the codex
+            # target's Kimi K3 is one of them)
+            assert {sm.family(m) for m in r.candidates} <= r.families, r.name
             continue
         assert set(sm.DS_KIMI) <= set(r.candidates), r.name
         assert (sm.R1 in r.candidates) == (r.name not in TOOL_ROLES), r.name

@@ -541,13 +541,13 @@ tune a provisioned Skill Lab rather than switch it on.
 |---|---|---|
 | `skill_lab_python` | `<repo>/data/skill-lab-venv/bin/python` | Interpreter the vendored `evaluate_skill.py` / `train.py` / task-set validators run in. Bootstrap builds it from `vendor/skillopt/requirements-launchpad.txt` and rebuilds it when that file changes; the backend process never imports the vendored tree itself. `GET /api/skill-lab/status` reports `venv_ready: false` while this path is missing — that is what an un-provisioned workspace looks like. |
 | `skill_lab_max_concurrent_jobs` | `1` (1–4) | How many evaluation/training jobs run at once. Each job is a CLI subprocess plus its own worker sessions, so this trades wall clock against host CPU/memory and pressure on the worker runtime; excess jobs queue instead of failing. |
-| `skill_lab_judge_model_id` | `us.openai.gpt-6-sol` | Model that scores rollouts. It must be a Bedrock **Converse inference-profile id** — the `bedrock_chat` judge rejects bare model ids. It also selects the agentic judge's host CLI by family: an `openai.*` id routes to the host `codex` binary with the same profile id (codex >= 0.155, whose model catalog needs an entry for that id), anything else to the host `claude` binary (`runner.judge_exec_route`). Changing this therefore changes which CLI the host must have installed. |
+| `skill_lab_judge_model_id` | `global.openai.gpt-6.1-sol` | Model that scores rollouts. It must be a Bedrock **Converse inference-profile id** — the `bedrock_chat` judge rejects bare model ids; prefer the `global.` profile, which every workspace region serves. It also selects the agentic judge's host CLI by family: an `openai.*` id routes to the host `codex` binary with the same profile id (codex >= 0.155; an id missing from its model catalog runs on codex's fallback metadata), anything else to the host `claude` binary (`runner.judge_exec_route`). Changing this therefore changes which CLI the host must have installed. |
 | `skill_lab_target_model_id` | `global.anthropic.claude-opus-5-5` | Default model the skill under test runs on for the `claude_code_exec` target backend — again a Converse inference-profile id. Per-job parameters override it; a blank value is never sent, because an empty `--model` would let the vendored CLI substitute its own non-Bedrock default. |
-| `skill_lab_codex_target_model_id` | `global.openai.gpt-6-sol` | The same default for the `codex_exec` target backend. codex resolves models itself: its baked `amazon-bedrock-runtime` provider invokes this **inference-profile id** (a bare `openai.*` id is rejected for on-demand throughput) and reads its metadata from the host model catalog (`skill_lab_codex_catalog_path`), which therefore needs an entry for the exact id. Kept as a separate key so each backend gets an id its CLI accepts. |
+| `skill_lab_codex_target_model_id` | `global.openai.gpt-6.1-sol` | The same default for the `codex_exec` target backend: an OpenAI or Kimi (`moonshotai`) profile — `global.openai.gpt-6.1-sol`, `global.openai.gpt-6.1-terra`, `global.openai.gpt-6-astra` and `global.moonshotai.kimi-k3` are live-verified on the worker. codex resolves models itself: its baked `amazon-bedrock-runtime` provider invokes this **inference-profile id** (a bare model id is rejected for on-demand throughput) and reads its metadata from the host model catalog (`skill_lab_codex_catalog_path`); an id the catalog lacks still runs, on codex's fallback metadata, with a warning in the rollout log. Kept as a separate key so each backend gets an id its CLI accepts. |
 | `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | Bedrock model catalog read from the backend host and staged into the worker image's codex-home at build time. The file embeds proprietary model instructions and is never committed, so when it is absent the build stages an empty `{}` catalog and logs that it did — codex targets on that image then have no catalog to resolve against. |
 | `skill_lab_judge_sandbox` | `bwrap` | Sandbox launcher argv (shlex-split) for the agentic judge's artifact parsers, which run on the backend **host** — the worker microVM cannot run bubblewrap. On hosts where unprivileged `bwrap` is blocked by AppArmor, set `sudo -n bwrap`. `GET /api/skill-lab/status` probes this argv's first word for `agentic_judge_ready`, and the vendored fail-closed boundary check still applies on top. |
-| `skill_lab_worker_cli_version` | `2.1.283` | Reports the `claude` CLI version baked into the worker image. |
-| `skill_lab_worker_codex_version` | `0.155.1` | Reports the `codex` CLI version baked into the worker image. |
+| `skill_lab_worker_cli_version` | `2.1.294` | Reports the `claude` CLI version baked into the worker image. It is a ceiling: from 2.1.295 on, the CLI in the image (empty HOME) makes Opus 5.5 refuse ordinary rollouts as `[cyber]` — bisected 2026-11-03; re-check before raising it. |
+| `skill_lab_worker_codex_version` | `0.166.0` | Reports the `codex` CLI version baked into the worker image. |
 
 The two `*_version` keys are **mirrors, not inputs**. The build uses the
 `ARG CLAUDE_CLI_VERSION` / `ARG CODEX_CLI_VERSION` defaults in
@@ -593,7 +593,7 @@ they were created with — a role only decides what *new* ones get.
 | `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5` | What a Studio canvas node without a model generates. The backend scopes that agent's execution role to the same value and the canvas reads it from the server, so the two always agree. Deliberately separate from the agent default: moving it moves every existing flow's model-less nodes. |
 | `codegen_model` | `global.anthropic.claude-sonnet-5` | The coding agent behind Studio AI Fix. Claude only. |
 | `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | See [Prompt optimization](#prompt-optimization). |
-| `skill_lab_judge_model_id`, `skill_lab_target_model_id`, `skill_lab_codex_target_model_id` | see [Skill Lab](#skill-lab) | The judge is OpenAI or Claude; the Claude-CLI target Claude only; the codex target OpenAI only. |
+| `skill_lab_judge_model_id`, `skill_lab_target_model_id`, `skill_lab_codex_target_model_id` | see [Skill Lab](#skill-lab) | The judge is OpenAI or Claude; the Claude-CLI target Claude only; the codex target OpenAI or Kimi. |
 
 A role that runs tools refuses a model measured not to support Converse tool use
 (DeepSeek R1). Every id must be a Bedrock id (`[A-Za-z0-9._:/-]`, 3–121 characters).
@@ -814,9 +814,9 @@ on the host.
 | `LAUNCHPAD_PROMPT_OPT_MODELS` | the four ids in [Prompt optimization](#prompt-optimization) | The reflection models the console offers, as a JSON list (`'["global.zai.glm-5.3","deepseek.v3.2"]'`). Env / `launchpad.yaml` only; the Models page does not edit the list. |
 | `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Default of the Claude Agent SDK (container) method. **Claude only.** |
 | `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio AI Fix, which runs on the Claude Agent SDK (see [Code generation](#code-generation-ai-fix)). **Claude only.** |
-| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `us.openai.gpt-6-sol` | Skill Lab judge. An OpenAI id runs on the host `codex` CLI, a Claude id on the host `claude` CLI. **OpenAI or Claude only.** |
+| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab judge. An OpenAI id runs on the host `codex` CLI, a Claude id on the host `claude` CLI. **OpenAI or Claude only.** |
 | `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab `claude_code_exec` target. **Claude only.** |
-| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6-sol` | Skill Lab `codex_exec` target. **OpenAI only.** |
+| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab `codex_exec` target. **OpenAI or Kimi only.** |
 
 A setting is a default for what is created next. Existing agents keep their
 `model_id`, an installed architect keeps its model, and an existing evaluator
@@ -970,8 +970,9 @@ Some features are bound to one model family by the SDK or CLI they run on. In
 an account without Anthropic access they stay unavailable whatever you set: the
 **Claude Agent SDK** deploy method, **Studio AI Fix** (codegen), and the Skill
 Lab `claude_code_exec` target and claude-CLI judge path. Without OpenAI access
-the Skill Lab `codex_exec` target and codex judge path are unavailable. The
-Skill Lab judge needs one of the two families.
+the codex judge path is unavailable, and the Skill Lab `codex_exec` target then
+needs Kimi (`global.moonshotai.kimi-k3`). The Skill Lab judge needs one of the
+two families.
 
 ### Changing the judge changes the scores
 

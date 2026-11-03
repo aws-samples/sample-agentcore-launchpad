@@ -295,7 +295,7 @@ def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):
 
 
 def test_judge_exec_route_by_family(lab, tmp_path):
-    """An openai-family judge model (the default: us.openai.gpt-6-sol) runs
+    """An openai-family judge model (e.g. us.openai.gpt-6-sol) runs
     the agentic judge on the host codex CLI with the SAME profile id — codex's
     amazon-bedrock-runtime provider rejects bare ids for on-demand throughput.
     Anthropic judges keep the claude CLI unchanged."""
@@ -349,6 +349,9 @@ def test_env_is_allowlisted(lab, monkeypatch):
     # the VM itself is the sandbox. Live-verified 2026-08-18.
     assert env["CODEX_EXEC_FULL_AUTO"] == "false"
     assert env["CODEX_EXEC_SANDBOX"] == "danger-full-access"
+    # the vendored "none" default reaches the CLI verbatim and GPT-6.1 Sol /
+    # GPT-6 Astra refuse it (live 2026-11-03)
+    assert env["CODEX_EXEC_REASONING_EFFORT"] == "low"
     assert env["SKILLOPT_AGENTCORE_S3_PREFIX"] == "skill-lab/exec-jobs"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTHONUNBUFFERED"] == "1"  # killed jobs must not lose buffered log output

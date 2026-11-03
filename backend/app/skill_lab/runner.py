@@ -552,6 +552,12 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             #   Bash, no OS sandbox).
             "CODEX_EXEC_FULL_AUTO": "false",
             "CODEX_EXEC_SANDBOX": "danger-full-access",
+            # The vendored default is "none", and the codex CLI path passes it
+            # verbatim as `-c model_reasoning_effort="none"` (the SDK paths drop
+            # it). GPT-6.1 Sol and GPT-6 Astra reject "none" (low…max only) —
+            # live-found 2026-11-03, every rollout failed; "low" is accepted by
+            # every codex target model and is gpt-6-sol's catalog default.
+            "CODEX_EXEC_REASONING_EFFORT": "low",
             # The agentic judge's claude CLI runs on THIS host (never the
             # worker) and must take the Bedrock path with the instance role.
             # Rollout claude runs in the worker with the image's own env, so
