@@ -27,9 +27,9 @@ SPOKE = Path(__file__).resolve().parents[2] / "infra" / "spoke"
 # templates, then paste the new values printed by the failing assertion.
 FINGERPRINTS = {
     "launchpad-workspace-role.yaml":
-        "8322e85dbf03ebf66280ade12b07bc188b57c5038177759c98abb48423e76297",
+        "cc9dd60f3f3f6e91a3d2144a7df149f28878edbe55b78aac433490660bae15ea",
     "launchpad-workspace-role-prod.yaml":
-        "60171781ba51caee3747afe39b5af1a7762bfb1fbcf02cdd8faaba026a65e973",
+        "8599300bd86ee80549692aba708aef0437f97f999254d6aa09e3d24ae794d415",
 }
 ROLE_ARN = "arn:aws:iam::444455556666:role/LaunchpadWorkspaceRole"
 

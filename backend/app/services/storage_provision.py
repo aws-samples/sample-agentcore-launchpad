@@ -177,6 +177,110 @@ def get_job(db: Session, workspace_id: str, job_id: str) -> dict[str, Any]:
     return view(job)
 
 
+# ── plan (read-only) ─────────────────────────────────────────────────────────
+
+S3_GATEWAY_DOCS = "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html"
+
+
+def plan(db: Session, workspace: Any, network_profile_id: str,
+         storage_id: str | None = None) -> dict[str, Any]:
+    """What a create would put into the network profile's VPC, read before anything is
+    made so the administrator sees it (read-only EC2 calls, the preflight's own):
+
+    * the new mount-target security group: name, VPC, inbound and outbound rules;
+    * one mount target per Availability Zone, and the subnet it goes into;
+    * each of the profile's (agent) security groups and whether its outbound rules
+      already let TCP 2049 reach the mount-target subnets. The console never edits
+      those groups; a missing rule is the administrator's to add;
+    * whether an S3 gateway endpoint serves the agents' route tables. S3 Files streams
+      reads of 1 MiB or more straight from the bucket over it, free of charge; without
+      it they go through the file system, slower and at a higher cost.
+    """
+    from app.models.network import NetworkProfile
+    from app.services import network_preflight
+    from app.services.storage_mounts import _cidr_holds, _covers_nfs
+
+    profile = db.get(NetworkProfile, network_profile_id)
+    if profile is None or profile.workspace_id != workspace.id or profile.archived_at:
+        raise NotFoundError("network_profile.not_found",
+                            f"network profile '{network_profile_id}' not found",
+                            {"profile_id": network_profile_id})
+    agent_group_ids = list(profile.security_group_ids or [])
+    facts = network_preflight.gather(
+        workspace.client("ec2"), vpc_id=profile.vpc_id,
+        subnet_ids=list(profile.subnet_ids or []), security_group_ids=agent_group_ids)
+    by_az: dict[str, dict[str, Any]] = {}
+    for subnet in sorted(facts["subnets"], key=lambda s: s["SubnetId"]):
+        by_az.setdefault(subnet.get("AvailabilityZoneId") or "", subnet)
+    mount_subnets = [{"subnet_id": s["SubnetId"], "availability_zone_id": az,
+                      "cidr": s.get("CidrBlock")} for az, s in sorted(by_az.items())]
+    vpc = facts.get("vpc") or {}
+    vpc_cidrs = [a["CidrBlock"] for a in vpc.get("CidrBlockAssociationSet") or []
+                 if (a.get("CidrBlockState") or {}).get("State", "associated") == "associated"
+                 ] or ([vpc["CidrBlock"]] if vpc.get("CidrBlock") else [])
+    name = security_group_name(storage_id or "<id>")
+    targets = [s["cidr"] for s in mount_subnets if s["cidr"]]
+
+    def nfs_out(group: dict[str, Any]) -> bool:
+        # the new group does not exist yet, so only a CIDR rule can already cover it
+        for rule in group.get("IpPermissionsEgress") or []:
+            if not _covers_nfs(rule):
+                continue
+            for item in rule.get("IpRanges") or []:
+                cidr = item.get("CidrIp", "")
+                if cidr == "0.0.0.0/0" or (targets and all(_cidr_holds(cidr, t)
+                                                           for t in targets)):
+                    return True
+        return False
+
+    seen = {g["GroupId"]: g for g in facts.get("security_groups") or []}
+    agent_groups = [{
+        "group_id": gid,
+        "name": (seen.get(gid) or {}).get("GroupName"),
+        "status": "not_found" if gid not in seen
+        else ("ok" if nfs_out(seen[gid]) else "missing"),
+        "required_outbound": {"protocol": "tcp", "port": NFS_PORT, "destination": name},
+    } for gid in agent_group_ids]
+
+    s3_service = f"com.amazonaws.{workspace.region}.s3"
+    gateways = [e for e in facts.get("endpoints") or []
+                if e.get("ServiceName") == s3_service
+                and str(e.get("VpcEndpointType", "")).lower() == "gateway"]
+    routed = {t for e in gateways for t in e.get("RouteTableIds") or []}
+    tables = facts.get("route_tables") or []
+    unrouted = []
+    for subnet in facts["subnets"]:
+        table = network_preflight._route_table_of(subnet["SubnetId"], tables)
+        if table is None or table.get("RouteTableId") not in routed:
+            unrouted.append(subnet["SubnetId"])
+    return {
+        "network_profile_id": profile.id,
+        "vpc_id": facts.get("vpc_id"),
+        "vpc_cidrs": vpc_cidrs,
+        "mount_target_security_group": {
+            "name": name,
+            "vpc_id": facts.get("vpc_id"),
+            "inbound": [{"protocol": "tcp", "port": NFS_PORT, "source_group_id": gid}
+                        for gid in agent_group_ids],
+            "outbound": [],
+        },
+        "mount_targets": [{"subnet_id": s["subnet_id"],
+                           "availability_zone_id": s["availability_zone_id"]}
+                          for s in mount_subnets],
+        "agent_security_groups": agent_groups,
+        "s3_gateway_endpoint": {
+            "service_name": s3_service,
+            "endpoint_ids": sorted(e.get("VpcEndpointId", "") for e in gateways),
+            "status": "ok" if gateways and not unrouted
+            else ("unrouted" if gateways else "missing"),
+            "unrouted_subnets": sorted(unrouted),
+            "docs": S3_GATEWAY_DOCS,
+        },
+        "nat_gateways": sorted(n.get("NatGatewayId", "")
+                               for n in facts.get("nat_gateways") or []),
+    }
+
+
 # ── queueing ─────────────────────────────────────────────────────────────────
 
 
@@ -528,7 +632,27 @@ def _stage_security_group(run: _Run) -> str:
     except ClientError as exc:
         if _code(exc) != "InvalidPermission.Duplicate":
             raise
-    return f"{detail}; TCP {NFS_PORT} from {', '.join(sources)}"
+    _drop_egress(ec2, group_id)
+    return (f"{detail} in {res['vpc_id']}; inbound TCP {NFS_PORT} from "
+            f"{', '.join(sources)}; outbound none")
+
+
+def _drop_egress(ec2: Any, group_id: str) -> None:
+    """Remove every outbound rule of the mount-target group, the allow-all one that
+    CreateSecurityGroup adds included. Mount targets only answer NFS connections that
+    agents open, and a security group is stateful, so those replies need no outbound
+    rule (least privilege). Idempotent: a group with no outbound rule is left alone."""
+    groups = ec2.describe_security_groups(
+        Filters=[{"Name": "group-id", "Values": [group_id]}]).get("SecurityGroups") or []
+    rules = [{k: v for k, v in rule.items() if v not in (None, [])}
+             for g in groups for rule in g.get("IpPermissionsEgress") or []]
+    if not rules:
+        return
+    try:
+        ec2.revoke_security_group_egress(GroupId=group_id, IpPermissions=rules)
+    except ClientError as exc:
+        if _code(exc) != "InvalidPermission.NotFound":
+            raise
 
 
 def _mount_targets(client: Any, fs_id: str) -> list[dict[str, Any]]:

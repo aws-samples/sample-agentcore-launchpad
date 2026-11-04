@@ -16105,7 +16105,7 @@
       "provision": {
         "open": "Create S3 Files",
         "title": "Create S3 Files storage",
-        "intro": "The console creates a new versioned bucket, an S3 file system on it, a mount target in each Availability Zone of the network profile, a security group that admits NFS (TCP 2049) from the profile's security groups, and an access point — then registers the result here. It takes about 5–10 minutes.",
+        "intro": "The console creates a new versioned bucket, an S3 file system on it, a mount target in each Availability Zone of the network profile, a security group that admits NFS (TCP 2049) from the profile's security groups and has no outbound rule, and an access point — then registers the result here. It takes about 5–10 minutes.",
         "noProfiles": "Create a network profile first: the mount targets go into its subnets.",
         "pickProfile": "Pick a network profile",
         "profileHint": "Agents that mount this storage must run in this profile's VPC. Its security groups must allow TCP 2049 out — the check says so if they do not.",
@@ -16141,6 +16141,38 @@
           "access-point": "Access point",
           "register": "Register in the catalog",
           "archive": "Archive the entry"
+        },
+        "adminOnly": "Only Launchpad administrators (the engineers who operate the platform) can create and delete S3 Files storage.",
+        "plan": {
+          "title": "What will be created in your AWS account",
+          "loading": "Reading the network profile's VPC…",
+          "failed": "Could not read the VPC ({{error}}). Check the security group rules yourself before you create.",
+          "newGroup": "New security group",
+          "vpc": "in VPC",
+          "direction": "Direction",
+          "protocol": "Protocol",
+          "port": "Port",
+          "peer": "Source / destination",
+          "inbound": "Inbound",
+          "outbound": "Outbound",
+          "noOutbound": "None. The allow-all rule AWS adds to a new group is removed: a security group is stateful, so NFS replies need no outbound rule.",
+          "mountTargets": "Mount targets (one per Availability Zone, each using the group above):",
+          "agentGroups": "Agent security groups (the network profile's; the console does not change them):",
+          "group": "Security group",
+          "needs": "Rule agents need",
+          "state": "Current state",
+          "groupState": {
+            "ok": "Allowed",
+            "missing": "You need to add it",
+            "not_found": "Group not found"
+          },
+          "addOutbound": "Add an outbound rule to {{groups}} in the AWS console (EC2 → Security groups → the group → Outbound rules): type NFS (TCP 2049), destination the security group {{group}} (selectable once it is created) or the VPC range {{cidr}}. Without it, the check blocks agents that mount this storage.",
+          "s3GatewayOk": "The VPC has an S3 gateway endpoint ({{ids}}) on the agents' route tables: reads of 1 MiB or more go straight from the bucket to the agent over the private network, and a gateway endpoint has no hourly or data-processing charge.",
+          "s3GatewayMissing": "Recommended, lower cost: add an S3 gateway endpoint. S3 Files streams reads of 1 MiB or more straight from the bucket to the agent, and that path needs an S3 gateway endpoint in the VPC. Without one those reads go through the file system, slower and at a higher cost, and the agents' other S3 traffic goes through the NAT gateway, which bills each GB processed. A gateway endpoint has no hourly or data-processing charge. To add it yourself: AWS console → VPC → Endpoints → Create endpoint, service {{service}} (type Gateway), and select the route tables of the profile's subnets.",
+          "s3GatewayUnrouted": "Recommended, lower cost: the VPC has an S3 gateway endpoint, but it is not on the route table of {{subnets}}, so large reads from those subnets go through the file system (slower, higher cost) and other S3 traffic through the NAT gateway. To fix it yourself: AWS console → VPC → Endpoints → the {{service}} endpoint → Route tables → Manage route tables, and add those subnets' route tables.",
+          "s3GatewayDocs": "AWS docs: gateway endpoints for Amazon S3",
+          "ack": "I have reviewed the security group, its rules and the mount targets above, and the settings I need to make myself in the AWS console.",
+          "ackFirst": "Confirm the network changes above first"
         }
       },
       "teardown": {

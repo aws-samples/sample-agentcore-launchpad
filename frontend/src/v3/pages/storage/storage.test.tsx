@@ -4,10 +4,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../../i18n";
 import type { AgentInfo } from "../../../lib/api";
-import type { AgentStorage, StorageEntry } from "../../../lib/api/storage";
+import type { AgentStorage, StorageEntry, StorageProvisionPlan } from "../../../lib/api/storage";
 import { hostedGroups } from "../../nav";
 import { StorageCardView } from "../agent/StorageCard";
 import { ProvisionJobs } from "./ProvisionJobs";
+import { ProvisionPlan } from "./ProvisionPlan";
 import { StorageTable } from "./Storage";
 import { StorageDetail } from "./StorageDetail";
 
@@ -103,6 +104,48 @@ describe("storage page", () => {
     expect(html).toContain("mount-targets: no free IPs");
     expect(html).toContain("Retry");
     expect(render(<ProvisionJobs onRetry={() => {}} jobs={[]} />)).toBe("");
+  });
+
+  const plan: StorageProvisionPlan = {
+    network_profile_id: "np-1",
+    vpc_id: "vpc-1",
+    vpc_cidrs: ["10.0.0.0/16"],
+    mount_target_security_group: {
+      name: "launchpad-mt-<id>", vpc_id: "vpc-1",
+      inbound: [{ protocol: "tcp", port: 2049, source_group_id: "sg-agents" }], outbound: [],
+    },
+    mount_targets: [{ subnet_id: "subnet-a", availability_zone_id: "usw2-az1" }],
+    agent_security_groups: [
+      { group_id: "sg-agents", name: "agents", status: "missing",
+        required_outbound: { protocol: "tcp", port: 2049, destination: "launchpad-mt-<id>" } },
+    ],
+    s3_gateway_endpoint: {
+      service_name: "com.amazonaws.us-west-2.s3", endpoint_ids: [], status: "missing",
+      unrouted_subnets: ["subnet-a"], docs: "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html",
+    },
+    nat_gateways: ["nat-1"],
+  };
+
+  it("shows the new group, its VPC and rules, and what the administrator must add", () => {
+    const html = render(<ProvisionPlan plan={plan} storageId="datasets" />);
+    expect(html).toContain("launchpad-mt-datasets");
+    expect(html).toContain("vpc-1 (10.0.0.0/16)");
+    expect(html).toContain("Inbound");
+    expect(html).toContain("sg-agents");
+    expect(html).toContain("The allow-all rule AWS adds to a new group is removed");
+    expect(html).toContain("subnet-a (usw2-az1)");
+    expect(html).toContain("You need to add it");
+    expect(html).toContain("Add an outbound rule to sg-agents");
+    expect(html).toContain("add an S3 gateway endpoint");
+    expect(html).toContain("com.amazonaws.us-west-2.s3");
+    const ok = render(<ProvisionPlan storageId="" plan={{
+      ...plan,
+      agent_security_groups: [{ ...plan.agent_security_groups[0], status: "ok" }],
+      s3_gateway_endpoint: { ...plan.s3_gateway_endpoint, status: "ok", endpoint_ids: ["vpce-1"], unrouted_subnets: [] },
+    }} />);
+    expect(ok).toContain("launchpad-mt-&lt;id&gt;");
+    expect(ok).not.toContain("Add an outbound rule");
+    expect(ok).toContain("S3 gateway endpoint (vpce-1)");
   });
 
   it("is an administrator's Configure entry after Network profiles", () => {

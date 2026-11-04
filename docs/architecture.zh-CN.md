@@ -284,11 +284,16 @@ P4 Harness 由 PUBLIC 重新发布到 VPC、P5 BYOC 镜像、P8 只读）。探�
 **控制台代建 S3 Files 存储**（storage-mounts §7，`services/storage_provision.py`，
 `POST /api/storage-mounts/provision`）。管理员填写 id、网络配置档，以及访问点的 POSIX 身份和根目录；作业
 `storage_provision` 依次新建开启版本控制的存储桶（`launchpad-s3files-<账号>-<哈希>`）、在它上面建 S3 文件系统、
-建只放行配置档安全组 TCP 2049 流量的安全组 `launchpad-mt-<id>`、在配置档子网的每个可用区建一个挂载目标、建访问点，
+建只放行配置档安全组 TCP 2049 入站流量、没有出站规则的安全组 `launchpad-mt-<id>`（新安全组自带的全部放行出站规则会被删除：
+安全组有状态，NFS 响应不需要出站规则）、在配置档子网的每个可用区建一个挂载目标、建访问点，
 最后以 `origin: "platform"` 登记并运行检查。S3 Files 扮演每个工作区一个的共用**同步角色**
 （`launchpad-s3files-sync[-<区域>]`，由 CDK 栈和工作区引导的 `iam` 阶段创建，`resources.s3files_sync_role_arn`），
 它只能访问 `launchpad-s3files-*` 存储桶，所以后端只需要对这一个角色的 `iam:PassRole`，不需要 `iam:CreateRole`；
-平台不会关联客户已有的存储桶。配置档自己的安全组不改动：如果它们不允许 2049 出站，检查会拦下并说明原因。每个阶段都先查后建，
+平台不会关联客户已有的存储桶。配置档自己的安全组不改动：如果它们不允许 2049 出站，检查会拦下并说明原因。
+确认新建前，对话框会读取 `POST /api/storage-mounts/provision/plan`（只读，复用预检的 EC2 读取），列出新安全组及其
+所在 VPC、入站和出站规则、挂载目标、每个 Agent 安全组需要的出站规则以及是否已经具备（缺少时由管理员在 AWS 控制台添加），
+以及配置档的路由表是否关联了 S3 网关终端节点：S3 Files 会经这个终端节点把 1 MiB 及以上的读取直接从存储桶传给 Agent，
+不产生费用；没有它时这部分读取改走文件系统，费用更高。管理员勾选确认后才能提交。每个阶段都先查后建，
 重启后作业继续执行（`resume_pending_jobs`）。`POST /api/storage-mounts/{id}/teardown`（需再次输入 id）删除访问点、
 挂载目标、文件系统和安全组，并归档条目；登记进来的存储和仍有 Agent 挂载的存储会被拒绝；**存储桶和其中的对象保留**。
 V3 存储页（`/v3/storage`）提供「新建 S3 Files」对话框，逐阶段显示作业进度，失败的新建可以重试。spoke 角色模板（版本 2）

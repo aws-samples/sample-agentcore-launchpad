@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "../../../lib/api";
@@ -8,10 +8,13 @@ import {
   type ProvisionForm,
   STORAGE_DATA_CLASSES,
   STORAGE_MODES,
+  storageApi,
+  type StorageProvisionPlan,
   validateProvision,
 } from "../../../lib/api/storage";
 import { Select } from "../../select";
 import { Btn, Dialog, Notice } from "../../ui";
+import { ProvisionPlan } from "./ProvisionPlan";
 
 /**
  * Create S3 Files storage (storage-mounts §7): the console makes a new bucket, the file
@@ -33,15 +36,33 @@ export function ProvisionDialog({
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // what the create would add to the profile's VPC, and the administrator's
+  // acknowledgement of it: nothing is submitted before both
+  const [plan, setPlan] = useState<StorageProvisionPlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
   const errors = touched ? validateProvision(form) : {};
   const live = profiles.filter((p) => !p.archived_at);
+  const profileId = form.network_profile_id;
+  useEffect(() => {
+    setPlan(null);
+    setPlanError(null);
+    setAcknowledged(false);
+    if (!profileId) return;
+    let stale = false;
+    storageApi.provisionPlan(profileId).then(
+      (p) => { if (!stale) setPlan(p); },
+      (err) => { if (!stale) setPlanError(errorMessage(err)); },
+    );
+    return () => { stale = true; };
+  }, [profileId]);
   const set = <K extends keyof ProvisionForm>(key: K, value: ProvisionForm[K]) => {
     setError(null);
     setForm((prev) => ({ ...prev, [key]: value }));
   };
   const submit = async () => {
     setTouched(true);
-    if (Object.keys(validateProvision(form)).length > 0) return;
+    if (Object.keys(validateProvision(form)).length > 0 || !acknowledged) return;
     setBusy(true);
     setError(null);
     try {
@@ -68,8 +89,9 @@ export function ProvisionDialog({
       foot={
         <>
           <Btn kind="ghost" disabled={busy} onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" busy={busy} disabled={busy || live.length === 0}
-            disabledReason={live.length === 0 ? t("v3.storage.provision.noProfiles") : undefined}
+          <Btn kind="primary" busy={busy} disabled={busy || live.length === 0 || !acknowledged}
+            disabledReason={live.length === 0 ? t("v3.storage.provision.noProfiles")
+              : !acknowledged ? t("v3.storage.provision.plan.ackFirst") : undefined}
             onClick={() => void submit()}>
             {t("v3.storage.provision.submit")}
           </Btn>
@@ -79,6 +101,7 @@ export function ProvisionDialog({
       <form style={{ display: "grid", gap: 12 }} data-testid="v3-storage-provision-form"
         onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <Notice s="info">{t("v3.storage.provision.intro")}</Notice>
+        <small className="v3-hint">{t("v3.storage.provision.adminOnly")}</small>
         {live.length === 0 && <Notice s="act">{t("v3.storage.provision.noProfiles")}</Notice>}
         {field("id", t("v3.storage.form.id"),
           <input className="v3-input mono" placeholder="datasets" value={form.id}
@@ -120,7 +143,17 @@ export function ProvisionDialog({
             </Select>
           </label>
         </div>
+        {profileId && !plan && !planError && <small className="v3-hint">{t("v3.storage.provision.plan.loading")}</small>}
+        {planError && <Notice s="act">{t("v3.storage.provision.plan.failed", { error: planError })}</Notice>}
+        {plan && <ProvisionPlan plan={plan} storageId={form.id} />}
         <small className="v3-hint">{t("v3.storage.provision.cost")}</small>
+        {profileId && (plan || planError) && (
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <input type="checkbox" data-testid="v3-storage-provision-ack" checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)} />
+            <span>{t("v3.storage.provision.plan.ack")}</span>
+          </label>
+        )}
         {error && <Notice s="act">{error}</Notice>}
         <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
       </form>

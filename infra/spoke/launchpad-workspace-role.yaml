@@ -652,6 +652,8 @@ Resources:
                 Action:
                   - ec2:AuthorizeSecurityGroupIngress
                   - ec2:DeleteSecurityGroup
+                  # drops the allow-all outbound rule a new group starts with
+                  - ec2:RevokeSecurityGroupEgress
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"
                 Condition:

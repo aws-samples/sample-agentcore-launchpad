@@ -171,6 +171,39 @@ export interface StorageProvisionJob {
   updated_at: string | null;
 }
 
+/**
+ * `POST /api/storage-mounts/provision/plan`: what a create would add to the network
+ * profile's VPC, read before it is confirmed. Nothing is made.
+ */
+export interface StorageProvisionPlan {
+  network_profile_id: string;
+  vpc_id: string | null;
+  vpc_cidrs: string[];
+  /** the new group; `outbound` is empty — the allow-all rule AWS adds is removed */
+  mount_target_security_group: {
+    name: string;
+    vpc_id: string | null;
+    inbound: { protocol: string; port: number; source_group_id: string }[];
+    outbound: { protocol: string; port: number; destination: string }[];
+  };
+  mount_targets: { subnet_id: string; availability_zone_id: string }[];
+  /** the profile's own groups: the console never edits them */
+  agent_security_groups: {
+    group_id: string;
+    name: string | null;
+    status: "ok" | "missing" | "not_found";
+    required_outbound: { protocol: string; port: number; destination: string };
+  }[];
+  s3_gateway_endpoint: {
+    service_name: string;
+    endpoint_ids: string[];
+    status: "ok" | "unrouted" | "missing";
+    unrouted_subnets: string[];
+    docs: string;
+  };
+  nat_gateways: string[];
+}
+
 export const storagePath = (storageId?: string) =>
   storageId === undefined ? "/api/storage-mounts" : `/api/storage-mounts/${enc(storageId)}`;
 
@@ -195,6 +228,10 @@ export const storageApi = {
   forAgent: (agentId: string) => getJson<AgentStorage>(`${storagePath()}/agents/${enc(agentId)}`),
   /** queues the console's S3 Files creation; a retry with the same id resumes a failed job */
   provision: (body: StorageProvisionBody) => sendJson<StorageProvisionJob>(`${storagePath()}/provision`, "POST", body),
+  /** read-only: the security group, its rules and the mount targets a create would make */
+  provisionPlan: (networkProfileId: string, id?: string) =>
+    sendJson<StorageProvisionPlan>(`${storagePath()}/provision/plan`, "POST",
+      { network_profile_id: networkProfileId, ...(id ? { id } : {}) }),
   provisionJobs: () => getJson<{ jobs: StorageProvisionJob[] }>(`${storagePath()}/provision/jobs`),
   provisionJob: (jobId: string) => getJson<StorageProvisionJob>(`${storagePath()}/provision/jobs/${enc(jobId)}`),
   /** deletes what the console made for an entry (the bucket stays) and archives it */

@@ -89,6 +89,16 @@ class ProvisionBody(BaseModel):
     project_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
+class ProvisionPlanBody(BaseModel):
+    """`POST …/provision/plan`: the network profile a create would use, and the id (for
+    the security group's name). Read-only; nothing is made."""
+
+    model_config = {"extra": "forbid"}
+
+    network_profile_id: str = Field(pattern=NETWORK_PROFILE_ID_RE)
+    id: str | None = Field(default=None, pattern=STORAGE_ID_PATTERN)
+
+
 class TeardownBody(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -154,6 +164,17 @@ def register_storage(
             # registered all the same; the page offers the check again
             out = {**out, "check_error": {"code": exc.code, "message": exc.message}}
     return out
+
+
+@router.post("/provision/plan")
+def plan_provision(
+    body: ProvisionPlanBody, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """What a create would add to the profile's VPC (security group, its inbound and
+    outbound rules, mount targets), whether the agents' security groups already let NFS
+    out, and whether an S3 gateway endpoint serves their route tables (§7)."""
+    return provision.plan(db, ws.context, body.network_profile_id, body.id)
 
 
 @router.post("/provision", status_code=202)

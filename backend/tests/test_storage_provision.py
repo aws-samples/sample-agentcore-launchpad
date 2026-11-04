@@ -156,13 +156,28 @@ class FakeEc2:
     def describe_security_groups(self, Filters):  # noqa: N803
         want = {f["Name"]: f["Values"][0] for f in Filters}
         return {"SecurityGroups": [g for g in self.groups.values()
-                                   if g["GroupName"] == want.get("group-name")]}
+                                   if g["GroupName"] == want.get("group-name")
+                                   or g["GroupId"] == want.get("group-id")]}
 
     def create_security_group(self, GroupName, VpcId, Description, TagSpecifications):  # noqa: N803
         group_id = f"sg-0mt{len(self.groups) + 1:014d}"
+        # what AWS gives every new group: one allow-all outbound rule
         self.groups[group_id] = {"GroupId": group_id, "GroupName": GroupName, "VpcId": VpcId,
-                                 "Tags": TagSpecifications[0]["Tags"]}
+                                 "Tags": TagSpecifications[0]["Tags"],
+                                 "IpPermissionsEgress": [{
+                                     "IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                                     "Ipv6Ranges": [], "PrefixListIds": [],
+                                     "UserIdGroupPairs": []}]}
         return {"GroupId": group_id}
+
+    def revoke_security_group_egress(self, GroupId, IpPermissions):  # noqa: N803
+        group = self.groups[GroupId]
+        if not group["IpPermissionsEgress"]:
+            raise client_error("InvalidPermission.NotFound")
+        assert all(set(p) <= {"IpProtocol", "IpRanges", "FromPort", "ToPort"}
+                   for p in IpPermissions), IpPermissions  # empty lists stripped
+        group["IpPermissionsEgress"] = []
+        self.revoked = [*getattr(self, "revoked", []), GroupId]
 
     def authorize_security_group_ingress(self, GroupId, IpPermissions):  # noqa: N803
         if any(i["GroupId"] == GroupId for i in self.ingress):
@@ -279,6 +294,10 @@ def test_a_create_builds_everything_and_registers_a_platform_entry(aws):
     perm = rule["IpPermissions"][0]
     assert (perm["FromPort"], perm["ToPort"]) == (2049, 2049)
     assert [p["GroupId"] for p in perm["UserIdGroupPairs"]] == [AGENT_SG]
+    # least privilege: the allow-all outbound rule a new group starts with is gone
+    assert group["IpPermissionsEgress"] == []
+    sg_stage = next(s for s in out["stages"] if s["name"] == "security-group")
+    assert VPC in sg_stage["detail"] and "outbound none" in sg_stage["detail"]
     assert all(m["securityGroups"] == [group["GroupId"]] for m in aws.s3files.mts.values())
     (ap,) = aws.s3files.aps.values()
     assert ap["posixUser"] == {"uid": 1000, "gid": 1000}
@@ -424,3 +443,94 @@ def test_the_routes_queue_and_report(client, aws, monkeypatch):
         assert bad.status_code == 422, root
     gone = client.post("/api/storage-mounts/missing/teardown", json={"confirm": "missing"})
     assert gone.status_code == 404
+
+
+# ── plan (what the dialog shows before a create) ─────────────────────────────
+
+OTHER_SG = "sg-0bbbbbbbbbbbbbbb2"
+
+
+def _facts(*, agent_egress, endpoint_tables=("rtb-a",)):
+    subnets = [{"SubnetId": "subnet-a", "VpcId": VPC, "AvailabilityZoneId": "usw2-az1",
+                "CidrBlock": "10.0.1.0/24"},
+               {"SubnetId": "subnet-a2", "VpcId": VPC, "AvailabilityZoneId": "usw2-az1",
+                "CidrBlock": "10.0.3.0/24"},
+               {"SubnetId": "subnet-b", "VpcId": VPC, "AvailabilityZoneId": "usw2-az2",
+                "CidrBlock": "10.0.2.0/24"}]
+    endpoints = [] if endpoint_tables is None else [{
+        "VpcEndpointId": "vpce-s3", "ServiceName": f"com.amazonaws.{REGION}.s3",
+        "VpcEndpointType": "Gateway", "RouteTableIds": list(endpoint_tables)}]
+    return {
+        "vpc_id": VPC, "subnets": subnets,
+        "security_groups": [{"GroupId": AGENT_SG, "GroupName": "agents",
+                             "IpPermissionsEgress": agent_egress}],
+        "vpc": {"VpcId": VPC, "CidrBlock": "10.0.0.0/16"},
+        "route_tables": [{"RouteTableId": "rtb-a", "Associations": [{"Main": True}]}],
+        "endpoints": endpoints, "nat_gateways": [{"NatGatewayId": "nat-1"}],
+    }
+
+
+def _plan(aws, monkeypatch, facts, **kw):
+    from app.services import network_preflight
+
+    monkeypatch.setattr(network_preflight, "gather", lambda ec2, **_kw: facts)
+    db = SessionLocal()
+    try:
+        return prov.plan(db, aws.workspace, PROFILE, **kw)
+    finally:
+        db.close()
+
+
+def test_the_plan_names_the_group_its_rules_and_the_mount_targets(aws, monkeypatch):
+    nfs_to_vpc = [{"IpProtocol": "tcp", "FromPort": 2049, "ToPort": 2049,
+                   "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}]
+    out = _plan(aws, monkeypatch, _facts(agent_egress=nfs_to_vpc), storage_id="datasets")
+    group = out["mount_target_security_group"]
+    assert group == {"name": "launchpad-mt-datasets", "vpc_id": VPC,
+                     "inbound": [{"protocol": "tcp", "port": 2049,
+                                  "source_group_id": AGENT_SG}],
+                     "outbound": []}
+    assert out["mount_targets"] == [{"subnet_id": "subnet-a", "availability_zone_id": "usw2-az1"},
+                                    {"subnet_id": "subnet-b", "availability_zone_id": "usw2-az2"}]
+    (agents,) = out["agent_security_groups"]
+    assert agents["status"] == "ok" and agents["name"] == "agents"
+    assert agents["required_outbound"]["destination"] == "launchpad-mt-datasets"
+    assert out["s3_gateway_endpoint"]["status"] == "ok"
+    assert out["vpc_cidrs"] == ["10.0.0.0/16"] and out["nat_gateways"] == ["nat-1"]
+    assert not aws.ec2.groups  # read-only: nothing made
+
+
+@pytest.mark.parametrize("egress, status", [
+    ([{"IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}], "ok"),
+    # 443 only: the agents could not reach NFS
+    ([{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+       "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}], "missing"),
+    # a CIDR that misses one mount-target subnet
+    ([{"IpProtocol": "tcp", "FromPort": 2049, "ToPort": 2049,
+       "IpRanges": [{"CidrIp": "10.0.1.0/24"}]}], "missing"),
+])
+def test_the_plan_says_whether_the_agents_may_reach_nfs(aws, monkeypatch, egress, status):
+    out = _plan(aws, monkeypatch, _facts(agent_egress=egress))
+    assert out["agent_security_groups"][0]["status"] == status
+    assert out["mount_target_security_group"]["name"] == "launchpad-mt-<id>"
+
+
+@pytest.mark.parametrize("tables, status", [(None, "missing"), (["rtb-other"], "unrouted")])
+def test_the_plan_flags_a_missing_s3_gateway_endpoint(aws, monkeypatch, tables, status):
+    out = _plan(aws, monkeypatch, _facts(agent_egress=[], endpoint_tables=tables))
+    gateway = out["s3_gateway_endpoint"]
+    assert gateway["status"] == status
+    assert gateway["service_name"] == f"com.amazonaws.{REGION}.s3"
+    assert gateway["docs"].startswith("https://docs.aws.amazon.com/")
+    if status == "unrouted":
+        assert gateway["unrouted_subnets"] == ["subnet-a", "subnet-a2", "subnet-b"]
+
+
+def test_the_plan_route_is_read_only_and_checks_the_profile(client, aws, monkeypatch):
+    monkeypatch.setattr(prov, "plan", lambda db, ctx, pid, sid: {"profile": pid, "id": sid})
+    res = client.post("/api/storage-mounts/provision/plan",
+                      json={"network_profile_id": PROFILE, "id": "datasets"})
+    assert res.status_code == 200 and res.json() == {"profile": PROFILE, "id": "datasets"}
+    bad = client.post("/api/storage-mounts/provision/plan",
+                      json={"network_profile_id": "not a profile"})
+    assert bad.status_code == 422

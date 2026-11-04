@@ -1762,12 +1762,15 @@ ROUTE_POLICY.update({
     # the console creates / tears down S3 Files storage (§7, services/storage_provision):
     # it makes AWS resources in the workspace, so administrators only
     ("POST", "/api/storage-mounts/provision"): ADMIN,
+    # read-only: what a create would add to the VPC, shown before it is confirmed
+    ("POST", "/api/storage-mounts/provision/plan"): ADMIN,
     ("GET", "/api/storage-mounts/provision/jobs"): ADMIN,
     ("GET", "/api/storage-mounts/provision/jobs/{job_id}"): ADMIN,
     ("POST", "/api/storage-mounts/{storage_id}/teardown"): ADMIN,
 })
 PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
     ("POST", "/api/storage-mounts/provision"),
+    ("POST", "/api/storage-mounts/provision/plan"),
     ("GET", "/api/storage-mounts/provision/jobs"),
     ("GET", "/api/storage-mounts/provision/jobs/{job_id}"),
     ("POST", "/api/storage-mounts/{storage_id}/teardown"),
@@ -1952,6 +1955,7 @@ _STRUCTURE_ROUTES = (
     ("GET", "/api/storage-mounts/projects/{project_id}"),
     ("PUT", "/api/storage-mounts/projects/{project_id}"),
     ("POST", "/api/storage-mounts/provision"),
+    ("POST", "/api/storage-mounts/provision/plan"),
     ("GET", "/api/storage-mounts/provision/jobs"),
     ("GET", "/api/storage-mounts/provision/jobs/{job_id}"),
     ("POST", "/api/storage-mounts/{storage_id}/teardown"),

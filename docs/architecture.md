@@ -387,7 +387,9 @@ stay as an administrator set them, or remove them. The execution role gets the
 names an id, a network profile and the access point's POSIX identity and root
 directory; the Job `storage_provision` makes a new versioned bucket
 (`launchpad-s3files-<account>-<hash>`), an S3 file system on it, a security group
-`launchpad-mt-<id>` admitting TCP 2049 from the profile's security groups, one mount
+`launchpad-mt-<id>` admitting TCP 2049 from the profile's security groups and holding
+no outbound rule (the allow-all rule a new group starts with is revoked: the group is
+stateful, so NFS replies need none), one mount
 target per Availability Zone of the profile's subnets and the access point, then
 registers the result with `origin: "platform"` and runs its check. S3 Files assumes
 one shared **sync role** per workspace (`launchpad-s3files-sync[-<region>]`, made by the
@@ -395,7 +397,15 @@ CDK stack and the workspace bootstrap's `iam` stage, `resources.s3files_sync_rol
 that reaches only `launchpad-s3files-*` buckets, so the backend needs `iam:PassRole` on
 that one role and never `iam:CreateRole`; a customer's existing bucket is never linked.
 The profile's own security groups are left alone: when they do not allow 2049 out,
-the check blocks and says so. Every stage is list-or-get then create, and a restart
+the check blocks and says so. Before the create is confirmed, the dialog reads
+`POST /api/storage-mounts/provision/plan` (read-only, the preflight's EC2 reads) and
+lists the new group with its VPC and its inbound / outbound rules, the mount targets,
+each agent security group with the outbound rule it needs and whether it already has
+it (the administrator adds a missing one in the AWS console), and whether an S3
+gateway endpoint serves the profile's route tables: S3 Files streams reads of 1 MiB
+or more straight from the bucket over that endpoint, which costs nothing, and without
+it those reads go through the file system at a higher cost. The administrator ticks
+an acknowledgement before the create is sent. Every stage is list-or-get then create, and a restart
 resumes the job (`resume_pending_jobs`). `POST /api/storage-mounts/{id}/teardown`
 (the id typed again) deletes the access point, mount targets, file system and security
 group and archives the entry, refused for registered storage and while an agent mounts
