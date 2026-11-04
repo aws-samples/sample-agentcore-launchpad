@@ -14,6 +14,11 @@ import {
   storageFormToBody,
   storageKindOfArn,
   validateStorage,
+  emptyProvisionForm,
+  provisionFormToBody,
+  type StorageProvisionJob,
+  validateProvision,
+  visibleJobs,
 } from "./storage";
 
 const S3_AP = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-0123456789abcdef0/access-point/fsap-0123456789abcdef0";
@@ -82,5 +87,39 @@ describe("storage API", () => {
       "GET /api/storage-mounts/agents/a1",
     ]);
     expect(JSON.parse(String(calls[1][1].body))).toEqual({ storage_ids: ["datasets"] });
+  });
+});
+
+describe("the console's S3 Files creation (storage-mounts §7)", () => {
+  const job = (over: Partial<StorageProvisionJob>): StorageProvisionJob => ({
+    job_id: "j1", op: "create", storage_id: "datasets", status: "running", done: false,
+    stages: [], resources: {}, request: {}, error: null, created_at: null, updated_at: null, ...over,
+  });
+
+  it("validates the form like the server's ProvisionBody", () => {
+    const ok = { ...emptyProvisionForm(), id: "datasets", network_profile_id: "np-1", root_directory: "/data/a" };
+    expect(validateProvision(ok)).toEqual({});
+    const bad = validateProvision({ ...ok, id: "Data", network_profile_id: "", posix_uid: "-1",
+      posix_gid: "4294967296", root_directory: "data" });
+    expect(Object.keys(bad).sort()).toEqual(["id", "network_profile_id", "posix_gid", "posix_uid", "root_directory"]);
+    expect(validateProvision({ ...ok, root_directory: "/a/b/c/d/e" }).root_directory).toBe("v3.storage.provision.errRoot");
+    // the file system root belongs to root: an access point there cannot write
+    expect(validateProvision({ ...ok, root_directory: "/" }).root_directory).toBe("v3.storage.provision.errRoot");
+  });
+
+  it("sends numbers and drops an empty name", () => {
+    const body = provisionFormToBody({ ...emptyProvisionForm(), id: " datasets ", network_profile_id: "np-1", posix_uid: "0" });
+    expect(body).toEqual({ id: "datasets", name: undefined, network_profile_id: "np-1", max_mode: "ro",
+      data_class: "reference", posix_uid: 0, posix_gid: 1000, root_directory: "/data" });
+  });
+
+  it("shows running jobs and a failed latest one, once per storage", () => {
+    const shown = visibleJobs([
+      job({ job_id: "a", storage_id: "x" }),
+      job({ job_id: "b", storage_id: "y", status: "failed", done: true }),
+      job({ job_id: "c", storage_id: "z", status: "succeeded", done: true }),
+      job({ job_id: "d", storage_id: "x", status: "failed", done: true }),
+    ]);
+    expect(shown.map((j) => j.job_id)).toEqual(["a", "b"]);
   });
 });

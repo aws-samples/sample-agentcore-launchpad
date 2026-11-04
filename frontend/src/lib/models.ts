@@ -46,17 +46,18 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "responses",
     },
   ],
-  // Every id here rides `converse_stream` on the harness. GLM-5.3 leads as the
-  // platform default: its global inference profile answers in us-east-1,
-  // us-west-2, us-east-2 and ca-central-1 (probed 2026-10-08). The global GPT-6
-  // profiles follow — the harness's `responses`/`chat_completions` formats resolve
-  // Mantle, where GPT-6 is bare-id and us-west-2 only, while these global
-  // profiles answer Converse in every region (probed 2026-09-26).
+  // Every id here rides `converse_stream` on the harness. Kimi K3 leads as the
+  // platform default: its global inference profile answers Converse with tool use
+  // in us-east-1 and us-west-2 (probed 2026-11-04). GLM-5.3 (the default before)
+  // follows, then the global GPT-6.1 / GPT-6 profiles — the harness's
+  // `responses`/`chat_completions` formats resolve Mantle, where GPT-6 is bare-id
+  // and us-west-2 only, while these global profiles answer Converse in every
+  // region (probed 2026-09-26).
   bedrock: [
+    { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },
     { model_id: "global.zai.glm-5.3", label: "GLM-5.3 (global)", api_format: "converse_stream" },
     { model_id: "zai.glm-5", label: "GLM-5", api_format: "converse_stream" },
     { model_id: "zai.glm-4.7", label: "GLM-4.7", api_format: "converse_stream" },
-    { model_id: "global.openai.gpt-6-sol", label: "GPT-6 Sol (global)", api_format: "converse_stream" },
     // GPT-6.1 Sol and GLM 5.3: global profiles probed (Converse + tool use) in
     // us-west-2 and us-east-1, 2026-10-14.
     {
@@ -64,6 +65,7 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       label: "GPT-6.1 Sol (global)",
       api_format: "converse_stream",
     },
+    { model_id: "global.openai.gpt-6-sol", label: "GPT-6 Sol (global)", api_format: "converse_stream" },
     // GPT-6.1 Terra: Converse, tool use (auto + forced any) and reasoning.effort
     // live-probed on the global + US profiles in us-east-1 and us-west-2, 2026-11-02.
     // Converse refuses `document` blocks for it (model card) — send files as text.
@@ -74,6 +76,19 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
     },
     { model_id: "global.openai.gpt-6-astra", label: "GPT-6 Astra (global)", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-luna", label: "GPT-6 Luna (global)", api_format: "converse_stream" },
+    // Claude 5.5: global profiles probed (Converse + tool use) in us-west-2 and
+    // us-east-1, 2026-11-04; Sonnet 5.5 leads, so it is the Claude Agent SDK's
+    // first Claude entry.
+    {
+      model_id: "global.anthropic.claude-sonnet-5-5",
+      label: "Claude Sonnet 5.5 (global)",
+      api_format: "converse_stream",
+    },
+    {
+      model_id: "global.anthropic.claude-opus-5-5",
+      label: "Claude Opus 5.5 (global)",
+      api_format: "converse_stream",
+    },
     {
       model_id: "global.anthropic.claude-sonnet-5",
       label: "Claude Sonnet 5 (global)",
@@ -89,7 +104,6 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       label: "Claude Opus 5 (global)",
       api_format: "converse_stream",
     },
-    { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },
     // Kimi / DeepSeek: live-probed 2026-10-12 (us-east-1 + us-west-2) for Converse,
     // tool use (auto + forced), ConverseStream with a tool. DeepSeek V3.1 is
     // us-west-2 only (`regions.ts`); DeepSeek R1 refuses toolConfig, so it is not

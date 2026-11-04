@@ -66,13 +66,13 @@ def test_create_full_params_payload_shape(client, monkeypatch):
     assert judge["instructions"] == "Rate the tone of {session}"
     assert judge["ratingScale"]["numerical"] == FIVE_POINT_SCALE
     assert judge["modelConfig"]["bedrockEvaluatorModelConfig"]["modelId"] == (
-        "global.openai.gpt-6-sol"
+        "global.openai.gpt-6.1-sol"
     )
     assert kwargs["clientToken"]
     assert res.json()["model_fallback"] is None
 
 
-def _probe_refusal(model="global.openai.gpt-6-sol"):
+def _probe_refusal(model="global.openai.gpt-6.1-sol"):
     """The ValidationException CreateEvaluator/UpdateEvaluator return when the judge
     model rejects the service's fixed 10-token validation call (measured 2026-09-29)."""
     from botocore.exceptions import ClientError
@@ -103,12 +103,12 @@ def test_create_falls_back_when_agentcore_refuses_the_judge_model(client, monkey
     assert res.status_code == 201
     calls = stub.create_evaluator.call_args_list
     assert [_model_of(c) for c in calls] == [
-        "global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5",
+        "global.openai.gpt-6.1-sol", "global.anthropic.claude-sonnet-5-5",
     ]
     # each attempt is its own request — the refused token is never replayed
     assert calls[0].kwargs["clientToken"] != calls[1].kwargs["clientToken"]
     fallback = res.json()["model_fallback"]
-    assert fallback["requested"] == "global.openai.gpt-6-sol"
+    assert fallback["requested"] == "global.openai.gpt-6.1-sol"
     assert fallback["used"] == "global.anthropic.claude-sonnet-5-5"
 
 
@@ -132,9 +132,9 @@ def test_update_falls_back_and_reports_it(client, monkeypatch):
     })
     assert res.status_code == 200
     assert [_model_of(c) for c in stub.update_evaluator.call_args_list] == [
-        "global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5",
+        "global.openai.gpt-6.1-sol", "global.anthropic.claude-sonnet-5-5",
     ]
-    assert res.json()["model_fallback"]["requested"] == "global.openai.gpt-6-sol"
+    assert res.json()["model_fallback"]["requested"] == "global.openai.gpt-6.1-sol"
 
 
 def test_other_validation_errors_are_not_retried(client, monkeypatch):
@@ -285,7 +285,7 @@ DERIVED_DETAIL = {
             "baseEvaluatorId": "ThirdParty.DeepEval.TaskCompletion",
             "modelConfig": {
                 "bedrockEvaluatorModelConfig": {
-                    "modelId": "global.anthropic.claude-sonnet-5"
+                    "modelId": "global.anthropic.claude-sonnet-5-5"
                 }
             },
         }
@@ -395,7 +395,7 @@ def test_get_derived_output_mapping(client, monkeypatch):
         "definition": "derived",
         "instructions": "",
         "rating_scale": [],
-        "model_id": "global.anthropic.claude-sonnet-5",
+        "model_id": "global.anthropic.claude-sonnet-5-5",
         "base_evaluator_id": "ThirdParty.DeepEval.TaskCompletion",
         "lambda_arn": None,
         "lambda_timeout_s": None,

@@ -641,7 +641,59 @@ class LaunchpadBaseStack(Stack):
             )
         )
 
+        # ---- S3 Files sync role (the console's storage creation, storage-mounts §7) ----
+        # S3 Files assumes it to keep a file system and its bucket in step. One shared
+        # role per workspace, limited to the buckets the console makes
+        # (launchpad-s3files-*), so the backend only ever needs iam:PassRole on it —
+        # never iam:CreateRole. Mirrors workspace_iam.s3files_sync_role_policy.
+        s3files_buckets = f"arn:{self.partition}:s3:::launchpad-s3files-*"
+        own_account = {"StringEquals": {"aws:ResourceAccount": self.account}}
+        s3files_sync_role = iam.Role(
+            self,
+            "S3FilesSyncRole",
+            role_name=regional_role_name("launchpad-s3files-sync", self.region),
+            assumed_by=iam.ServicePrincipal(
+                "elasticfilesystem.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": self.account},
+                    "ArnLike": {
+                        "aws:SourceArn":
+                            f"arn:{self.partition}:s3files:{self.region}:{self.account}"
+                            ":file-system/*"
+                    },
+                },
+            ),
+            description="Assumed by S3 Files to sync the file systems the console creates",
+        )
+        s3files_sync_role.add_to_policy(iam.PolicyStatement(
+            sid="S3BucketPermissions",
+            actions=["s3:ListBucket", "s3:ListBucketVersions"],
+            resources=[s3files_buckets],
+            conditions=own_account,
+        ))
+        s3files_sync_role.add_to_policy(iam.PolicyStatement(
+            sid="S3ObjectPermissions",
+            actions=["s3:AbortMultipartUpload", "s3:DeleteObject*", "s3:GetObject*",
+                     "s3:List*", "s3:PutObject*"],
+            resources=[f"{s3files_buckets}/*"],
+            conditions=own_account,
+        ))
+        s3files_sync_role.add_to_policy(iam.PolicyStatement(
+            sid="EventBridgeManage",
+            actions=["events:DeleteRule", "events:DisableRule", "events:EnableRule",
+                     "events:PutRule", "events:PutTargets", "events:RemoveTargets"],
+            resources=[f"arn:{self.partition}:events:*:*:rule/DO-NOT-DELETE-S3-Files*"],
+            conditions={"StringEquals": {"events:ManagedBy": "elasticfilesystem.amazonaws.com"}},
+        ))
+        s3files_sync_role.add_to_policy(iam.PolicyStatement(
+            sid="EventBridgeRead",
+            actions=["events:DescribeRule", "events:ListRuleNamesByTarget",
+                     "events:ListRules", "events:ListTargetsByRule"],
+            resources=[f"arn:{self.partition}:events:*:*:rule/*"],
+        ))
+
         # ---- outputs consumed by backend bootstrap ----
+        CfnOutput(self, "S3FilesSyncRoleArn", value=s3files_sync_role.role_arn)
         CfnOutput(self, "HrLambdaArn", value=hr_lambda.function_arn)
         CfnOutput(self, "OfficeFactsApiUrl", value=facts_api.url)
         CfnOutput(self, "OfficeFactsApiKeyId", value=api_key.key_id)

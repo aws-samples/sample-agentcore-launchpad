@@ -21,7 +21,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.services import aws_clients
 from app.services.workspace import WorkspaceContext
 
-EXPECTED_VERSION = 1
+EXPECTED_VERSION = 2
 VERSION_TAG = "launchpad:template-version"
 VARIANT_TAG = "launchpad:role"
 # launchpad:role tag value → the template that deploys it.

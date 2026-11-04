@@ -92,6 +92,8 @@ export function scoreColor(score: number, evaluatorId: string): string {
  *  the requested judge the backend falls back to `judge_fallback_model_id` and says
  *  so in `model_fallback`. */
 export const JUDGE_MODEL_OPTIONS = [
+  // GPT-6.1 Sol: AgentCore judge acceptance live-probed 2026-11-04 (us-west-2)
+  "global.openai.gpt-6.1-sol",
   "global.openai.gpt-6-sol",
   "global.anthropic.claude-sonnet-5-5",
   "global.anthropic.claude-sonnet-5",

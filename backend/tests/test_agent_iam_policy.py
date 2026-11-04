@@ -302,7 +302,7 @@ class TestStudioFlowModels:
 
     def test_a_node_without_a_model_id_gets_the_codegen_fallback(self):
         resources = _statement(_studio(_node()), "BedrockModels")["Resource"]
-        assert resources == agent_iam.model_resources("global.anthropic.claude-sonnet-5", CTX)
+        assert resources == agent_iam.model_resources("global.anthropic.claude-sonnet-5-5", CTX)
 
     def test_a_mantle_node_adds_the_mantle_statements(self):
         spec = _studio(_node(modelProvider="Amazon Bedrock (Mantle)",

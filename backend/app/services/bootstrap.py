@@ -407,6 +407,9 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
                 "m2m_client_id": outputs.get("M2MClientId", ""),
                 # managed KB layer; absent on stacks predating it
                 "kb_role_arn": outputs.get("KbRoleArn", ""),
+                # the console's S3 Files creation (storage-mounts §7); absent on
+                # stacks predating it — `make bootstrap` then updates the stack
+                "s3files_sync_role_arn": outputs.get("S3FilesSyncRoleArn", ""),
             },
         },
         replace={"demo_users": {"passwords": passwords}},

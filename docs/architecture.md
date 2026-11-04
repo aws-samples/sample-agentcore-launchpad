@@ -382,6 +382,33 @@ stay as an administrator set them, or remove them. The execution role gets the
 `launchpad-fs-<agent>` inline policy for every method (always with
 `ClientWrite`; a read-only mode arrives with the catalog).
 
+**The console creates S3 Files storage** (storage-mounts §7,
+`services/storage_provision.py`, `POST /api/storage-mounts/provision`). An administrator
+names an id, a network profile and the access point's POSIX identity and root
+directory; the Job `storage_provision` makes a new versioned bucket
+(`launchpad-s3files-<account>-<hash>`), an S3 file system on it, a security group
+`launchpad-mt-<id>` admitting TCP 2049 from the profile's security groups, one mount
+target per Availability Zone of the profile's subnets and the access point, then
+registers the result with `origin: "platform"` and runs its check. S3 Files assumes
+one shared **sync role** per workspace (`launchpad-s3files-sync[-<region>]`, made by the
+CDK stack and the workspace bootstrap's `iam` stage, `resources.s3files_sync_role_arn`)
+that reaches only `launchpad-s3files-*` buckets, so the backend needs `iam:PassRole` on
+that one role and never `iam:CreateRole`; a customer's existing bucket is never linked.
+The profile's own security groups are left alone: when they do not allow 2049 out,
+the check blocks and says so. Every stage is list-or-get then create, and a restart
+resumes the job (`resume_pending_jobs`). `POST /api/storage-mounts/{id}/teardown`
+(the id typed again) deletes the access point, mount targets, file system and security
+group and archives the entry, refused for registered storage and while an agent mounts
+it; **the bucket and its objects are kept**. The V3 storage page (`/v3/storage`) has
+the "Create S3 Files" dialog, follows each job stage by stage, and offers a failed
+create's retry. The spoke role templates (version 2) carry the grants: S3 Files
+create/delete in the account, the `launchpad-s3files-*` buckets (with their change
+notifications), PassRole on the sync role, the `DO-NOT-DELETE-S3-Files*` EventBridge
+rules, network interfaces only through S3 Files (`aws:CalledVia` — S3 Files makes the
+mount targets' ENIs with the caller's credentials), and security-group changes only on
+groups tagged `launchpad:managed`. The workshop stack's instance role gets the same set
+in its own `WorkshopInstanceStoragePolicy`.
+
 **The storage catalog** (storage-mounts §4, SM-2, `services/storage_mounts.py`,
 [api.md](api.md#console-storage-catalog-api)). An administrator registers an S3 Files
 or EFS access point once per workspace as a catalog entry (`storage_mounts`: id, kind,
@@ -1665,7 +1692,7 @@ block is an `invalid` revision that keeps only a marker); `ProposalContent` is a
 Pydantic allowlist with `extra="forbid"` and per-field/per-item bounds — no `env`,
 `code`, `requirements`, `allowed_tools`, `protocol`, `filesystem`, `network`, URLs,
 ARNs, S3 prefixes or roles can pass. A proposal that names no model gets
-`PROPOSAL_DEFAULT_MODEL_ID` (`global.openai.gpt-6-sol`, the Create Agent wizard's
+`PROPOSAL_DEFAULT_MODEL_ID` (`global.openai.gpt-6.1-sol`, the Create Agent wizard's
 default; an approval is always a managed Harness, so a non-Claude default is safe),
 not `AgentSpec`'s stored-spec fallback. `memory` is `"disabled"` or `"workspace"` — the
 only two states the Harness API can enforce (`{"disabled": {}}`, or the workspace's
@@ -2363,15 +2390,15 @@ ACTIVE and then fails its first invoke with `401 access_denied`; the grant is
 shared by harness and zip, and adding it needs a CDK deploy.
 The field defaults to `bedrock` for backward compatibility with specs
 stored before it existed. The console form also starts every method on `bedrock`,
-with GLM-5.3 (`global.zai.glm-5.3`, a global inference profile offered in every region the
-console targets) as the default model, which `AgentSpec` also defaults to; Mantle stays
+with Kimi K3 (`global.moonshotai.kimi-k3`, a global inference profile; GLM-5.3 before
+2026-11-04) as the default model, which `AgentSpec` also defaults to; Mantle stays
 selectable for harness and zip (`MODEL_SOURCE_BY_METHOD` in
 `frontend/src/lib/agent-spec.ts`). The Claude Agent SDK method defaults to the
 first Claude entry instead, and the backend gives a container spec that names no model
-`global.anthropic.claude-sonnet-5` (`CLAUDE_SDK_DEFAULT_MODEL_ID`). Intent clustering and
+`global.anthropic.claude-sonnet-5-5` (`CLAUDE_SDK_DEFAULT_MODEL_ID`). Intent clustering and
 answer suggestions keep their own platform model, and the Strands Studio canvas keeps its
 Claude fallback for nodes without a model (changing it would change existing flows); new
-canvas nodes start on GLM-5.3. The console's model catalog lives in
+canvas nodes start on the configured agent default (Kimi K3). The console's model catalog lives in
 `frontend/src/lib/models.ts`, where the catalog's first entry is the default.
 
 **Harness (方式B)** — both sources ride the **same** `bedrockModelConfig` branch

@@ -51,6 +51,8 @@ def describe_providers() -> list[dict[str, Any]]:
 # Labels for the ids the settings default list carries; anything else is shown
 # as its id. Mirrors frontend/src/lib/models.ts wording.
 _MODEL_LABELS = {
+    "global.anthropic.claude-opus-5-5": "Claude Opus 5.5 (global)",
+    "global.anthropic.claude-sonnet-5-5": "Claude Sonnet 5.5 (global)",
     "global.anthropic.claude-sonnet-5": "Claude Sonnet 5 (global)",
     "global.anthropic.claude-opus-5": "Claude Opus 5 (global)",
     "global.anthropic.claude-sonnet-4-6": "Claude Sonnet 4.6 (global)",

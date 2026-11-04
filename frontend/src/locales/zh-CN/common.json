@@ -2794,6 +2794,7 @@
     "agent.teardown_pending": "AWS 仍在删除该 Agent 的端点。Agent 已从控制台移除，AWS 释放后其资源会自动删除。",
     "agent.tool_approval_requires_console": "该 Agent 的某个工具需要人工批准，只能在 Launchpad 控制台的对话中批准。",
     "agent.upstream_error": "智能体的模型或运行时在回答前出错，通常是暂时的。请重新发送；反复出现时打开该智能体的追踪查看。",
+    "agent.model_access_denied": "该智能体无权调用它的模型：执行角色没有授权这个模型，或本账号没有开通该模型的访问权限。重新发送不会成功。请重新部署该智能体以重新生成角色，或在 Amazon Bedrock 中开通该模型的访问权限，或换一个模型。",
     "agent_tools.jwt_inbound": "该 Agent 不能作为工具提供：它的 Runtime 只接受 JWT Bearer 令牌，而调用方 Agent 使用 IAM 签名。",
     "agent_tools.not_deployed": "该 Agent 不能作为工具提供：它尚未部署。",
     "agent_tools.not_found": "未找到被选作工具的 Agent。",
@@ -3443,7 +3444,11 @@
     "auth.registration_queue_full": "待审批的账号过多，注册暂时关闭。",
     "registry.record_not_found": "未找到该注册记录。",
     "registry.not_republishable": "只有“草稿”或“待审批”的记录可以重新发布。",
-    "gateway_tool.not_adoptable": "只有本工作区账号与区域内、使用内联工具 schema 的手工 Lambda 目标可以纳管。"
+    "gateway_tool.not_adoptable": "只有本工作区账号与区域内、使用内联工具 schema 的手工 Lambda 目标可以纳管。",
+    "storage.sync_role_missing": "该工作区还没有 S3 Files 同步角色。请重新运行 make bootstrap（默认工作区）或该工作区的引导，然后再试。",
+    "storage.not_platform": "这块存储是登记进来的，不是控制台新建的。控制台不会删除登记的存储，请改用归档。",
+    "storage.confirm_mismatch": "请准确输入存储 ID 以确认删除。",
+    "storage.job_not_found": "未找到该存储作业。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -16096,6 +16101,55 @@
         "none": "本项目没有可用的存储，请联系管理员登记。",
         "modeTooWide": "该存储只能以只读方式挂载",
         "preflightOk": "存储预检通过"
+      },
+      "provision": {
+        "open": "新建 S3 Files",
+        "title": "新建 S3 Files 存储",
+        "intro": "控制台会新建一个开启版本控制的存储桶，在它上面建 S3 文件系统，在网络配置档的每个可用区建一个挂载目标，建一个只放行配置档安全组 NFS（TCP 2049）流量的安全组，再建访问点，最后登记到这里。大约需要 5 到 10 分钟。",
+        "noProfiles": "请先新建网络配置档：挂载目标会建在它的子网里。",
+        "pickProfile": "选择网络配置档",
+        "profileHint": "挂载这块存储的 Agent 必须运行在这个配置档的 VPC 里。它的安全组要允许 TCP 2049 出站，不允许时检查结果会提示。",
+        "uid": "POSIX 用户 ID",
+        "gid": "POSIX 组 ID",
+        "root": "根目录",
+        "rootHint": "Agent 看到的挂载点顶层。第一次使用时创建，属主是上面的用户和组，所以 Agent 能在里面写文件；文件系统本身的根目录属于 root，不能使用。",
+        "cost": "S3 Files 存储、挂载目标和存储桶都在本工作区的账号里计费。以后删除这块存储时，存储桶和其中的对象会保留。",
+        "submit": "新建",
+        "queued": "正在新建 {{id}}，进度见下方",
+        "errProfile": "请选择网络配置档。",
+        "errPosix": "请输入 0 到 4294967295 之间的整数。",
+        "errRoot": "填一到四段 /名称（字母、数字、.、_、-），例如 /data。",
+        "jobsTitle": "正在新建或删除的存储",
+        "op": {
+          "create": "新建",
+          "delete": "删除"
+        },
+        "job": {
+          "queued": "排队中",
+          "running": "进行中",
+          "succeeded": "已完成",
+          "failed": "失败"
+        },
+        "retry": "重试",
+        "madeHere": "控制台新建",
+        "stage": {
+          "validate": "检查网络配置档",
+          "bucket": "存储桶",
+          "file-system": "文件系统",
+          "security-group": "挂载目标安全组",
+          "mount-targets": "挂载目标",
+          "access-point": "访问点",
+          "register": "登记到存储目录",
+          "archive": "归档条目"
+        }
+      },
+      "teardown": {
+        "action": "删除存储及其 AWS 资源",
+        "title": "删除 {{name}}？",
+        "body": "控制台会删除访问点、挂载目标、文件系统和它的安全组，并归档这个条目。存储桶和其中的所有对象都会保留。",
+        "typeId": "输入 {{id}} 确认",
+        "confirm": "删除",
+        "queued": "正在删除 {{name}}，进度见下方"
       }
     },
     "menuSettings": {

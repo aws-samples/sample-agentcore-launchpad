@@ -1258,7 +1258,7 @@ shots:
     wait: '.v3-obs-wf .r'
     actions:
       - {sleep: 2500}
-      - {click: '.v3-obs-wf .r:has(.t:text-is("chat global.zai.glm-5.3")) >> nth=-1'}
+      - {click: '.v3-obs-wf .r:has(.t:text-is("chat global.moonshotai.kimi-k3")) >> nth=-1'}
       - {sleep: 800}
     highlights:
       - {n: 1, box: 'main .v3-grid.c4', badge: left}
@@ -1266,7 +1266,7 @@ shots:
       # by span name, not row number (the span count differs per run); a row is
       # display:contents, so the box is its child spans
       - {n: 3, box: '.v3-obs-wf .r:has(.t:has-text("kb_search")) >> nth=0 >> xpath=./span', badge: left}
-      - {n: 4, box: '.v3-obs-wf .r:has(.t:text-is("chat global.zai.glm-5.3")) >> nth=-1 >> xpath=./span', badge: left}
+      - {n: 4, box: '.v3-obs-wf .r:has(.t:text-is("chat global.moonshotai.kimi-k3")) >> nth=-1 >> xpath=./span', badge: left}
       # the span card now carries the prompt messages (thousands of px): frame its
       # two key/value blocks and crop to the waterfall, not the whole card
       - {n: 5, box: 'main .v3-obs-side dl.v3-kv', badge: right}

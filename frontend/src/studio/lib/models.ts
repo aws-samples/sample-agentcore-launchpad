@@ -16,7 +16,7 @@
 
 import { MODEL_CATALOG } from '../../lib/models';
 
-export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5';
+export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5-5';
 
 // launchpad extension: the server's configured `studio_fallback_model_id`
 // (GET /api/models/defaults) replaces DEFAULT_MODEL_ID once loaded — an account
@@ -44,6 +44,10 @@ export interface BedrockModelOption {
 // Entry [0] is what a new agent node and a switch to the Bedrock provider get.
 export const BEDROCK_MODELS: BedrockModelOption[] = [
   {
+    model_id: 'global.moonshotai.kimi-k3',
+    model_name: 'Kimi K3 (global)',
+  },
+  {
     model_id: 'global.zai.glm-5.3',
     model_name: 'GLM-5.3 (global)',
   },
@@ -54,6 +58,10 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
   {
     model_id: 'zai.glm-4.7',
     model_name: 'GLM-4.7',
+  },
+  {
+    model_id: 'global.openai.gpt-6.1-sol',
+    model_name: 'GPT-6.1 Sol (global)',
   },
   {
     model_id: 'global.openai.gpt-6-sol',
@@ -70,6 +78,10 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
   {
     model_id: 'global.openai.gpt-6-luna',
     model_name: 'GPT-6 Luna (global)',
+  },
+  {
+    model_id: 'global.anthropic.claude-sonnet-5-5',
+    model_name: 'Claude Sonnet 5.5 (global)',
   },
   {
     model_id: 'global.anthropic.claude-sonnet-5',
@@ -129,10 +141,6 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
   {
     model_id: 'deepseek.v3.2',
     model_name: 'DeepSeek V3.2',
-  },
-  {
-    model_id: 'global.moonshotai.kimi-k3',
-    model_name: 'Kimi K3 (global)',
   },
   {
     model_id: 'us.moonshotai.kimi-k3',

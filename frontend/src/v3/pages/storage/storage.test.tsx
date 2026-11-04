@@ -7,6 +7,7 @@ import type { AgentInfo } from "../../../lib/api";
 import type { AgentStorage, StorageEntry } from "../../../lib/api/storage";
 import { hostedGroups } from "../../nav";
 import { StorageCardView } from "../agent/StorageCard";
+import { ProvisionJobs } from "./ProvisionJobs";
 import { StorageTable } from "./Storage";
 import { StorageDetail } from "./StorageDetail";
 
@@ -76,6 +77,32 @@ describe("storage page", () => {
     expect(html).toContain("Allowed for: risk, collect");
     expect(html).toContain("2 agents mount this storage read-write");
     expect(html).toContain("etl");
+  });
+
+  it("marks a console-made entry and offers its teardown", () => {
+    const made = { ...entry, origin: "platform" as const, agents: [] };
+    const html = render(<StorageTable entries={[made]} selectedId="" busyId={null} onSelect={() => {}} onCheck={() => {}}
+      onEdit={() => {}} onArchive={() => {}} onTeardown={() => {}} />);
+    expect(html).toContain("created here");
+    expect(html).toContain("Delete the storage and its AWS resources");
+    expect(render(<StorageTable entries={[{ ...made, origin: "registered" }]} selectedId="" busyId={null} onSelect={() => {}}
+      onCheck={() => {}} onEdit={() => {}} onArchive={() => {}} onTeardown={() => {}} />)).not.toContain("created here");
+  });
+
+  it("follows a create stage by stage and offers a failed one's retry", () => {
+    const html = render(<ProvisionJobs onRetry={() => {}} jobs={[{
+      job_id: "j1", op: "create", storage_id: "datasets", status: "failed", done: true, resources: {}, request: {},
+      stages: [
+        { name: "bucket", status: "succeeded", detail: "created launchpad-s3files-1-abc" },
+        { name: "mount-targets", status: "failed", detail: "no free IPs" },
+      ],
+      error: "mount-targets: no free IPs", created_at: null, updated_at: null,
+    }]} />);
+    expect(html).toContain("Mount targets");
+    expect(html).toContain("created launchpad-s3files-1-abc");
+    expect(html).toContain("mount-targets: no free IPs");
+    expect(html).toContain("Retry");
+    expect(render(<ProvisionJobs onRetry={() => {}} jobs={[]} />)).toBe("");
   });
 
   it("is an administrator's Configure entry after Network profiles", () => {

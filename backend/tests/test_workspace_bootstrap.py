@@ -587,6 +587,8 @@ class TestStages:
             "registry_arn",
             "registry_unavailable_reason",
             "user_pool_domain",
+            # optional: older workspaces predate the console's S3 Files creation
+            "s3files_sync_role_arn",
         }
         assert resources["artifacts_bucket"] == f"launchpad-artifacts-{ACCOUNT}-{REGION}"
         assert resources["ecr_repo"] == "launchpad-agents"
@@ -614,6 +616,7 @@ class TestStages:
             f"launchpad-agent-execution-role-{REGION}",
             f"launchpad-gateway-role-{REGION}",
             f"launchpad-kb-role-{REGION}",
+            f"launchpad-s3files-sync-{REGION}",
             f"launchpad-codebuild-role-{REGION}",
         ]
         assert len(aws.s3.created) == 1

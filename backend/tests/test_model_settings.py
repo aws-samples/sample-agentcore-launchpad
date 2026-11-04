@@ -24,15 +24,15 @@ def settings(monkeypatch):
 
 def test_defaults_are_unchanged():
     defaults = {name: f.default for name, f in Settings.model_fields.items()}
-    assert defaults["platform_model_id"] == "global.anthropic.claude-sonnet-5"
-    assert defaults["judge_model_id"] == "global.openai.gpt-6-sol"
+    assert defaults["platform_model_id"] == "global.anthropic.claude-sonnet-5-5"
+    assert defaults["judge_model_id"] == "global.openai.gpt-6.1-sol"
     assert defaults["judge_fallback_model_id"] == "global.anthropic.claude-sonnet-5-5"
-    assert defaults["assistant_model_id"] == "global.openai.gpt-6-sol"
+    assert defaults["assistant_model_id"] == "global.openai.gpt-6.1-sol"
     assert defaults["architect_model_id"] == "global.openai.gpt-6-astra"
     assert defaults["actor_model_id"] == "global.openai.gpt-6-luna"
-    assert defaults["studio_fallback_model_id"] == "global.anthropic.claude-sonnet-5"
-    assert defaults["claude_sdk_model_id"] == "global.anthropic.claude-sonnet-5"
-    assert defaults["codegen_model"] == "global.anthropic.claude-sonnet-5"
+    assert defaults["studio_fallback_model_id"] == "global.anthropic.claude-sonnet-5-5"
+    assert defaults["claude_sdk_model_id"] == "global.anthropic.claude-sonnet-5-5"
+    assert defaults["codegen_model"] == "global.anthropic.claude-sonnet-5-5"
     assert defaults["skill_lab_judge_model_id"] == "global.openai.gpt-6.1-sol"
     assert defaults["skill_lab_target_model_id"] == "global.anthropic.claude-opus-5-5"
     assert defaults["skill_lab_codex_target_model_id"] == "global.openai.gpt-6.1-sol"
@@ -134,9 +134,9 @@ def test_judge_default_follows_settings(settings):
 
 def test_judge_fallback_follows_settings(settings):
     settings(judge_fallback_model_id=GLM)
-    client = _Refusing({"global.openai.gpt-6-sol"})
-    out = _create(client, "global.openai.gpt-6-sol")
-    assert client.models == ["global.openai.gpt-6-sol", GLM]
+    client = _Refusing({"global.openai.gpt-6.1-sol"})
+    out = _create(client, "global.openai.gpt-6.1-sol")
+    assert client.models == ["global.openai.gpt-6.1-sol", GLM]
     assert out["launchpadModelFallback"]["used"] == GLM
 
 
@@ -146,11 +146,11 @@ def test_an_empty_judge_fallback_disables_the_retry(settings):
     from app.evaluation import agentcore_eval as ac
 
     settings(judge_fallback_model_id="")
-    assert ac.judge_fallback_model("global.openai.gpt-6-sol") is None
-    client = _Refusing({"global.openai.gpt-6-sol"})
+    assert ac.judge_fallback_model("global.openai.gpt-6.1-sol") is None
+    client = _Refusing({"global.openai.gpt-6.1-sol"})
     with pytest.raises(ClientError):
-        _create(client, "global.openai.gpt-6-sol")
-    assert client.models == ["global.openai.gpt-6-sol"]  # no second attempt
+        _create(client, "global.openai.gpt-6.1-sol")
+    assert client.models == ["global.openai.gpt-6.1-sol"]  # no second attempt
 
 
 # ── assistant proposal ──────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ def test_studio_fallback_follows_settings(settings):
     spec = AgentSpec(name="flow-agent", method="studio", code="print(1)", system_prompt="p",
                      studio_flow=flow)
     assert agent_iam.studio_node_models(spec) == [
-        ("AWS Bedrock", "global.anthropic.claude-sonnet-5")]
+        ("AWS Bedrock", "global.anthropic.claude-sonnet-5-5")]
     settings(studio_fallback_model_id=GLM)
     assert agent_iam.studio_node_models(spec) == [("AWS Bedrock", GLM)]
 
@@ -202,7 +202,7 @@ def test_claude_sdk_default_follows_settings(settings):
     from app.schemas.agent import AgentSpec
 
     assert AgentSpec(name="sdk-agent", method="container", system_prompt="p").model_id == (
-        "global.anthropic.claude-sonnet-5")
+        "global.anthropic.claude-sonnet-5-5")
     settings(claude_sdk_model_id="us.anthropic.claude-sonnet-5")
     assert AgentSpec(name="sdk-agent", method="container", system_prompt="p").model_id == (
         "us.anthropic.claude-sonnet-5")
@@ -213,9 +213,9 @@ def test_claude_sdk_default_follows_settings(settings):
 
 def test_defaults_endpoint_reports_the_configured_ids(client, settings):
     body = client.get("/api/models/defaults").json()
-    assert body["judge_model_id"] == "global.openai.gpt-6-sol"
+    assert body["judge_model_id"] == "global.openai.gpt-6.1-sol"
     assert body["actor_model_id"] == "global.openai.gpt-6-luna"
-    assert body["agent_default_model_id"] == GLM
+    assert body["agent_default_model_id"] == "global.moonshotai.kimi-k3"
     settings(judge_model_id=GLM, actor_model_id=GLM, judge_fallback_model_id="")
     body = client.get("/api/models/defaults").json()
     assert body["judge_model_id"] == body["actor_model_id"] == GLM
@@ -259,8 +259,8 @@ def test_console_override_applies_at_once_and_reset_restores(client, restore_set
     assert client.get("/api/models/defaults").json()["judge_model_id"] == GLM
 
     reset = client.delete("/api/models/settings/judge_model_id").json()
-    assert reset["source"] == "default" and reset["value"] == "global.openai.gpt-6-sol"
-    assert ac.judge_default_model_id() == "global.openai.gpt-6-sol"
+    assert reset["source"] == "default" and reset["value"] == "global.openai.gpt-6.1-sol"
+    assert ac.judge_default_model_id() == "global.openai.gpt-6.1-sol"
 
 
 def test_console_beats_env_and_env_is_reported(client, monkeypatch, restore_settings):
@@ -400,7 +400,8 @@ def test_actor_probe_checks_forced_tool_choice_and_reports_denials():
 def test_new_agent_default_follows_settings(settings):
     from app.schemas.agent import AgentSpec
 
-    assert AgentSpec(name="plain-agent", method="harness", system_prompt="p").model_id == GLM
+    assert AgentSpec(name="plain-agent", method="harness",
+                     system_prompt="p").model_id == "global.moonshotai.kimi-k3"
     settings(agent_default_model_id="us.amazon.nova-pro-v1:0")
     assert AgentSpec(name="plain-agent", method="harness",
                      system_prompt="p").model_id == "us.amazon.nova-pro-v1:0"
@@ -461,7 +462,7 @@ def test_tool_roles_probe_tool_use():
     ("deepseek.v3.2", True), ("deepseek.v3-v1:0", True), ("moonshotai.kimi-k2.5", True),
     ("moonshot.kimi-k2-thinking", True), ("global.zai.glm-5.3", True),
     ("global.moonshotai.kimi-k3", True), ("us.deepseek.r1-v1:0", True),
-    ("global.openai.gpt-6-sol", True),  # from its Bedrock model card
+    ("global.openai.gpt-6.1-sol", True),  # from its Bedrock model card
     ("global.openai.gpt-6-luna", True),  # main's built-in Luna price
 ])
 def test_deepseek_and_kimi_prices(model_id, priced):
@@ -488,4 +489,4 @@ def test_a_console_override_survives_a_runtime_cache_clear(client, restore_setti
     assert row["source"] == "console" and row["value"] == GLM
     client.delete("/api/models/settings/judge_model_id")
     get_settings.cache_clear()
-    assert get_settings().judge_model_id == "global.openai.gpt-6-sol"
+    assert get_settings().judge_model_id == "global.openai.gpt-6.1-sol"

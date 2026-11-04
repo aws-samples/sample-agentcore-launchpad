@@ -257,9 +257,12 @@ def _assert_profile(db: Session, workspace_id: str, profile_id: str | None) -> N
                             {"profile_id": profile_id})
 
 
-def register(db: Session, workspace_id: str, fields: dict[str, Any], actor: str) -> StorageMount:
+def register(db: Session, workspace_id: str, fields: dict[str, Any], actor: str,
+             *, origin: str = "registered") -> StorageMount:
     """A new catalog entry (unchecked). The id is unique among the workspace's live
-    entries; an archived entry's id may be registered again."""
+    entries; an archived entry's id may be registered again. ``origin="platform"`` marks
+    an entry the console made (`services/storage_provision`), which its teardown may
+    delete; a registered one the platform never deletes."""
     storage_id = fields["id"]
     if _row(db, workspace_id, storage_id) is not None:
         raise AppError("storage.id_exists",
@@ -278,7 +281,7 @@ def register(db: Session, workspace_id: str, fields: dict[str, Any], actor: str)
         network_profile_id=fields.get("network_profile_id") or None,
         max_mode=fields.get("max_mode") or "ro",
         data_class=fields.get("data_class") or "reference",
-        origin="registered", status="unchecked", created_by=actor,
+        origin=origin, status="unchecked", created_by=actor,
     )
     db.add(row)
     db.commit()
@@ -315,12 +318,8 @@ def update(db: Session, workspace_id: str, storage_id: str, fields: dict[str, An
     return get_entry(db, workspace_id, storage_id, None, see_all=True)
 
 
-def archive(db: Session, workspace_id: str, storage_id: str) -> None:
-    """Archive (the row stays: snapshots may still name it). The platform never deletes
-    registered storage itself (design principle 4). Refused while a live agent mounts it."""
-    row = _row(db, workspace_id, storage_id)
-    if row is None:
-        raise _not_found(storage_id)
+def assert_unused(db: Session, workspace_id: str, row: StorageMount) -> None:
+    """`storage.in_use` (409) while a live agent mounts the entry."""
     used = usage(db, workspace_id, row.id).get(row.id, [])
     if used:
         raise AppError("storage.in_use",
@@ -328,6 +327,15 @@ def archive(db: Session, workspace_id: str, storage_id: str) -> None:
                        "from them first",
                        {"storage_id": row.id, "agents": [a["agent_id"] for a in used]},
                        status_code=409)
+
+
+def archive(db: Session, workspace_id: str, storage_id: str) -> None:
+    """Archive (the row stays: snapshots may still name it). The platform never deletes
+    registered storage itself (design principle 4). Refused while a live agent mounts it."""
+    row = _row(db, workspace_id, storage_id)
+    if row is None:
+        raise _not_found(storage_id)
+    assert_unused(db, workspace_id, row)
     row.archived_at = _now()
     row.updated_at = row.archived_at
     for binding in _bindings_of(db, row):

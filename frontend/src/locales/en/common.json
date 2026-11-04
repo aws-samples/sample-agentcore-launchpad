@@ -2794,6 +2794,7 @@
     "agent.teardown_pending": "AWS is still deleting this agent's endpoints. The agent is removed from the console and its resource is deleted automatically once AWS releases it.",
     "agent.tool_approval_requires_console": "A tool in this agent needs a person's approval, which only the Launchpad console chat can give.",
     "agent.upstream_error": "The agent's model or runtime failed before answering — usually temporary. Send the turn again; if it keeps failing, open the agent's traces.",
+    "agent.model_access_denied": "The agent is not allowed to call its model: its execution role does not grant the model, or this account has no access to it. Sending the turn again will not help. Redeploy the agent so its role is regenerated, enable access to the model in Amazon Bedrock, or pick another model.",
     "agent_tools.jwt_inbound": "This agent cannot be offered as a tool: its Runtime accepts JWT bearer tokens only, and the calling agent signs with IAM.",
     "agent_tools.not_deployed": "This agent cannot be offered as a tool: it is not deployed.",
     "agent_tools.not_found": "The agent picked as a tool was not found.",
@@ -3443,7 +3444,11 @@
     "auth.registration_queue_full": "Registration is temporarily closed while administrators review pending accounts.",
     "registry.record_not_found": "Registry record not found.",
     "registry.not_republishable": "Only a Draft or Pending-approval record can be published again.",
-    "gateway_tool.not_adoptable": "Only a hand-made Lambda target with an inline tool schema in this workspace's account and region can be brought under management."
+    "gateway_tool.not_adoptable": "Only a hand-made Lambda target with an inline tool schema in this workspace's account and region can be brought under management.",
+    "storage.sync_role_missing": "This workspace has no S3 Files sync role yet. Re-run make bootstrap (default workspace) or the workspace's bootstrap, then try again.",
+    "storage.not_platform": "This storage was registered, not created by the console. The console never deletes registered storage: archive it instead.",
+    "storage.confirm_mismatch": "Type the storage id exactly to confirm the deletion.",
+    "storage.job_not_found": "That storage job was not found."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -16096,6 +16101,55 @@
         "none": "No storage is available to this project. Ask an administrator to register it.",
         "modeTooWide": "This storage can only be mounted read-only",
         "preflightOk": "Storage preflight passed"
+      },
+      "provision": {
+        "open": "Create S3 Files",
+        "title": "Create S3 Files storage",
+        "intro": "The console creates a new versioned bucket, an S3 file system on it, a mount target in each Availability Zone of the network profile, a security group that admits NFS (TCP 2049) from the profile's security groups, and an access point — then registers the result here. It takes about 5–10 minutes.",
+        "noProfiles": "Create a network profile first: the mount targets go into its subnets.",
+        "pickProfile": "Pick a network profile",
+        "profileHint": "Agents that mount this storage must run in this profile's VPC. Its security groups must allow TCP 2049 out — the check says so if they do not.",
+        "uid": "POSIX user ID",
+        "gid": "POSIX group ID",
+        "root": "Root directory",
+        "rootHint": "What agents see as the top of the mount. Created on first use and owned by the user and group above, so agents can write there; the file system's own root belongs to root and cannot be used.",
+        "cost": "S3 Files storage, its mount targets and the bucket are billed to this workspace's account. Deleting the storage later keeps the bucket and its objects.",
+        "submit": "Create",
+        "queued": "Creating {{id}} — follow its progress below",
+        "errProfile": "Pick a network profile.",
+        "errPosix": "A whole number from 0 to 4294967295.",
+        "errRoot": "One to four /segments of letters, digits, '.', '_' or '-', for example /data.",
+        "jobsTitle": "Storage being created or deleted",
+        "op": {
+          "create": "create",
+          "delete": "delete"
+        },
+        "job": {
+          "queued": "queued",
+          "running": "running",
+          "succeeded": "done",
+          "failed": "failed"
+        },
+        "retry": "Retry",
+        "madeHere": "created here",
+        "stage": {
+          "validate": "Check the network profile",
+          "bucket": "Bucket",
+          "file-system": "File system",
+          "security-group": "Mount-target security group",
+          "mount-targets": "Mount targets",
+          "access-point": "Access point",
+          "register": "Register in the catalog",
+          "archive": "Archive the entry"
+        }
+      },
+      "teardown": {
+        "action": "Delete the storage and its AWS resources",
+        "title": "Delete {{name}}?",
+        "body": "The console deletes the access point, the mount targets, the file system and its security group, and archives the entry. The bucket and every object in it are kept.",
+        "typeId": "Type {{id}} to confirm",
+        "confirm": "Delete",
+        "queued": "Deleting {{name}} — follow its progress below"
       }
     },
     "menuSettings": {

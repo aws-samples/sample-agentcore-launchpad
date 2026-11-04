@@ -1300,7 +1300,7 @@ def test_judge_refused_by_the_validation_probe_is_created_on_the_fallback_model(
     BEFORE the retry, and a resumed run rebuilds exactly that request."""
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    fakes.control.refuse_models = {"global.openai.gpt-6-sol"}
+    fakes.control.refuse_models = {"global.openai.gpt-6.1-sol"}
     op_id, _, _, _ = _approve(cid, h, fakes=fakes)
     assert _run(op_id, fakes)
     op = _op(op_id)
@@ -1308,7 +1308,7 @@ def test_judge_refused_by_the_validation_probe_is_created_on_the_fallback_model(
     res = _res(op, "evaluator:pii")
     assert [h_["outcome"] for h_ in res["create_history"]] == ["rejected", "created"]
     fallback = res["model_fallback"]
-    assert fallback["requested"] == "global.openai.gpt-6-sol"
+    assert fallback["requested"] == "global.openai.gpt-6.1-sol"
     assert fallback["used"] == "global.anthropic.claude-sonnet-5-5"
     assert fallback["client_token"] != res["client_token"]
     assert res["request"]["clientToken"] == fallback["client_token"]
@@ -1322,7 +1322,7 @@ def test_judge_refused_by_the_validation_probe_is_created_on_the_fallback_model(
 def test_lost_fallback_create_resumes_on_the_persisted_fallback_request(app_ready):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    fakes.control.refuse_models = {"global.openai.gpt-6-sol"}
+    fakes.control.refuse_models = {"global.openai.gpt-6.1-sol"}
     fakes.control.lose_response_once = True  # the FALLBACK create succeeds, response lost
     op_id, _, _, _ = _approve(cid, h, fakes=fakes)
     _run(op_id, fakes)
@@ -3673,7 +3673,8 @@ def test_approval_refuses_a_taken_name_before_any_write(app_ready):
 def test_deleted_and_rejected_evaluators_free_their_names(app_ready):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    fakes.control.refuse_models = {"global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5"}
+    fakes.control.refuse_models = {
+        "global.openai.gpt-6.1-sol", "global.anthropic.claude-sonnet-5-5"}
     op_id, *_ = _approve(cid, h, fakes=fakes)
     _run(op_id, fakes)  # the judge is definitely rejected on both models: nothing created
     db = SessionLocal()

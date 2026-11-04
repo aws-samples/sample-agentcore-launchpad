@@ -30,8 +30,8 @@ from app.templates import context_layer_support
 
 # Latest Sonnet inference profile available in the target account (verified via
 # bedrock list-inference-profiles; there is no "sonnet-5" profile).
-# GLM-5.3 through its global inference profile: offered in every region the
-# console targets (us-east-1, us-west-2, us-east-2, ca-central-1). Mirrors the
+# Kimi K3 through its global inference profile (Converse + tool use probed in
+# us-east-1 and us-west-2, 2026-11-04; GLM-5.3 before that). Mirrors the
 # console's SPEC_DEFAULT_MODEL_ID (frontend/src/lib/models.ts).
 DEFAULT_MODEL_ID = Settings.model_fields["agent_default_model_id"].default  # built-in
 

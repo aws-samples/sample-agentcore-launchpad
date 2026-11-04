@@ -45,7 +45,7 @@ def test_model_questions_are_used_and_capped():
     call = bedrock.calls[0]
     # a cap with room for a reasoning model's thinking (GLM-5.3 used 294 for four)
     assert 300 < call["inferenceConfig"]["maxTokens"] <= 2000
-    assert call["modelId"] == "global.anthropic.claude-sonnet-5"  # the default
+    assert call["modelId"] == "global.anthropic.claude-sonnet-5-5"  # the default
     # Claude 5 rejects `temperature` with a ValidationException
     assert "temperature" not in call["inferenceConfig"]
     assert "HR policy" in call["messages"][0]["content"][0]["text"]

@@ -595,6 +595,81 @@ def kb_role_policy(artifacts_bucket: str) -> dict[str, Any]:
     }
 
 
+# S3 Files the console creates (services/storage_provision): one shared sync role per
+# workspace, which S3 Files assumes to keep a file system and its bucket in step. It
+# reaches only the buckets the platform makes for that purpose, all named with this
+# prefix, so a passed role never opens a customer's own bucket.
+S3FILES_SYNC_ROLE_BASE = "launchpad-s3files-sync"
+S3FILES_BUCKET_PREFIX = "launchpad-s3files-"
+
+
+def s3files_sync_trust_policy(account_id: str, region: str,
+                              partition: str = "aws") -> dict[str, Any]:
+    """S3 Files assumes the role as `elasticfilesystem.amazonaws.com`, for this
+    account's file systems only (AWS S3 Files user guide, "IAM role for accessing
+    your bucket from the file system")."""
+    return {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": "AllowS3FilesAssumeRole",
+            "Effect": "Allow",
+            "Principal": {"Service": "elasticfilesystem.amazonaws.com"},
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {"aws:SourceAccount": account_id},
+                "ArnLike": {
+                    "aws:SourceArn": f"arn:{partition}:s3files:{region}:{account_id}:file-system/*"
+                },
+            },
+        }],
+    }
+
+
+def s3files_sync_role_policy(account_id: str, partition: str = "aws") -> dict[str, Any]:
+    """The user guide's sync policy, narrowed to the platform's buckets
+    (`launchpad-s3files-*`). S3 Files needs versioned-object reads and writes, and
+    manages its own EventBridge rules (`DO-NOT-DELETE-S3-Files*`) to notice bucket
+    changes. KMS is not granted: the platform's buckets use SSE-S3."""
+    buckets = f"arn:{partition}:s3:::{S3FILES_BUCKET_PREFIX}*"
+    own = {"StringEquals": {"aws:ResourceAccount": account_id}}
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "S3BucketPermissions",
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+                "Resource": buckets,
+                "Condition": own,
+            },
+            {
+                "Sid": "S3ObjectPermissions",
+                "Effect": "Allow",
+                "Action": ["s3:AbortMultipartUpload", "s3:DeleteObject*", "s3:GetObject*",
+                           "s3:List*", "s3:PutObject*"],
+                "Resource": f"{buckets}/*",
+                "Condition": own,
+            },
+            {
+                "Sid": "EventBridgeManage",
+                "Effect": "Allow",
+                "Action": ["events:DeleteRule", "events:DisableRule", "events:EnableRule",
+                           "events:PutRule", "events:PutTargets", "events:RemoveTargets"],
+                "Resource": f"arn:{partition}:events:*:*:rule/DO-NOT-DELETE-S3-Files*",
+                "Condition": {"StringEquals": {"events:ManagedBy":
+                                               "elasticfilesystem.amazonaws.com"}},
+            },
+            {
+                "Sid": "EventBridgeRead",
+                "Effect": "Allow",
+                "Action": ["events:DescribeRule", "events:ListRuleNamesByTarget",
+                           "events:ListRules", "events:ListTargetsByRule"],
+                "Resource": f"arn:{partition}:events:*:*:rule/*",
+            },
+        ],
+    }
+
+
 def codebuild_role_policy(
     account_id: str, region: str, artifacts_bucket: str, ecr_repo_arn: str, project: str
 ) -> dict[str, Any]:

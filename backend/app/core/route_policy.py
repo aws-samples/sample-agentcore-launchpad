@@ -1759,8 +1759,18 @@ ROUTE_POLICY.update({
     ("DELETE", "/api/storage-mounts/{storage_id}"): ADMIN,
     ("GET", "/api/storage-mounts/projects/{project_id}"): ADMIN,
     ("PUT", "/api/storage-mounts/projects/{project_id}"): ADMIN,
+    # the console creates / tears down S3 Files storage (§7, services/storage_provision):
+    # it makes AWS resources in the workspace, so administrators only
+    ("POST", "/api/storage-mounts/provision"): ADMIN,
+    ("GET", "/api/storage-mounts/provision/jobs"): ADMIN,
+    ("GET", "/api/storage-mounts/provision/jobs/{job_id}"): ADMIN,
+    ("POST", "/api/storage-mounts/{storage_id}/teardown"): ADMIN,
 })
 PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
+    ("POST", "/api/storage-mounts/provision"),
+    ("GET", "/api/storage-mounts/provision/jobs"),
+    ("GET", "/api/storage-mounts/provision/jobs/{job_id}"),
+    ("POST", "/api/storage-mounts/{storage_id}/teardown"),
     ("POST", "/api/storage-mounts"),
     ("POST", "/api/storage-mounts/{storage_id}/check"),
     ("PATCH", "/api/storage-mounts/{storage_id}"),
@@ -1941,6 +1951,10 @@ _STRUCTURE_ROUTES = (
     ("DELETE", "/api/storage-mounts/{storage_id}"),
     ("GET", "/api/storage-mounts/projects/{project_id}"),
     ("PUT", "/api/storage-mounts/projects/{project_id}"),
+    ("POST", "/api/storage-mounts/provision"),
+    ("GET", "/api/storage-mounts/provision/jobs"),
+    ("GET", "/api/storage-mounts/provision/jobs/{job_id}"),
+    ("POST", "/api/storage-mounts/{storage_id}/teardown"),
     # platform settings and installation-wide content
     ("GET", "/api/models/settings"),
     ("PUT", "/api/models/settings/{field}"),
