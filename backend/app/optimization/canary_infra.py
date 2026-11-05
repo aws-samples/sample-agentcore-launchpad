@@ -83,6 +83,25 @@ def _uploader_for(workspace: WorkspaceContext) -> Callable[[str, str, str], None
     return upload
 
 
+def _candidate_mounts(live: dict, spec: Any, agent: Any, log: Any) -> list[dict] | None:
+    """The candidate's mounts: the spec's, plus the live runtime's that the platform did
+    not set (an AWS console mount), so a candidate does not lose them. Paths the current
+    spec names are the platform's; a candidate on the PUBLIC network keeps none."""
+    from app.deployer.filesystem import merge_live, mount_path
+    from app.deployer.mounts import manifest_paths
+
+    platform = filesystem_configurations(spec)
+    merged = merge_live(live.get("filesystemConfigurations"), platform,
+                        managed_paths=manifest_paths(agent.spec))
+    kept = merged[len(platform):]
+    if kept and spec_vpc(spec, agent.workspace_id) is None:
+        log("mounts set outside the platform are not carried to a PUBLIC candidate")
+        merged = platform
+    for fs in kept:
+        log(f"mount {mount_path(fs)}: set outside the platform, kept on the candidate")
+    return merged or None
+
+
 def candidate_s3_key(agent_name: str, canary_id: str, role: str,
                      project_id: str | None = None) -> str:
     """Deterministic key for a canary's zip: one object per canary + role.
@@ -208,8 +227,9 @@ def mint_candidate_version(
         role_arn=role_arn,
         environment=environment,
         protocol=edited_spec.protocol,
-        # an omitted list detaches the mounts — the candidate keeps production's
-        filesystem_configurations=filesystem_configurations(edited_spec) or None,
+        # an omitted list detaches the mounts — the candidate keeps production's,
+        # including those added outside the platform (read back from `live`)
+        filesystem_configurations=_candidate_mounts(live, edited_spec, agent, log),
         # every update sends the network: a VPC agent's candidate must stay in its VPC
         vpc=spec_vpc(edited_spec, agent.workspace_id),
     )

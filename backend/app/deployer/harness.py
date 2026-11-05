@@ -772,15 +772,7 @@ def _update_network(ctx: StageContext, spec: AgentSpec, workspace_id: str | None
 
 
 def _published_mount_paths(db: Any, agent_id: str) -> set[str]:
-    """The BYO mount paths any publish of this agent set (its spec snapshots): the
-    entries the platform owns on the live harness even after the spec dropped them,
-    so a re-publish detaches a removed mount (storage-mounts §3.2)."""
-    from app.models.ledger import SpecSnapshot
-
-    paths: set[str] = set()
-    for (spec,) in db.query(SpecSnapshot.spec).filter(SpecSnapshot.agent_id == agent_id):
-        paths |= mounts.manifest_paths(spec)
-    return paths
+    return mounts.published_mount_paths(db, agent_id)
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:

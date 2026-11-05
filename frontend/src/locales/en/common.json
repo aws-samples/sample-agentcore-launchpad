@@ -16113,7 +16113,10 @@
         "missing": "not in the catalog",
         "archived": "archived",
         "inline": "inline",
-        "inlineHint": "Inline access points are read-write and cannot be promoted. Register them in the storage catalog and mount them by id."
+        "inlineHint": "Inline access points are read-write and cannot be promoted. Register them in the storage catalog and mount them by id.",
+        "external": "added outside Launchpad",
+        "externalHint": "Read back from AWS: these mounts were added outside Launchpad (in the AWS console, or before the agent was imported). A re-publish from Launchpad keeps them; to manage one here, register its access point in Storage and mount it through the edit wizard.",
+        "liveUnavailable": "Could not read the mounts on AWS ({{error}}): mounts added outside Launchpad are not listed."
       },
       "picker": {
         "title": "Storage from the catalog",

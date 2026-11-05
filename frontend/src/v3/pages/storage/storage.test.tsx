@@ -183,6 +183,25 @@ describe("agent storage card", () => {
     expect(html).toContain("/v2/agents?view=edit&amp;id=a1");
   });
 
+  it("lists a mount added outside Launchpad, read back from AWS", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{
+      ...data, mounts: [], inline: [],
+      live: { status: "ok", kind: "runtime", entries: [
+        { kind: "s3files", mount_path: "/mnt/data", access_point_arn: "arn:a", origin: "platform", storage_id: null, storage_name: null },
+        { kind: "efs", mount_path: "/mnt/console", access_point_arn: "arn:b", origin: "external", storage_id: "shared", storage_name: "Shared" },
+      ] },
+    }} />);
+    expect(html).toContain("/mnt/console");
+    expect(html).toContain("added outside Launchpad");
+    expect(html).toContain("Shared");
+    expect(html).toContain("EFS");
+    expect(html).toContain("A re-publish from Launchpad keeps them");
+    expect(html).not.toContain("/mnt/data");
+    const down = render(<StorageCardView agent={agent} loading={false} error={null}
+      data={{ ...data, mounts: [], inline: [], live: { status: "unavailable", error: "AccessDenied", entries: [] } }} />);
+    expect(down).toContain("Could not read the mounts on AWS (AccessDenied)");
+  });
+
   it("renders nothing when only session storage is mounted", () => {
     expect(render(<StorageCardView agent={agent} loading={false} error={null} data={{ ...data, mounts: [], inline: [] }} />)).toBe("");
   });

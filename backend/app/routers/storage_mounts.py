@@ -13,6 +13,7 @@ catalog mounts against its network inside the request's project, and the agent r
 
 from typing import Any, Literal
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ from app.schemas.agent import NETWORK_PROFILE_ID_RE, StorageMountRef
 from app.services import access, agent_access
 from app.services import storage_mounts as service
 from app.services import storage_provision as provision
+from app.services.agentcore.client import control_client
 from app.services.audit import record_audit_event
 from app.services.visibility import Viewer, require_viewer
 
@@ -266,7 +268,16 @@ def get_agent_storage(
     agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    return service.agent_storage(db, agent)
+    out = service.agent_storage(db, agent)
+    # what AWS actually mounts, external mounts included; an AWS failure only blanks
+    # this part of the card
+    try:
+        out["live"] = service.live_mounts(control_client(ws.context), db, agent)
+    except (ClientError, BotoCoreError) as exc:
+        out["live"] = {"status": "unavailable", "entries": [],
+                       "error": getattr(exc, "response", {}).get("Error", {}).get("Code")
+                       or type(exc).__name__}
+    return out
 
 
 @router.get("/{storage_id}")

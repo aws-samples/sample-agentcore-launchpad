@@ -16113,7 +16113,10 @@
         "missing": "不在目录中",
         "archived": "已归档",
         "inline": "内联",
-        "inlineHint": "内联访问点为读写，且无法晋级。请在存储目录中登记后按 ID 挂载。"
+        "inlineHint": "内联访问点为读写，且无法晋级。请在存储目录中登记后按 ID 挂载。",
+        "external": "在 Launchpad 之外挂载",
+        "externalHint": "从 AWS 回读：这些挂载是在 Launchpad 之外添加的（在 AWS 控制台里，或在导入 Agent 之前）。在 Launchpad 里重新发布会保留它们；如果要在这里管理，请先在存储页登记它的访问点，再通过编辑向导挂载。",
+        "liveUnavailable": "读取 AWS 上的挂载失败（{{error}}），在 Launchpad 之外添加的挂载没有列出。"
       },
       "picker": {
         "title": "从存储目录挂载",

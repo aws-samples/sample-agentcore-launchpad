@@ -331,7 +331,11 @@ Harness 还会在系统提示词末尾附一段「Shared directories」说明（
 
 - **UpdateAgentRuntime 省略 `filesystemConfigurations` 会清空挂载**，和它重置
   `protocolConfiguration` 的方式一样。因此 zip、container、BYOC 和金丝雀候选版本每次更新都发送该列表；
-  “关闭会话存储”正是靠省略它来卸载。
+  “关闭会话存储”正是靠省略它来卸载。更新前会先读 `GetAgentRuntime`，按和下面 Harness 相同的归属规则
+  以 `mountPath` 合并（`filesystem.runtime_update_mounts` / `merge_live`），所以在 AWS 控制台添加的
+  S3 Files 或 EFS 挂载在重新发布后仍然保留（部署日志记 “kept on this update”）。Runtime 改到 PUBLIC
+  网络时无法保留这类挂载（AWS 不接受 VPC 之外的自带挂载），会被卸载并记入日志。金丝雀候选版本只把当前
+  spec 的路径算作平台的。
 - **UpdateHarness 省略 `environment` 则保留原配置**，发送时整体替换列表（`[]` 卸载全部）。
   Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），按 `mountPath` 合并：
   spec 的条目（会话存储与自带挂载）归平台，原样发送；线上条目所在路径若曾由该 Agent 的某次发布设置

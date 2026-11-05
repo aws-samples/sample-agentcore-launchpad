@@ -465,7 +465,13 @@ The two update APIs behave differently on a re-publish (probed live 2026-10-04):
 - **UpdateAgentRuntime clears an omitted `filesystemConfigurations`**, the same
   way it resets `protocolConfiguration`. The zip, container, BYOC and
   canary-candidate paths therefore send the list on every update; leaving it out
-  is how "session storage off" detaches the mount.
+  is how "session storage off" detaches the mount. Before the update they read
+  `GetAgentRuntime` and merge by `mountPath` with the same ownership rule as the
+  harness below (`filesystem.runtime_update_mounts` / `merge_live`), so an S3 Files
+  or EFS mount added in the AWS console survives a re-publish (the deploy log says
+  "kept on this update"). A runtime that moves to the PUBLIC network cannot keep one
+  (AWS refuses a BYO mount outside a VPC): it is detached and logged. The canary
+  candidate counts only the current spec's paths as the platform's.
 - **UpdateHarness keeps an omitted `environment`** and replaces the list as a
   whole when one is sent (`[]` detaches everything). The harness re-publish
   reads `GetHarness` first (`harness.environment_for_update`) and merges by

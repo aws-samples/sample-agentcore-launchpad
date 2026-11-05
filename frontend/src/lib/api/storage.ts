@@ -116,10 +116,23 @@ export interface StoragePreflight {
   results: StorageCheck[];
 }
 
+/** One S3 Files / EFS mount the agent's Runtime or Harness carries on AWS. */
+export interface LiveMount {
+  kind: "s3files" | "efs";
+  mount_path: string;
+  access_point_arn: string | null;
+  /** `external`: added outside Launchpad (AWS console, an imported agent); kept on re-publish */
+  origin: "platform" | "external";
+  storage_id: string | null;
+  storage_name: string | null;
+}
+
 export interface AgentStorage {
   agent_id: string;
   version: string | null;
   session_storage: string | null;
+  /** read back from AWS; absent on an older backend */
+  live?: { status: "ok" | "no_resource" | "unavailable"; kind?: "runtime" | "harness"; error?: string; entries: LiveMount[] };
   mounts: {
     storage_id: string;
     mount_path: string;
