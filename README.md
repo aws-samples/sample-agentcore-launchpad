@@ -295,7 +295,7 @@ Launchpad cost. Costs are qualitative and small at demo scale, but scale with
 how much you exercise each layer:
 
 - **Runtime / Harness invocations** — every invoke bills model tokens (default
-  `global.zai.glm-5.3`; Claude, GPT and the other GLM models stay selectable per agent)
+  `global.moonshotai.kimi-k3`; Claude, GPT, GLM and the other models stay selectable per agent)
   plus managed runtime/session compute.
 - **Container builds (方式A)** — CodeBuild ARM64 build minutes, roughly 2
   minutes per agent build; 方式B (harness) has no build, and 方式C rides the

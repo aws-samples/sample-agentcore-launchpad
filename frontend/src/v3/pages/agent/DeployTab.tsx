@@ -4,6 +4,7 @@ import type { AgentPermissions } from "../../../lib/agent-admin/permissions";
 import type { AgentInfo, AgentVersionsInfo, JobInfo } from "../../../lib/api";
 import type { Loaded } from "../../hooks";
 import { DeployCard } from "./DeployCard";
+import { PromptDriftCard } from "./PromptDriftCard";
 import { SnapshotsCard } from "./SnapshotsCard";
 import type { DetailSections } from "./tabs";
 import { VersionsCard } from "./VersionsCard";
@@ -39,6 +40,15 @@ export function DeployTab({
         <DeployCard agent={agent} job={job} />
         {sections.versions && <VersionsCard versions={versions} />}
       </div>
+      {sections.versions && agent.method === "harness" && agent.status !== "deploying" && (
+        <PromptDriftCard
+          agentId={agent.id}
+          refreshKey={`${agent.status}:${agent.version ?? ""}:${agent.deployments?.length ?? 0}`}
+          canAdopt={canRollback}
+          blockedTitle={perms.locked ? perms.lockTitle : t("v3.agent.promptDrift.blocked")}
+          onAdopted={onChanged}
+        />
+      )}
       {sections.snapshots && (
         <SnapshotsCard
           agentId={agent.id}

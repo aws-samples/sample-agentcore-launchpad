@@ -532,6 +532,24 @@ export interface AgentVersionsInfo {
   canary_endpoints: string[];
 }
 
+/** `GET /api/agents/{id}/prompt-drift`: the ledger prompt beside the one the Harness's
+ *  latest AWS version carries (an edit in the AWS console). Runtime prompts are
+ *  compiled into code and imported Harnesses have no spec: `unsupported`. */
+export interface AgentPromptDrift {
+  agent_id: string;
+  kind: "runtime" | "harness";
+  status: "in_sync" | "drifted" | "unsupported";
+  reason?: "runtime" | "imported";
+  ledger_version: string | null;
+  ledger_prompt: string;
+  aws_prompt?: string;
+  aws_version?: string | null;
+  aws_updated_at?: string | null;
+  endpoint_mode?: string;
+  /** other members the console changed; adopting re-publishes the ledger's values */
+  other_differences?: { member: string; ledger: unknown; aws: unknown }[];
+}
+
 /** One file of `GET /api/agents/{id}/source`. `content` is null when the file was left
  *  out: `binary`, or `budget` (the response cap; read it alone with `?path=`). */
 export interface AgentSourceFile {
@@ -5739,8 +5757,24 @@ export interface CostReport {
   by_actor: CostActorRow[];
   /** absent from a backend without per-project attribution */
   by_project?: CostProjectRow[];
+  /** every call priced at its own model's rate; absent from an older backend */
+  by_model?: CostModelRow[];
+  /** the window the figures cover (UTC ISO); absent from an older backend */
+  period?: { start: string; end: string };
   unpriced_models: string[];
   estimate: boolean;
+}
+
+/** One model's spend in the window. `est_cost_usd` null = no rate in the price map. */
+export interface CostModelRow {
+  model: string;
+  agents: number;
+  llm_calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cache_tokens: number;
+  tokens: number;
+  est_cost_usd: number | null;
 }
 
 /** T29 — one watched threshold and what it last saw. */
@@ -6573,6 +6607,14 @@ export const api = {
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  agentPromptDrift: (id: string) =>
+    request<AgentPromptDrift>(`/api/agents/${encodeURIComponent(id)}/prompt-drift`),
+  /** re-publishes with the AWS prompt; `awsVersion` is the version reviewed (stale → 409) */
+  adoptAgentPrompt: (id: string, awsVersion: string) =>
+    request<{ job_id: string; deployment_id: string; adopted_from_version: string }>(
+      `/api/agents/${encodeURIComponent(id)}/prompt-drift/adopt`,
+      { method: "POST", body: JSON.stringify({ aws_version: awsVersion }) },
+    ),
   agentSource: (id: string, path?: string) =>
     request<AgentSourceInfo>(
       `/api/agents/${id}/source${path ? `?path=${encodeURIComponent(path)}` : ""}`,
@@ -6647,8 +6689,13 @@ export const api = {
       method: "DELETE",
     }),
   // T28 — spend attribution
-  costs: (range: string, force = false) =>
-    request<CostReport>(`/api/costs?range=${encodeURIComponent(range)}${force ? "&force=true" : ""}`),
+  /** `range`: a trailing window (1h…30d) or a UTC calendar period (today, this_week,
+   *  last_week, this_month, last_month, custom + `period` dates, inclusive) */
+  costs: (range: string, force = false, period?: { start: string; end: string }) =>
+    request<CostReport>(
+      `/api/costs?range=${encodeURIComponent(range)}${force ? "&force=true" : ""}` +
+        (period ? `&start=${encodeURIComponent(period.start)}&end=${encodeURIComponent(period.end)}` : ""),
+    ),
   costsMonthToDate: () =>
     request<{ workspace_id: string; est_cost_usd: number }>("/api/costs/month-to-date"),
   // T29 — alert rules

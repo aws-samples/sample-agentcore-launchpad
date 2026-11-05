@@ -728,6 +728,7 @@ def resume_pending_jobs() -> list[str]:
         project_purge,
         promotion_exec,
         registry_sync,
+        storage_provision,
     )
     from app.system_agents import uninstall as system_uninstall
 
@@ -756,6 +757,9 @@ def resume_pending_jobs() -> list[str]:
         cost_tags.JOB_TYPE: cost_tags.start_backfill_async,
         # POST /api/registry/sync-defaults: re-runs the sync (every step is an upsert)
         registry_sync.JOB_TYPE: registry_sync.start_async,
+        # storage-mounts §7: an S3 Files create / teardown continues from its first
+        # unfinished stage (every stage is list-or-get, then create)
+        storage_provision.JOB_TYPE: storage_provision.start_async,
     }
     db = SessionLocal()
     try:

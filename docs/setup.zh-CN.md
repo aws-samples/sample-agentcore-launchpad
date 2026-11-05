@@ -417,7 +417,7 @@ agent，由它在临时工作目录里重写 `generated_agent.py`，再通过 SS
 | 配置项 | 默认值 | 作用 |
 |---|---|---|
 | `codegen_backend` | `claude` | 由哪个编码 agent 执行修复。目前只注册了 `claude`（Claude Agent SDK）；填入未注册的名字会让请求直接失败并列出已注册的名字，而不是静默回退。 |
-| `codegen_model` | `global.anthropic.claude-sonnet-5` | 该编码 agent 使用的模型。更强的模型单次修得更多，单次也更贵。 |
+| `codegen_model` | `global.anthropic.claude-sonnet-5-5` | 该编码 agent 使用的模型。更强的模型单次修得更多，单次也更贵。 |
 | `codegen_timeout_s` | `180.0` | 一次 AI Fix 请求的端到端预算，含全部修复轮次。如果修复总在 agent 写完文件之前被打断，就调大它。 |
 | `codegen_max_repair_rounds` | `2` | 一次重写最多可以被重新校验并重试几轮。每多一轮就是对首次修复仍无法导入的流程多发一次模型调用。 |
 
@@ -458,8 +458,8 @@ id 都是 Bedrock Converse 的 inference-profile id，并和其他调用一样�
 
 | 配置项 | 默认值 | 作用 |
 |---|---|---|
-| `prompt_opt_models` | `["global.anthropic.claude-opus-5", "global.anthropic.claude-sonnet-5", "global.anthropic.claude-sonnet-4-6", "us.openai.gpt-5.6-sol"]` | 控制台提供选择的反思模型清单。想让某个 id 可选，就加到这里。 |
-| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | 其中哪一个排在最前、并在请求未指定模型时被使用。 |
+| `prompt_opt_models` | `["global.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-sonnet-4-6", "us.openai.gpt-5.6-sol"]` | 控制台提供选择的反思模型清单。想让某个 id 可选，就加到这里。 |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5-5` | 其中哪一个排在最前、并在请求未指定模型时被使用。 |
 | `prompt_opt_max_sessions` | `30`（3–100） | provider 从被固定的那次运行里读取多少个会话（最差优先，另加一组得分最好的对照）。读得少更便宜更快，读得多则给反思更多可归纳的证据。 |
 | `prompt_opt_max_tokens` | `8192`（512–16000） | 反思调用的输出预算。含提示词与若干工具描述的双组件反思实测超过了 4096；响应被截断时 provider 会自行把该值翻倍一次。 |
 | `prompt_opt_read_timeout_s` | `900` | 反思调用的读超时。该调用是流式的，因此它约束的是两个数据块之间的间隔而不是总时长。botocore 默认的 60 秒在这里远远不够：生产环境里大模型处理 30 个会话时超过了它，botocore 静默重发了整个请求五次才最终失败。 |
@@ -472,16 +472,16 @@ Agent、评估器和预设保留创建时的模型 ID——角色只决定*新�
 
 | 角色（配置项） | 默认值 | 用途 |
 |---|---|---|
-| `agent_default_model_id` | `global.openai.gpt-6-sol` | 向导里原生 Bedrock 下新建 Agent 的预选模型；通过 API 创建且未指定 `model_id` 的 Agent 也使用它。 |
-| `claude_sdk_model_id` | `global.anthropic.claude-sonnet-5` | Claude Agent SDK（`container`）方式的同一默认值。该方式只能驱动 Claude：未指定 `model_id` 的容器 spec 使用它，而不是 Agent 默认模型。仅限 Claude。 |
-| `judge_model_id` | `global.openai.gpt-6-sol` | 自定义 / 派生 LLM 评估器的默认评审模型，架构助手起草的评估器也使用它。 |
+| `agent_default_model_id` | `global.moonshotai.kimi-k3` | 向导里原生 Bedrock 下新建 Agent 的预选模型；通过 API 创建且未指定 `model_id` 的 Agent 也使用它。 |
+| `claude_sdk_model_id` | `global.anthropic.claude-sonnet-5-5` | Claude Agent SDK（`container`）方式的同一默认值。该方式只能驱动 Claude：未指定 `model_id` 的容器 spec 使用它，而不是 Agent 默认模型。仅限 Claude。 |
+| `judge_model_id` | `global.openai.gpt-6.1-sol` | 自定义 / 派生 LLM 评估器的默认评审模型，架构助手起草的评估器也使用它。 |
 | `judge_fallback_model_id` | `global.anthropic.claude-sonnet-5-5` | AgentCore Evaluation 拒绝评审模型时改用它重试。留空 = 不回退，直接报出拒绝原因。 |
-| `assistant_model_id` | `global.openai.gpt-6-sol` | 架构助手为新 Agent 推荐的模型。 |
+| `assistant_model_id` | `global.openai.gpt-6.1-sol` | 架构助手为新 Agent 推荐的模型。 |
 | `architect_model_id` | `global.openai.gpt-6-astra` | 管理员安装或修复系统架构师预设时使用的模型。 |
 | `actor_model_id` | `global.openai.gpt-6-luna` | 模拟人格评估运行中扮演用户的模型，必须支持 Converse 强制工具调用。 |
-| `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5` | Studio 画布中未指定模型的节点所生成的模型。后端按同一个值为该 Agent 的执行角色授权，画布也从服务端读取它，因此两边始终一致。它刻意与 Agent 默认模型分开：改它会改动所有已有流程中未指定模型的节点。 |
-| `codegen_model` | `global.anthropic.claude-sonnet-5` | Studio AI 修复所用的编码 Agent。仅限 Claude。 |
-| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | 见[提示词优化](#提示词优化)。 |
+| `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5-5` | Studio 画布中未指定模型的节点所生成的模型。后端按同一个值为该 Agent 的执行角色授权，画布也从服务端读取它，因此两边始终一致。它刻意与 Agent 默认模型分开：改它会改动所有已有流程中未指定模型的节点。 |
+| `codegen_model` | `global.anthropic.claude-sonnet-5-5` | Studio AI 修复所用的编码 Agent。仅限 Claude。 |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5-5` | 见[提示词优化](#提示词优化)。 |
 | `skill_lab_judge_model_id`、`skill_lab_target_model_id`、`skill_lab_codex_target_model_id` | 见 [Skill Lab](#skill-lab) | 评审模型为 OpenAI 或 Claude；Claude CLI 目标仅限 Claude；codex 目标为 OpenAI 或 Kimi。 |
 
 会运行工具的角色拒绝实测不支持 Converse 工具调用的模型（DeepSeek R1）。每个 ID 都必须是
@@ -634,18 +634,18 @@ uv run python scripts/e2e_agent_dlc_browser.py --ui http://localhost:5173 --lang
 
 | 环境变量（`launchpad.yaml` 的键 = 去掉 `LAUNCHPAD_` 后的小写名） | 默认值 | 用在哪里 |
 |---|---|---|
-| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.zai.glm-5.3` | 新建 Agent 的默认模型：新建智能体向导预选它，提交时没有 `model_id` 的 spec 也用它。 |
-| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5` | 意图归类与命名（可观测 → 意图视图）以及试聊面板的建议问题。调用失败时，意图视图退回机械归类，面板退回通用问题。 |
-| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6-sol` | 自定义与派生 AgentCore 评估器的默认 LLM 评审模型（新建评估器时评审模型字段的默认值）。 |
+| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.moonshotai.kimi-k3` | 新建 Agent 的默认模型：新建智能体向导预选它，提交时没有 `model_id` 的 spec 也用它。 |
+| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | 意图归类与命名（可观测 → 意图视图）以及试聊面板的建议问题。调用失败时，意图视图退回机械归类，面板退回通用问题。 |
+| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | 自定义与派生 AgentCore 评估器的默认 LLM 评审模型（新建评估器时评审模型字段的默认值）。 |
 | `LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | AgentCore 的评估器校验拒绝所选评审模型时改用的模型。`""` 表示不回退，直接报出拒绝。 |
-| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6-sol` | 架构助手提议的 Agent（托管 Harness）的默认模型。 |
+| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6.1-sol` | 架构助手提议的 Agent（托管 Harness）的默认模型。 |
 | `LAUNCHPAD_ARCHITECT_MODEL_ID` | `global.openai.gpt-6-astra` | 安装系统架构师 Agent 时使用的模型。只有 OpenAI 模型才预设 `reasoning_effort`，因为只有这一家接受它。 |
 | `LAUNCHPAD_ACTOR_MODEL_ID` | `global.openai.gpt-6-luna` | 人设场景里控制台预选的模拟用户（actor）模型。它必须支持 Converse 的强制工具选择。 |
-| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Strands Studio 画布上没有指定模型的节点所用的模型。 |
-| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5` | 实验 RECOMMEND 阶段在请求未指定模型时使用的反思模型（见[提示词优化](#提示词优化)）。 |
+| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Strands Studio 画布上没有指定模型的节点所用的模型。 |
+| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5-5` | 实验 RECOMMEND 阶段在请求未指定模型时使用的反思模型（见[提示词优化](#提示词优化)）。 |
 | `LAUNCHPAD_PROMPT_OPT_MODELS` | [提示词优化](#提示词优化)里的四个 id | 控制台提供的反思模型清单，JSON 数组（`'["global.zai.glm-5.3","deepseek.v3.2"]'`）。只能用环境变量或 `launchpad.yaml` 设置，模型设置页不编辑这份清单。 |
-| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Claude Agent SDK（容器）方式的默认模型。**仅限 Claude。** |
-| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio 的 AI Fix，运行在 Claude Agent SDK 上（见[代码生成（AI Fix）](#代码生成ai-fix)）。**仅限 Claude。** |
+| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Claude Agent SDK（容器）方式的默认模型。**仅限 Claude。** |
+| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5-5` | Studio 的 AI Fix，运行在 Claude Agent SDK 上（见[代码生成（AI Fix）](#代码生成ai-fix)）。**仅限 Claude。** |
 | `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab 的评审。OpenAI id 走主机上的 `codex` CLI，Claude id 走主机上的 `claude` CLI。**仅限 OpenAI 或 Claude。** |
 | `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab 的 `claude_code_exec` 目标。**仅限 Claude。** |
 | `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab 的 `codex_exec` 目标。**仅限 OpenAI 或 Kimi。** |

@@ -261,7 +261,7 @@ def test_status_not_installed_for_everyone(admin, member, aws):
         assert body["runtime_arn"] is None and body["image_tag"] is None and body["job"] is None
         assert body["models"] == get_settings().coding_models
         assert body["efforts"] == ["low", "medium", "high", "xhigh"]
-        assert body["default_model"] == "global.openai.gpt-6-sol"
+        assert body["default_model"] == "global.openai.gpt-6.1-sol"
         assert body["default_effort"] == "medium"
     assert aws.gets == 0, "nothing installed: no AWS read"
 

@@ -621,14 +621,34 @@ def _stage_iam(ctx: BootstrapContext) -> str:
         ),
         log=ctx.log,
     )
+    # the console's S3 Files creation (storage-mounts §7): the shared sync role the
+    # file systems it makes are linked with; limited to launchpad-s3files-* buckets
+    s3files_sync_role_arn = workspace_iam.ensure_role(
+        iam,
+        workspace_id=ctx.workspace_id,
+        role_name=workspace_iam.regional_role_name(
+            workspace_iam.S3FILES_SYNC_ROLE_BASE, ctx.region
+        ),
+        trust_policy=workspace_iam.s3files_sync_trust_policy(
+            ctx.account_id, ctx.region, ctx.workspace.partition
+        ),
+        inline_policies={
+            "launchpad-s3files-sync": workspace_iam.s3files_sync_role_policy(
+                ctx.account_id, ctx.workspace.partition
+            )
+        },
+        description="Assumed by S3 Files to sync the file systems the console creates",
+        log=ctx.log,
+    )
     ctx.record(
         {
             "execution_role_arn": execution_role_arn,
             "gateway_role_arn": gateway_role_arn,
             "kb_role_arn": kb_role_arn,
+            "s3files_sync_role_arn": s3files_sync_role_arn,
         }
     )
-    return "3 service roles ready"
+    return "4 service roles ready"
 
 
 # ── stage: storage ─────────────────────────────────────────────────────────

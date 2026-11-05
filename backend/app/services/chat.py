@@ -25,6 +25,7 @@ from app.services.invoke import (
     harness_turn_overrides,
     invoke_agent_events,
 )
+from app.services.model_access import model_access_denied
 from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -206,6 +207,13 @@ def chat_stream(
             envelope(exc.code, exc.message, exc.detail), exc, status_events)}
         return
     except Exception as exc:
+        # a refused model call is final and named (agent.model_access_denied): the
+        # console must not retry it by itself or tell the person to send it again
+        denied = model_access_denied(exc)
+        if denied is not None:
+            yield {"event": "error", "data": _with_transient(
+                envelope(denied.code, denied.message, denied.detail), denied, status_events)}
+            return
         yield {"event": "error", "data": _with_transient(
             {"message": f"{type(exc).__name__}: {exc}"}, exc, status_events)}
         return

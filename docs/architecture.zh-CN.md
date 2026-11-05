@@ -281,6 +281,27 @@ P4 Harness 由 PUBLIC 重新发布到 VPC、P5 BYOC 镜像、P8 只读）。探�
 成员可以在管理员设置的挂载保持不变时重新发布，也可以删除挂载。每种方式的执行角色都会得到
 `launchpad-fs-<agent>` 内联策略（总是包含 `ClientWrite`；只读模式随存储目录一起提供）。
 
+**控制台代建 S3 Files 存储**（storage-mounts §7，`services/storage_provision.py`，
+`POST /api/storage-mounts/provision`）。管理员填写 id、网络配置档，以及访问点的 POSIX 身份和根目录；作业
+`storage_provision` 依次新建开启版本控制的存储桶（`launchpad-s3files-<账号>-<哈希>`）、在它上面建 S3 文件系统、
+建只放行配置档安全组 TCP 2049 入站流量、没有出站规则的安全组 `launchpad-mt-<id>`（新安全组自带的全部放行出站规则会被删除：
+安全组有状态，NFS 响应不需要出站规则）、在配置档子网的每个可用区建一个挂载目标、建访问点，
+最后以 `origin: "platform"` 登记并运行检查。S3 Files 扮演每个工作区一个的共用**同步角色**
+（`launchpad-s3files-sync[-<区域>]`，由 CDK 栈和工作区引导的 `iam` 阶段创建，`resources.s3files_sync_role_arn`），
+它只能访问 `launchpad-s3files-*` 存储桶，所以后端只需要对这一个角色的 `iam:PassRole`，不需要 `iam:CreateRole`；
+平台不会关联客户已有的存储桶。配置档自己的安全组不改动：如果它们不允许 2049 出站，检查会拦下并说明原因。
+确认新建前，对话框会读取 `POST /api/storage-mounts/provision/plan`（只读，复用预检的 EC2 读取），列出新安全组及其
+所在 VPC、入站和出站规则、挂载目标、每个 Agent 安全组需要的出站规则以及是否已经具备（缺少时由管理员在 AWS 控制台添加），
+以及配置档的路由表是否关联了 S3 网关终端节点：S3 Files 会经这个终端节点把 1 MiB 及以上的读取直接从存储桶传给 Agent，
+不产生费用；没有它时这部分读取改走文件系统，费用更高。管理员勾选确认后才能提交。每个阶段都先查后建，
+重启后作业继续执行（`resume_pending_jobs`）。`POST /api/storage-mounts/{id}/teardown`（需再次输入 id）删除访问点、
+挂载目标、文件系统和安全组，并归档条目；登记进来的存储和仍有 Agent 挂载的存储会被拒绝；**存储桶和其中的对象保留**。
+V3 存储页（`/v3/storage`）提供「新建 S3 Files」对话框，逐阶段显示作业进度，失败的新建可以重试。spoke 角色模板（版本 2）
+加入了相应权限：本账号内 S3 Files 的创建和删除、`launchpad-s3files-*` 存储桶（含桶的变更通知）、对同步角色的 PassRole、
+`DO-NOT-DELETE-S3-Files*` EventBridge 规则、只能经由 S3 Files 创建和删除网卡（`aws:CalledVia`：S3 Files 以调用方的凭证
+创建挂载目标的网卡），以及只对带 `launchpad:managed` 标签的安全组做修改。workshop 栈的实例角色通过单独的
+`WorkshopInstanceStoragePolicy` 获得同一组权限。
+
 **存储目录**（storage-mounts §4、SM-2，`services/storage_mounts.py`，[api.zh-CN.md](api.zh-CN.md)
 「控制台存储目录 API」）。管理员按工作区把 S3 Files 或 EFS 接入点登记为目录条目（`storage_mounts`：id、种类、
 接入点、`max_mode` `ro` / `rw`、`data_class`、可选的默认网络配置档），并像网络配置档一样按项目放行
@@ -310,7 +331,11 @@ Harness 还会在系统提示词末尾附一段「Shared directories」说明（
 
 - **UpdateAgentRuntime 省略 `filesystemConfigurations` 会清空挂载**，和它重置
   `protocolConfiguration` 的方式一样。因此 zip、container、BYOC 和金丝雀候选版本每次更新都发送该列表；
-  “关闭会话存储”正是靠省略它来卸载。
+  “关闭会话存储”正是靠省略它来卸载。更新前会先读 `GetAgentRuntime`，按和下面 Harness 相同的归属规则
+  以 `mountPath` 合并（`filesystem.runtime_update_mounts` / `merge_live`），所以在 AWS 控制台添加的
+  S3 Files 或 EFS 挂载在重新发布后仍然保留（部署日志记 “kept on this update”）。Runtime 改到 PUBLIC
+  网络时无法保留这类挂载（AWS 不接受 VPC 之外的自带挂载），会被卸载并记入日志。金丝雀候选版本只把当前
+  spec 的路径算作平台的。
 - **UpdateHarness 省略 `environment` 则保留原配置**，发送时整体替换列表（`[]` 卸载全部）。
   Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），按 `mountPath` 合并：
   spec 的条目（会话存储与自带挂载）归平台，原样发送；线上条目所在路径若曾由该 Agent 的某次发布设置
@@ -939,7 +964,7 @@ chat.session_not_found`；普通 Agent 不产生台账读取。对话会话/历�
 超限的模型块成为仅保留标记的 `invalid` 修订）；`ProposalContent` 是带 `extra="forbid"` 与逐字段/
 逐项上限的 Pydantic 白名单——`env`、`code`、`requirements`、`allowed_tools`、`protocol`、
 `filesystem`、`network`、URL、ARN、S3 前缀或角色都无法通过。未指定模型的提案使用
-`PROPOSAL_DEFAULT_MODEL_ID`（`global.openai.gpt-6-sol`，与新建 Agent 向导的默认值一致；审批后
+`PROPOSAL_DEFAULT_MODEL_ID`（`global.openai.gpt-6.1-sol`，与新建 Agent 向导的默认值一致；审批后
 创建的总是托管 Harness，因此默认非 Claude 模型是安全的），而不是 `AgentSpec` 为存量 spec 提供的回退值。
 `memory` 为 `"disabled"` 或
 `"workspace"`——Harness API 唯一能强制执行的两种状态（`{"disabled": {}}`，或 Workspace 既有的共享
@@ -1239,9 +1264,9 @@ Agent 自身的执行角色完成。但 Mantle 需要自己的 IAM 授权:`bedro
 Agent 会部署成功并进入 ACTIVE,但首次调用报 `401 access_denied`;该授权由 harness
 与 zip 共用,新增它需要执行一次 CDK 部署。该字段默认为 `bedrock`,以兼容
 此字段出现之前写入的 spec。控制台表单的各方式同样默认 `bedrock`,默认模型为
-GLM-5.3（`global.zai.glm-5.3`，全球推理配置文件，控制台面向的各区域均可用），`AgentSpec` 的默认值也是它；harness 与 zip 仍可切换到 Mantle
+Kimi K3（`global.moonshotai.kimi-k3`，全球推理配置文件；2026-11-04 之前是 GLM-5.3），`AgentSpec` 的默认值也是它；harness 与 zip 仍可切换到 Mantle
 (`frontend/src/lib/agent-spec.ts` 中的 `MODEL_SOURCE_BY_METHOD`)。Claude Agent SDK
-方式则默认取清单中第一个 Claude 模型，后端也会为未指定模型的 container spec 使用 `global.anthropic.claude-sonnet-5`（`CLAUDE_SDK_DEFAULT_MODEL_ID`）。意图归类与回答建议使用各自的平台模型；Strands Studio 画布对未指定模型的节点保留 Claude 兜底（改动会改变已有流程），新拖入的节点默认 GLM-5.3。控制台提供的模型清单位于
+方式则默认取清单中第一个 Claude 模型，后端也会为未指定模型的 container spec 使用 `global.anthropic.claude-sonnet-5-5`（`CLAUDE_SDK_DEFAULT_MODEL_ID`）。意图归类与回答建议使用各自的平台模型；Strands Studio 画布对未指定模型的节点保留 Claude 兜底（改动会改变已有流程），新拖入的节点默认使用配置的 Agent 默认模型（Kimi K3）。控制台提供的模型清单位于
 `frontend/src/lib/models.ts`,清单第一项即默认模型。
 
 **Harness(方式B)** —— 两种来源使用 `HarnessModelConfiguration` 联合类型中
@@ -1362,6 +1387,22 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
 面板标出 `DEFAULT`,把台账版本与 AWS 最新版本并列——带外更新或金丝雀候选版本铸造之后出现的不一致
 会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
 从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
+
+### 提示词漂移（在 AWS 控制台修改提示词）
+
+控制台显示的提示词是台账里的 `Agent.spec.system_prompt`，也就是上一次 Launchpad 部署发布的提示词。在 AWS 控制台
+修改 Harness（`UpdateHarness`）会发布一个台账不知道的新版本：Chat 已经按新提示词回答，页面上却还是旧的，而下一次
+从 Launchpad 重新发布会悄悄改回旧提示词。「部署与版本」页的**AWS 上的提示词**卡片读取
+`GET /api/agents/{agent_id}/prompt-drift`（`services/prompt_drift.py`）：它用 `GetHarness` 读最新版本，用
+`strip_generated_prompt` 去掉部署器追加的知识库、挂载和 Context Layer 段落，再和台账的提示词比较，结果是
+`in_sync` 或 `drifted`，后者还会列出控制台改过的模型、`maxTokens`、`maxIterations`、`timeoutSeconds`。门禁 Agent
+的生产流量固定在 `live` 端点，卡片会说明控制台的修改只落在 `DEFAULT` 上。只有 Launchpad 建的 Harness 能比较：
+Runtime 的提示词编译在生成的代码里，导入的 Harness 没有台账 spec，二者返回 `unsupported`。
+
+**导回**（`POST …/prompt-drift/adopt`，`{aws_version}`）把去掉追加段落后的 AWS 提示词写进 spec，再走
+`republish_agent`，与 redeploy 用同一套检查、权限（`perm:agents.deploy`，生产工作区受保护）和 Agent-DLC 门禁，
+所以页面、快照（备注 `prompt adopted from AWS version N`）和之后的部署都带上它。审阅后 AWS 又发布了新版本时返回
+`409 agent.prompt_drift_stale`。导回只带回提示词：其他被控制台修改的设置会在重新发布时恢复为台账的值，卡片在确认前就会列出。
 
 ### 代码视图（只读）
 

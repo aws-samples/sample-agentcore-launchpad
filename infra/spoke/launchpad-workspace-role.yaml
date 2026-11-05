@@ -156,7 +156,7 @@ Resources:
         # whenever a statement changes (backend/tests/test_spoke_template_version.py
         # fails otherwise); the hub compares it with spoke_template.EXPECTED_VERSION.
         - Key: launchpad:template-version
-          Value: "1"
+          Value: "2"
       ManagedPolicyArns:
         - Ref: WorkspaceBedrockTelemetryPolicy
       Policies:
@@ -561,6 +561,104 @@ Resources:
                   - s3files:ListAccessPoints
                   - s3files:ListMountTargets
                 Resource: "*"
+
+              # ── S3 Files the console creates (storage-mounts §7) ───────────
+              # services/storage_provision: a file system on a new bucket, one
+              # mount target per AZ, an access point, and their teardown. The
+              # account's S3 Files resources only; the bucket stays on delete.
+              - Sid: StorageProvisionS3Files
+                Effect: Allow
+                Action:
+                  - s3files:CreateAccessPoint
+                  - s3files:CreateFileSystem
+                  - s3files:CreateMountTarget
+                  - s3files:DeleteAccessPoint
+                  - s3files:DeleteFileSystem
+                  - s3files:DeleteMountTarget
+                  - s3files:ListFileSystems
+                  - s3files:TagResource
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:s3files:*:${AWS::AccountId}:*"
+              # Only the buckets the console makes for S3 Files (the shared sync
+              # role reaches no other bucket either).
+              - Sid: StorageProvisionBuckets
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:GetBucketNotification
+                  - s3:GetBucketTagging
+                  - s3:ListBucket
+                  - s3:PutBucketNotification
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:PutBucketTagging
+                  - s3:PutBucketVersioning
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:s3:::launchpad-s3files-*"
+              # S3 Files creates (and on delete removes) each mount target's ENI
+              # with the caller's credentials (CloudTrail, 2026-11-04). CalledVia
+              # keeps the grant to those calls: a direct CreateNetworkInterface
+              # is still refused (measured with a role holding only this).
+              - Sid: StorageProvisionMountTargetEnis
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+                Condition:
+                  ForAnyValue:StringEquals:
+                    aws:CalledVia: elasticfilesystem.amazonaws.com
+              # CreateFileSystem hands S3 Files the workspace's one sync role.
+              # Scoped to that role by name: its trust admits S3 Files alone.
+              - Sid: PassS3FilesSyncRole
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-s3files-sync*"
+              # CreateFileSystem sets up the bucket's change notifications as the
+              # caller: S3 Files' own DO-NOT-DELETE-S3-Files* EventBridge rules.
+              - Sid: StorageProvisionSyncRules
+                Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:events:*:${AWS::AccountId}:rule/DO-NOT-DELETE-S3-Files*"
+              # The mount targets' own security group (TCP 2049 from the network
+              # profile's groups). Changing or deleting a group needs the
+              # launchpad:managed tag the create puts on it, so the customer's
+              # own groups stay out of reach.
+              - Sid: StorageMountTargetGroupCreate
+                Effect: Allow
+                Action:
+                  - ec2:CreateSecurityGroup
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"
+                  - Fn::Sub: "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/*"
+              - Sid: StorageMountTargetGroupTag
+                Effect: Allow
+                Action:
+                  - ec2:CreateTags
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"
+                Condition:
+                  StringEquals:
+                    ec2:CreateAction: CreateSecurityGroup
+              - Sid: StorageMountTargetGroupManage
+                Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:DeleteSecurityGroup
+                  # drops the allow-all outbound rule a new group starts with
+                  - ec2:RevokeSecurityGroupEgress
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"
+                Condition:
+                  StringEquals:
+                    "aws:ResourceTag/launchpad:managed": "true"
 
               # ── EC2 (read-only) ────────────────────────────────────────────
               # Network-profile preflight (design projects §12.4) reads the VPC

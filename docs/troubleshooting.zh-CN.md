@@ -11,14 +11,14 @@ English: [troubleshooting.md](troubleshooting.md)
   Evaluation 都是预览功能，必须先在 `us-west-2` 为你的账号开启，bootstrap 才能
   成功。Agent Registry 已 GA（自 2026-08-06 起使用 `agent-registry` 命名空间，见
   [registry-ga-migration.md](registry-ga-migration.md)），无需开启预览。
-- **新建 Agent 的默认模型是 `global.zai.glm-5.3`**（`agent_default_model_id`，
+- **新建 Agent 的默认模型是 `global.moonshotai.kimi-k3`**（`agent_default_model_id`，
   环境变量 `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID`）。新建 Agent 默认使用该
   inference profile；其他模型仍可选择，已有 Agent 保留各自的 `model_id`。可在
   AgentSpec 中用 `model_id` 逐个覆盖，或按
   [setup.zh-CN.md → 切换模型](setup.zh-CN.md#切换模型) 修改默认值。
 - **账号里没有 OpenAI / Anthropic 模型。** 平台自己调用的模型默认是 OpenAI 与
-  Anthropic 的（评审 `global.openai.gpt-6-sol`，意图与建议问题
-  `global.anthropic.claude-sonnet-5`，以及 actor、架构师、架构助手等），这类账号
+  Anthropic 的（评审 `global.openai.gpt-6.1-sol`，意图与建议问题
+  `global.anthropic.claude-sonnet-5-5`，以及 actor、架构师、架构助手等），这类账号
   会看到评估器创建被拒、意图视图降级，或这些功能报 `AccessDeniedException`。管理员在
   **admin → 配置 → 模型设置** 里切换（选模型、**测试**、**保存**，立即生效）；或在
   主机上用 `scripts/switch_models.py` 探测账号，把能用的替代模型写进

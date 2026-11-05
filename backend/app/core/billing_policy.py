@@ -111,6 +111,8 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", f"{_AGENT}/inbound-auth"): FREE,
     ("POST", f"{_AGENT}/invoke"): Billable(SOURCE_INVOKE),
     ("POST", f"{_AGENT}/redeploy"): Billable(SOURCE_DEPLOY),
+    # adopting the AWS console's prompt is a redeploy
+    ("POST", f"{_AGENT}/prompt-drift/adopt"): Billable(SOURCE_DEPLOY),
     ("POST", f"{_AGENT}/release-bundles"): FREE,
     ("POST", f"{_AGENT}/release/block"): FREE,
     ("POST", f"{_AGENT}/release/evaluate"): Billable(SOURCE_EVAL),

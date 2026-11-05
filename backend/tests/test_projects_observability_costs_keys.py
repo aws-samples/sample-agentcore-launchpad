@@ -308,17 +308,22 @@ def test_the_viewer_cache_key_carries_the_project():
 # ── costs: workspace-wide cache, narrowed by ?project= (§5.9) ─────────────────
 
 
+_SERVICE_ROWS = [
+    {"service": "mine_rt.DEFAULT", "tokens_in": "1000000", "tokens_out": "0",
+     "model": "claude-sonnet"},
+    {"service": "theirs_rt.DEFAULT", "tokens_in": "0", "tokens_out": "1000000",
+     "model": "claude-sonnet"},
+    {"service": "ghost.DEFAULT", "tokens_in": "1000000", "tokens_out": "0",
+     "model": "claude-sonnet"},
+]
+
+
 def _stub_costs(monkeypatch):
     monkeypatch.setattr(cost_service, "logs_client", lambda workspace: object())
     monkeypatch.setattr(cost_service, "run_insights_queries", lambda q, hours, logs=None, **k: {
-        "by_service": [
-            {"service": "mine_rt.DEFAULT", "tokens_in": "1000000", "tokens_out": "0",
-             "model": "claude-sonnet"},
-            {"service": "theirs_rt.DEFAULT", "tokens_in": "0", "tokens_out": "1000000",
-             "model": "claude-sonnet"},
-            {"service": "ghost.DEFAULT", "tokens_in": "1000000", "tokens_out": "0",
-             "model": "claude-sonnet"},
-        ],
+        "by_service": _SERVICE_ROWS,
+        # the per-model query groups by service too: the same rows serve it
+        "by_model": _SERVICE_ROWS,
         "by_session": [
             {"session_id": "m" * 40, "tokens_in": "1000000", "model": "claude-sonnet"},
             {"session_id": "t" * 40, "tokens_out": "1000000", "model": "claude-sonnet"},

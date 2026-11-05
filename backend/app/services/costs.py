@@ -57,6 +57,53 @@ from app.services.workspace import WorkspaceContext
 # budget is expressed against.
 RANGES: dict[str, int] = {"1h": 1, "6h": 6, "24h": 24, "7d": 168, "30d": 720}
 DEFAULT_RANGE = "24h"
+# calendar periods, like the AWS billing console: in UTC (the day AWS bills by), a
+# week starting on Monday; `custom` takes `start` / `end` dates (inclusive)
+PERIODS = ("today", "this_week", "last_week", "this_month", "last_month", "custom")
+CUSTOM_MAX_DAYS = 92
+
+
+def resolve_window(range_key: str, *, start: str | None = None, end: str | None = None,
+                   now: datetime | None = None) -> tuple[datetime, datetime]:
+    """(start, end) UTC datetimes for a trailing range or a calendar period. A current
+    period (today, this week, this month) ends now; `custom` covers whole days."""
+    from datetime import date, timedelta
+
+    from app.core.errors import AppError
+
+    now = now or datetime.now(UTC)
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if range_key in RANGES:
+        return now - timedelta(hours=RANGES[range_key]), now
+    if range_key == "today":
+        return day, now
+    if range_key == "this_week":
+        return day - timedelta(days=day.weekday()), now
+    if range_key == "last_week":
+        this_week = day - timedelta(days=day.weekday())
+        return this_week - timedelta(days=7), this_week
+    month = day.replace(day=1)
+    if range_key == "this_month":
+        return month, now
+    if range_key == "last_month":
+        previous = (month - timedelta(days=1)).replace(day=1)
+        return previous, month
+    if range_key == "custom":
+        try:
+            first = date.fromisoformat(str(start))
+            last = date.fromisoformat(str(end))
+        except ValueError:
+            raise AppError("costs.bad_period", "custom needs start and end dates "
+                           "(YYYY-MM-DD)", status_code=422) from None
+        days = (last - first).days + 1
+        if days < 1 or days > CUSTOM_MAX_DAYS or first > now.date():
+            raise AppError("costs.bad_period",
+                           f"a custom period is 1–{CUSTOM_MAX_DAYS} days, not in the future",
+                           {"max_days": CUSTOM_MAX_DAYS}, status_code=422)
+        begin = datetime(first.year, first.month, first.day, tzinfo=UTC)
+        return begin, min(begin + timedelta(days=days), now)
+    raise AppError("costs.bad_range",
+                   f"range must be one of {', '.join((*RANGES, *PERIODS))}", status_code=422)
 _PROJECT_RE = re.compile(PROJECT_ID_PATTERN)
 
 
@@ -75,6 +122,25 @@ def q_cost_by_service() -> str:
   by resource.attributes.service.name as service, span_project
 | sort tokens_out desc
 | limit 200
+"""
+
+
+def q_cost_by_model() -> str:
+    """Tokens per (runtime service, span project, model): each row is priced at its own
+    model's rate, which gives the per-model view and the per-agent dollars (an agent
+    that called several models is no longer priced at its latest model's rate)."""
+    return f"""
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano)
+| {_IS_LLM_FIELDS}
+| filter is_llm > 0
+| fields coalesce(resource.attributes.{SPAN_PROJECT_ATTR}, "") as span_project
+| stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
+        sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
+        sum(is_llm) as llm_calls
+  by resource.attributes.service.name as service, span_project, telemetry_model as model
+| sort tokens_out desc
+| limit 1000
 """
 
 
@@ -133,8 +199,13 @@ def cost_report(
     range_key: str = DEFAULT_RANGE,
     force: bool = False,
     project: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
 ) -> dict[str, Any]:
     """Estimated spend for the window, broken down by agent, by person and by model.
+
+    The window is a trailing range (`RANGES`) or a calendar period (`PERIODS`, UTC,
+    `resolve_window`); the response names it as `period{start, end}`.
 
     Cached on the same terms as the observability views (Logs Insights is billed per
     scan), keyed by workspace and range. The cached entry is workspace-wide — built
@@ -143,15 +214,25 @@ def cost_report(
     the people of that project's sessions. The unattributed rows (a service no agent
     claims, the `—` bucket) belong to no project and appear only without one.
     """
-    hours = RANGES.get(range_key, RANGES[DEFAULT_RANGE])
+    calendar = range_key in PERIODS
+    window_start, window_end = resolve_window(range_key, start=start, end=end)
+    hours = max(1, round((window_end - window_start).total_seconds() / 3600))
+    # a calendar period's cache key is its start day (a current one moves its end, which
+    # the cache TTL refreshes); a closed period never changes
+    cache_key = (f"costs:{workspace.id}:{range_key}:{window_start.date().isoformat()}"
+                 f":{(window_end.date().isoformat()) if range_key == 'custom' else ''}"
+                 if calendar else f"costs:{workspace.id}:{range_key}")
 
     def build() -> dict[str, Any]:
         prices = get_settings().model_prices or {}
         logs = logs_client(workspace)
         results = run_insights_queries(
-            {"by_service": q_cost_by_service(), "by_session": q_cost_by_session()},
+            {"by_service": q_cost_by_service(), "by_session": q_cost_by_session(),
+             "by_model": q_cost_by_model()},
             hours=hours,
             logs=logs,
+            **({"window": (int(window_start.timestamp()), int(window_end.timestamp()))}
+               if calendar else {}),
         )
 
         from app.services.observability import build_agent_resolver
@@ -198,6 +279,35 @@ def cost_report(
                 entry["est_cost_usd"] = round((entry["est_cost_usd"] or 0.0) + usd, 6)
             elif row.get("model") and not entry["_unpriced"]:
                 entry["_unpriced"] = str(row["model"])
+        # per (service, project, model), each priced at its own model's rate
+        model_rows: list[dict[str, Any]] = []
+        priced_by_key: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+        for row in results.get("by_model") or []:
+            service = row.get("service") or "—"
+            tokens, usd = _priced(row, prices)
+            if not tokens:
+                continue
+            agent = agents_by_name.get(service) or resolve(service)
+            project_id, _ = _row_project(row, agent)
+            model = str(row.get("model") or "") or "unknown"
+            item = {
+                "model": model, "service": service, "project_id": project_id,
+                "tokens_in": int(_num(row, "tokens_in")),
+                "tokens_out": int(_num(row, "tokens_out")),
+                "cache_tokens": int(_num(row, "cache_read") + _num(row, "cache_write")),
+                "tokens": int(tokens), "llm_calls": int(_num(row, "llm_calls")), "usd": usd,
+                "_unpriced": model if usd is None and model != "unknown" else None,
+            }
+            model_rows.append(item)
+            priced_by_key.setdefault((service, project_id), []).append(item)
+        # an agent's dollars are the sum of its per-model rows when the query has them
+        for key, entry in merged.items():
+            rows = priced_by_key.get(key)
+            if not rows:
+                continue
+            priced = [r["usd"] for r in rows if r["usd"] is not None]
+            entry["est_cost_usd"] = round(sum(priced), 6) if priced else None
+            entry["_unpriced"] = next((r["_unpriced"] for r in rows if r["_unpriced"]), None)
         by_agent = list(merged.values())
 
         # session → (actor, project), for the rows the console opened
@@ -228,12 +338,14 @@ def cost_report(
         return {
             "range": range_key,
             "hours": hours,
+            "period": {"start": window_start.isoformat(), "end": window_end.isoformat()},
             "generated_at": datetime.now(UTC).isoformat(),
             "by_agent": by_agent,
             "sessions": sessions,
+            "model_rows": model_rows,
         }
 
-    return _report(cached(f"costs:{workspace.id}:{range_key}", force, build), project)
+    return _report(cached(cache_key, force, build), project)
 
 
 def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
@@ -244,7 +356,25 @@ def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
     sessions = [
         row for row in raw["sessions"] if project is None or row["project_id"] == project
     ]
-    unpriced = {row["_unpriced"] for row in (*agents, *sessions) if row["_unpriced"]}
+    # a cache entry built before the per-model query has no `model_rows`
+    model_rows = [
+        row for row in raw.get("model_rows") or []
+        if project is None or row["project_id"] == project
+    ]
+    unpriced = {row["_unpriced"] for row in (*agents, *sessions, *model_rows)
+                if row["_unpriced"]}
+    per_model: dict[str, dict[str, Any]] = {}
+    for row in model_rows:
+        bucket = per_model.setdefault(row["model"], {
+            "model": row["model"], "agents": set(), "llm_calls": 0, "tokens_in": 0,
+            "tokens_out": 0, "cache_tokens": 0, "tokens": 0, "est_cost_usd": None,
+        })
+        bucket["agents"].add(row["service"])
+        for k in ("llm_calls", "tokens_in", "tokens_out", "cache_tokens", "tokens"):
+            bucket[k] += row[k]
+        if row["usd"] is not None:
+            bucket["est_cost_usd"] = round((bucket["est_cost_usd"] or 0.0) + row["usd"], 6)
+    by_model = [{**b, "agents": len(b["agents"])} for b in per_model.values()]
     per_actor: dict[str, dict[str, Any]] = {}
     for row in sessions:
         bucket = per_actor.setdefault(
@@ -266,6 +396,7 @@ def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
     return {
         "range": raw["range"],
         "hours": raw["hours"],
+        **({"period": raw["period"]} if "period" in raw else {}),
         "generated_at": raw["generated_at"],
         **({"project": project} if project is not None else {}),
         "total_est_cost_usd": round(sum(row["est_cost_usd"] or 0.0 for row in by_agent), 6),
@@ -277,6 +408,11 @@ def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
         # the project dimension (§10.8); `project_id` None = attributed to no project
         "by_project": sorted(
             per_project.values(), key=lambda row: row["est_cost_usd"], reverse=True
+        ),
+        # per model, each call priced at its own model's rate; `est_cost_usd` None =
+        # the price map has no rate for it (also listed in `unpriced_models`)
+        "by_model": sorted(
+            by_model, key=lambda row: (row["est_cost_usd"] or 0.0, row["tokens"]), reverse=True
         ),
         # Stated, never implied: these models burned tokens the price map cannot value.
         "unpriced_models": sorted(unpriced),
@@ -331,13 +467,15 @@ def _month_to_date_raw(
         from app.services.observability import build_agent_resolver
 
         prices = get_settings().model_prices or {}
+        # per (service, project, model): every call priced at its own model's rate,
+        # the same basis as `cost_report`'s totals
         results = run_insights_queries(
-            {"by_service": q_cost_by_service()}, hours=hours, logs=logs_client(workspace)
+            {"by_model": q_cost_by_model()}, hours=hours, logs=logs_client(workspace)
         )
         resolve = build_agent_resolver(db, workspace.id, all_projects=True)
         total = 0.0
         by_project: dict[str, float] = {}
-        for row in results.get("by_service") or []:
+        for row in results.get("by_model") or []:
             _, usd = _priced(row, prices)
             total += usd or 0.0
             project_id, _ = _row_project(row, resolve(row.get("service")))

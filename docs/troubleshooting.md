@@ -13,7 +13,7 @@ entry below was observed during implementation — none is speculative.
   GA (the `agent-registry` namespace since 2026-08-06, see
   [registry-ga-migration.md](registry-ga-migration.md)) and needs no preview
   enablement.
-- **Default model of a new agent is `global.zai.glm-5.3`**
+- **Default model of a new agent is `global.moonshotai.kimi-k3`**
   (`agent_default_model_id`, env `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID`). New agents
   default to this inference profile; other models stay selectable, and existing
   agents keep their own `model_id`. Override per agent with `model_id` in the
@@ -21,8 +21,8 @@ entry below was observed during implementation — none is speculative.
   [setup.md → Choosing models](setup.md#choosing-models--切换模型).
 - **OpenAI / Anthropic models not available in this account.** The platform's
   own model calls default to OpenAI and Anthropic models (judge
-  `global.openai.gpt-6-sol`, intents and suggested questions
-  `global.anthropic.claude-sonnet-5`, actor, architect, assistant, …), so such
+  `global.openai.gpt-6.1-sol`, intents and suggested questions
+  `global.anthropic.claude-sonnet-5-5`, actor, architect, assistant, …), so such
   an account sees evaluator creation refused, a degraded intent view or
   `AccessDeniedException` on those features. An administrator switches them on
   **admin → Configuration → Models** (pick, **Test**, **Save**; applies at

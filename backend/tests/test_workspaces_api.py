@@ -1366,10 +1366,13 @@ class TestRoleTemplate:
 
     def test_an_outdated_stack_gets_the_update_command(self, admin, monkeypatch):
         self._cross_account_row()
-        calls = self._iam(monkeypatch, ["0", "1"])
+        from app.services import spoke_template
+
+        calls = self._iam(monkeypatch, ["0", str(spoke_template.EXPECTED_VERSION)])
         body = admin.get(f"/api/workspaces/{NEW['id']}/role-template").json()
         assert body["workspace_id"] == NEW["id"]
-        assert (body["status"], body["deployed"], body["expected"]) == ("outdated", 0, 1)
+        assert (body["status"], body["deployed"], body["expected"]) == (
+            "outdated", 0, spoke_template.EXPECTED_VERSION)
         assert body["stack_command"].startswith("aws cloudformation deploy")
         assert calls == ["LaunchpadWorkspaceRole"]
         # cached until the console asks again after the admin updated the stack

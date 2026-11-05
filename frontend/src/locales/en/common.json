@@ -2794,6 +2794,7 @@
     "agent.teardown_pending": "AWS is still deleting this agent's endpoints. The agent is removed from the console and its resource is deleted automatically once AWS releases it.",
     "agent.tool_approval_requires_console": "A tool in this agent needs a person's approval, which only the Launchpad console chat can give.",
     "agent.upstream_error": "The agent's model or runtime failed before answering — usually temporary. Send the turn again; if it keeps failing, open the agent's traces.",
+    "agent.model_access_denied": "The agent is not allowed to call its model: its execution role does not grant the model, or this account has no access to it. Sending the turn again will not help. Redeploy the agent so its role is regenerated, enable access to the model in Amazon Bedrock, or pick another model.",
     "agent_tools.jwt_inbound": "This agent cannot be offered as a tool: its Runtime accepts JWT bearer tokens only, and the calling agent signs with IAM.",
     "agent_tools.not_deployed": "This agent cannot be offered as a tool: it is not deployed.",
     "agent_tools.not_found": "The agent picked as a tool was not found.",
@@ -3443,7 +3444,15 @@
     "auth.registration_queue_full": "Registration is temporarily closed while administrators review pending accounts.",
     "registry.record_not_found": "Registry record not found.",
     "registry.not_republishable": "Only a Draft or Pending-approval record can be published again.",
-    "gateway_tool.not_adoptable": "Only a hand-made Lambda target with an inline tool schema in this workspace's account and region can be brought under management."
+    "gateway_tool.not_adoptable": "Only a hand-made Lambda target with an inline tool schema in this workspace's account and region can be brought under management.",
+    "storage.sync_role_missing": "This workspace has no S3 Files sync role yet. Re-run make bootstrap (default workspace) or the workspace's bootstrap, then try again.",
+    "storage.not_platform": "This storage was registered, not created by the console. The console never deletes registered storage: archive it instead.",
+    "storage.confirm_mismatch": "Type the storage id exactly to confirm the deletion.",
+    "storage.job_not_found": "That storage job was not found.",
+    "agent.prompt_drift_stale": "AWS has published a newer Harness version since you reviewed the prompt. Review it again before adopting.",
+    "agent.prompt_drift_unsupported": "This agent's prompt cannot be read back from AWS.",
+    "agent.prompt_in_sync": "The prompt in Launchpad already matches AWS; there is nothing to adopt.",
+    "costs.bad_period": "Pick a custom period of 1 to 92 days that does not start in the future (dates as YYYY-MM-DD)."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -13024,6 +13033,25 @@
         "rollbackNote": "How to roll back",
         "inactive": "Only an active agent can be promoted.",
         "system": "System presets are installed per workspace and are not promoted."
+      },
+      "promptDrift": {
+        "title": "Prompt on AWS",
+        "inSync": "In sync",
+        "inSyncHint": "The prompt of Harness version {{version}} on AWS matches this page.",
+        "drifted": "The prompt was changed outside Launchpad: AWS's latest Harness version is {{version}}, and its prompt differs from the one this page shows (recorded with version {{ledger}}). Chat already answers with the AWS prompt; a re-publish from Launchpad would put this page's prompt back.",
+        "liveNote": "This agent is gated: production is pinned to the live endpoint, so production still answers with the released prompt until a release.",
+        "ledger": "This page (Launchpad)",
+        "aws": "AWS, version {{version}}",
+        "others": "The AWS console also changed: {{members}}. Adopting brings back only the prompt; the re-publish returns these to Launchpad's values.",
+        "adopt": "Adopt the AWS prompt",
+        "blocked": "Adopting re-publishes the agent: it needs the edit permission and no deploy in progress.",
+        "confirmTitle": "Adopt the AWS prompt?",
+        "confirmBody": "Launchpad saves the prompt of AWS version {{version}} as this agent's prompt and re-publishes the agent with it (a new Harness version). The page, the snapshots and every later deploy then use it.",
+        "adopted": "Adopting the prompt of version {{version}}: the re-publish is running",
+        "unsupported": {
+          "runtime": "A Runtime agent's prompt is compiled into its code, so it cannot be read back from AWS. Change it in Launchpad and re-publish.",
+          "imported": "This agent was imported from AWS: AWS holds its only copy of the prompt."
+        }
       }
     },
     "life": {
@@ -14045,6 +14073,33 @@
         },
         "platformHint": "The estimate prices model tokens only: idle and per-request fees of the shared infrastructure are on the billing view's shared row.",
         "nothing": "No cost view is available to you here"
+      },
+      "byModel": "By model",
+      "colModel": "Model",
+      "colShare": "Share",
+      "colIn": "Input tokens",
+      "colOut": "Output tokens",
+      "unpricedChip": "no price",
+      "period": {
+        "today": "Today",
+        "this_week": "This week",
+        "7d": "Last 7 days",
+        "last_week": "Last week",
+        "this_month": "This month",
+        "30d": "Last 30 days",
+        "last_month": "Last month",
+        "custom": "Custom"
+      },
+      "from": "From",
+      "to": "To",
+      "apply": "Apply",
+      "utcNote": "Dates in UTC, as on the AWS bill; weeks start on Monday.",
+      "pickCustom": "Pick a start and end date, then Apply.",
+      "customError": {
+        "missing": "Pick both dates.",
+        "order": "The end date is before the start date.",
+        "future": "The start date is in the future.",
+        "tooLong": "A custom range is at most {{max}} days."
       }
     },
     "memory": {
@@ -16086,7 +16141,10 @@
         "missing": "not in the catalog",
         "archived": "archived",
         "inline": "inline",
-        "inlineHint": "Inline access points are read-write and cannot be promoted. Register them in the storage catalog and mount them by id."
+        "inlineHint": "Inline access points are read-write and cannot be promoted. Register them in the storage catalog and mount them by id.",
+        "external": "added outside Launchpad",
+        "externalHint": "Read back from AWS: these mounts were added outside Launchpad (in the AWS console, or before the agent was imported). A re-publish from Launchpad keeps them; to manage one here, register its access point in Storage and mount it through the edit wizard.",
+        "liveUnavailable": "Could not read the mounts on AWS ({{error}}): mounts added outside Launchpad are not listed."
       },
       "picker": {
         "title": "Storage from the catalog",
@@ -16096,6 +16154,87 @@
         "none": "No storage is available to this project. Ask an administrator to register it.",
         "modeTooWide": "This storage can only be mounted read-only",
         "preflightOk": "Storage preflight passed"
+      },
+      "provision": {
+        "open": "Create S3 Files",
+        "title": "Create S3 Files storage",
+        "intro": "The console creates a new versioned bucket, an S3 file system on it, a mount target in each Availability Zone of the network profile, a security group that admits NFS (TCP 2049) from the profile's security groups and has no outbound rule, and an access point — then registers the result here. It takes about 5–10 minutes.",
+        "noProfiles": "Create a network profile first: the mount targets go into its subnets.",
+        "pickProfile": "Pick a network profile",
+        "profileHint": "Agents that mount this storage must run in this profile's VPC. Its security groups must allow TCP 2049 out — the check says so if they do not.",
+        "uid": "POSIX user ID",
+        "gid": "POSIX group ID",
+        "root": "Root directory",
+        "rootHint": "What agents see as the top of the mount. Created on first use and owned by the user and group above, so agents can write there; the file system's own root belongs to root and cannot be used.",
+        "cost": "S3 Files storage, its mount targets and the bucket are billed to this workspace's account. Deleting the storage later keeps the bucket and its objects.",
+        "submit": "Create",
+        "queued": "Creating {{id}} — follow its progress below",
+        "errProfile": "Pick a network profile.",
+        "errPosix": "A whole number from 0 to 4294967295.",
+        "errRoot": "One to four /segments of letters, digits, '.', '_' or '-', for example /data.",
+        "jobsTitle": "Storage being created or deleted",
+        "op": {
+          "create": "create",
+          "delete": "delete"
+        },
+        "job": {
+          "queued": "queued",
+          "running": "running",
+          "succeeded": "done",
+          "failed": "failed"
+        },
+        "retry": "Retry",
+        "madeHere": "created here",
+        "stage": {
+          "validate": "Check the network profile",
+          "bucket": "Bucket",
+          "file-system": "File system",
+          "security-group": "Mount-target security group",
+          "mount-targets": "Mount targets",
+          "access-point": "Access point",
+          "register": "Register in the catalog",
+          "archive": "Archive the entry"
+        },
+        "adminOnly": "Only Launchpad administrators (the engineers who operate the platform) can create and delete S3 Files storage.",
+        "plan": {
+          "title": "What will be created in your AWS account",
+          "loading": "Reading the network profile's VPC…",
+          "failed": "Could not read the VPC ({{error}}). Check the security group rules yourself before you create.",
+          "newGroup": "New security group",
+          "vpc": "in VPC",
+          "direction": "Direction",
+          "protocol": "Protocol",
+          "port": "Port",
+          "peer": "Source / destination",
+          "inbound": "Inbound",
+          "outbound": "Outbound",
+          "noOutbound": "None. The allow-all rule AWS adds to a new group is removed: a security group is stateful, so NFS replies need no outbound rule.",
+          "mountTargets": "Mount targets (one per Availability Zone, each using the group above):",
+          "agentGroups": "Agent security groups (the network profile's; the console does not change them):",
+          "group": "Security group",
+          "needs": "Rule agents need",
+          "state": "Current state",
+          "groupState": {
+            "ok": "Allowed",
+            "missing": "You need to add it",
+            "not_found": "Group not found"
+          },
+          "addOutbound": "Add an outbound rule to {{groups}} in the AWS console (EC2 → Security groups → the group → Outbound rules): type NFS (TCP 2049), destination the security group {{group}} (selectable once it is created) or the VPC range {{cidr}}. Without it, the check blocks agents that mount this storage.",
+          "s3GatewayOk": "The VPC has an S3 gateway endpoint ({{ids}}) on the agents' route tables: reads of 1 MiB or more go straight from the bucket to the agent over the private network, and a gateway endpoint has no hourly or data-processing charge.",
+          "s3GatewayMissing": "Recommended, lower cost: add an S3 gateway endpoint. S3 Files streams reads of 1 MiB or more straight from the bucket to the agent, and that path needs an S3 gateway endpoint in the VPC. Without one those reads go through the file system, slower and at a higher cost, and the agents' other S3 traffic goes through the NAT gateway, which bills each GB processed. A gateway endpoint has no hourly or data-processing charge. To add it yourself: AWS console → VPC → Endpoints → Create endpoint, service {{service}} (type Gateway), and select the route tables of the profile's subnets.",
+          "s3GatewayUnrouted": "Recommended, lower cost: the VPC has an S3 gateway endpoint, but it is not on the route table of {{subnets}}, so large reads from those subnets go through the file system (slower, higher cost) and other S3 traffic through the NAT gateway. To fix it yourself: AWS console → VPC → Endpoints → the {{service}} endpoint → Route tables → Manage route tables, and add those subnets' route tables.",
+          "s3GatewayDocs": "AWS docs: gateway endpoints for Amazon S3",
+          "ack": "I have reviewed the security group, its rules and the mount targets above, and the settings I need to make myself in the AWS console.",
+          "ackFirst": "Confirm the network changes above first"
+        }
+      },
+      "teardown": {
+        "action": "Delete the storage and its AWS resources",
+        "title": "Delete {{name}}?",
+        "body": "The console deletes the access point, the mount targets, the file system and its security group, and archives the entry. The bucket and every object in it are kept.",
+        "typeId": "Type {{id}} to confirm",
+        "confirm": "Delete",
+        "queued": "Deleting {{name}} — follow its progress below"
       }
     },
     "menuSettings": {

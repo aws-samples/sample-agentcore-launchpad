@@ -11,7 +11,7 @@ from typing import Annotated, Any, get_args
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
@@ -818,6 +818,56 @@ def get_agent_versions(
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     return list_agent_versions(control_client(ws.context), agent)
+
+
+@router.get("/agents/{agent_id}/prompt-drift")
+def get_agent_prompt_drift(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Read-only: the ledger's system prompt beside the one the Harness's latest AWS
+    version carries (an AWS console edit), see ``services/prompt_drift``."""
+    from app.services import prompt_drift
+
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    return prompt_drift.read(control_client(ws.context), agent)
+
+
+class PromptAdoptBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # the AWS version the operator reviewed; a newer one is refused (stale)
+    aws_version: str = Field(min_length=1, max_length=16)
+
+
+@router.post("/agents/{agent_id}/prompt-drift/adopt", status_code=202)
+def adopt_agent_prompt(
+    agent_id: str,
+    body: PromptAdoptBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Adopt the prompt changed in the AWS console: write it into the ledger spec and
+    re-publish (the redeploy path, its guards and gate), so the page, the snapshots
+    and the next deploy all carry it."""
+    from app.services import prompt_drift
+
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    spec, current = prompt_drift.adopt_spec(control_client(ws.context), agent,
+                                            body.aws_version)
+    result = republish_agent(
+        db, agent, spec, ws, actor=require_identity(request).username,
+        note=f"prompt adopted from AWS version {current['aws_version']}", viewer=viewer,
+    )
+    return {**result, "adopted_from_version": current["aws_version"]}
 
 
 @router.get("/agents/{agent_id}/mcp")

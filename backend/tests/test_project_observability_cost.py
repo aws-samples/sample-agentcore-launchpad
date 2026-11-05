@@ -397,8 +397,10 @@ def test_a_profile_arn_is_priced_as_its_model():
 
 def _stub_costs(monkeypatch, by_service, by_session=()):
     monkeypatch.setattr(cost_service, "logs_client", lambda workspace: object())
+    # the per-model query groups by service + span project too: the same rows serve it
     monkeypatch.setattr(cost_service, "run_insights_queries", lambda q, hours, logs=None, **k: {
-        "by_service": list(by_service), "by_session": list(by_session)})
+        "by_service": list(by_service), "by_session": list(by_session),
+        "by_model": list(by_service)})
     monkeypatch.setattr(cost_service, "get_settings",
                         lambda: SimpleNamespace(model_prices=PRICES))
     monkeypatch.setattr(cost_service, "cached", lambda key, force, build: build())

@@ -197,19 +197,24 @@ def run_insights_queries(
     queries: dict[str, str], hours: int, logs: Any = None,
     log_groups: list[str] | None = None,
     workspace: WorkspaceContext | None = None,
+    window: tuple[int, int] | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Start all queries concurrently, poll each to completion, flatten rows.
 
     Queries run in the workspace's region — CloudWatch Logs is regional, so a
     caller must supply either a ``logs`` client or the ``workspace`` to build one
-    from.
+    from. ``window`` = (start, end) epoch seconds overrides the trailing ``hours``
+    (a calendar period: last week, last month…).
     """
     if logs is None:
         if workspace is None:
             raise ValueError("run_insights_queries needs either logs or workspace")
         logs = logs_client(workspace)
-    end = int(_now())
-    start = end - hours * 3600
+    if window is not None:
+        start, end = int(window[0]), int(window[1])
+    else:
+        end = int(_now())
+        start = end - hours * 3600
     query_ids = {
         name: _start_query(logs, q, start, end, log_groups=log_groups)
         for name, q in queries.items()

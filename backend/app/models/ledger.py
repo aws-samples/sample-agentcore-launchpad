@@ -1075,7 +1075,10 @@ class AuditEvent(ProjectShared, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-_PLATFORM_JOB_TYPES = frozenset({"bootstrap_workspace", "uninstall_system_agent"})
+# `storage_provision`: the console's S3 Files create / teardown is workspace
+# infrastructure (services/storage_provision), like a bootstrap
+_PLATFORM_JOB_TYPES = frozenset({"bootstrap_workspace", "uninstall_system_agent",
+                                 "storage_provision"})
 
 
 class Job(ProjectShared, Base):

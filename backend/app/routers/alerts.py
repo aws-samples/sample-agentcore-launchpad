@@ -92,11 +92,17 @@ def get_costs(
     request: Request,
     range: str = Query(default=cost_service.DEFAULT_RANGE),
     project: str | None = Query(default=None, max_length=32),
+    start: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Estimated spend for the window, by agent, by person and by model.
+    """Estimated spend for the window, by agent, by person, by project and by model.
+
+    `range` is a trailing window (1h…30d) or a calendar period in UTC, like the AWS
+    bill: today, this_week / last_week (Monday first), this_month / last_month, or
+    custom with `start` / `end` dates (inclusive, at most 92 days).
 
     Advisory by construction: prices come from the config map matched by substring, and a
     model missing from it contributes tokens but no dollars — those models are named in
@@ -104,16 +110,16 @@ def get_costs(
     project's agents and sessions (the route runs outside any project: an
     administrator's cross-project view).
     """
-    if range not in cost_service.RANGES:
+    if range not in cost_service.RANGES and range not in cost_service.PERIODS:
         raise AppError(
             "costs.bad_range",
-            f"range must be one of {', '.join(cost_service.RANGES)}",
+            f"range must be one of {', '.join((*cost_service.RANGES, *cost_service.PERIODS))}",
             status_code=422,
         )
     if project is not None:
         _bound_project(db, ws, project)
     report = cost_service.cost_report(
-        db, ws.context, range_key=range, force=force, project=project
+        db, ws.context, range_key=range, force=force, project=project, start=start, end=end
     )
     from app.services import steward as steward_service
 

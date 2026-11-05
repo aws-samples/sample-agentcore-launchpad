@@ -13,6 +13,7 @@ catalog mounts against its network inside the request's project, and the agent r
 
 from typing import Any, Literal
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,6 +27,8 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import NETWORK_PROFILE_ID_RE, StorageMountRef
 from app.services import access, agent_access
 from app.services import storage_mounts as service
+from app.services import storage_provision as provision
+from app.services.agentcore.client import control_client
 from app.services.audit import record_audit_event
 from app.services.visibility import Viewer, require_viewer
 
@@ -62,6 +65,47 @@ class ProjectStorageBody(BaseModel):
     model_config = {"extra": "forbid"}
 
     storage_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class ProvisionBody(BaseModel):
+    """`POST …/provision` (storage-mounts §7): what the console builds — a new S3 file
+    system on a new bucket, reachable from one network profile — and the catalog fields
+    the result is registered with."""
+
+    model_config = {"extra": "forbid"}
+
+    id: str = Field(pattern=STORAGE_ID_PATTERN)
+    name: str = Field(default="", max_length=64)
+    network_profile_id: str = Field(pattern=NETWORK_PROFILE_ID_RE)
+    max_mode: Mode = "ro"
+    data_class: DataClass = "reference"
+    # the access point's POSIX identity and root directory. The directory is created on
+    # first mount, owned by that identity (mode 755) — never "/": a new file system's
+    # root belongs to root, so an access point rooted there could not write as 1000
+    # (measured live 2026-11-04: EACCES on every write)
+    posix_uid: int = Field(default=1000, ge=0, le=4294967295)
+    posix_gid: int = Field(default=1000, ge=0, le=4294967295)
+    root_directory: str = Field(default="/data", max_length=100,
+                                pattern=r"^(/[A-Za-z0-9._-]+){1,4}$")
+    # projects allowed to mount it once registered
+    project_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class ProvisionPlanBody(BaseModel):
+    """`POST …/provision/plan`: the network profile a create would use, and the id (for
+    the security group's name). Read-only; nothing is made."""
+
+    model_config = {"extra": "forbid"}
+
+    network_profile_id: str = Field(pattern=NETWORK_PROFILE_ID_RE)
+    id: str | None = Field(default=None, pattern=STORAGE_ID_PATTERN)
+
+
+class TeardownBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # repeats the storage id: the console's second confirmation (§7)
+    confirm: str = Field(min_length=1, max_length=32)
 
 
 class PreflightBody(BaseModel):
@@ -124,6 +168,61 @@ def register_storage(
     return out
 
 
+@router.post("/provision/plan")
+def plan_provision(
+    body: ProvisionPlanBody, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """What a create would add to the profile's VPC (security group, its inbound and
+    outbound rules, mount targets), whether the agents' security groups already let NFS
+    out, and whether an S3 gateway endpoint serves their route tables (§7)."""
+    return provision.plan(db, ws.context, body.network_profile_id, body.id)
+
+
+@router.post("/provision", status_code=202)
+def provision_storage(
+    body: ProvisionBody, request: Request, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Queue the console's S3 Files creation (§7); poll `GET …/provision/jobs/{job_id}`.
+    A second call for the same id returns its running job, or resumes a failed one."""
+    job, started = provision.queue_create(db, ws.context, body.model_dump(), _actor(request))
+    if started:
+        provision.start_async(job.id)
+        _audit(ws, request, "storage.provision", f"storage:{body.id}")
+    return provision.view(job)
+
+
+@router.get("/provision/jobs")
+def list_provision_jobs(
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return {"jobs": provision.list_jobs(db, ws.id)}
+
+
+@router.get("/provision/jobs/{job_id}")
+def get_provision_job(
+    job_id: str, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return provision.get_job(db, ws.id, job_id)
+
+
+@router.post("/{storage_id}/teardown", status_code=202)
+def teardown_storage(
+    storage_id: str, body: TeardownBody, request: Request, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Delete what the console made for an entry and archive it (§7); the bucket and its
+    objects are kept. Registered (not console-made) storage is refused."""
+    job, started = provision.queue_delete(db, ws.context, storage_id, body.confirm,
+                                          _actor(request))
+    if started:
+        provision.start_async(job.id)
+        _audit(ws, request, "storage.teardown", f"storage:{storage_id}")
+    return provision.view(job)
+
+
 @router.post("/preflight")
 def preflight(
     body: PreflightBody, request: Request, db: Session = Depends(get_db),
@@ -169,7 +268,16 @@ def get_agent_storage(
     agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    return service.agent_storage(db, agent)
+    out = service.agent_storage(db, agent)
+    # what AWS actually mounts, external mounts included; an AWS failure only blanks
+    # this part of the card
+    try:
+        out["live"] = service.live_mounts(control_client(ws.context), db, agent)
+    except (ClientError, BotoCoreError) as exc:
+        out["live"] = {"status": "unavailable", "entries": [],
+                       "error": getattr(exc, "response", {}).get("Error", {}).get("Code")
+                       or type(exc).__name__}
+    return out
 
 
 @router.get("/{storage_id}")
