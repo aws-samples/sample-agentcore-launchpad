@@ -1384,6 +1384,22 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
 会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
 从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
+### 提示词漂移（在 AWS 控制台修改提示词）
+
+控制台显示的提示词是台账里的 `Agent.spec.system_prompt`，也就是上一次 Launchpad 部署发布的提示词。在 AWS 控制台
+修改 Harness（`UpdateHarness`）会发布一个台账不知道的新版本：Chat 已经按新提示词回答，页面上却还是旧的，而下一次
+从 Launchpad 重新发布会悄悄改回旧提示词。「部署与版本」页的**AWS 上的提示词**卡片读取
+`GET /api/agents/{agent_id}/prompt-drift`（`services/prompt_drift.py`）：它用 `GetHarness` 读最新版本，用
+`strip_generated_prompt` 去掉部署器追加的知识库、挂载和 Context Layer 段落，再和台账的提示词比较，结果是
+`in_sync` 或 `drifted`，后者还会列出控制台改过的模型、`maxTokens`、`maxIterations`、`timeoutSeconds`。门禁 Agent
+的生产流量固定在 `live` 端点，卡片会说明控制台的修改只落在 `DEFAULT` 上。只有 Launchpad 建的 Harness 能比较：
+Runtime 的提示词编译在生成的代码里，导入的 Harness 没有台账 spec，二者返回 `unsupported`。
+
+**导回**（`POST …/prompt-drift/adopt`，`{aws_version}`）把去掉追加段落后的 AWS 提示词写进 spec，再走
+`republish_agent`，与 redeploy 用同一套检查、权限（`perm:agents.deploy`，生产工作区受保护）和 Agent-DLC 门禁，
+所以页面、快照（备注 `prompt adopted from AWS version N`）和之后的部署都带上它。审阅后 AWS 又发布了新版本时返回
+`409 agent.prompt_drift_stale`。导回只带回提示词：其他被控制台修改的设置会在重新发布时恢复为台账的值，卡片在确认前就会列出。
+
 ### 代码视图（只读）
 
 Agent 详情的「代码」按钮打开 `/v2/agents?view=source&id=`，背后是

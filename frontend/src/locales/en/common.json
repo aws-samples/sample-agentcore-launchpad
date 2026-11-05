@@ -3448,7 +3448,10 @@
     "storage.sync_role_missing": "This workspace has no S3 Files sync role yet. Re-run make bootstrap (default workspace) or the workspace's bootstrap, then try again.",
     "storage.not_platform": "This storage was registered, not created by the console. The console never deletes registered storage: archive it instead.",
     "storage.confirm_mismatch": "Type the storage id exactly to confirm the deletion.",
-    "storage.job_not_found": "That storage job was not found."
+    "storage.job_not_found": "That storage job was not found.",
+    "agent.prompt_drift_stale": "AWS has published a newer Harness version since you reviewed the prompt. Review it again before adopting.",
+    "agent.prompt_drift_unsupported": "This agent's prompt cannot be read back from AWS.",
+    "agent.prompt_in_sync": "The prompt in Launchpad already matches AWS; there is nothing to adopt."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -13029,6 +13032,25 @@
         "rollbackNote": "How to roll back",
         "inactive": "Only an active agent can be promoted.",
         "system": "System presets are installed per workspace and are not promoted."
+      },
+      "promptDrift": {
+        "title": "Prompt on AWS",
+        "inSync": "In sync",
+        "inSyncHint": "The prompt of Harness version {{version}} on AWS matches this page.",
+        "drifted": "The prompt was changed outside Launchpad: AWS's latest Harness version is {{version}}, and its prompt differs from the one this page shows (recorded with version {{ledger}}). Chat already answers with the AWS prompt; a re-publish from Launchpad would put this page's prompt back.",
+        "liveNote": "This agent is gated: production is pinned to the live endpoint, so production still answers with the released prompt until a release.",
+        "ledger": "This page (Launchpad)",
+        "aws": "AWS, version {{version}}",
+        "others": "The AWS console also changed: {{members}}. Adopting brings back only the prompt; the re-publish returns these to Launchpad's values.",
+        "adopt": "Adopt the AWS prompt",
+        "blocked": "Adopting re-publishes the agent: it needs the edit permission and no deploy in progress.",
+        "confirmTitle": "Adopt the AWS prompt?",
+        "confirmBody": "Launchpad saves the prompt of AWS version {{version}} as this agent's prompt and re-publishes the agent with it (a new Harness version). The page, the snapshots and every later deploy then use it.",
+        "adopted": "Adopting the prompt of version {{version}}: the re-publish is running",
+        "unsupported": {
+          "runtime": "A Runtime agent's prompt is compiled into its code, so it cannot be read back from AWS. Change it in Launchpad and re-publish.",
+          "imported": "This agent was imported from AWS: AWS holds its only copy of the prompt."
+        }
       }
     },
     "life": {

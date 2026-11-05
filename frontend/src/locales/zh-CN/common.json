@@ -3448,7 +3448,10 @@
     "storage.sync_role_missing": "该工作区还没有 S3 Files 同步角色。请重新运行 make bootstrap（默认工作区）或该工作区的引导，然后再试。",
     "storage.not_platform": "这块存储是登记进来的，不是控制台新建的。控制台不会删除登记的存储，请改用归档。",
     "storage.confirm_mismatch": "请准确输入存储 ID 以确认删除。",
-    "storage.job_not_found": "未找到该存储作业。"
+    "storage.job_not_found": "未找到该存储作业。",
+    "agent.prompt_drift_stale": "你审阅提示词之后，AWS 又发布了新的 Harness 版本。请重新审阅后再导回。",
+    "agent.prompt_drift_unsupported": "这个 Agent 的提示词无法从 AWS 回读。",
+    "agent.prompt_in_sync": "Launchpad 里的提示词已经和 AWS 一致，没有需要导回的内容。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -13029,6 +13032,25 @@
         "rollbackNote": "回滚方案",
         "inactive": "只有运行中的智能体可以晋级。",
         "system": "系统预置按工作区安装，不参与晋级。"
+      },
+      "promptDrift": {
+        "title": "AWS 上的提示词",
+        "inSync": "一致",
+        "inSyncHint": "AWS 上 Harness 版本 {{version}} 的提示词与本页一致。",
+        "drifted": "提示词在 Launchpad 之外被修改过：AWS 上最新的 Harness 版本是 {{version}}，它的提示词与本页显示的不同（本页记录的是版本 {{ledger}}）。Chat 已经按 AWS 上的提示词回答；如果在 Launchpad 里重新发布，会把本页的提示词改回去。",
+        "liveNote": "这个 Agent 启用了发布门禁：生产流量固定在 live 端点上，发布之前生产环境仍用已发布的提示词。",
+        "ledger": "本页（Launchpad）",
+        "aws": "AWS，版本 {{version}}",
+        "others": "AWS 控制台还修改了：{{members}}。导回只会带回提示词，重新发布时这些设置会恢复为 Launchpad 里的值。",
+        "adopt": "导回 AWS 上的提示词",
+        "blocked": "导回会重新发布 Agent，需要编辑权限，且当前没有正在进行的部署。",
+        "confirmTitle": "导回 AWS 上的提示词？",
+        "confirmBody": "Launchpad 会把 AWS 版本 {{version}} 的提示词保存为这个 Agent 的提示词，并用它重新发布（生成一个新的 Harness 版本）。之后本页、快照和后续每次部署都使用这个提示词。",
+        "adopted": "正在导回版本 {{version}} 的提示词，重新发布进行中",
+        "unsupported": {
+          "runtime": "Runtime 类 Agent 的提示词编译在代码里，无法从 AWS 回读。请在 Launchpad 里修改后重新发布。",
+          "imported": "这个 Agent 是从 AWS 导入的，提示词只保存在 AWS 上。"
+        }
       }
     },
     "life": {

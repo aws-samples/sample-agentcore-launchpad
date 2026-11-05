@@ -2562,6 +2562,31 @@ so canary leftovers are noticed. It is strictly read-only: it never re-points
 `DEFAULT` and never creates, updates or deletes an endpoint; the canary owns those
 operations.
 
+### Prompt drift (a prompt edited in the AWS console)
+
+The console shows `Agent.spec.system_prompt`, the prompt the last Launchpad deploy
+published. An edit in the AWS console (`UpdateHarness`) publishes a Harness version the
+ledger does not know: chat answers with the new prompt while the page shows the old
+one, and the next re-publish from Launchpad silently puts the old one back. The
+**Prompt on AWS** card on the Deploy & versions tab reads
+`GET /api/agents/{agent_id}/prompt-drift` (`services/prompt_drift.py`): `GetHarness` on
+the latest version, `strip_generated_prompt` removes the sections the deployer
+appends (knowledge bases, storage mounts, the context layer), and the rest is compared
+with the ledger's prompt — `in_sync` or `drifted`, the latter also naming the model,
+`maxTokens`, `maxIterations` and `timeoutSeconds` the console changed. For a gated
+agent the card notes that production is pinned to `live`, so the console edit only
+reached `DEFAULT`. Only a Launchpad-built Harness can be compared: a Runtime's prompt is
+compiled into its generated code and an imported Harness has no ledger spec, so both
+answer `unsupported`.
+
+**Adopting** (`POST …/prompt-drift/adopt`, `{aws_version}`) writes the stripped AWS
+prompt into the spec and runs `republish_agent`: the redeploy's guards, permission
+(`perm:agents.deploy`, prod-protected) and Agent-DLC gate, so the page, the snapshots
+(note `prompt adopted from AWS version N`) and later deploys carry it. A newer AWS
+version than the one reviewed is `409 agent.prompt_drift_stale`. Only the prompt is
+adopted; other members the console changed return to the ledger's values on that
+re-publish, which the card lists before the confirmation.
+
 ### Code view (read-only)
 
 The agent detail's **Code** button opens `/v2/agents?view=source&id=`, backed by

@@ -153,6 +153,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/agents/{agent_id}/identity"): MEMBER,
     ("GET", "/api/agents/{agent_id}/mcp"): MEMBER,  # live Gateway read-back
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
+    # the ledger prompt beside the Harness's latest (read-only), and adopting it —
+    # a re-publish through the redeploy path, so the redeploy's permission
+    ("GET", "/api/agents/{agent_id}/prompt-drift"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/prompt-drift/adopt"): PERM_AGENT_DEPLOY,
     ("GET", "/api/agents/{agent_id}/source"): MEMBER,  # read-only code / harness config
     ("GET", "/api/agents/{agent_id}/runtime-logs"): MEMBER,  # read-only AWS view
     ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
@@ -1013,6 +1017,8 @@ PROD_PROTECTED: frozenset[tuple[str, str]] = frozenset(
         ("DELETE", "/api/agents/{agent_id}"),
         ("POST", "/api/agents/{agent_id}/convert"),
         ("POST", "/api/agents/{agent_id}/redeploy"),  # edit = redeploy
+        # adopting the AWS console's prompt re-publishes through the same path
+        ("POST", "/api/agents/{agent_id}/prompt-drift/adopt"),
         ("POST", "/api/agents/{agent_id}/inbound-auth"),  # re-publishes the runtime
         # accepting an AI recommendation republishes the agent (a new Harness version)
         # through the same republish path as redeploy, so prod treats it the same way
