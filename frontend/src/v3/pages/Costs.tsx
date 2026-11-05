@@ -19,6 +19,10 @@ import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Pan
 import { BillingView } from "./cost-tags/BillingView";
 import { DepartmentBudgetView, PlatformBudgetView, ProjectBudgetView } from "./costs/BudgetViews";
 import { costViews, pickView } from "./costs/budgetModel";
+import {
+  COST_PERIODS, type CostPeriod, CUSTOM_MAX_DAYS, customRangeError, DEFAULT_COST_PERIOD, periodLabel, utcToday,
+} from "./costs/costPeriod";
+import { ModelSpendPanel } from "./costs/ModelSpend";
 import { alertDetailText } from "../../lib/alertDetail";
 import { Select } from "../select";
 
@@ -113,9 +117,18 @@ function SpendView() {
   const { current } = useWorkspace();
   const ws = current?.id ?? "";
   const [, setParams] = useSearchParams();
-  const [range, setRange] = useState<(typeof RANGES)[number]>("24h");
+  const [range, setRange] = useState<CostPeriod>(DEFAULT_COST_PERIOD);
+  // the custom range being typed, and the one applied (only an applied one is queried)
+  const [draft, setDraft] = useState(() => ({ start: utcToday(), end: utcToday() }));
+  const [custom, setCustom] = useState<{ start: string; end: string } | null>(null);
   const [tick, setTick] = useState(0);
-  const report = useLoad(() => api.costs(range, tick > 0), `v3-costs:${ws}:${range}:${tick}`);
+  const waiting = range === "custom" && !custom;
+  const report = useLoad(
+    () => (waiting ? Promise.resolve(null) : api.costs(range, tick > 0, range === "custom" ? custom ?? undefined : undefined)),
+    `v3-costs:${ws}:${range}:${custom?.start ?? ""}:${custom?.end ?? ""}:${tick}`,
+  );
+  const draftError = customRangeError(draft.start, draft.end);
+  const rangeLabel = periodLabel(report.data?.period) || t(`v3.costs.period.${range}`);
   const mtd = useLoad(() => api.costsMonthToDate().catch(() => null), `v3-costs-mtd:${ws}:${tick}`);
   // what the platform watches, as last evaluated — read only, never re-evaluated here
   const rules = useLoad(() => api.alertRules().catch(() => null), `v3-costs-rules:${ws}`);
@@ -144,14 +157,28 @@ function SpendView() {
       )}
 
       <div className="v3-grid c4">
-        <Panel signal="info"><Stat label={t("v3.costs.spend", { range })} value={usd(data?.total_est_cost_usd)} foot={t("v2.costs.estimate")} /></Panel>
+        <Panel signal="info"><Stat label={t("v3.costs.spend", { range: rangeLabel })} value={usd(data?.total_est_cost_usd)} foot={t("v2.costs.estimate")} /></Panel>
         <Panel><Stat label={t("v3.costs.mtd")} value={mtd.data ? usd(mtd.data.est_cost_usd) : "—"} foot={t("v3.costs.mtdFoot")} /></Panel>
-        <Panel><Stat label={t("v2.costs.kpiTokens")} value={data ? data.total_tokens.toLocaleString() : "—"} foot={t("v2.costs.window", { range })} /></Panel>
+        <Panel><Stat label={t("v2.costs.kpiTokens")} value={data ? data.total_tokens.toLocaleString() : "—"} foot={rangeLabel} /></Panel>
         <Panel><Stat label={t("v2.costs.kpiAgents")} value={data?.by_agent.length ?? "—"} /></Panel>
       </div>
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <Filters value={range} onChange={setRange} options={RANGES.map((value) => ({ value, label: value }))} />
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }} data-testid="v3-costs-period">
+        <Filters value={range} onChange={setRange}
+          options={COST_PERIODS.map((value) => ({ value, label: t(`v3.costs.period.${value}`) }))} />
+        {range === "custom" && (
+          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="date" className="v3-input" aria-label={t("v3.costs.from")} value={draft.start}
+              max={utcToday()} onChange={(e) => setDraft((d) => ({ ...d, start: e.target.value }))} />
+            <span>–</span>
+            <input type="date" className="v3-input" aria-label={t("v3.costs.to")} value={draft.end}
+              min={draft.start} onChange={(e) => setDraft((d) => ({ ...d, end: e.target.value }))} />
+            <Btn size="sm" kind="primary" disabled={draftError !== null}
+              disabledReason={draftError ? t(`v3.costs.customError.${draftError}`, { max: CUSTOM_MAX_DAYS }) : undefined}
+              onClick={() => setCustom({ ...draft })}>{t("v3.costs.apply")}</Btn>
+          </span>
+        )}
+        <small className="v3-hint">{t("v3.costs.utcNote")}</small>
         <Btn size="sm" kind="ghost" onClick={() => {
           setTick((n) => n + 1);
           toast("ok", t("v2.costs.refreshing"));
@@ -160,6 +187,9 @@ function SpendView() {
       </div>
 
       {data && data.unpriced_models.length > 0 && <Notice s="wait">{t("v2.costs.unpriced", { models: data.unpriced_models.join(", ") })}</Notice>}
+      {waiting && <Notice s="info">{t("v3.costs.pickCustom")}</Notice>}
+
+      {data?.by_model && <ModelSpendPanel rows={data.by_model} total={data.total_est_cost_usd} />}
 
       <div className="v3-grid v3-split" style={{ alignItems: "start" }}>
         <Panel flush title={t("v2.costs.byAgent")}>

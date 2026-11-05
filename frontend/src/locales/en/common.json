@@ -3451,7 +3451,8 @@
     "storage.job_not_found": "That storage job was not found.",
     "agent.prompt_drift_stale": "AWS has published a newer Harness version since you reviewed the prompt. Review it again before adopting.",
     "agent.prompt_drift_unsupported": "This agent's prompt cannot be read back from AWS.",
-    "agent.prompt_in_sync": "The prompt in Launchpad already matches AWS; there is nothing to adopt."
+    "agent.prompt_in_sync": "The prompt in Launchpad already matches AWS; there is nothing to adopt.",
+    "costs.bad_period": "Pick a custom period of 1 to 92 days that does not start in the future (dates as YYYY-MM-DD)."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -14072,6 +14073,33 @@
         },
         "platformHint": "The estimate prices model tokens only: idle and per-request fees of the shared infrastructure are on the billing view's shared row.",
         "nothing": "No cost view is available to you here"
+      },
+      "byModel": "By model",
+      "colModel": "Model",
+      "colShare": "Share",
+      "colIn": "Input tokens",
+      "colOut": "Output tokens",
+      "unpricedChip": "no price",
+      "period": {
+        "today": "Today",
+        "this_week": "This week",
+        "7d": "Last 7 days",
+        "last_week": "Last week",
+        "this_month": "This month",
+        "30d": "Last 30 days",
+        "last_month": "Last month",
+        "custom": "Custom"
+      },
+      "from": "From",
+      "to": "To",
+      "apply": "Apply",
+      "utcNote": "Dates in UTC, as on the AWS bill; weeks start on Monday.",
+      "pickCustom": "Pick a start and end date, then Apply.",
+      "customError": {
+        "missing": "Pick both dates.",
+        "order": "The end date is before the start date.",
+        "future": "The start date is in the future.",
+        "tooLong": "A custom range is at most {{max}} days."
       }
     },
     "memory": {

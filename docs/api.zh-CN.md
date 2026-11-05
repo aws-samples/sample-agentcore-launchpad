@@ -598,7 +598,7 @@ workspace 划分；覆盖设置保存在本部署的账本（`platform_settings`
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d`（默认 `24h`）`&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, agent_name, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`。其他范围 → `422 costs.bad_range`；Logs Insights 失败或超时 → `502 observability.query_failed` |
+| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d\|today\|this_week\|last_week\|this_month\|last_month\|custom`（默认 `24h`；日历区间按 UTC 计算，与 AWS 账单一致，一周从周一开始；`custom` 需要 `&start=&end=`，格式 `YYYY-MM-DD`，包含两端，1–92 天，否则 `422 costs.bad_period`）`&force=` → `{range, hours, period{start, end}, generated_at, total_est_cost_usd, by_agent[{service, agent_id, agent_name, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], by_model[{model, agents, llm_calls, tokens_in, tokens_out, cache_tokens, tokens, est_cost_usd}]（每次调用按它自己的模型价格计价；Agent 的金额是它各模型之和）, unpriced_models[], estimate, cache}`。其他范围 → `422 costs.bad_range`；Logs Insights 失败或超时 → `502 observability.query_failed` |
 | `GET` | `/api/costs/month-to-date` | `?force=` → `{workspace_id, est_cost_usd, hours, unpriced_models[], estimate: true}`——自当月 1 日 00:00 UTC 起的花费，最多 720 小时 |
 | `GET` | `/api/alerts` | 只读台账，不调用 AWS → `{rules[], firing, kinds[]}` |
 | `POST` | `/api/alerts` | body `{kind, threshold, name?, comparison?, window?, enabled?, webhook_url?}` → `201` 规则。`comparison` 默认取该类型的自然方向 |

@@ -3451,7 +3451,8 @@
     "storage.job_not_found": "未找到该存储作业。",
     "agent.prompt_drift_stale": "你审阅提示词之后，AWS 又发布了新的 Harness 版本。请重新审阅后再导回。",
     "agent.prompt_drift_unsupported": "这个 Agent 的提示词无法从 AWS 回读。",
-    "agent.prompt_in_sync": "Launchpad 里的提示词已经和 AWS 一致，没有需要导回的内容。"
+    "agent.prompt_in_sync": "Launchpad 里的提示词已经和 AWS 一致，没有需要导回的内容。",
+    "costs.bad_period": "请选择 1 到 92 天、且不从未来开始的自定义区间（日期格式 YYYY-MM-DD）。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -14072,6 +14073,33 @@
         },
         "platformHint": "估算只为模型 token 计价：共享基础设施的闲置费与按请求计费的部分见账单视图的共享行。",
         "nothing": "这里没有你可以打开的费用视图"
+      },
+      "byModel": "按模型",
+      "colModel": "模型",
+      "colShare": "占比",
+      "colIn": "输入 Token",
+      "colOut": "输出 Token",
+      "unpricedChip": "无价格",
+      "period": {
+        "today": "本日",
+        "this_week": "本周",
+        "7d": "最近一周",
+        "last_week": "上一周",
+        "this_month": "本月",
+        "30d": "最近一月",
+        "last_month": "上个月",
+        "custom": "自定义"
+      },
+      "from": "开始日期",
+      "to": "结束日期",
+      "apply": "应用",
+      "utcNote": "日期按 UTC 计算，与 AWS 账单一致；一周从周一开始。",
+      "pickCustom": "请选择开始和结束日期，然后点击应用。",
+      "customError": {
+        "missing": "请选择两个日期。",
+        "order": "结束日期早于开始日期。",
+        "future": "开始日期在未来。",
+        "tooLong": "自定义区间最长 {{max}} 天。"
       }
     },
     "memory": {

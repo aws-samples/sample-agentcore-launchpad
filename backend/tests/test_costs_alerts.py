@@ -73,7 +73,7 @@ def _clear_rules() -> None:
 # ── T28: attribution ─────────────────────────────────────────────────────────────
 
 
-def _stub_insights(monkeypatch, by_service, by_session):
+def _stub_insights(monkeypatch, by_service, by_session, by_model=None):
     monkeypatch.setattr(cost_service, "logs_client", lambda workspace: object())
     monkeypatch.setattr(
         cost_service,
@@ -81,6 +81,7 @@ def _stub_insights(monkeypatch, by_service, by_session):
         lambda queries, hours, logs=None, **kw: {
             "by_service": by_service,
             "by_session": by_session,
+            **({"by_model": by_model} if by_model is not None else {}),
         },
     )
     monkeypatch.setattr(
@@ -144,6 +145,48 @@ def test_an_unpriced_model_is_reported_rather_than_counted_as_free(monkeypatch, 
     assert report["by_agent"][0]["tokens"] == 1000  # tokens still counted
     assert report["unpriced_models"] == ["some-unlisted-model"]
     assert report["total_est_cost_usd"] == 0.0
+
+
+def test_spend_per_model_prices_every_call_at_its_own_rate(monkeypatch, ctx):
+    """An agent that called two models: the per-model view splits the dollars, and the
+    agent's total is the sum of both rates — not every token at its latest model's."""
+    _seed()
+    _stub_insights(
+        monkeypatch,
+        by_service=[
+            {"service": "priced-agent", "tokens_in": "2000000", "tokens_out": "0",
+             "cache_read": "0", "cache_write": "0", "llm_calls": "3",
+             "model": "some-unlisted-model"},  # latest() picked the unpriced one
+        ],
+        by_session=[],
+        by_model=[
+            {"service": "priced-agent", "span_project": "", "model": "claude-sonnet",
+             "tokens_in": "1000000", "tokens_out": "0", "cache_read": "0",
+             "cache_write": "0", "llm_calls": "2"},
+            {"service": "priced-agent", "span_project": "", "model": "some-unlisted-model",
+             "tokens_in": "1000000", "tokens_out": "0", "cache_read": "0",
+             "cache_write": "0", "llm_calls": "1"},
+            {"service": "other", "span_project": "", "model": "claude-sonnet",
+             "tokens_in": "0", "tokens_out": "1000000", "cache_read": "0",
+             "cache_write": "0", "llm_calls": "1"},
+        ],
+    )
+    db = SessionLocal()
+    try:
+        report = cost_service.cost_report(db, ctx, range_key="24h")
+    finally:
+        db.close()
+    models = {row["model"]: row for row in report["by_model"]}
+    # sonnet: 1M in at $3 (priced-agent) + 1M out at $15 (other)
+    assert models["claude-sonnet"]["est_cost_usd"] == pytest.approx(18.0)
+    assert models["claude-sonnet"]["agents"] == 2
+    assert models["claude-sonnet"]["llm_calls"] == 3
+    assert models["some-unlisted-model"]["est_cost_usd"] is None
+    assert models["some-unlisted-model"]["tokens"] == 1_000_000
+    assert [row["model"] for row in report["by_model"]][0] == "claude-sonnet"
+    agent = next(r for r in report["by_agent"] if r["service"] == "priced-agent")
+    assert agent["est_cost_usd"] == pytest.approx(3.0)
+    assert "some-unlisted-model" in report["unpriced_models"]
 
 
 def test_a_service_with_no_ledger_agent_is_still_reported(monkeypatch, ctx):
@@ -401,7 +444,7 @@ def test_month_to_date_uses_the_elapsed_month(monkeypatch, ctx):
 
     def fake_run(queries, hours, logs=None, **kw):
         seen["hours"] = hours
-        return {"by_service": [{"service": "a", "tokens_in": "1000000", "tokens_out": "0",
+        return {"by_model": [{"service": "a", "tokens_in": "1000000", "tokens_out": "0",
                                 "cache_read": "0", "cache_write": "0",
                                 "model": "claude-sonnet"}]}
 
@@ -486,3 +529,59 @@ def test_a_runtime_service_name_is_attributed_to_its_agent(monkeypatch, ctx):
         db.close()
     [row] = report["by_agent"]
     assert row["known"] is True and row["agent_id"] == agent_id
+
+
+# ── calendar periods (like the AWS bill: UTC, weeks start on Monday) ─────────────
+
+_NOW = datetime(2026, 11, 5, 10, 30, tzinfo=UTC)  # a Thursday
+
+
+@pytest.mark.parametrize("key, start, end", [
+    ("today", datetime(2026, 11, 5, tzinfo=UTC), _NOW),
+    ("this_week", datetime(2026, 11, 2, tzinfo=UTC), _NOW),
+    ("last_week", datetime(2026, 10, 26, tzinfo=UTC), datetime(2026, 11, 2, tzinfo=UTC)),
+    ("this_month", datetime(2026, 11, 1, tzinfo=UTC), _NOW),
+    ("last_month", datetime(2026, 10, 1, tzinfo=UTC), datetime(2026, 11, 1, tzinfo=UTC)),
+    ("7d", datetime(2026, 10, 29, 10, 30, tzinfo=UTC), _NOW),
+])
+def test_calendar_periods(key, start, end):
+    assert cost_service.resolve_window(key, now=_NOW) == (start, end)
+
+
+def test_a_january_last_month_is_december():
+    jan = datetime(2027, 1, 15, tzinfo=UTC)
+    assert cost_service.resolve_window("last_month", now=jan) == (
+        datetime(2026, 12, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC))
+
+
+def test_a_custom_period_covers_whole_days_and_is_bounded():
+    assert cost_service.resolve_window("custom", start="2026-10-01", end="2026-10-03",
+                                       now=_NOW) == (datetime(2026, 10, 1, tzinfo=UTC),
+                                                     datetime(2026, 10, 4, tzinfo=UTC))
+    # a period running into today ends now
+    assert cost_service.resolve_window("custom", start="2026-11-04", end="2026-11-05",
+                                       now=_NOW)[1] == _NOW
+    for start, end in (("2026-10-03", "2026-10-01"), ("2026-01-01", "2026-11-01"),
+                       ("2026-12-01", "2026-12-02"), (None, None)):
+        with pytest.raises(AppError) as err:
+            cost_service.resolve_window("custom", start=start, end=end, now=_NOW)
+        assert err.value.code == "costs.bad_period"
+
+
+def test_a_calendar_period_queries_its_own_window(monkeypatch, ctx):
+    seen: dict = {}
+    _stub_insights(monkeypatch, by_service=[], by_session=[], by_model=[])
+    monkeypatch.setattr(cost_service, "run_insights_queries",
+                        lambda queries, hours, logs=None, **kw: seen.update(kw) or {})
+    db = SessionLocal()
+    try:
+        report = cost_service.cost_report(db, ctx, range_key="custom",
+                                          start="2026-10-01", end="2026-10-31")
+    finally:
+        db.close()
+    begin = datetime(2026, 10, 1, tzinfo=UTC)
+    assert seen["window"] == (int(begin.timestamp()),
+                              int(datetime(2026, 11, 1, tzinfo=UTC).timestamp()))
+    assert report["period"]["start"] == begin.isoformat()
+    assert report["hours"] == 31 * 24
+    assert report["by_model"] == []
