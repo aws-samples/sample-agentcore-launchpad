@@ -9,7 +9,7 @@ import {
   normalizePath,
   refreshTargets,
   visibleRows,
-} from "./fileTree";
+} from "./fileTreeModel";
 
 const f = (path: string, size = 1) => ({ path, dir: false, size });
 const d = (path: string) => ({ path, dir: true, size: null });

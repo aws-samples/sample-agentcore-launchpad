@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import i18n from "../../../i18n";
 import { ApiError, codingApi, errorMessage } from "../../../lib/api";
-import { normalizePath } from "./fileTree";
+import { normalizePath } from "./fileTreeModel";
 
 /** One editor tab: the file as last read from disk and the member's draft of it. */
 export interface OpenFile {
