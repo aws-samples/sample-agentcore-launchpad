@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { codingApi, errorMessage } from "../../../lib/api";
 import { Alert, LinkButton, Spin } from "../../ui";
-import { emptyTree, mergeListing, refreshTargets, ROOT, type TreeState, visibleRows } from "./fileTree";
+import { emptyTree, mergeListing, refreshTargets, ROOT, type TreeState, visibleRows } from "./fileTreeModel";
 
 /**
  * The repo's directory tree. The root is listed on mount; a directory is listed

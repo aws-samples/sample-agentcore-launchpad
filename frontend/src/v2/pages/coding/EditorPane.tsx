@@ -8,7 +8,7 @@ import { useLoad, useV2Toast } from "../../hooks";
 import { copyText } from "../observability/common";
 import { Alert, Button, LinkButton, Segmented, Spin, Tag } from "../../ui";
 import { CodingMarkdown, type OpenFileHandler } from "./CodingMarkdown";
-import { parentOf, ROOT } from "./fileTree";
+import { parentOf, ROOT } from "./fileTreeModel";
 import { languageFor, isMarkdown } from "./language";
 import { isDirty, type OpenFile } from "./useOpenFiles";
 
