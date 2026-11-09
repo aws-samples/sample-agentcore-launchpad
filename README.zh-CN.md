@@ -254,7 +254,7 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 通常不高，实际金额取决于各项能力的使用量：
 
 - **Runtime / Harness 调用**：每次调用都会产生模型 token 费用（默认模型为
-  `global.zai.glm-5.3`，Claude、GPT 及其他 GLM 模型仍可按 Agent 选择），以及托管
+  `global.moonshotai.kimi-k3`，Claude、GPT、GLM 及其他模型仍可按 Agent 选择），以及托管
   runtime/session 的计算费用。
 - **容器构建（方式A）**：CodeBuild 按 ARM64 构建时长计费，每个 Agent 构建约 2 分钟。
   方式B（Harness）无需构建，方式C 使用更快的 zip 路径。

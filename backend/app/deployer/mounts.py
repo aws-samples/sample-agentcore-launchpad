@@ -103,3 +103,16 @@ def manifest_paths(spec: dict[str, Any] | None) -> set[str]:
         if path:
             paths.add(path)
     return paths
+
+
+def published_mount_paths(db: Any, agent_id: str) -> set[str]:
+    """The BYO mount paths any publish of this agent set (its spec snapshots): the
+    entries the platform owns on the live Runtime / Harness even after the spec
+    dropped them, so a re-publish detaches a removed mount (storage-mounts §3.2) while
+    keeping one added outside the platform."""
+    from app.models.ledger import SpecSnapshot
+
+    paths: set[str] = set()
+    for (spec,) in db.query(SpecSnapshot.spec).filter(SpecSnapshot.agent_id == agent_id):
+        paths |= manifest_paths(spec)
+    return paths

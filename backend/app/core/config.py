@@ -251,16 +251,16 @@ class Settings(BaseSettings):
     # See docs/setup.md "Choosing models".
     # Default model of a new agent (the Create Agent wizard pre-selects it; a spec
     # submitted without a model_id gets it).
-    agent_default_model_id: str = "global.zai.glm-5.3"
+    agent_default_model_id: str = "global.moonshotai.kimi-k3"
     # Intent clustering (Observe intent view) and the try-chat suggested questions.
-    platform_model_id: str = "global.anthropic.claude-sonnet-5"
+    platform_model_id: str = "global.anthropic.claude-sonnet-5-5"
     # Default LLM-as-judge model of custom / derived AgentCore evaluators, and the
     # model to retry on when AgentCore's evaluator validation refuses the judge
     # (empty = no fallback; the refusal surfaces).
-    judge_model_id: str = "global.openai.gpt-6-sol"
+    judge_model_id: str = "global.openai.gpt-6.1-sol"
     judge_fallback_model_id: str = "global.anthropic.claude-sonnet-5-5"
     # Default model of agents the architect assistant proposes (managed Harness).
-    assistant_model_id: str = "global.openai.gpt-6-sol"
+    assistant_model_id: str = "global.openai.gpt-6.1-sol"
     # Default model of the system architect agent on a new install. reasoning_effort
     # is preset only when this is an OpenAI model (the only family that takes it).
     architect_model_id: str = "global.openai.gpt-6-astra"
@@ -292,19 +292,19 @@ class Settings(BaseSettings):
     # scenarios; it must accept Converse forced tool choice (any / tool).
     actor_model_id: str = "global.openai.gpt-6-luna"
     # Model of a Strands Studio canvas node that names none.
-    studio_fallback_model_id: str = "global.anthropic.claude-sonnet-5"
+    studio_fallback_model_id: str = "global.anthropic.claude-sonnet-5-5"
     # Default of the Claude Agent SDK ("container") method — Claude models only.
-    claude_sdk_model_id: str = "global.anthropic.claude-sonnet-5"
+    claude_sdk_model_id: str = "global.anthropic.claude-sonnet-5-5"
 
     # 3rd-party recommendation providers for the experiment RECOMMEND stage
     # (app/optimization/providers). Model ids are Bedrock Converse
     # inference-profile ids invoked through the workspace client funnel; the list
     # is what the console offers, the default leads it. GPT-5.6 Sol is invocable
     # via Converse in us-west-2 too (unlike Mantle for harnesses) — live-verified.
-    prompt_opt_default_model_id: str = "global.anthropic.claude-opus-5"
+    prompt_opt_default_model_id: str = "global.anthropic.claude-opus-5-5"
     prompt_opt_models: list[str] = [
-        "global.anthropic.claude-opus-5",
-        "global.anthropic.claude-sonnet-5",
+        "global.anthropic.claude-opus-5-5",
+        "global.anthropic.claude-sonnet-5-5",
         "global.anthropic.claude-sonnet-4-6",
         "us.openai.gpt-5.6-sol",
     ]
@@ -368,7 +368,7 @@ class Settings(BaseSettings):
     # AI-fix coding backend (slice 3 consumes these; declared here so the whole
     # local-debug surface shares one settings block).
     codegen_backend: str = "claude"
-    codegen_model: str = "global.anthropic.claude-sonnet-5"
+    codegen_model: str = "global.anthropic.claude-sonnet-5-5"
     codegen_timeout_s: float = 180.0
     codegen_max_repair_rounds: int = 2
 
@@ -425,7 +425,7 @@ class Settings(BaseSettings):
         "global.openai.gpt-6-sol",
         "global.openai.gpt-6-astra",
     ]
-    coding_default_model: str = "global.openai.gpt-6-sol"
+    coding_default_model: str = "global.openai.gpt-6.1-sol"
     # codex reasoning effort per turn (`turn/start.effort`)
     coding_efforts: list[str] = ["low", "medium", "high", "xhigh"]
     coding_default_effort: str = "medium"

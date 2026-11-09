@@ -572,14 +572,14 @@ def test_ordinary_knob_pairings_the_schema_refuses_are_422(client, overrides):
     assert res.status_code == 422, res.text
 
 
-def test_harness_and_strands_specs_without_a_model_default_to_glm(client):
-    """The platform default is GLM-5.3 (global profile): a spec that names no model
+def test_harness_and_strands_specs_without_a_model_default_to_kimi(client):
+    """The platform default is Kimi K3 (global profile): a spec that names no model
     gets it, except the Claude Agent SDK, which only drives Claude (above)."""
     from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 
-    assert DEFAULT_MODEL_ID == "global.zai.glm-5.3"
-    spec = AgentSpec(name="glm-default", method="harness", system_prompt="hi")
-    assert spec.model_id == "global.zai.glm-5.3"
+    assert DEFAULT_MODEL_ID == "global.moonshotai.kimi-k3"
+    spec = AgentSpec(name="kimi-default", method="harness", system_prompt="hi")
+    assert spec.model_id == "global.moonshotai.kimi-k3"
     explicit = AgentSpec(name="claude-pinned", method="harness", system_prompt="hi",
                          model_id="global.anthropic.claude-sonnet-5")
     assert explicit.model_id == "global.anthropic.claude-sonnet-5"

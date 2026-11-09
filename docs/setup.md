@@ -524,7 +524,7 @@ a scratch workspace and hands it back over SSE. Four settings control that:
 | Setting | Default | Effect |
 |---|---|---|
 | `codegen_backend` | `claude` | Which coding agent performs the fix. `claude` (the Claude Agent SDK) is the only registered backend today; an unregistered name fails the request with the list of registered names rather than silently falling back. |
-| `codegen_model` | `global.anthropic.claude-sonnet-5` | Model that coding agent runs on. A stronger model repairs more per attempt and costs more per attempt. |
+| `codegen_model` | `global.anthropic.claude-sonnet-5-5` | Model that coding agent runs on. A stronger model repairs more per attempt and costs more per attempt. |
 | `codegen_timeout_s` | `180.0` | End-to-end budget for one AI-fix request, repair rounds included. Raise it if fixes are being cut off before the agent finishes writing the file. |
 | `codegen_max_repair_rounds` | `2` | How many times a rewrite may be re-validated and re-attempted before the request gives up. Each extra round is another model call on a flow whose first fix did not import cleanly. |
 
@@ -569,8 +569,8 @@ through the same workspace client funnel as everything else.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `prompt_opt_models` | `["global.anthropic.claude-opus-5", "global.anthropic.claude-sonnet-5", "global.anthropic.claude-sonnet-4-6", "us.openai.gpt-5.6-sol"]` | The reflection models the console offers. Add an id here to make it selectable. |
-| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | Which of them leads that list and is used when a request names none. |
+| `prompt_opt_models` | `["global.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-sonnet-4-6", "us.openai.gpt-5.6-sol"]` | The reflection models the console offers. Add an id here to make it selectable. |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5-5` | Which of them leads that list and is used when a request names none. |
 | `prompt_opt_max_sessions` | `30` (3–100) | How many sessions of the pinned run a provider reads (worst-first plus a best-scoring contrast set). Fewer is cheaper and faster; more gives the reflection more evidence to generalise from. |
 | `prompt_opt_max_tokens` | `8192` (512–16000) | Output budget of the reflection call. A two-component reflection (prompt plus several tool descriptions) ran past 4096, and the provider doubles this once on its own when a response comes back truncated. |
 | `prompt_opt_read_timeout_s` | `900` | Read timeout of the reflection call. The call streams, so this bounds the gap between chunks rather than the total. botocore's 60 s default is far too low: in practice a large model over 30 sessions ran past it and botocore silently re-sent the whole request five times before failing. |
@@ -584,16 +584,16 @@ they were created with — a role only decides what *new* ones get.
 
 | Role (setting) | Default | Used for |
 |---|---|---|
-| `agent_default_model_id` | `global.openai.gpt-6-sol` | The model a new agent on native Bedrock pre-selects in the wizard, and what an agent created through the API without a `model_id` gets. |
-| `claude_sdk_model_id` | `global.anthropic.claude-sonnet-5` | The same for the Claude Agent SDK (`container`) method, which drives Claude only: a container spec without a `model_id` gets this, never the agent default. Claude only. |
-| `judge_model_id` | `global.openai.gpt-6-sol` | Default judge of a custom / derived LLM evaluator, and of the evaluators the architect assistant drafts. |
+| `agent_default_model_id` | `global.moonshotai.kimi-k3` | The model a new agent on native Bedrock pre-selects in the wizard, and what an agent created through the API without a `model_id` gets. |
+| `claude_sdk_model_id` | `global.anthropic.claude-sonnet-5-5` | The same for the Claude Agent SDK (`container`) method, which drives Claude only: a container spec without a `model_id` gets this, never the agent default. Claude only. |
+| `judge_model_id` | `global.openai.gpt-6.1-sol` | Default judge of a custom / derived LLM evaluator, and of the evaluators the architect assistant drafts. |
 | `judge_fallback_model_id` | `global.anthropic.claude-sonnet-5-5` | Retried when AgentCore Evaluation refuses the judge model. Empty = no fallback; the refusal surfaces. |
-| `assistant_model_id` | `global.openai.gpt-6-sol` | The model the architect assistant proposes for a new agent. |
+| `assistant_model_id` | `global.openai.gpt-6.1-sol` | The model the architect assistant proposes for a new agent. |
 | `architect_model_id` | `global.openai.gpt-6-astra` | The system architect preset's model when an admin installs or repairs it. |
 | `actor_model_id` | `global.openai.gpt-6-luna` | The simulated user of a persona evaluation run. Must accept Converse forced tool choice. |
-| `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5` | What a Studio canvas node without a model generates. The backend scopes that agent's execution role to the same value and the canvas reads it from the server, so the two always agree. Deliberately separate from the agent default: moving it moves every existing flow's model-less nodes. |
-| `codegen_model` | `global.anthropic.claude-sonnet-5` | The coding agent behind Studio AI Fix. Claude only. |
-| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | See [Prompt optimization](#prompt-optimization). |
+| `studio_fallback_model_id` | `global.anthropic.claude-sonnet-5-5` | What a Studio canvas node without a model generates. The backend scopes that agent's execution role to the same value and the canvas reads it from the server, so the two always agree. Deliberately separate from the agent default: moving it moves every existing flow's model-less nodes. |
+| `codegen_model` | `global.anthropic.claude-sonnet-5-5` | The coding agent behind Studio AI Fix. Claude only. |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5-5` | See [Prompt optimization](#prompt-optimization). |
 | `skill_lab_judge_model_id`, `skill_lab_target_model_id`, `skill_lab_codex_target_model_id` | see [Skill Lab](#skill-lab) | The judge is OpenAI or Claude; the Claude-CLI target Claude only; the codex target OpenAI or Kimi. |
 
 A role that runs tools refuses a model measured not to support Converse tool use
@@ -803,18 +803,18 @@ on the host.
 
 | Env var (`launchpad.yaml` key = the lower-case name without `LAUNCHPAD_`) | Default | Where it is used |
 |---|---|---|
-| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.zai.glm-5.3` | Default model of a new agent: the Create Agent wizard pre-selects it, and a spec submitted without `model_id` gets it. |
-| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Intent clustering and naming (Observe → intent view) and the try-chat suggested questions. When the call fails, the intent view falls back to mechanical grouping and the panel to generic questions. |
-| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6-sol` | Default LLM-as-judge model of custom and derived AgentCore evaluators (the judge-model field of a new evaluator). |
+| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.moonshotai.kimi-k3` | Default model of a new agent: the Create Agent wizard pre-selects it, and a spec submitted without `model_id` gets it. |
+| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Intent clustering and naming (Observe → intent view) and the try-chat suggested questions. When the call fails, the intent view falls back to mechanical grouping and the panel to generic questions. |
+| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | Default LLM-as-judge model of custom and derived AgentCore evaluators (the judge-model field of a new evaluator). |
 | `LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Judge retried when AgentCore's evaluator validation refuses the chosen one. `""` = no fallback; the refusal surfaces. |
-| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6-sol` | Default model of the agents the architect assistant proposes (managed Harness). |
+| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6.1-sol` | Default model of the agents the architect assistant proposes (managed Harness). |
 | `LAUNCHPAD_ARCHITECT_MODEL_ID` | `global.openai.gpt-6-astra` | Model of the system architect agent when it is installed. `reasoning_effort` is preset only for an OpenAI model, the only family that takes it. |
 | `LAUNCHPAD_ACTOR_MODEL_ID` | `global.openai.gpt-6-luna` | Simulated-user (actor) model the console pre-selects for persona scenarios. It must accept Converse forced tool choice. |
-| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Model of a Strands Studio canvas node that names none. |
-| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5` | Reflection model of the experiment RECOMMEND stage when a request names none (see [Prompt optimization](#prompt-optimization)). |
+| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Model of a Strands Studio canvas node that names none. |
+| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Reflection model of the experiment RECOMMEND stage when a request names none (see [Prompt optimization](#prompt-optimization)). |
 | `LAUNCHPAD_PROMPT_OPT_MODELS` | the four ids in [Prompt optimization](#prompt-optimization) | The reflection models the console offers, as a JSON list (`'["global.zai.glm-5.3","deepseek.v3.2"]'`). Env / `launchpad.yaml` only; the Models page does not edit the list. |
-| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Default of the Claude Agent SDK (container) method. **Claude only.** |
-| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio AI Fix, which runs on the Claude Agent SDK (see [Code generation](#code-generation-ai-fix)). **Claude only.** |
+| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Default of the Claude Agent SDK (container) method. **Claude only.** |
+| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5-5` | Studio AI Fix, which runs on the Claude Agent SDK (see [Code generation](#code-generation-ai-fix)). **Claude only.** |
 | `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab judge. An OpenAI id runs on the host `codex` CLI, a Claude id on the host `claude` CLI. **OpenAI or Claude only.** |
 | `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab `claude_code_exec` target. **Claude only.** |
 | `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6.1-sol` | Skill Lab `codex_exec` target. **OpenAI or Kimi only.** |

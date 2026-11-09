@@ -30,7 +30,7 @@ SESSION = "s" * 40
 def test_coding_settings_defaults():
     settings = get_settings()
     assert settings.coding_models == MODELS
-    assert settings.coding_default_model == "global.openai.gpt-6-sol"
+    assert settings.coding_default_model == "global.openai.gpt-6.1-sol"
     assert settings.coding_efforts == ["low", "medium", "high", "xhigh"]
     assert settings.coding_default_effort == "medium"
 
@@ -74,7 +74,7 @@ def test_role_policy_has_no_s3_no_mantle_and_no_wildcard_beyond_the_ecr_token():
 
 
 def test_role_policy_never_widens_on_an_empty_model():
-    resources = _policy(["", "global.openai.gpt-6-sol"])["Statement"][3]["Resource"]
+    resources = _policy(["", "global.openai.gpt-6.1-sol"])["Statement"][3]["Resource"]
     assert "*" not in resources
     assert "arn:aws:bedrock:*::foundation-model/*" not in resources
 

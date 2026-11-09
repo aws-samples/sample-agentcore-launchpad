@@ -135,11 +135,11 @@ def role(result, name):
 
 
 def test_order_default_then_prefer_then_alternatives(tmp_path, capsys):
-    session = FakeSession(broken={sm.SONNET5, "global.zai.glm-5.3", sm.SONNET55})
+    session = FakeSession(broken={sm.SONNET55, "global.zai.glm-5.3", sm.SONNET5})
     code, _ = run(tmp_path, session, "--roles", "platform", "--dry-run",
                   "--prefer", "global.zai.glm-5.3")
     probed = [m for m, _, _ in session.runtime.calls]
-    assert probed == [sm.SONNET5, "global.zai.glm-5.3", sm.SONNET55, sm.HAIKU55]
+    assert probed == [sm.SONNET55, "global.zai.glm-5.3", sm.SONNET5, sm.HAIKU55]
     r = role(result_of(capsys), "platform")
     assert code == 0 and r["chosen"] == sm.HAIKU55
     assert "AccessDeniedException" in r["why"] and "first working alternative" in r["why"]
@@ -147,12 +147,12 @@ def test_order_default_then_prefer_then_alternatives(tmp_path, capsys):
 
 def test_prefer_skipped_when_family_does_not_fit(tmp_path, capsys):
     claude_sdk = next(r for r in sm.ROLES if r.name == "claude_sdk")
-    listed = sm.candidates(claude_sdk, sm.SONNET5, ["global.zai.glm-5.3", sm.OPUS55])
-    assert listed[:2] == [sm.SONNET5, sm.OPUS55] and "global.zai.glm-5.3" not in listed
-    session = FakeSession(broken={sm.SONNET5})
+    listed = sm.candidates(claude_sdk, sm.SONNET55, ["global.zai.glm-5.3", sm.OPUS55])
+    assert listed[:2] == [sm.SONNET55, sm.OPUS55] and "global.zai.glm-5.3" not in listed
+    session = FakeSession(broken={sm.SONNET55})
     run(tmp_path, session, "--roles", "claude_sdk", "--dry-run", "--prefer", "global.zai.glm-5.3")
     assert all(sm.family(m) == "anthropic" for m, _, _ in session.runtime.calls)
-    assert role(result_of(capsys), "claude_sdk")["chosen"] == sm.SONNET55
+    assert role(result_of(capsys), "claude_sdk")["chosen"] == sm.SONNET5
 
 
 def test_default_access_denied_falls_back(tmp_path, capsys):
@@ -166,34 +166,34 @@ def test_default_access_denied_falls_back(tmp_path, capsys):
 
 
 def test_region_filtering(tmp_path, capsys):
-    offered = [m for m in ALL_MODELS if m != sm.SONNET5]
+    offered = [m for m in ALL_MODELS if m != sm.SONNET55]
     session = FakeSession(offered=offered)
     run(tmp_path, session, "--roles", "platform", "--dry-run")
     r = role(result_of(capsys), "platform")
-    assert sm.SONNET5 not in [m for m, _, _ in session.runtime.calls]
-    assert r["tried"][0] == {"model": sm.SONNET5, "result": f"not offered in {REGION}"}
-    assert r["chosen"] == sm.SONNET55
+    assert sm.SONNET55 not in [m for m, _, _ in session.runtime.calls]
+    assert r["tried"][0] == {"model": sm.SONNET55, "result": f"not offered in {REGION}"}
+    assert r["chosen"] == sm.SONNET5
 
 
 def test_judge_needs_converse_and_evaluator_probe(tmp_path, capsys):
-    session = FakeSession(refused={sm.GPT6_SOL})
+    session = FakeSession(refused={sm.GPT61_SOL})
     run(tmp_path, session, "--roles", "judge", "--dry-run")
     r = role(result_of(capsys), "judge")
     assert r["chosen"] == sm.SONNET55
-    assert session.control.created == [sm.GPT6_SOL, sm.SONNET55]
-    assert [m for m, _, _ in session.runtime.calls] == [sm.GPT6_SOL, sm.SONNET55]
+    assert session.control.created == [sm.GPT61_SOL, sm.SONNET55]
+    assert [m for m, _, _ in session.runtime.calls] == [sm.GPT61_SOL, sm.SONNET55]
     assert "ValidationException" in r["why"]
     assert session.control.live == {}  # every successful probe evaluator deleted
 
 
 def test_judge_converse_failure_skips_evaluator_probe(tmp_path, capsys):
-    session = FakeSession(broken={sm.GPT6_SOL})
+    session = FakeSession(broken={sm.GPT61_SOL})
     run(tmp_path, session, "--roles", "judge", "--dry-run")
     assert session.control.created == [sm.SONNET55]
 
 
 def test_probe_evaluator_deleted_even_when_create_response_is_lost(tmp_path, capsys):
-    session = FakeSession(timeout_on={sm.GPT6_SOL})
+    session = FakeSession(timeout_on={sm.GPT61_SOL})
     run(tmp_path, session, "--roles", "judge", "--dry-run")
     r = role(result_of(capsys), "judge")
     assert r["chosen"] == sm.SONNET55 and "ReadTimeoutError" in r["why"]
@@ -213,7 +213,7 @@ def test_judge_fallback_keeps_current_or_is_empty(tmp_path, capsys):
     run(tmp_path, FakeSession(), "--roles", "judge,judge_fallback", "--dry-run")
     assert role(result_of(capsys), "judge_fallback")["chosen"] == sm.SONNET55
 
-    nothing_else = {m for m in ALL_MODELS if m != sm.GPT6_SOL}
+    nothing_else = {m for m in ALL_MODELS if m != sm.GPT61_SOL}
     code, env = run(tmp_path, FakeSession(broken=nothing_else), "--roles",
                     "judge,judge_fallback")
     r = role(result_of(capsys), "judge_fallback")
@@ -222,7 +222,7 @@ def test_judge_fallback_keeps_current_or_is_empty(tmp_path, capsys):
 
 
 def test_judge_fallback_differs_from_chosen_judge(tmp_path, capsys):
-    session = FakeSession(broken={sm.GPT6_SOL})
+    session = FakeSession(broken={sm.GPT61_SOL})
     run(tmp_path, session, "--roles", "judge,judge_fallback", "--dry-run")
     result = result_of(capsys)
     assert role(result, "judge")["chosen"] == sm.SONNET55
@@ -261,7 +261,7 @@ def test_env_file_content_and_mode(tmp_path, capsys):
     env = tmp_path / "models.env"
     env.write_text("# operator note\nOTHER=keep me\nLAUNCHPAD_ACTOR_MODEL_ID=global.zai.glm-5.3\n")
     env.chmod(0o644)
-    code, _ = run(tmp_path, FakeSession(broken={sm.SONNET5}), env_file=env)
+    code, _ = run(tmp_path, FakeSession(broken={sm.SONNET55}), env_file=env)
     assert code == 0
     lines = env.read_text().splitlines()
     assert lines[:2] == ["# operator note", "OTHER=keep me"]
@@ -269,15 +269,15 @@ def test_env_file_content_and_mode(tmp_path, capsys):
     values = dict(line.split("=", 1) for line in lines if "=" in line and line[0] != "#")
     # an already-working override stays first -> idempotent
     assert values["LAUNCHPAD_ACTOR_MODEL_ID"] == "global.zai.glm-5.3"
-    assert values["LAUNCHPAD_PLATFORM_MODEL_ID"] == sm.SONNET55
-    assert values["LAUNCHPAD_JUDGE_MODEL_ID"] == sm.GPT6_SOL
+    assert values["LAUNCHPAD_PLATFORM_MODEL_ID"] == sm.SONNET5
+    assert values["LAUNCHPAD_JUDGE_MODEL_ID"] == sm.GPT61_SOL
     raw = values[sm.PROMPT_OPT_MODELS_ENV]
     assert " " not in raw and json.loads(raw)[0] == values["LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID"]
-    assert sm.SONNET5 not in json.loads(raw)
+    assert sm.SONNET55 not in json.loads(raw)
     assert sum(line.startswith(sm.HEADER) for line in lines) == 2
 
     # re-run: same keys replaced, not duplicated; header refreshed
-    run(tmp_path, FakeSession(broken={sm.SONNET5}), env_file=env)
+    run(tmp_path, FakeSession(broken={sm.SONNET55}), env_file=env)
     lines = env.read_text().splitlines()
     assert sum(line.startswith("LAUNCHPAD_ACTOR_MODEL_ID=") for line in lines) == 1
     assert sum(line.startswith(sm.HEADER) for line in lines) == 2
@@ -327,11 +327,12 @@ def _evaluators():
         "judge_stale": {"evaluatorName": "js", "description": "d1", "level": "SESSION",
                         "evaluatorConfig": {"llmAsAJudge": {
                             "instructions": "Rate {context}", "ratingScale": scale,
-                            "modelConfig": model(sm.GPT6_SOL, inferenceConfig={"maxTokens": 9})}}},
+                            "modelConfig": model(sm.GPT61_SOL,
+                                                 inferenceConfig={"maxTokens": 9})}}},
         "derived_stale": {"evaluatorName": "ds", "description": "d2", "level": "TRACE",
                           "evaluatorConfig": {"derived": {
                               "baseEvaluatorId": "Builtin.Helpfulness",
-                              "modelConfig": model(sm.GPT6_SOL)}}},
+                              "modelConfig": model(sm.GPT61_SOL)}}},
         "judge_fine": {"evaluatorName": "jf", "level": "TRACE", "evaluatorConfig": {
             "llmAsAJudge": {"instructions": "x {context}", "ratingScale": scale,
                             "modelConfig": model(sm.SONNET5)}}},
@@ -339,7 +340,7 @@ def _evaluators():
 
 
 def test_evaluators_listed_read_only_without_flag(tmp_path, capsys):
-    session = FakeSession(broken={sm.GPT6_SOL}, evaluators=_evaluators())
+    session = FakeSession(broken={sm.GPT61_SOL}, evaluators=_evaluators())
     run(tmp_path, session, "--roles", "judge", db=_ledger(tmp_path))
     rows = {r["id"]: r for r in result_of(capsys)["evaluators"]}
     assert set(rows) == {"judge_stale", "derived_stale", "judge_fine"}
@@ -349,12 +350,12 @@ def test_evaluators_listed_read_only_without_flag(tmp_path, capsys):
 
 
 def test_update_evaluators_full_replace(tmp_path, capsys):
-    session = FakeSession(broken={sm.GPT6_SOL}, evaluators=_evaluators())
+    session = FakeSession(broken={sm.GPT61_SOL}, evaluators=_evaluators())
     code, _ = run(tmp_path, session, "--roles", "judge", "--update-evaluators",
                   db=_ledger(tmp_path))
     rows = {r["id"]: r for r in result_of(capsys)["evaluators"]}
     assert code == 0
-    assert rows["judge_stale"]["before"] == sm.GPT6_SOL
+    assert rows["judge_stale"]["before"] == sm.GPT61_SOL
     assert rows["judge_stale"]["after"] == sm.SONNET55
     assert rows["judge_stale"]["status"] == "updated"
     assert rows["judge_fine"]["after"] == sm.SONNET5
@@ -371,7 +372,7 @@ def test_update_evaluators_full_replace(tmp_path, capsys):
 
 
 def test_update_evaluators_dry_run_does_not_update(tmp_path, capsys):
-    session = FakeSession(broken={sm.GPT6_SOL}, evaluators=_evaluators())
+    session = FakeSession(broken={sm.GPT61_SOL}, evaluators=_evaluators())
     run(tmp_path, session, "--roles", "judge", "--update-evaluators", "--dry-run",
         db=_ledger(tmp_path))
     assert session.control.updates == []
@@ -404,7 +405,7 @@ def test_unwritable_env_file_suggests_sudo(tmp_path, capsys):
 
 def test_console_override_is_reported_not_modified(tmp_path, capsys):
     url = _ledger(tmp_path, [("judge_model_id", sm.SONNET5), ("actor_model_id", "")])
-    code, env = run(tmp_path, FakeSession(broken={sm.GPT6_SOL}, evaluators=_evaluators()),
+    code, env = run(tmp_path, FakeSession(broken={sm.GPT61_SOL}, evaluators=_evaluators()),
                     "--roles", "judge,actor", db=url)
     out = capsys.readouterr().out
     result = json.loads(out[out.index("\n{") + 1:])
@@ -433,7 +434,8 @@ def test_env_keys_are_settings_field_names():
     for r in sm.ROLES:
         assert r.env == "LAUNCHPAD_" + r.field.upper()
     agent = next(r for r in sm.ROLES if r.name == "agent_default")
-    assert agent.env == "LAUNCHPAD_AGENT_DEFAULT_MODEL_ID" and agent.default == "global.zai.glm-5.3"
+    assert agent.env == "LAUNCHPAD_AGENT_DEFAULT_MODEL_ID"
+    assert agent.default == "global.moonshotai.kimi-k3"
 
 
 TOOL_ROLES = {"agent_default", "assistant", "architect", "studio_fallback", "actor"}
@@ -454,7 +456,7 @@ def test_deepseek_and_kimi_in_every_unrestricted_role():
 def test_tool_roles_probe_with_tool_config(tmp_path, capsys):
     session = FakeSession()
     run(tmp_path, session, "--roles", "assistant", "--dry-run")
-    assert session.runtime.calls == [(sm.GPT6_SOL, True, 64)]
+    assert session.runtime.calls == [(sm.GPT61_SOL, True, 64)]
 
 
 def test_r1_never_probed_or_chosen_for_tool_roles(tmp_path, capsys):

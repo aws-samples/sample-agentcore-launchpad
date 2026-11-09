@@ -35,6 +35,7 @@ from app.services.agentcore.client import (
     heartbeat_data_client,
 )
 from app.services.attachments import PreparedAttachments
+from app.services.model_access import model_access_denied
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
     is_discovered_harness,
@@ -224,9 +225,16 @@ def upstream_invoke_error(exc: BaseException, *, public: bool = False) -> AppErr
     HTTP routes answered a bare 500 for them (live 2026-10-16: GLM-5.3 on Bedrock
     failing 1 call in 3). ``None`` for anything else, which keeps its own handling.
 
-    ``public`` (``/v1``) leaves the AWS text out, like the ``/v1`` AWS envelope."""
+    ``public`` (``/v1``) leaves the AWS text out, like the ``/v1`` AWS envelope.
+
+    A model call the agent's role may not make is named first
+    (``agent.model_access_denied``): it reaches here as a ``runtimeClientError`` or a
+    ``RuntimeError`` and is final, not "usually temporary"."""
     from app.evaluation.service import transient_invoke_error
 
+    denied = model_access_denied(exc, public=public)
+    if denied is not None:
+        return denied
     if isinstance(exc, AppError) or not transient_invoke_error(exc):
         return None
     code = aws_error_code(exc) if isinstance(exc, ClientError) else type(exc).__name__

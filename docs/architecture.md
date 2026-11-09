@@ -382,6 +382,43 @@ stay as an administrator set them, or remove them. The execution role gets the
 `launchpad-fs-<agent>` inline policy for every method (always with
 `ClientWrite`; a read-only mode arrives with the catalog).
 
+**The console creates S3 Files storage** (storage-mounts §7,
+`services/storage_provision.py`, `POST /api/storage-mounts/provision`). An administrator
+names an id, a network profile and the access point's POSIX identity and root
+directory; the Job `storage_provision` makes a new versioned bucket
+(`launchpad-s3files-<account>-<hash>`), an S3 file system on it, a security group
+`launchpad-mt-<id>` admitting TCP 2049 from the profile's security groups and holding
+no outbound rule (the allow-all rule a new group starts with is revoked: the group is
+stateful, so NFS replies need none), one mount
+target per Availability Zone of the profile's subnets and the access point, then
+registers the result with `origin: "platform"` and runs its check. S3 Files assumes
+one shared **sync role** per workspace (`launchpad-s3files-sync[-<region>]`, made by the
+CDK stack and the workspace bootstrap's `iam` stage, `resources.s3files_sync_role_arn`)
+that reaches only `launchpad-s3files-*` buckets, so the backend needs `iam:PassRole` on
+that one role and never `iam:CreateRole`; a customer's existing bucket is never linked.
+The profile's own security groups are left alone: when they do not allow 2049 out,
+the check blocks and says so. Before the create is confirmed, the dialog reads
+`POST /api/storage-mounts/provision/plan` (read-only, the preflight's EC2 reads) and
+lists the new group with its VPC and its inbound / outbound rules, the mount targets,
+each agent security group with the outbound rule it needs and whether it already has
+it (the administrator adds a missing one in the AWS console), and whether an S3
+gateway endpoint serves the profile's route tables: S3 Files streams reads of 1 MiB
+or more straight from the bucket over that endpoint, which costs nothing, and without
+it those reads go through the file system at a higher cost. The administrator ticks
+an acknowledgement before the create is sent. Every stage is list-or-get then create, and a restart
+resumes the job (`resume_pending_jobs`). `POST /api/storage-mounts/{id}/teardown`
+(the id typed again) deletes the access point, mount targets, file system and security
+group and archives the entry, refused for registered storage and while an agent mounts
+it; **the bucket and its objects are kept**. The V3 storage page (`/v3/storage`) has
+the "Create S3 Files" dialog, follows each job stage by stage, and offers a failed
+create's retry. The spoke role templates (version 2) carry the grants: S3 Files
+create/delete in the account, the `launchpad-s3files-*` buckets (with their change
+notifications), PassRole on the sync role, the `DO-NOT-DELETE-S3-Files*` EventBridge
+rules, network interfaces only through S3 Files (`aws:CalledVia` — S3 Files makes the
+mount targets' ENIs with the caller's credentials), and security-group changes only on
+groups tagged `launchpad:managed`. The workshop stack's instance role gets the same set
+in its own `WorkshopInstanceStoragePolicy`.
+
 **The storage catalog** (storage-mounts §4, SM-2, `services/storage_mounts.py`,
 [api.md](api.md#console-storage-catalog-api)). An administrator registers an S3 Files
 or EFS access point once per workspace as a catalog entry (`storage_mounts`: id, kind,
@@ -428,7 +465,13 @@ The two update APIs behave differently on a re-publish (probed live 2026-10-04):
 - **UpdateAgentRuntime clears an omitted `filesystemConfigurations`**, the same
   way it resets `protocolConfiguration`. The zip, container, BYOC and
   canary-candidate paths therefore send the list on every update; leaving it out
-  is how "session storage off" detaches the mount.
+  is how "session storage off" detaches the mount. Before the update they read
+  `GetAgentRuntime` and merge by `mountPath` with the same ownership rule as the
+  harness below (`filesystem.runtime_update_mounts` / `merge_live`), so an S3 Files
+  or EFS mount added in the AWS console survives a re-publish (the deploy log says
+  "kept on this update"). A runtime that moves to the PUBLIC network cannot keep one
+  (AWS refuses a BYO mount outside a VPC): it is detached and logged. The canary
+  candidate counts only the current spec's paths as the platform's.
 - **UpdateHarness keeps an omitted `environment`** and replaces the list as a
   whole when one is sent (`[]` detaches everything). The harness re-publish
   reads `GetHarness` first (`harness.environment_for_update`) and merges by
@@ -1665,7 +1708,7 @@ block is an `invalid` revision that keeps only a marker); `ProposalContent` is a
 Pydantic allowlist with `extra="forbid"` and per-field/per-item bounds — no `env`,
 `code`, `requirements`, `allowed_tools`, `protocol`, `filesystem`, `network`, URLs,
 ARNs, S3 prefixes or roles can pass. A proposal that names no model gets
-`PROPOSAL_DEFAULT_MODEL_ID` (`global.openai.gpt-6-sol`, the Create Agent wizard's
+`PROPOSAL_DEFAULT_MODEL_ID` (`global.openai.gpt-6.1-sol`, the Create Agent wizard's
 default; an approval is always a managed Harness, so a non-Claude default is safe),
 not `AgentSpec`'s stored-spec fallback. `memory` is `"disabled"` or `"workspace"` — the
 only two states the Harness API can enforce (`{"disabled": {}}`, or the workspace's
@@ -2363,15 +2406,15 @@ ACTIVE and then fails its first invoke with `401 access_denied`; the grant is
 shared by harness and zip, and adding it needs a CDK deploy.
 The field defaults to `bedrock` for backward compatibility with specs
 stored before it existed. The console form also starts every method on `bedrock`,
-with GLM-5.3 (`global.zai.glm-5.3`, a global inference profile offered in every region the
-console targets) as the default model, which `AgentSpec` also defaults to; Mantle stays
+with Kimi K3 (`global.moonshotai.kimi-k3`, a global inference profile; GLM-5.3 before
+2026-11-04) as the default model, which `AgentSpec` also defaults to; Mantle stays
 selectable for harness and zip (`MODEL_SOURCE_BY_METHOD` in
 `frontend/src/lib/agent-spec.ts`). The Claude Agent SDK method defaults to the
 first Claude entry instead, and the backend gives a container spec that names no model
-`global.anthropic.claude-sonnet-5` (`CLAUDE_SDK_DEFAULT_MODEL_ID`). Intent clustering and
+`global.anthropic.claude-sonnet-5-5` (`CLAUDE_SDK_DEFAULT_MODEL_ID`). Intent clustering and
 answer suggestions keep their own platform model, and the Strands Studio canvas keeps its
 Claude fallback for nodes without a model (changing it would change existing flows); new
-canvas nodes start on GLM-5.3. The console's model catalog lives in
+canvas nodes start on the configured agent default (Kimi K3). The console's model catalog lives in
 `frontend/src/lib/models.ts`, where the catalog's first entry is the default.
 
 **Harness (方式B)** — both sources ride the **same** `bedrockModelConfig` branch
@@ -2524,6 +2567,31 @@ warning, not treated as an error — and flags `stable`/`treatment` endpoint nam
 so canary leftovers are noticed. It is strictly read-only: it never re-points
 `DEFAULT` and never creates, updates or deletes an endpoint; the canary owns those
 operations.
+
+### Prompt drift (a prompt edited in the AWS console)
+
+The console shows `Agent.spec.system_prompt`, the prompt the last Launchpad deploy
+published. An edit in the AWS console (`UpdateHarness`) publishes a Harness version the
+ledger does not know: chat answers with the new prompt while the page shows the old
+one, and the next re-publish from Launchpad silently puts the old one back. The
+**Prompt on AWS** card on the Deploy & versions tab reads
+`GET /api/agents/{agent_id}/prompt-drift` (`services/prompt_drift.py`): `GetHarness` on
+the latest version, `strip_generated_prompt` removes the sections the deployer
+appends (knowledge bases, storage mounts, the context layer), and the rest is compared
+with the ledger's prompt — `in_sync` or `drifted`, the latter also naming the model,
+`maxTokens`, `maxIterations` and `timeoutSeconds` the console changed. For a gated
+agent the card notes that production is pinned to `live`, so the console edit only
+reached `DEFAULT`. Only a Launchpad-built Harness can be compared: a Runtime's prompt is
+compiled into its generated code and an imported Harness has no ledger spec, so both
+answer `unsupported`.
+
+**Adopting** (`POST …/prompt-drift/adopt`, `{aws_version}`) writes the stripped AWS
+prompt into the spec and runs `republish_agent`: the redeploy's guards, permission
+(`perm:agents.deploy`, prod-protected) and Agent-DLC gate, so the page, the snapshots
+(note `prompt adopted from AWS version N`) and later deploys carry it. A newer AWS
+version than the one reviewed is `409 agent.prompt_drift_stale`. Only the prompt is
+adopted; other members the console changed return to the ledger's values on that
+re-publish, which the card lists before the confirmation.
 
 ### Code view (read-only)
 

@@ -27,9 +27,9 @@ from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
-from app.deployer.filesystem import filesystem_configurations
+from app.deployer.filesystem import filesystem_configurations, runtime_update_mounts
 from app.deployer.mounts import describe as describe_mounts
-from app.deployer.mounts import with_mounts_env, with_prompt_note
+from app.deployer.mounts import published_mount_paths, with_mounts_env, with_prompt_note
 from app.deployer.network import describe as describe_network
 from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -922,8 +922,13 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
             runtime_id = row.resource_id
+            # keep the mounts added outside the platform (UpdateAgentRuntime would
+            # detach them): the spec's entries + the live runtime's foreign ones
+            update_kwargs = {**_kwargs(), "filesystem_configurations": runtime_update_mounts(
+                client, runtime_id, _deploy_spec(row.spec, ctx.workspace),
+                managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log)}
             updated = agent_iam.retry_iam_propagation(
-                lambda: rt.update_code_runtime(client, runtime_id=runtime_id, **_kwargs()),
+                lambda: rt.update_code_runtime(client, runtime_id=runtime_id, **update_kwargs),
                 ctx.log,
             )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))

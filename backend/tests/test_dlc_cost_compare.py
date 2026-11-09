@@ -105,7 +105,7 @@ def test_history_divides_the_agents_cost_by_its_own_sessions(db, monkeypatch):
     assert cost._per_session_from_history(db, agent, SimpleNamespace()) == (None, "no_history")
 
 
-PRICES = {"global.openai.gpt-6-sol": {"input": 2.0, "output": 10.0},
+PRICES = {"global.openai.gpt-6.1-sol": {"input": 2.0, "output": 10.0},
           "claude-sonnet-5-5": {"input": 3.0, "output": 15.0}}
 
 
@@ -155,7 +155,7 @@ def test_the_default_gpt6_sol_judge_is_priced(db, monkeypatch):
                         criteria_rows=rows)
     assert out["judge_usd"] is not None and out["judge_usd"] > 0, out
     assert all("price map" not in (j.get("note") or "") for j in out["judges"])
-    assert cost._price_of("global.openai.gpt-6-sol")["input"] == 2.00
+    assert cost._price_of("global.openai.gpt-6.1-sol")["input"] == 2.00
     assert cost._price_of("us.openai.gpt-6-sol")["output"] == 11.00
 
 

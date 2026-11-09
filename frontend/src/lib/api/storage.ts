@@ -116,10 +116,23 @@ export interface StoragePreflight {
   results: StorageCheck[];
 }
 
+/** One S3 Files / EFS mount the agent's Runtime or Harness carries on AWS. */
+export interface LiveMount {
+  kind: "s3files" | "efs";
+  mount_path: string;
+  access_point_arn: string | null;
+  /** `external`: added outside Launchpad (AWS console, an imported agent); kept on re-publish */
+  origin: "platform" | "external";
+  storage_id: string | null;
+  storage_name: string | null;
+}
+
 export interface AgentStorage {
   agent_id: string;
   version: string | null;
   session_storage: string | null;
+  /** read back from AWS; absent on an older backend */
+  live?: { status: "ok" | "no_resource" | "unavailable"; kind?: "runtime" | "harness"; error?: string; entries: LiveMount[] };
   mounts: {
     storage_id: string;
     mount_path: string;
@@ -138,6 +151,70 @@ export interface AgentStorage {
     } | null;
   }[];
   inline: { kind: StorageKind; access_point_arn: string | null; mount_path: string | null; mode: StorageMode }[];
+}
+
+/** `POST /api/storage-mounts/provision` (storage-mounts §7): what the console builds. */
+export interface StorageProvisionBody {
+  id: string;
+  name?: string;
+  network_profile_id: string;
+  max_mode?: StorageMode;
+  data_class?: StorageDataClass;
+  posix_uid?: number;
+  posix_gid?: number;
+  root_directory?: string;
+  project_ids?: string[];
+}
+
+export type ProvisionStageStatus = "pending" | "running" | "succeeded" | "failed";
+
+/** A create / teardown job as the storage page polls it. */
+export interface StorageProvisionJob {
+  job_id: string;
+  op: "create" | "delete";
+  storage_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  done: boolean;
+  stages: { name: string; status: ProvisionStageStatus; detail: string }[];
+  resources: Record<string, unknown>;
+  /** the create form as submitted (a failed create's retry resubmits it) */
+  request: Partial<StorageProvisionBody>;
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * `POST /api/storage-mounts/provision/plan`: what a create would add to the network
+ * profile's VPC, read before it is confirmed. Nothing is made.
+ */
+export interface StorageProvisionPlan {
+  network_profile_id: string;
+  vpc_id: string | null;
+  vpc_cidrs: string[];
+  /** the new group; `outbound` is empty — the allow-all rule AWS adds is removed */
+  mount_target_security_group: {
+    name: string;
+    vpc_id: string | null;
+    inbound: { protocol: string; port: number; source_group_id: string }[];
+    outbound: { protocol: string; port: number; destination: string }[];
+  };
+  mount_targets: { subnet_id: string; availability_zone_id: string }[];
+  /** the profile's own groups: the console never edits them */
+  agent_security_groups: {
+    group_id: string;
+    name: string | null;
+    status: "ok" | "missing" | "not_found";
+    required_outbound: { protocol: string; port: number; destination: string };
+  }[];
+  s3_gateway_endpoint: {
+    service_name: string;
+    endpoint_ids: string[];
+    status: "ok" | "unrouted" | "missing";
+    unrouted_subnets: string[];
+    docs: string;
+  };
+  nat_gateways: string[];
 }
 
 export const storagePath = (storageId?: string) =>
@@ -162,7 +239,82 @@ export const storageApi = {
   preflight: (body: { mounts: StorageMountRef[]; network_profile_id?: string | null; method?: string; byoc_artifact_kind?: string | null }) =>
     sendJson<StoragePreflight>(`${storagePath()}/preflight`, "POST", body),
   forAgent: (agentId: string) => getJson<AgentStorage>(`${storagePath()}/agents/${enc(agentId)}`),
+  /** queues the console's S3 Files creation; a retry with the same id resumes a failed job */
+  provision: (body: StorageProvisionBody) => sendJson<StorageProvisionJob>(`${storagePath()}/provision`, "POST", body),
+  /** read-only: the security group, its rules and the mount targets a create would make */
+  provisionPlan: (networkProfileId: string, id?: string) =>
+    sendJson<StorageProvisionPlan>(`${storagePath()}/provision/plan`, "POST",
+      { network_profile_id: networkProfileId, ...(id ? { id } : {}) }),
+  provisionJobs: () => getJson<{ jobs: StorageProvisionJob[] }>(`${storagePath()}/provision/jobs`),
+  provisionJob: (jobId: string) => getJson<StorageProvisionJob>(`${storagePath()}/provision/jobs/${enc(jobId)}`),
+  /** deletes what the console made for an entry (the bucket stays) and archives it */
+  teardown: (storageId: string, confirm: string) =>
+    sendJson<StorageProvisionJob>(`${storagePath(storageId)}/teardown`, "POST", { confirm }),
 };
+
+/* ── the console's S3 Files creation (storage-mounts §7) ────────────────── */
+
+/** The create form: an id, a network profile and the access point's identity. */
+export interface ProvisionForm {
+  id: string;
+  name: string;
+  network_profile_id: string;
+  max_mode: StorageMode;
+  data_class: StorageDataClass;
+  posix_uid: string;
+  posix_gid: string;
+  root_directory: string;
+}
+
+export const emptyProvisionForm = (): ProvisionForm => ({
+  id: "", name: "", network_profile_id: "", max_mode: "ro", data_class: "reference",
+  posix_uid: "1000", posix_gid: "1000", root_directory: "/data",
+});
+
+/** `ProvisionBody.root_directory`: one to four `/segment`s — never `/`, whose owner is
+ *  root, so the access point's own identity could not write there */
+const ROOT_RE = /^(\/[A-Za-z0-9._-]+){1,4}$/;
+const POSIX_ID_MAX = 4294967295;
+
+const posixId = (value: string) => /^\d+$/.test(value.trim()) && Number(value) <= POSIX_ID_MAX;
+
+/** field → i18n key of its error */
+export function validateProvision(form: ProvisionForm): Partial<Record<keyof ProvisionForm, string>> {
+  const out: Partial<Record<keyof ProvisionForm, string>> = {};
+  if (!STORAGE_ID_RE.test(form.id)) out.id = "v3.storage.form.errId";
+  if (form.name.length > 64) out.name = "v3.storage.form.errName";
+  if (!form.network_profile_id) out.network_profile_id = "v3.storage.provision.errProfile";
+  if (!posixId(form.posix_uid)) out.posix_uid = "v3.storage.provision.errPosix";
+  if (!posixId(form.posix_gid)) out.posix_gid = "v3.storage.provision.errPosix";
+  if (!ROOT_RE.test(form.root_directory) || form.root_directory.length > 100) out.root_directory = "v3.storage.provision.errRoot";
+  return out;
+}
+
+export function provisionFormToBody(form: ProvisionForm): StorageProvisionBody {
+  return {
+    id: form.id.trim(),
+    name: form.name.trim() || undefined,
+    network_profile_id: form.network_profile_id,
+    max_mode: form.max_mode,
+    data_class: form.data_class,
+    posix_uid: Number(form.posix_uid),
+    posix_gid: Number(form.posix_gid),
+    root_directory: form.root_directory,
+  };
+}
+
+/** The jobs still worth showing: running ones, and the latest finished one per storage
+ *  id when it failed (the page offers the retry) — newest first, as the server lists. */
+export function visibleJobs(jobs: readonly StorageProvisionJob[]): StorageProvisionJob[] {
+  const seen = new Set<string>();
+  const out: StorageProvisionJob[] = [];
+  for (const job of jobs) {
+    if (seen.has(job.storage_id)) continue;
+    seen.add(job.storage_id);
+    if (!job.done || job.status === "failed") out.push(job);
+  }
+  return out;
+}
 
 /* ── the wizard's catalog picks ───────────────────────────────────────────── */
 

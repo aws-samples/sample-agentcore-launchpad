@@ -83,8 +83,19 @@ def stack_exists(region: str) -> bool:
         raise
 
 
-def deploy_cdk() -> None:
-    print(f"── stack {bs.STACK_NAME} not found — running cdk deploy…")
+# outputs a stack made by an older checkout lacks: their presence is the cue that the
+# stack needs a `cdk deploy` update, not only a creation
+REQUIRED_OUTPUTS = ("S3FilesSyncRoleArn",)
+
+
+def stack_outdated(region: str) -> list[str]:
+    """The REQUIRED_OUTPUTS an existing stack lacks."""
+    outputs = bs.get_stack_outputs(region)
+    return [key for key in REQUIRED_OUTPUTS if not outputs.get(key)]
+
+
+def deploy_cdk(reason: str = "not found") -> None:
+    print(f"── stack {bs.STACK_NAME} {reason} — running cdk deploy…")
     subprocess.run(
         ["uv", "run", "cdk", "deploy", "--require-approval", "never"],
         cwd=REPO_ROOT / "infra",
@@ -105,6 +116,8 @@ def main() -> int:
             print(f"stack {bs.STACK_NAME} missing and --skip-cdk given — aborting", flush=True)
             return 1
         deploy_cdk()
+    elif (missing := stack_outdated(region)) and not args.skip_cdk:
+        deploy_cdk(f"lacks {', '.join(missing)}")
 
     summary = bs.run_bootstrap(region)
 

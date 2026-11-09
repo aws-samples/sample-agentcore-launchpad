@@ -147,7 +147,7 @@ def test_the_real_converse_call_goes_through_the_client_funnel(monkeypatch):
     assert "Simplified Chinese" in fake.calls[0]["system"][0]["text"]
     # Claude 5 rejects `temperature` with a ValidationException
     assert "temperature" not in fake.calls[0]["inferenceConfig"]
-    assert fake.calls[0]["modelId"] == "global.anthropic.claude-sonnet-5"  # the default
+    assert fake.calls[0]["modelId"] == "global.anthropic.claude-sonnet-5-5"  # the default
 
 
 def test_the_platform_model_follows_settings(monkeypatch):

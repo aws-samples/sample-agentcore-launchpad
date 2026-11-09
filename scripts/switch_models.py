@@ -118,22 +118,24 @@ class Role:
         return self.families is not None
 
 
-_JUDGES = [GPT6_SOL, SONNET55, SONNET5, *GLM, *DS_KIMI, NOVA_PRO, R1]
-_CLAUDE_TOOLS = [SONNET5, SONNET55, HAIKU55, OPUS5, SONNET46, "us.anthropic.claude-sonnet-5"]
-PROMPT_OPT_DEFAULT_LIST = [OPUS5, SONNET5, SONNET46, "us.openai.gpt-5.6-sol"]
+_JUDGES = [GPT61_SOL, SONNET55, SONNET5, GPT6_SOL, *GLM, *DS_KIMI, NOVA_PRO, R1]
+_CLAUDE_TOOLS = [SONNET55, SONNET5, HAIKU55, OPUS55, OPUS5, SONNET46,
+                 "us.anthropic.claude-sonnet-5-5", "us.anthropic.claude-sonnet-5"]
+PROMPT_OPT_DEFAULT_LIST = [OPUS55, SONNET55, SONNET46, "us.openai.gpt-5.6-sol"]
 ROLES = [
-    Role("platform", "platform_model_id", SONNET5, "converse",
-         [SONNET5, SONNET55, HAIKU55, GPT6_SOL, GPT6_LUNA, *GLM, *DS_KIMI, NOVA_PRO, NOVA_LITE,
-          QWEN, R1], note="intent clustering + suggested questions"),
-    Role("agent_default", "agent_default_model_id", GLM[0], "tools",
-         [*GLM, *DS_KIMI, NOVA_PRO, QWEN, SONNET5, GPT6_SOL, GPT61_TERRA],
+    Role("platform", "platform_model_id", SONNET55, "converse",
+         [SONNET55, SONNET5, HAIKU55, GPT61_SOL, GPT6_SOL, GPT6_LUNA, *GLM, *DS_KIMI, NOVA_PRO,
+          NOVA_LITE, QWEN, R1], note="intent clustering + suggested questions"),
+    Role("agent_default", "agent_default_model_id", KIMI[0], "tools",
+         [*KIMI, *GLM, *(m for m in DS_KIMI if m not in KIMI), NOVA_PRO, QWEN, SONNET55,
+          GPT61_SOL, GPT61_TERRA],
          note="default model of new agents"),
-    Role("judge", "judge_model_id", GPT6_SOL, "judge", _JUDGES,
+    Role("judge", "judge_model_id", GPT61_SOL, "judge", _JUDGES,
          note="LLM-as-judge of custom/derived evaluators"),
     Role("judge_fallback", "judge_fallback_model_id", SONNET55, "judge", [SONNET55, *_JUDGES],
          note="retry model when AgentCore refuses the judge; '' = none"),
-    Role("assistant", "assistant_model_id", GPT6_SOL, "tools",
-         [GPT6_SOL, SONNET55, SONNET5, *GLM, *DS_KIMI, NOVA_PRO, QWEN],
+    Role("assistant", "assistant_model_id", GPT61_SOL, "tools",
+         [GPT61_SOL, GPT6_SOL, SONNET55, SONNET5, *GLM, *DS_KIMI, NOVA_PRO, QWEN],
          note="default model of agents the architect proposes"),
     Role("architect", "architect_model_id", GPT6_ASTRA, "tools",
          [GPT6_ASTRA, GPT6_SOL, OPUS55, SONNET55, SONNET5, *GLM, *DS_KIMI, NOVA_PRO],
@@ -141,15 +143,15 @@ ROLES = [
     Role("actor", "actor_model_id", GPT6_LUNA, "tool_any",
          [GPT6_LUNA, HAIKU55, SONNET5, HAIKU45, *GLM, NOVA_PRO, NOVA_LITE, *DS_KIMI, QWEN],
          note="simulated user; needs forced toolChoice any"),
-    Role("studio_fallback", "studio_fallback_model_id", SONNET5, "tools",
-         [SONNET5, SONNET55, GPT6_SOL, *GLM, *DS_KIMI, NOVA_PRO],
+    Role("studio_fallback", "studio_fallback_model_id", SONNET55, "tools",
+         [SONNET55, SONNET5, GPT61_SOL, *GLM, *DS_KIMI, NOVA_PRO],
          note="Strands Studio model-less nodes"),
-    Role("claude_sdk", "claude_sdk_model_id", SONNET5, "converse", _CLAUDE_TOOLS, CLAUDE,
+    Role("claude_sdk", "claude_sdk_model_id", SONNET55, "converse", _CLAUDE_TOOLS, CLAUDE,
          "Claude Agent SDK container method (Claude-only feature)"),
-    Role("codegen", "codegen_model", SONNET5, "converse", _CLAUDE_TOOLS, CLAUDE,
+    Role("codegen", "codegen_model", SONNET55, "converse", _CLAUDE_TOOLS, CLAUDE,
          "Studio AI-fix via Claude Agent SDK (Claude-only feature)"),
-    Role("prompt_opt", "prompt_opt_default_model_id", OPUS5, "converse",
-         [OPUS5, OPUS55, SONNET55, SONNET5, SONNET46, "us.openai.gpt-5.6-sol", GPT6_SOL, *GLM,
+    Role("prompt_opt", "prompt_opt_default_model_id", OPUS55, "converse",
+         [OPUS55, OPUS5, SONNET55, SONNET5, SONNET46, "us.openai.gpt-5.6-sol", GPT6_SOL, *GLM,
           *DS_KIMI, NOVA_PRO, QWEN, R1], note="GEPA-lite reflection (+ PROMPT_OPT_MODELS)"),
     Role("skill_lab_judge", "skill_lab_judge_model_id", GPT61_SOL, "converse",
          [GPT61_SOL, GPT6_SOL, OPUS55, SONNET55, SONNET5], OPENAI_OR_CLAUDE,

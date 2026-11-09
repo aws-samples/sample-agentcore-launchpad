@@ -257,9 +257,12 @@ def _assert_profile(db: Session, workspace_id: str, profile_id: str | None) -> N
                             {"profile_id": profile_id})
 
 
-def register(db: Session, workspace_id: str, fields: dict[str, Any], actor: str) -> StorageMount:
+def register(db: Session, workspace_id: str, fields: dict[str, Any], actor: str,
+             *, origin: str = "registered") -> StorageMount:
     """A new catalog entry (unchecked). The id is unique among the workspace's live
-    entries; an archived entry's id may be registered again."""
+    entries; an archived entry's id may be registered again. ``origin="platform"`` marks
+    an entry the console made (`services/storage_provision`), which its teardown may
+    delete; a registered one the platform never deletes."""
     storage_id = fields["id"]
     if _row(db, workspace_id, storage_id) is not None:
         raise AppError("storage.id_exists",
@@ -278,7 +281,7 @@ def register(db: Session, workspace_id: str, fields: dict[str, Any], actor: str)
         network_profile_id=fields.get("network_profile_id") or None,
         max_mode=fields.get("max_mode") or "ro",
         data_class=fields.get("data_class") or "reference",
-        origin="registered", status="unchecked", created_by=actor,
+        origin=origin, status="unchecked", created_by=actor,
     )
     db.add(row)
     db.commit()
@@ -315,12 +318,8 @@ def update(db: Session, workspace_id: str, storage_id: str, fields: dict[str, An
     return get_entry(db, workspace_id, storage_id, None, see_all=True)
 
 
-def archive(db: Session, workspace_id: str, storage_id: str) -> None:
-    """Archive (the row stays: snapshots may still name it). The platform never deletes
-    registered storage itself (design principle 4). Refused while a live agent mounts it."""
-    row = _row(db, workspace_id, storage_id)
-    if row is None:
-        raise _not_found(storage_id)
+def assert_unused(db: Session, workspace_id: str, row: StorageMount) -> None:
+    """`storage.in_use` (409) while a live agent mounts the entry."""
     used = usage(db, workspace_id, row.id).get(row.id, [])
     if used:
         raise AppError("storage.in_use",
@@ -328,6 +327,15 @@ def archive(db: Session, workspace_id: str, storage_id: str) -> None:
                        "from them first",
                        {"storage_id": row.id, "agents": [a["agent_id"] for a in used]},
                        status_code=409)
+
+
+def archive(db: Session, workspace_id: str, storage_id: str) -> None:
+    """Archive (the row stays: snapshots may still name it). The platform never deletes
+    registered storage itself (design principle 4). Refused while a live agent mounts it."""
+    row = _row(db, workspace_id, storage_id)
+    if row is None:
+        raise _not_found(storage_id)
+    assert_unused(db, workspace_id, row)
     row.archived_at = _now()
     row.updated_at = row.archived_at
     for binding in _bindings_of(db, row):
@@ -1029,6 +1037,51 @@ def storage_iam_statements(spec: Any, resources: dict[str, dict[str, Any]] | Non
 
 
 # ── an agent's storage (§10 "storage" card) ───────────────────────────────────
+
+
+def live_mounts(control: Any, db: Session, agent: Agent) -> dict[str, Any]:
+    """The S3 Files / EFS mounts the agent's Runtime or Harness carries on AWS, each
+    marked ``platform`` (a mount path a Launchpad publish set) or ``external`` (added
+    outside Launchpad, e.g. in the AWS console, or on an imported agent) and matched to
+    a catalog entry by access point ARN. A re-publish keeps the external ones
+    (``deployer/filesystem.merge_live``). Read-only."""
+    from app.deployer.filesystem import mount_path
+    from app.deployer.mounts import manifest_paths, published_mount_paths
+    from app.services.agent_versions import resource_kind
+    from app.services.agentcore import harness as harness_api
+    from app.services.agentcore import runtime as runtime_api
+
+    kind = resource_kind(agent)
+    if kind is None or not agent.resource_id or agent.status == "deleted":
+        return {"status": "no_resource", "entries": []}
+    if kind == "harness":
+        live = harness_api.get_harness(control, agent.resource_id)
+        env = (live.get("environment") or {}).get("agentCoreRuntimeEnvironment") or {}
+        entries = env.get("filesystemConfigurations") or []
+    else:
+        entries = runtime_api.get_runtime(control, agent.resource_id).get(
+            "filesystemConfigurations") or []
+    owned = manifest_paths(agent.spec) | published_mount_paths(db, agent.id)
+    by_arn = {r.access_point_arn: r for r in db.scalars(select(StorageMount).where(
+        StorageMount.workspace_id == (agent.workspace_id or ""),
+        StorageMount.archived_at.is_(None)))}
+    out = []
+    for fs in entries:
+        if "sessionStorage" in fs:
+            continue
+        member_kind, member = next(((k, v) for k, v in fs.items() if isinstance(v, dict)),
+                                   ("", {}))
+        arn = str(member.get("accessPointArn") or "")
+        row = by_arn.get(arn)
+        out.append({
+            "kind": "efs" if member_kind == "efsAccessPoint" else "s3files",
+            "mount_path": mount_path(fs),
+            "access_point_arn": arn or None,
+            "origin": "platform" if mount_path(fs) in owned else "external",
+            "storage_id": row.id if row is not None else None,
+            "storage_name": row.name if row is not None else None,
+        })
+    return {"status": "ok", "kind": kind, "entries": out}
 
 
 def agent_storage(db: Session, agent: Agent) -> dict[str, Any]:

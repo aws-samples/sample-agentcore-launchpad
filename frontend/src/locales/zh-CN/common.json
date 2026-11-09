@@ -2794,6 +2794,7 @@
     "agent.teardown_pending": "AWS 仍在删除该 Agent 的端点。Agent 已从控制台移除，AWS 释放后其资源会自动删除。",
     "agent.tool_approval_requires_console": "该 Agent 的某个工具需要人工批准，只能在 Launchpad 控制台的对话中批准。",
     "agent.upstream_error": "智能体的模型或运行时在回答前出错，通常是暂时的。请重新发送；反复出现时打开该智能体的追踪查看。",
+    "agent.model_access_denied": "该智能体无权调用它的模型：执行角色没有授权这个模型，或本账号没有开通该模型的访问权限。重新发送不会成功。请重新部署该智能体以重新生成角色，或在 Amazon Bedrock 中开通该模型的访问权限，或换一个模型。",
     "agent_tools.jwt_inbound": "该 Agent 不能作为工具提供：它的 Runtime 只接受 JWT Bearer 令牌，而调用方 Agent 使用 IAM 签名。",
     "agent_tools.not_deployed": "该 Agent 不能作为工具提供：它尚未部署。",
     "agent_tools.not_found": "未找到被选作工具的 Agent。",
@@ -3443,7 +3444,15 @@
     "auth.registration_queue_full": "待审批的账号过多，注册暂时关闭。",
     "registry.record_not_found": "未找到该注册记录。",
     "registry.not_republishable": "只有“草稿”或“待审批”的记录可以重新发布。",
-    "gateway_tool.not_adoptable": "只有本工作区账号与区域内、使用内联工具 schema 的手工 Lambda 目标可以纳管。"
+    "gateway_tool.not_adoptable": "只有本工作区账号与区域内、使用内联工具 schema 的手工 Lambda 目标可以纳管。",
+    "storage.sync_role_missing": "该工作区还没有 S3 Files 同步角色。请重新运行 make bootstrap（默认工作区）或该工作区的引导，然后再试。",
+    "storage.not_platform": "这块存储是登记进来的，不是控制台新建的。控制台不会删除登记的存储，请改用归档。",
+    "storage.confirm_mismatch": "请准确输入存储 ID 以确认删除。",
+    "storage.job_not_found": "未找到该存储作业。",
+    "agent.prompt_drift_stale": "你审阅提示词之后，AWS 又发布了新的 Harness 版本。请重新审阅后再导回。",
+    "agent.prompt_drift_unsupported": "这个 Agent 的提示词无法从 AWS 回读。",
+    "agent.prompt_in_sync": "Launchpad 里的提示词已经和 AWS 一致，没有需要导回的内容。",
+    "costs.bad_period": "请选择 1 到 92 天、且不从未来开始的自定义区间（日期格式 YYYY-MM-DD）。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -13024,6 +13033,25 @@
         "rollbackNote": "回滚方案",
         "inactive": "只有运行中的智能体可以晋级。",
         "system": "系统预置按工作区安装，不参与晋级。"
+      },
+      "promptDrift": {
+        "title": "AWS 上的提示词",
+        "inSync": "一致",
+        "inSyncHint": "AWS 上 Harness 版本 {{version}} 的提示词与本页一致。",
+        "drifted": "提示词在 Launchpad 之外被修改过：AWS 上最新的 Harness 版本是 {{version}}，它的提示词与本页显示的不同（本页记录的是版本 {{ledger}}）。Chat 已经按 AWS 上的提示词回答；如果在 Launchpad 里重新发布，会把本页的提示词改回去。",
+        "liveNote": "这个 Agent 启用了发布门禁：生产流量固定在 live 端点上，发布之前生产环境仍用已发布的提示词。",
+        "ledger": "本页（Launchpad）",
+        "aws": "AWS，版本 {{version}}",
+        "others": "AWS 控制台还修改了：{{members}}。导回只会带回提示词，重新发布时这些设置会恢复为 Launchpad 里的值。",
+        "adopt": "导回 AWS 上的提示词",
+        "blocked": "导回会重新发布 Agent，需要编辑权限，且当前没有正在进行的部署。",
+        "confirmTitle": "导回 AWS 上的提示词？",
+        "confirmBody": "Launchpad 会把 AWS 版本 {{version}} 的提示词保存为这个 Agent 的提示词，并用它重新发布（生成一个新的 Harness 版本）。之后本页、快照和后续每次部署都使用这个提示词。",
+        "adopted": "正在导回版本 {{version}} 的提示词，重新发布进行中",
+        "unsupported": {
+          "runtime": "Runtime 类 Agent 的提示词编译在代码里，无法从 AWS 回读。请在 Launchpad 里修改后重新发布。",
+          "imported": "这个 Agent 是从 AWS 导入的，提示词只保存在 AWS 上。"
+        }
       }
     },
     "life": {
@@ -14045,6 +14073,33 @@
         },
         "platformHint": "估算只为模型 token 计价：共享基础设施的闲置费与按请求计费的部分见账单视图的共享行。",
         "nothing": "这里没有你可以打开的费用视图"
+      },
+      "byModel": "按模型",
+      "colModel": "模型",
+      "colShare": "占比",
+      "colIn": "输入 Token",
+      "colOut": "输出 Token",
+      "unpricedChip": "无价格",
+      "period": {
+        "today": "本日",
+        "this_week": "本周",
+        "7d": "最近一周",
+        "last_week": "上一周",
+        "this_month": "本月",
+        "30d": "最近一月",
+        "last_month": "上个月",
+        "custom": "自定义"
+      },
+      "from": "开始日期",
+      "to": "结束日期",
+      "apply": "应用",
+      "utcNote": "日期按 UTC 计算，与 AWS 账单一致；一周从周一开始。",
+      "pickCustom": "请选择开始和结束日期，然后点击应用。",
+      "customError": {
+        "missing": "请选择两个日期。",
+        "order": "结束日期早于开始日期。",
+        "future": "开始日期在未来。",
+        "tooLong": "自定义区间最长 {{max}} 天。"
       }
     },
     "memory": {
@@ -16086,7 +16141,10 @@
         "missing": "不在目录中",
         "archived": "已归档",
         "inline": "内联",
-        "inlineHint": "内联访问点为读写，且无法晋级。请在存储目录中登记后按 ID 挂载。"
+        "inlineHint": "内联访问点为读写，且无法晋级。请在存储目录中登记后按 ID 挂载。",
+        "external": "在 Launchpad 之外挂载",
+        "externalHint": "从 AWS 回读：这些挂载是在 Launchpad 之外添加的（在 AWS 控制台里，或在导入 Agent 之前）。在 Launchpad 里重新发布会保留它们；如果要在这里管理，请先在存储页登记它的访问点，再通过编辑向导挂载。",
+        "liveUnavailable": "读取 AWS 上的挂载失败（{{error}}），在 Launchpad 之外添加的挂载没有列出。"
       },
       "picker": {
         "title": "从存储目录挂载",
@@ -16096,6 +16154,87 @@
         "none": "本项目没有可用的存储，请联系管理员登记。",
         "modeTooWide": "该存储只能以只读方式挂载",
         "preflightOk": "存储预检通过"
+      },
+      "provision": {
+        "open": "新建 S3 Files",
+        "title": "新建 S3 Files 存储",
+        "intro": "控制台会新建一个开启版本控制的存储桶，在它上面建 S3 文件系统，在网络配置档的每个可用区建一个挂载目标，建一个只放行配置档安全组 NFS（TCP 2049）入站流量、没有出站规则的安全组，再建访问点，最后登记到这里。大约需要 5 到 10 分钟。",
+        "noProfiles": "请先新建网络配置档：挂载目标会建在它的子网里。",
+        "pickProfile": "选择网络配置档",
+        "profileHint": "挂载这块存储的 Agent 必须运行在这个配置档的 VPC 里。它的安全组要允许 TCP 2049 出站，不允许时检查结果会提示。",
+        "uid": "POSIX 用户 ID",
+        "gid": "POSIX 组 ID",
+        "root": "根目录",
+        "rootHint": "Agent 看到的挂载点顶层。第一次使用时创建，属主是上面的用户和组，所以 Agent 能在里面写文件；文件系统本身的根目录属于 root，不能使用。",
+        "cost": "S3 Files 存储、挂载目标和存储桶都在本工作区的账号里计费。以后删除这块存储时，存储桶和其中的对象会保留。",
+        "submit": "新建",
+        "queued": "正在新建 {{id}}，进度见下方",
+        "errProfile": "请选择网络配置档。",
+        "errPosix": "请输入 0 到 4294967295 之间的整数。",
+        "errRoot": "填一到四段 /名称（字母、数字、.、_、-），例如 /data。",
+        "jobsTitle": "正在新建或删除的存储",
+        "op": {
+          "create": "新建",
+          "delete": "删除"
+        },
+        "job": {
+          "queued": "排队中",
+          "running": "进行中",
+          "succeeded": "已完成",
+          "failed": "失败"
+        },
+        "retry": "重试",
+        "madeHere": "控制台新建",
+        "stage": {
+          "validate": "检查网络配置档",
+          "bucket": "存储桶",
+          "file-system": "文件系统",
+          "security-group": "挂载目标安全组",
+          "mount-targets": "挂载目标",
+          "access-point": "访问点",
+          "register": "登记到存储目录",
+          "archive": "归档条目"
+        },
+        "adminOnly": "只有 Launchpad 管理员（负责平台运维的工程师）可以新建和删除 S3 Files 存储。",
+        "plan": {
+          "title": "将在你的 AWS 账号里创建的内容",
+          "loading": "正在读取网络配置档的 VPC…",
+          "failed": "读取 VPC 失败（{{error}}）。新建前请自己核对安全组规则。",
+          "newGroup": "新建安全组",
+          "vpc": "所在 VPC",
+          "direction": "方向",
+          "protocol": "协议",
+          "port": "端口",
+          "peer": "来源 / 目标",
+          "inbound": "入站",
+          "outbound": "出站",
+          "noOutbound": "无。AWS 给新安全组默认添加的全部放行规则会被删除：安全组是有状态的，NFS 的响应不需要出站规则。",
+          "mountTargets": "挂载目标（每个可用区一个，都使用上面的安全组）：",
+          "agentGroups": "Agent 安全组（网络配置档里的，控制台不会修改）：",
+          "group": "安全组",
+          "needs": "Agent 需要的规则",
+          "state": "当前状态",
+          "groupState": {
+            "ok": "已允许",
+            "missing": "需要你添加",
+            "not_found": "找不到安全组"
+          },
+          "addOutbound": "请在 AWS 控制台给 {{groups}} 添加出站规则（EC2 → 安全组 → 选中该安全组 → 出站规则）：类型 NFS（TCP 2049），目标选安全组 {{group}}（创建完成后才能选）或 VPC 网段 {{cidr}}。不添加的话，挂载这块存储的 Agent 会被检查拦下。",
+          "s3GatewayOk": "VPC 已有 S3 网关终端节点（{{ids}}），并关联了 Agent 子网的路由表：1 MiB 及以上的读取由 Agent 经内网直接从存储桶读取，网关终端节点没有小时费，也不收数据处理费。",
+          "s3GatewayMissing": "建议添加 S3 网关终端节点，成本更低。S3 Files 会把 1 MiB 及以上的读取直接从存储桶传给 Agent，这条路径需要 VPC 里有 S3 网关终端节点。没有时，这部分读取改走文件系统，速度更慢、费用更高；Agent 的其他 S3 流量也会经过 NAT 网关，按处理的 GB 数收费。网关终端节点没有小时费，也不收数据处理费。自行配置方法：AWS 控制台 → VPC → 终端节点 → 创建终端节点，服务选 {{service}}（类型 Gateway），勾选配置档子网所在的路由表。",
+          "s3GatewayUnrouted": "建议调整，成本更低：VPC 里有 S3 网关终端节点，但没有关联 {{subnets}} 的路由表，所以这些子网上的大文件读取会改走文件系统（更慢、更贵），其他 S3 流量走 NAT 网关。自行修改方法：AWS 控制台 → VPC → 终端节点 → 选中 {{service}} 终端节点 → 路由表 → 管理路由表，加上这些子网的路由表。",
+          "s3GatewayDocs": "AWS 文档：Amazon S3 网关终端节点",
+          "ack": "我已核对上面的安全组、规则和挂载目标，以及需要我自己在 AWS 控制台完成的配置。",
+          "ackFirst": "请先确认上面的网络变更"
+        }
+      },
+      "teardown": {
+        "action": "删除存储及其 AWS 资源",
+        "title": "删除 {{name}}？",
+        "body": "控制台会删除访问点、挂载目标、文件系统和它的安全组，并归档这个条目。存储桶和其中的所有对象都会保留。",
+        "typeId": "输入 {{id}} 确认",
+        "confirm": "删除",
+        "queued": "正在删除 {{name}}，进度见下方"
       }
     },
     "menuSettings": {

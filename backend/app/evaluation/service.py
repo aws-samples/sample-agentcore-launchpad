@@ -491,7 +491,14 @@ def transient_invoke_error(exc: BaseException) -> bool:
     or a transport failure (``httpx.TransportError``: connect / read timeout,
     dropped connection) is transient, while an authorizer rejection
     (``RuntimeBearerAuthError``, 401/403) and any other 4xx are final.
-    Iteration / token limits and every other error are final."""
+    Iteration / token limits and every other error are final — including a model
+    call the agent's role may not make, which a Harness streams as a
+    ``runtimeClientError`` (``services/model_access``): replaying it only repeats
+    the refusal."""
+    from app.services.model_access import model_access_denied
+
+    if model_access_denied(exc) is not None:
+        return False
     if isinstance(exc, AppError):
         if exc.code == "harness.execution_timeout":
             return True
